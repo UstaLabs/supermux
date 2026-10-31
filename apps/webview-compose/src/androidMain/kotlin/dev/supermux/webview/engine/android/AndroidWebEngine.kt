@@ -419,8 +419,14 @@ internal class AndroidWebEngine(
      * now on. A reset's epochs drop the last lease's queued focus changes too ([EngineEventQueue.advance]): nobody
      * collects between leases, and the next lease's view would take that focus for its own. The last reply proxy stays
      * with its document, which a fragment-only load keeps, but is used only while [gate] hears its token.
+     *
+     * A navigation still loading a document is stopped first ([DocumentGate.loadingNewDocument]): WebView gave the
+     * frame it made for that document the last epoch's shim, which [renewShim] doesn't reach, and a navigation that
+     * replaces it commits in that frame when it is of the same site. On the phone, a step back while a load was under
+     * way, and a load replacing one, each brought a page that signed with the last epoch's token, never heard.
      */
     private fun boundary(content: WebContent?, reset: Boolean = false) {
+        if (gate.loadingNewDocument) webView.stopLoading()
         token = newToken()
         val epoch = gate.boundary(token)
         queue.advance(reset = reset)
@@ -551,7 +557,8 @@ internal class AndroidWebEngine(
     /**
      * A step through history, by [go]. Once our navigation has committed, the page that comes back is a later commit
      * of the epoch, which [gate] hears. Before (it failed, or still loads), the gate hears nothing more in this epoch, so
-     * the step starts one, and its navigation is ours: the page that comes back has a URL, a title and its bridge.
+     * the step starts one, and its navigation is ours: the page that comes back has a URL, a title and its bridge. A
+     * load still under way is stopped by then ([boundary]), so that page signs with the new epoch's token.
      */
     private fun step(go: () -> Unit) {
         if (!gate.oursCommitted) boundary(served)

@@ -20,9 +20,10 @@ package dev.supermux.webview.engine.android
  * - Nothing a document does is heard until ours commits. After that, every commit in the epoch is the page's own (a
  *   link it follows, a history navigation) and is heard: those documents all began after the boundary.
  * - Page messages also carry the epoch's **token** ([bridgeScript]), which only documents that began loading after the
- *   boundary have. A same-document "ours" (a load that only changed the fragment) keeps its document, so the token that
- *   document signs with stays good with it, however many fragment-only loads follow. A document the page navigates to
- *   itself began after the boundary, and signs with the epoch's token.
+ *   boundary have: the engine stops a navigation still loading a document before it starts an epoch
+ *   ([loadingNewDocument]). A same-document "ours" (a load that only changed the fragment) keeps its document, so the
+ *   token that document signs with stays good with it, however many fragment-only loads follow. A document the page
+ *   navigates to itself began after the boundary, and signs with the epoch's token.
  *
  * Not every callback is posted, though. WebView calls some from the browser's own task, at once (measured on WebView
  * 156): console output, permission and geolocation prompts, file choosers, new windows and page-started navigations.
@@ -85,6 +86,15 @@ internal class DocumentGate {
      */
     val appNavigationLoading: Boolean get() = loading != null && !loadingByPage
 
+    /**
+     * Whether a main-frame navigation is loading a new document now, whoever started it. A boundary stops it first
+     * (measured on WebView 156): WebView made a frame for its document when it started, and gave that frame the shim of
+     * the epoch it began in, which the boundary's new shim never reaches. A navigation that replaces it (a load, a step
+     * through history, a reload) commits in that frame when it is of the same site, so its document signed with the
+     * last epoch's token, and the runtime never heard it.
+     */
+    val loadingNewDocument: Boolean get() = loading != null
+
     /** Whether the current epoch's marker has run: callbacks from now on were posted after the boundary. */
     val afterMarker: Boolean get() = !draining
 
@@ -144,7 +154,8 @@ internal class DocumentGate {
      * A main-frame navigation started, as WebView reports it at once. Nothing is queued in front of a callback made at
      * once, so no marker is needed: the first app-initiated navigation to start after the boundary is ours, the one
      * loadUrl, reload or restoreState started inside the call that made the boundary. One that loads a new document
-     * ([sameDocument] false) is the one [appNavigationLoading] is about until it completes: a frame loads one at a time.
+     * ([sameDocument] false) is the one [loadingNewDocument] and [appNavigationLoading] are about until it completes: a
+     * frame loads one at a time.
      */
     fun liveNavigationStarted(navigation: Any, byPage: Boolean, sameDocument: Boolean = false) {
         if (!sameDocument) {

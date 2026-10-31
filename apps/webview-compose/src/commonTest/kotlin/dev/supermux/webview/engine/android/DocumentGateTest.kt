@@ -243,6 +243,33 @@ class DocumentGateTest {
     }
 
     /**
+     * What a boundary stops first: a navigation loading a new document, whoever started it. Left to run, a navigation
+     * that replaces it commits in the frame WebView made for it, with the shim of the epoch it began in: on the phone,
+     * the page that came back signed with the last epoch's token, and the runtime never heard it.
+     */
+    @Test fun aNavigationLoadingANewDocumentIsUnderWayUntilItCompletesWhoeverStartedIt() {
+        val gate = DocumentGate()
+        assertFalse(gate.loadingNewDocument, "nothing loads")
+        gate.markerRan(gate.boundary(t1))
+        val ours = Any()
+        gate.liveNavigationStarted(ours, byPage = false)
+        assertTrue(gate.loadingNewDocument, "our load, before it commits")
+        gate.markerRan(gate.boundary(t2))
+        assertTrue(gate.loadingNewDocument, "a boundary ends no navigation: the engine stops it")
+        gate.liveNavigationCompleted(ours, byPage = false, didCommit = false)
+        assertFalse(gate.loadingNewDocument, "stopped")
+        val link = Any()
+        gate.liveNavigationStarted(link, byPage = true)
+        assertTrue(gate.loadingNewDocument, "the page's own navigation")
+        gate.liveNavigationStarted(Any(), byPage = true, sameDocument = true)
+        assertTrue(gate.loadingNewDocument, "a fragment the page changes meanwhile ends nothing")
+        gate.liveNavigationCompleted(link, byPage = true, didCommit = true)
+        assertFalse(gate.loadingNewDocument, "committed")
+        gate.liveNavigationStarted(Any(), byPage = false, sameDocument = true)
+        assertFalse(gate.loadingNewDocument, "a load that only changes the fragment keeps its document: none to stop")
+    }
+
+    /**
      * A load that failed leaves the document shown as it was: the next boundary's same-document "ours" (back to an entry
      * of that document) keeps the token that document began with, not the failed load's, which no document has.
      */

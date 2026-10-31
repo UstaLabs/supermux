@@ -149,6 +149,24 @@ class EngineRecoveryTest {
         }
     }
 
+    /**
+     * A load that replaces one still under way, of the same site, lands on a page the runtime hears. Before, the new page
+     * committed in the frame WebView had made for the load it replaced, with that epoch's shim: it signed with the last
+     * epoch's token, and the runtime heard its URL and title but never its bridge (on the phone, 2026-10-31).
+     */
+    @Test fun aLoadThatReplacesOneStillUnderWayBringsAPageTheRuntimeHears() = TestServer().use { server ->
+        server.page("/first", echoPage("first"))
+        server.page("/second", echoPage("second"))
+        server.route("/slow", TestServer.Response(200, echoPage("slow"), delayMillis = 8_000))
+        EngineHarness.run {
+            loadsAt(server, "/first", "first")
+            startLoading(server, "/slow")
+            delay(300)
+            val mark = startLoading(server, "/second")
+            cameBack(server, mark, "/second", "second")
+        }
+    }
+
     @Test fun backAfterALoadFailedBringsBackAPageTheRuntimeHears() = TestServer().use { server ->
         server.page("/first", echoPage("first"))
         server.page("/second", echoPage("second"))
