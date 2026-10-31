@@ -133,28 +133,38 @@ class CouncilCardTest {
         onNodeWithTag("council-preview:c-3:C", useUnmergedTree = true).assertTextContains("No answer in round 1")
     }
 
-    @Test fun stop_asks_first_then_kills_the_live_members_only() = runComposeUiTest {
-        val killed = mutableListOf<String>()
-        setPlatformContent { CouncilCard(card, killSession = { killed += it }) }
+    @Test fun stop_asks_first_then_ends_the_council() = runComposeUiTest {
+        val ended = mutableListOf<String>()
+        setPlatformContent { CouncilCard(card, endCouncil = { ended += it }) }
         onNodeWithTag("council-stop:c-3").performClick()
         waitForIdle()
-        assertEquals(emptyList(), killed)
+        assertEquals(emptyList(), ended)
         onNodeWithTag("council-stop-confirm:c-3").performClick()
         waitForIdle()
-        // D was killed already: A (reported), B (working) and C (failed, still running) end.
-        assertEquals(listOf("ma", "mb", "mc"), killed)
+        assertEquals(listOf("c-3"), ended)
     }
 
-    @Test fun no_stop_without_the_action_or_without_a_live_member() = runComposeUiTest {
-        val gone = council.copy(members = council.members.map { it.copy(status = if (it.letter == "A") "crashed" else "killed") })
+    @Test fun no_stop_without_the_action_or_once_ended() = runComposeUiTest {
         setPlatformContent {
             androidx.compose.foundation.layout.Column {
                 CouncilCard(card)
-                CouncilCard(TimelineItem.CouncilCard(gone.copy(id = "c-4")), killSession = {})
+                CouncilCard(TimelineItem.CouncilCard(council.copy(id = "c-4", status = "ended", endedBy = "caller", verdict = "Whisper Small.")), endCouncil = {})
             }
         }
         onNodeWithTag("council-stop:c-3").assertDoesNotExist()
         onNodeWithTag("council-stop:c-4").assertDoesNotExist()
+    }
+
+    @Test fun an_ended_council_shows_its_verdict_or_who_ended_it() = runComposeUiTest {
+        setPlatformContent {
+            androidx.compose.foundation.layout.Column {
+                CouncilCard(TimelineItem.CouncilCard(council.copy(id = "c-5", status = "ended", endedBy = "caller", verdict = "Whisper Small wins.")))
+                CouncilCard(TimelineItem.CouncilCard(council.copy(id = "c-6", status = "ended", endedBy = "user")))
+            }
+        }
+        onNodeWithTag("council-verdict:c-5").assertTextContains("Whisper Small wins.")
+        onNodeWithTag("council-verdict:c-6").assertTextContains("Stopped by you")
+        onNodeWithTag("council-verdict:c-3").assertDoesNotExist()
     }
 
     // ── in the chat ──

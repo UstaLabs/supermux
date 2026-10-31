@@ -326,11 +326,11 @@ export function acp(options: AcpOptions): AgentDriver {
             .map(l => (l && typeof l === 'object' ? (l as { path?: unknown }).path : undefined))
             .filter((p): p is string => typeof p === 'string')
         : []
-      const auto = acpPermissionDecision(livePermissions, toolKind, optionList, locations)
-      if (!auto.auto) return
       const toolCall = request.toolCall && typeof request.toolCall === 'object'
         ? request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown }
         : {}
+      const auto = acpPermissionDecision(livePermissions, toolKind, optionList, locations, typeof toolCall.title === 'string' ? toolCall.title : undefined)
+      if (!auto.auto) return
       if (session && !closed) {
         session.onUpdate({
           protocol: 'native',

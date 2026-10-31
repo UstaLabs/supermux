@@ -47,6 +47,8 @@ import m039 from "./039_inbox.sql" with { type: "text" }
 import m040 from "./040_session_parent.sql" with { type: "text" }
 import m041 from "./041_council.sql" with { type: "text" }
 import m042 from "./042_message_sender.sql" with { type: "text" }
+import m043 from "./043_council_end.sql" with { type: "text" }
+import m044 from "./044_council_member_removed.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -90,4 +92,6 @@ export const MIGRATIONS: Migration[] = [
   { version: 40, name: "040_session_parent", sql: m040 },
   { version: 41, name: "041_council", sql: m041 },
   { version: 42, name: "042_message_sender", sql: m042 },
+  { version: 43, name: "043_council_end", sql: m043 },
+  { version: 44, name: "044_council_member_removed", sql: m044 },
 ].sort((a, b) => a.version - b.version)

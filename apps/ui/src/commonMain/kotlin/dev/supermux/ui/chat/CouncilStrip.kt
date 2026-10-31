@@ -71,8 +71,8 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
 import kotlinx.coroutines.delay
 
-/** A council still running: one of its members works in the current round. */
-internal fun isRunningCouncil(c: CouncilView): Boolean = c.members.any { it.status == "working" }
+/** A council still running: open, and one of its members works in the current round. */
+internal fun isRunningCouncil(c: CouncilView): Boolean = c.status == "open" && c.members.any { it.status == "working" }
 
 /**
  * The lines the strip takes turns on, one per member with something to say: what a working member
@@ -95,16 +95,16 @@ internal fun councilStripLines(c: CouncilView, live: Map<String, String>): List<
 fun CouncilStrips(
     cards: List<TimelineItem.CouncilCard>,
     onOpenFile: (FilePathRef) -> Unit = {},
-    killSession: ((String) -> Unit)? = null,
+    endCouncil: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxWidth().animateContentSize()) {
-        for (card in cards) if (isRunningCouncil(card.council)) CouncilStrip(card, onOpenFile, killSession)
+        for (card in cards) if (isRunningCouncil(card.council)) CouncilStrip(card, onOpenFile, endCouncil)
     }
 }
 
 @Composable
-private fun CouncilStrip(item: TimelineItem.CouncilCard, onOpenFile: (FilePathRef) -> Unit, killSession: ((String) -> Unit)?) {
+private fun CouncilStrip(item: TimelineItem.CouncilCard, onOpenFile: (FilePathRef) -> Unit, endCouncil: ((String) -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     val c = item.council
     var open by rememberSaveable(c.id) { mutableStateOf(false) }
@@ -129,7 +129,7 @@ private fun CouncilStrip(item: TimelineItem.CouncilCard, onOpenFile: (FilePathRe
                     .verticalScroll(rememberScrollState())
                     .testTag("council-strip-body:${c.id}"),
             ) {
-                CouncilCardBody(item, onOpenFile, killSession)
+                CouncilCardBody(item, onOpenFile, endCouncil)
             }
         }
     }

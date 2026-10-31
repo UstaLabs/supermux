@@ -1,4 +1,5 @@
-// A council's start (spec 2026-10-28 §5): every member started, or none left running and no council.
+// A council's start (spec 2026-10-28 §5, changed 2026-10-31): the council is saved and returned at once; its
+// members start in the background, each on its own.
 import type { AgentKind } from "../../shared/agents"
 import type { Session } from "../session-manager/types"
 import type { RepoInfo } from "../git/repo-info"
@@ -17,6 +18,8 @@ export type StartCouncilArgs = {
 export type StartedCouncil = {
   council: string
   name: string
+  /** What the caller should do now, in the result it reads right after calling (the tool description alone was skimmed). */
+  note?: string
   members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }>
 }
 
@@ -53,78 +56,126 @@ export type StartCouncilDeps = {
   }): Promise<unknown>
   /** Stops and archives a started member (main.ts: killAndArchive, ended by the parent). */
   kill(id: string): Promise<void>
-  /** Council.opened: the question to the members. */
+  /** Council.opened: the saved council on the caller's card. */
   opened(councilId: string): void
+  /** Council.memberStarted: the question to a member that started. */
+  memberStarted(memberId: string): void
+  /** Council.memberStartFailed: the member's status, and the caller is told. */
+  memberStartFailed(memberId: string, error: string): void
+}
+
+export type CreatedCouncil = {
+  started: StartedCouncil
+  /** Starts every member, in parallel; never rejects (a member that can't start is reported). */
+  run(): Promise<void>
+}
+
+/**
+ * Seen 2026-10-31: with the rule only in the tool description, a caller still told the user each answer as
+ * it arrived; the user already sees them live on the council card.
+ */
+export const CALLER_NOTE = "The members are starting. Their answers arrive in your inbox and the user sees them live on the " +
+  "council card, so don't tell the user about each answer. Replace a member that fails (council_remove, council_add); " +
+  "when you have what you need, call council_end with your verdict and tell the user the verdict once."
+
+export type AddMembersArgs = {
+  callerId: string
+  council: string
+  members: StartCouncilArgs["members"]
+  checkout: "shared" | "worktree"
 }
 
 /**
  * council (spec §5): members start like delegated children (hidden in the caller's workspace, the
- * caller their parent), each with a fixed letter recorded before it starts. With "worktree" every
- * worktree is made first: if one can't be, none starts. When a worktree or a member fails, the call
- * fails with that error and takes the council with it: the members already started are killed and
- * archived (the caller gets no notice, no subagent card and no council_update for them), every
- * worktree is removed, and nothing of the council stays.
+ * caller their parent), each with a fixed letter recorded before it starts. Only what is quick is
+ * checked before the council is saved (the caller, the agents installed, the folder a git repository for
+ * "worktree"), so the call returns at once (decided 2026-10-31: a slow agent took the tool past its
+ * timeout). run() then makes each member's worktree and starts it, all members at the same time; a
+ * member that started gets the question, a member that can't start is stopped, its worktree removed,
+ * and the caller is told. The others carry on.
  */
-export async function startCouncil(deps: StartCouncilDeps, args: StartCouncilArgs): Promise<StartedCouncil> {
-  const caller = deps.isLive(args.callerId) ? deps.session(args.callerId) : undefined
-  if (!caller) throw new Error("unknown session")
-  for (const m of args.members) deps.assertInstalled(m.agent)
-  const workspaceId = deps.workspaceOf(caller.id)
+export async function createCouncil(deps: StartCouncilDeps, args: StartCouncilArgs): Promise<CreatedCouncil> {
+  const { caller, repo } = await check(deps, args.callerId, args.members, args.checkout)
   const council = deps.store.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
-  const worktrees: WorktreeHandle[] = []
-  try {
-    if (args.checkout === "worktree") {
-      const info = await deps.repoInfo(caller.workdir)
-      if (!info.eligible || !info.repoRoot) throw new Error(`${caller.workdir} is not a single git repository, so no worktree can be made`)
-      for (const [i] of args.members.entries()) {
+  const created = launch(deps, { councilId: council.id, councilName: council.name, caller, repo, members: args.members, firstIndex: 0 })
+  deps.opened(council.id)
+  return { started: { council: council.id, name: council.name, members: created.members, note: CALLER_NOTE }, run: created.run }
+}
+
+/**
+ * council_add (design 2026-10-31 §2): more members join an open council's current round, with the next letters,
+ * started the same way. A member added after round 1 gets that round's focus and the reports before it.
+ */
+export async function addCouncilMembers(deps: StartCouncilDeps, args: AddMembersArgs): Promise<{ added: StartedCouncil["members"]; run(): Promise<void> }> {
+  const c = deps.store.get(args.council)
+  if (!c) throw new Error(`unknown council: ${args.council}`)
+  if (c.callerSessionId !== args.callerId) throw new Error("only the council's caller can add members")
+  if (c.status === "ended") throw new Error(`${c.name} has ended`)
+  const { caller, repo } = await check(deps, args.callerId, args.members, args.checkout)
+  const created = launch(deps, { councilId: c.id, councilName: c.name, caller, repo, members: args.members, firstIndex: deps.store.members(c.id).length })
+  deps.opened(c.id)
+  return { added: created.members, run: created.run }
+}
+
+/** What is quick to check before anything is saved: the caller, the agents, and the folder for "worktree". */
+async function check(deps: StartCouncilDeps, callerId: string, members: StartCouncilArgs["members"], checkout: "shared" | "worktree") {
+  const caller = deps.isLive(callerId) ? deps.session(callerId) : undefined
+  if (!caller) throw new Error("unknown session")
+  for (const m of members) deps.assertInstalled(m.agent)
+  let repo: { root: string; branch: string } | undefined
+  if (checkout === "worktree") {
+    const info = await deps.repoInfo(caller.workdir)
+    if (!info.eligible || !info.repoRoot) throw new Error(`${caller.workdir} is not a single git repository, so no worktree can be made`)
+    repo = { root: info.repoRoot, branch: info.currentBranch || "HEAD" }
+  }
+  return { caller, repo }
+}
+
+/** Records the members (letters from `firstIndex`) and returns how to start them, all at once. */
+function launch(deps: StartCouncilDeps, o: {
+  councilId: string; councilName: string; caller: Session; repo?: { root: string; branch: string }
+  members: StartCouncilArgs["members"]; firstIndex: number
+}) {
+  const workspaceId = deps.workspaceOf(o.caller.id)
+  const members = o.members.map((m, i) => ({ ...m, letter: letterAt(o.firstIndex + i), id: deps.newId() }))
+  // Recorded before any start: a member's preamble and its tool list read its membership.
+  for (const m of members) deps.store.addMember(o.councilId, m.id, m.letter)
+
+  const startMember = async (m: (typeof members)[number]): Promise<void> => {
+    let worktree: WorktreeHandle | undefined
+    try {
+      if (o.repo) {
         try {
-          worktrees.push(await deps.createWorktree({ repoRoot: info.repoRoot, baseBranch: info.currentBranch || "HEAD", sessionName: `${council.name} ${letterAt(i)}` }))
+          worktree = await deps.createWorktree({ repoRoot: o.repo.root, baseBranch: o.repo.branch, sessionName: `${o.councilName} ${m.letter}` })
         } catch (err) {
           throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-    }
-    for (const [i, m] of args.members.entries()) {
-      const letter = letterAt(i)
-      const id = deps.newId()
-      deps.store.addMember(council.id, id, letter)
       await deps.spawn({
-        id,
-        workdir: caller.workdir,
-        requestedName: `${council.name} ${letter}`,
+        id: m.id,
+        workdir: o.caller.workdir,
+        requestedName: `${o.councilName} ${m.letter}`,
         agent: m.agent,
         model: m.model,
         reasoningLevel: m.effort,
         permissionMode: m.access,
         worktree: false,
-        worktreeHandle: worktrees[i],
-        parentSessionId: caller.id,
+        worktreeHandle: worktree,
+        parentSessionId: o.caller.id,
         workspaceId,
       })
+    } catch (err) {
+      // A spawn can throw after its session row was made: that session is stopped too.
+      if (deps.isLive(m.id)) await deps.kill(m.id).catch(() => {})
+      if (worktree) await deps.removeWorktree(worktree.repoRoot, worktree.worktreeDir, worktree.sessionBranch, { force: true }).catch(() => {})
+      deps.memberStartFailed(m.id, err instanceof Error ? err.message : String(err))
+      return
     }
-  } catch (err) {
-    // Every member id is recorded before its spawn, so this also finds one whose spawn threw after
-    // its row was made. The council row goes before the kills and the membership after them: a
-    // member's kill then finds no council to update (no council_update frame), and its membership
-    // still keeps it off the caller's subagent list (no "cancelled" subagent card).
-    const memberIds = deps.store.members(council.id).map((m) => m.sessionId)
-    deps.store.removeRecord(council.id)
-    for (const id of memberIds) {
-      if (deps.isLive(id)) await deps.kill(id).catch(() => {})
-    }
-    // The council never ran: none of its worktrees stays (its members are stopped by now).
-    for (const wt of worktrees) await deps.removeWorktree(wt.repoRoot, wt.worktreeDir, wt.sessionBranch, { force: true }).catch(() => {})
-    // Then everything under it (members, round, reports, statuses): nothing of the council stays.
-    deps.store.remove(council.id)
-    throw err
+    deps.memberStarted(m.id)
   }
-  deps.opened(council.id)
+
   return {
-    council: council.id,
-    name: council.name,
-    members: deps.store.members(council.id).map((m) => {
-      const s = deps.session(m.sessionId)
-      return { letter: m.letter, session: m.sessionId, agent: (s?.agent ?? "claude") as AgentKind, model: s?.model ?? null }
-    }),
+    members: members.map((m) => ({ letter: m.letter, session: m.id, agent: m.agent, model: m.model ?? null })),
+    run: async () => { await Promise.all(members.map(startMember)) },
   }
 }

@@ -122,7 +122,7 @@ private const val URL_HEX = "0123456789ABCDEF"
  * malformed. Nothing about the fix is specific to a hostile id; an ordinary
  * Turkish session title is enough.
  */
-private fun urlParam(value: String): String {
+internal fun urlParam(value: String): String {
     val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
     val out = StringBuilder(value.length)
     for (byte in value.encodeToByteArray()) {

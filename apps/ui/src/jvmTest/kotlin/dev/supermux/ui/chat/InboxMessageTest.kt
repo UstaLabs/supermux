@@ -234,6 +234,8 @@ class InboxMessageTest {
         assertEquals("Fix: login bug" to "Body", councilHeadAndBody("Fix: login bug [council-1 C:7f3a2c41-0d9e-4b8a-9c11-52e0b7d1a6f3]:\nBody"))
         assertTrue(isAlarmingNotice("Your subagent x crashed."))
         assertFalse(isAlarmingNotice("Your subagent x was killed."))
+        assertTrue(isAlarmingNotice("council-1 · C couldn't start:\nopencode exited at once"))
+        assertFalse(isAlarmingNotice("council-1 · B [x:y] was stopped by the user."))
         // Four lines at most, and a cut shows: Text draws no "…" when whole lines after a break are dropped.
         assertEquals("a crashed.\nIts last message:\none\ntwo…", noticeLines("a crashed.\nIts last message:\none\ntwo\nthree"))
         assertEquals("a crashed.\nIt sent no message.", noticeLines("a crashed.\nIt sent no message.\n"))

@@ -125,7 +125,7 @@ internal fun noticeLines(text: String, max: Int = NOTICE_MAX_LINES): String {
 }
 
 /** A supermux notice that something went wrong (the error icon), not just news (the info icon). */
-internal fun isAlarmingNotice(text: String): Boolean = "crashed" in text || "stopped with an error" in text
+internal fun isAlarmingNotice(text: String): Boolean = "crashed" in text || "stopped with an error" in text || "couldn't start" in text
 
 /** Only words: the card can hug them. Code, tables and images take the card's full width. */
 private fun hugsContent(blocks: List<MdBlock>): Boolean =

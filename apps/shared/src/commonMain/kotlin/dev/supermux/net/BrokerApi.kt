@@ -236,6 +236,9 @@ data class AppConfigDto(
     val voiceCodexAvailable: Boolean = false,
     /** Probed, not stored: the configured STT engine is fast enough for live partial passes. */
     val voiceLivePartials: Boolean = false,
+    /** Probed, not stored: the broker takes live dictation as a stream (`/transcribe/stream`) —
+     *  it hears the pauses and owns the text, so the app only sends audio. */
+    val voiceStreaming: Boolean = false,
 )
 
 @Serializable
@@ -2004,6 +2007,13 @@ class BrokerApi(
     /** DELETE /sessions/<id>. Non-2xx throws (SKIE-safe, see [ensureMutationSuccess]). */
     suspend fun kill(id: String) {
         ensureMutationSuccess(http.delete("$httpBase/sessions/$id") {
+            authHeader()
+        })
+    }
+
+    /** POST /councils/<id>/end — the user's Stop council: ends it and stops its members. Non-2xx throws. */
+    suspend fun endCouncil(id: String) {
+        ensureMutationSuccess(http.post("$httpBase/councils/$id/end") {
             authHeader()
         })
     }

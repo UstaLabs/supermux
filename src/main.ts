@@ -4,7 +4,7 @@ import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
-import { WebChannel, WEB_CAPABILITIES } from "./channels/web"
+import { WebChannel, WEB_CAPABILITIES, type WebChannelOpts } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -77,6 +77,9 @@ import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { joinContinuation } from "./core/transcription/continuation"
 import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { DictationStream } from "./core/transcription/stream/dictation-stream"
+import { speechModels } from "./core/transcription/stream/speech-models"
+import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
@@ -94,11 +97,12 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { agentChoices } from "./core/models/agent-choices"
 import { failedTurn } from "./core/delegate/failed-turn"
 import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
 import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
-import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
+import { addCouncilMembers, createCouncil, type AddMembersArgs, type StartCouncilArgs, type StartCouncilDeps, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -160,11 +164,11 @@ import {
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
-import { homedir, hostname } from "os"
+import { homedir, hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -780,6 +784,7 @@ const councils = new Council({
     catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
   },
   lastReply: (id) => messageLog.lastReply(id),
+  kill: (id): Promise<void> => sessionManager.killAndArchive(id, { endedBy: "parent" }),
   // A member holds its caller's settle only while it really works (decision #21).
   busy: (id: string): boolean => turnRunning(id) || !!inboxDelivery?.pending(id) || corePendingInput(id) > 0,
   changed: (caller, view) => {
@@ -795,7 +800,8 @@ const parentOfChild = (id: string): string | undefined =>
 /** Where a session's tasks come from: a child's parent, a member's council (its question and rounds). */
 function settleSource(id: string): SettleSource | undefined {
   const membership = councilStore.membership(id)
-  if (membership) return { kind: "member", from: membership.councilId }
+  // Only members of an open council are watched: an ended one is never touched again (design 2026-10-31 §4).
+  if (membership) return councils.watched(id) ? { kind: "member", from: membership.councilId } : undefined
   const parent = parentOfChild(id)
   return parent ? { kind: "child", from: parent } : undefined
 }
@@ -1171,6 +1177,12 @@ const sessionManager = new SessionManager(registry, {
     delegate: (args) => delegateSession(args),
     council: (args) => councilSession(args),
     councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
+    councilAdd: (args) => councilAddMembers(args),
+    councilRemove: (args) => councils.remove(args.callerId, args.council, args.letters),
+    councilEnd: async (args) => {
+      await councils.end(args.council, "caller", { callerId: args.callerId, verdict: args.verdict })
+      return { ended: true as const }
+    },
     councilReport: async (args) => {
       const report = councils.report(args.memberId, args.text)
       childSettle.reported(args.memberId)
@@ -1215,6 +1227,7 @@ bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
   councilMember: (id) => !!councilStore.membership(id),
+  choices: () => agentChoices((kind) => lookupModels(kind)),
 })
 // A delegated child's preamble names the session that created it (spec §3); a council member's, its council (spec §5).
 bindCreatedBy((sessionId) => {
@@ -1789,14 +1802,26 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       settleChanged(sessionId)
       return
     }
-    // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
-    // unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
-    // willSwitchAccount is read now, while the switch is still pending.
+    // Told already while the turn still ran (turn-failed).
+    if (ev.reported) {
+      settleChanged(sessionId)
+      return
+    }
+    reportFailedTurn(ev.error)
+  })
+  // A turn that failed but stays open (an unconfirmed stall): told now, its turn-complete may never come.
+  adapter.on("turn-failed", (ev: TurnFailedEvent) => reportFailedTurn(ev.error))
+  /**
+   * A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
+   * unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
+   * willSwitchAccount is read now, while the switch is still pending.
+   */
+  function reportFailedTurn(error: Error): void {
     const turnAtEnd = turnsStarted
     const crashesAtEnd = crashes
     // Not settled while it is decided: a failed-turn notice tells the parent already (decision #21).
     const hold = childSettle.hold(sessionId)
-    void failedTurn(ev.error.message, {
+    void failedTurn(error.message, {
       isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
       newerTurn: () => turnsStarted !== turnAtEnd,
       continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
@@ -1807,7 +1832,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(hold.release)
-  })
+  }
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
@@ -2347,6 +2372,112 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   const ttsAudio = new TtsAudioStreams()
   // One long-lived store so its parsed-records cache survives across requests.
   const proxyDeviceStore = new DeviceStore(DEVICES_FILE)
+  // Voice transcription: pluggable STT engine (when audio) → optional agent cleanup →
+  // composer-ready text. A named function rather than inline in the WebChannel options because
+  // a streamed dictation's Stop runs the same pipeline for engines too slow for live passes.
+  const transcribeVoice: NonNullable<WebChannelOpts["transcribe"]> = async (sessionId, input) => {
+    // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
+    // present it enriches the cleanup with prior messages + the session's agent skills; when
+    // absent the cleanup still runs off the draft + global glossary/engine/model.
+    const s = sessionId ? registry.get(sessionId) : undefined
+    const cfg = settings.getAppConfig(appConfigEnv)
+    let draft = input.draft ?? ""
+    let sttMs = 0
+    let sttEngine = "client"
+    let prefersCleanup = true
+    if (input.partial) {
+      // A live dictation pass: the text so far + the audio since the last pass → the complete
+      // text (`full: true`), which the client puts in place of everything dictated.
+      // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
+      // would take longer than the user's next pause). A slow engine declines outright.
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+      const currentText = input.previousText ?? ""
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const t0 = Date.now()
+      // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+      // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+      // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+      // INVENTS sentences for clips with little or no speech in them.)
+      const r = await runStt(input.audioPath, {
+        engine,
+        lang,
+        languages: cfg.voiceLanguages,
+        keyterms: cfg.voiceCleanupGlossary,
+        fromMs: input.fromMs,
+        previousText: currentText,
+        stream: input.dictationId,
+        endStream: input.final,
+        fallback: false,
+      })
+      const cut = (r.fromMs ?? 0) > 0
+      const text = cut ? joinContinuation(currentText, r.text) : r.text
+      // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+      const added = cut ? text.slice(currentText.trim().length).trim() : ""
+      log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+      return {
+        text,
+        full: true,
+        ...(added ? { added } : {}),
+        ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      }
+    }
+    if (input.audioPath) {
+      // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+      // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+      // parallel with the STT call so real speech pays no extra latency.
+      const silent = isDigitalSilence(input.audioPath)
+      const t0 = Date.now()
+      const stt = runStt(input.audioPath, {
+        engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
+        // whisper-specific knobs stay on app-config until engines grow their own model fields
+        model: cfg.whisperModel,
+        // Single-language engines get a pin only when the user dictates in exactly one
+        // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+        // whole list as a prompt hint instead.
+        lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+        languages: cfg.voiceLanguages,
+        // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+        // codex-realtime puts it in its transcription prompt.
+        keyterms: cfg.voiceCleanupGlossary,
+      })
+      if (await silent) {
+        stt.catch(() => {})
+        log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+        return { text: "" }
+      }
+      const r = await stt
+      sttMs = Date.now() - t0
+      draft = r.text
+      sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
+      prefersCleanup = r.prefersCleanup
+    }
+    if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
+    const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
+    const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
+    const payload = buildVoicePayload(draft, messages, skills)
+    // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
+    // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
+    if (!prefersCleanup) {
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
+      return { text: draft }
+    }
+    log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+    try {
+      const t1 = Date.now()
+      const out = await cleanupDraft(
+        { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
+        { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
+      )
+      const cleanupMs = Date.now() - t1
+      const text = out.text || draft
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      return { text }
+    } catch (e) {
+      log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
+      return { text: draft, degraded: true }
+    }
+  }
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -2498,6 +2629,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionCouncils: (id) => councils.forCaller(id),
     messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
     stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
+    endCouncil: async (councilId) => {
+      if (!councilStore.get(councilId)) return { ok: false, status: 404, error: "council not found" }
+      try {
+        await councils.end(councilId, "user")
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -3055,116 +3195,82 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // The same hints the first pass will use, so it needs no session.update either.
       return warmStt(engine, dictationId, { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary })
     },
-    transcribe: async (sessionId, input) => {
-      // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
-      // present it enriches the cleanup with prior messages + the session's agent skills; when
-      // absent the cleanup still runs off the draft + global glossary/engine/model.
-      const s = sessionId ? registry.get(sessionId) : undefined
-      const cfg = settings.getAppConfig(appConfigEnv)
-      let draft = input.draft ?? ""
-      let sttMs = 0
-      let sttEngine = "client"
-      let prefersCleanup = true
-      if (input.partial) {
-        // A live dictation pass: the text so far + the audio since the last pass → the complete
-        // text (`full: true`), which the client puts in place of everything dictated.
-        // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
-        // would take longer than the user's next pause). A slow engine declines outright.
-        const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
-        if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
-        const currentText = input.previousText ?? ""
-        const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
-        const t0 = Date.now()
-        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
-        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
-        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
-        // INVENTS sentences for clips with little or no speech in them.)
-        const r = await runStt(input.audioPath, {
-          engine,
-          lang,
-          languages: cfg.voiceLanguages,
-          keyterms: cfg.voiceCleanupGlossary,
-          fromMs: input.fromMs,
-          previousText: currentText,
-          stream: input.dictationId,
-          endStream: input.final,
-          fallback: false,
-        })
-        const cut = (r.fromMs ?? 0) > 0
-        const text = cut ? joinContinuation(currentText, r.text) : r.text
-        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
-        const added = cut ? text.slice(currentText.trim().length).trim() : ""
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
-        return {
-          text,
-          full: true,
-          ...(added ? { added } : {}),
-          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
-        }
-      }
-      if (input.audioPath) {
-        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
-        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
-        // parallel with the STT call so real speech pays no extra latency.
-        const silent = isDigitalSilence(input.audioPath)
-        const t0 = Date.now()
-        const stt = runStt(input.audioPath, {
-          engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
-          // whisper-specific knobs stay on app-config until engines grow their own model fields
-          model: cfg.whisperModel,
-          // Single-language engines get a pin only when the user dictates in exactly one
-          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
-          // whole list as a prompt hint instead.
-          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
-          languages: cfg.voiceLanguages,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
-          // codex-realtime puts it in its transcription prompt.
-          keyterms: cfg.voiceCleanupGlossary,
-        })
-        if (await silent) {
-          stt.catch(() => {})
-          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
-          return { text: "" }
-        }
-        const r = await stt
-        sttMs = Date.now() - t0
-        draft = r.text
-        sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
-        prefersCleanup = r.prefersCleanup
-      }
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
-      const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
-      const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
-      const payload = buildVoicePayload(draft, messages, skills)
-      // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
-      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
-      if (!prefersCleanup) {
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
-        return { text: draft }
-      }
-      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-      try {
-        const t1 = Date.now()
-        const out = await cleanupDraft(
-          { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
-          { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
-        )
-        const cleanupMs = Date.now() - t1
-        const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-        return { text }
-      } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
-        return { text: draft, degraded: true }
-      }
-    },
+    transcribe: transcribeVoice,
     // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
     dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
+    // Streamed dictation (`/transcribe/stream`): the app sends its mic audio as it records; the
+    // broker hears the pauses (Silero), judges sentence ends (Smart Turn), transcribes, and sends
+    // the whole dictated text back. See src/core/transcription/stream/dictation-stream.ts.
+    openDictationStream: ({ dictationId, sessionId, send, close }) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const hints = { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary }
+      const livePasses = livePartialsUsable(engine)
+      // Two engine connections: one for the passes at pauses and Stop, one for the passes while
+      // talking, so the first never waits behind the second.
+      const liveStream = `${dictationId}~live`
+      if (livePasses) {
+        for (const key of [dictationId, liveStream]) {
+          warmStt(engine, key, hints).catch((err) => log.warn("dictation_stream_warm_failed", { dictationId: key, err: String(err) }))
+        }
+      }
+      const models = speechModels()
+      // Engines take a file: each pass writes its stretch as a WAV and removes it straight after.
+      const scratch = join(tmpdir(), "mux-voice-stream")
+      const fileId = dictationId.replace(/[^\w-]/g, "").slice(0, 64)
+      let files = 0
+      const withWav = async <T,>(pcm: Int16Array, run: (path: string) => Promise<T>): Promise<T> => {
+        mkdirSync(scratch, { recursive: true })
+        const path = join(scratch, `${fileId}-${++files}.wav`)
+        writeFileSync(path, encodeWav16(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), 16_000))
+        try {
+          return await run(path)
+        } finally {
+          try { unlinkSync(path) } catch { /* already gone */ }
+        }
+      }
+      const stream = new DictationStream({
+        id: dictationId,
+        vad: (onProbs, onError) => models.openVad(onProbs, onError),
+        turn: (audio) => models.turn(audio),
+        livePasses,
+        transcribe: (pcm, o) => withWav(pcm, async (path) => (await runStt(path, {
+          engine, ...hints, context: o.context, stream: o.lane === "live" ? liveStream : dictationId, endStream: o.final, fallback: false,
+        })).text),
+        transcribeWhole: (pcm) => withWav(pcm, async (path) => (await transcribeVoice(sessionId, { audioPath: path })).text),
+        checkEdit: async (text, newWords) => (await checkDictationEdit({ text, newWords }, codexAdapter())).text,
+        endStream: () => {
+          const e = selectStt(engine)
+          e.endStream?.(dictationId)
+          e.endStream?.(liveStream)
+        },
+        send: (ev) => {
+          send(ev)
+          if (ev.type === "done" || (ev.type === "error" && ev.fatal)) close()
+        },
+      })
+      return {
+        audio: (bytes) => stream.pushAudio(bytes),
+        control: (msg) => {
+          if (msg.type === "stop") void stream.stop()
+          else if (msg.type === "cancel") stream.cancel()
+          else if (msg.type === "edit" && typeof msg.text === "string") stream.edit(msg.text, typeof msg.seq === "number" ? msg.seq : undefined)
+        },
+        closed: () => stream.cancel(),
+      }
+    },
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
+      const streaming = process.env.MUX_VOICE_STREAMING !== "0"
+      // Every composer asks for these when it opens, so a dictation may follow: warm the speech
+      // models now rather than on the first words (a cold start cost several seconds).
+      if (streaming && livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE)) speechModels().prewarm?.()
       return {
         codexAvailable: selectStt("codex-realtime").isAvailable(),
         livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
+        // Apps stream their mic here instead of judging pauses themselves (MUX_VOICE_STREAMING=0 = off).
+        streaming,
       }
     },
     // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.
@@ -3694,9 +3800,25 @@ async function delegateSession(args: {
   return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
 }
 
-/** council (spec §5): a council's start (startCouncil), with main.ts's collaborators. */
-function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
-  return startCouncil({
+/**
+ * council (spec §5): the council is saved and returned at once (createCouncil); its members start in
+ * the background, and the card and the caller hear each one start or fail.
+ */
+async function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
+  const created = await createCouncil(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_start_failed", { council: created.started.council, err: String(err) }))
+  return created.started
+}
+
+/** council_add (design 2026-10-31 §2): more members for an open council, started like the first ones. */
+async function councilAddMembers(args: AddMembersArgs): Promise<{ added: StartedCouncil["members"] }> {
+  const created = await addCouncilMembers(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_add_failed", { council: args.council, err: String(err) }))
+  return { added: created.added }
+}
+
+function councilStartDeps(): StartCouncilDeps {
+  return {
     store: councilStore,
     session: (id) => registry.sessions.getById(id),
     isLive: (id) => !!registry.get(id),
@@ -3709,7 +3831,9 @@ function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
     spawn: (a) => spawnSession(a),
     kill: (id) => sessionManager.killAndArchive(id, { endedBy: "parent" }),
     opened: (councilId) => councils.opened(councilId),
-  }, args)
+    memberStarted: (id) => councils.memberStarted(id),
+    memberStartFailed: (id, error) => councils.memberStartFailed(id, error),
+  }
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
@@ -4230,7 +4354,7 @@ function seedMemberTasks(): void {
   for (const s of registry.list()) {
     const membership = councilStore.membership(s.id)
     const council = membership ? councilStore.get(membership.councilId) : undefined
-    if (!membership || !council || !registry.get(council.callerSessionId)) continue
+    if (!membership || !council || council.status !== "open" || !registry.get(council.callerSessionId)) continue
     try {
       const own = inboxStore.read(s.id)
       const seed = seedFor({

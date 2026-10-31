@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test"
+import { agentChoices } from "../models/agent-choices"
 import { agents } from "../agents/registry"
 import { join } from "path"
 import { openDb, runMigrations, type Db } from "../storage/db"
@@ -912,16 +913,16 @@ describe("register reply: the tools the external shim serves", () => {
   }
 
   test("mux-shim gets this broker's list, council_report only for a council member", async () => {
-    expect((await registerAs("mux-shim")).tools).toEqual(shimTools("mux-shim"))
+    expect((await registerAs("mux-shim")).tools).toEqual(shimTools("mux-shim", { choices: agentChoices(() => []) }))
     const member = await registerAs("mux-shim", { member: true })
     expect(member.council_member).toBe(true)
-    expect(member.tools).toEqual(shimTools("mux-shim", { councilMember: true }))
+    expect(member.tools).toEqual(shimTools("mux-shim", { councilMember: true, choices: agentChoices(() => []) }))
     expect(member.tools!.map((t) => t.name)).toContain("council_report")
   })
 
   test("mux-rpc gets resolve/reject; the same holds for a non-core row", async () => {
     expect((await registerAs("mux-rpc")).tools).toEqual(shimTools("mux-rpc"))
-    expect((await registerAs("mux-shim", { core: false })).tools).toEqual(shimTools("mux-shim"))
+    expect((await registerAs("mux-shim", { core: false })).tools).toEqual(shimTools("mux-shim", { choices: agentChoices(() => []) }))
   })
 
   test("mux-channel, and a shim that does not say which server it is, get no tools key", async () => {

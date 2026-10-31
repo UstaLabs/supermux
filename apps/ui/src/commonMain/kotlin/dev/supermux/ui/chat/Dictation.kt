@@ -6,10 +6,16 @@
 //   - DEVICE, on a host with `Platform.mic.liveTranscript` (iOS, Android): recognise on the device,
 //     show the growing partial in the RecordingBar, and POST only the finished draft for a cleanup
 //     pass (`transcribeDraft`).
-//   - BROKER (every host; the only mode on web and desktop): record, then POST the encoded audio
-//     (`transcribeAudio`). While recording, each pause sends everything said so far as a live
-//     partial pass (`transcribePartial`), and the answer fills the RecordingBar's transcript, so
-//     the user can see the work happening long before Stop.
+//   - BROKER (every host; the only mode on web and desktop), in one of two shapes:
+//       - STREAM, when the broker offers it ([VoiceCaps.streaming]) and the mic hands out raw PCM
+//         ([MicCapture.pcmSince]): the audio goes to `/transcribe/stream` as it is recorded; the
+//         broker hears the pauses (a speech model, not loudness), transcribes each sentence and
+//         OWNS the dictated text — every update it sends replaces the dictated stretch. Stop sends
+//         `stop` and takes the broker's `final`. Nothing is uploaded twice.
+//       - PER-PAUSE UPLOADS otherwise: record, then POST the encoded audio (`transcribeAudio`).
+//         While recording, each pause (judged by loudness) sends everything said so far as a live
+//         partial pass (`transcribePartial`), and the answer fills the field, so the user can see
+//         the work happening long before Stop.
 //
 // The controller's lifecycle is desktop's: it is `remember(resetKey)`-scoped and cancels an
 // IN-FLIGHT transcription on dispose, so a ~20-30s POST launched under session A can never resolve
@@ -63,6 +69,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.net.DictationStreamEvent
+import dev.supermux.net.DictationStreamSocket
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
@@ -73,13 +81,16 @@ import dev.supermux.ui.theme.NoHaptics
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.AlertDialog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -114,7 +125,19 @@ fun resolveDictationMode(
 }
 
 /** What the broker reports about its STT (`/settings/config`'s probed `voice*` fields). */
-data class VoiceCaps(val codexAvailable: Boolean, val livePartials: Boolean)
+data class VoiceCaps(
+    val codexAvailable: Boolean,
+    val livePartials: Boolean,
+    /** The broker takes live dictation as a stream (`/transcribe/stream`, `voiceStreaming`). */
+    val streaming: Boolean = false,
+)
+
+/**
+ * Opens a live dictation stream (`/transcribe/stream`) for one recording, [dictationId], and runs
+ * [session] with it; the socket closes when [session] returns. THROWS when it cannot connect or the
+ * socket breaks — the recording then falls back to uploading its audio at Stop.
+ */
+typealias OpenDictationStream = suspend (dictationId: String, session: suspend (DictationStreamSocket) -> Unit) -> Unit
 
 /**
  * A live pass's answer. [skipped] = the broker declined (its engine is too slow for live passes —
@@ -170,6 +193,18 @@ data class LivePassTiming(
     val minSpeechMs: Long = 250,
 )
 
+/** Timing of a streamed dictation; a parameter only so tests can name the numbers. */
+data class StreamTiming(
+    /** How often the audio captured since the last send goes out. */
+    val pumpMs: Long = 100,
+    /** A hand edit of the dictated text is sent once it has stopped changing for this long. */
+    val editSettleMs: Long = 300,
+    /** Stop waits this long for the broker's final text before uploading the recording instead. */
+    val finalTimeoutMs: Long = 15_000,
+    /** After Stop, a spoken edit still being checked may land this long afterwards. */
+    val lateEditMs: Long = 8_000,
+)
+
 /** A fresh id for one recording — unique enough to key the broker's per-dictation connection. */
 @OptIn(ExperimentalUuidApi::class)
 private fun newDictationId(): String = Uuid.random().toString()
@@ -189,6 +224,7 @@ class DictationController(
     private val scope: CoroutineScope,
     private val haptic: Haptics = NoHaptics,
     private val timing: LivePassTiming = LivePassTiming(),
+    private val streamTiming: StreamTiming = StreamTiming(),
 ) {
     /** Audio (record-then-POST) capture active. */
     var recording by mutableStateOf(false); private set
@@ -264,6 +300,15 @@ class DictationController(
 
     /** The broker's engine can serve live passes; null = not known, try (it answers `skipped`). */
     var livePartialsAvailable: Boolean? = null
+
+    /** Live dictation as a stream; null = this composer has none (it uses the per-pause uploads). */
+    var openDictationStream: OpenDictationStream? = null
+
+    /** The broker takes dictation as a stream; null = not known (yet) — the per-pause uploads. */
+    var streamingAvailable: Boolean? = null
+
+    /** The current recording's stream, from mic start until its last word (or late edit) lands. */
+    private var stream: LiveStream? = null
 
     /** Quiet time at the end of the latest level sample, ms (the pause detector's state). */
     private var quietMs = 0L
@@ -431,9 +476,290 @@ class DictationController(
         }
     }
 
+    // ---- the streamed dictation ----
+
+    /** What a stream sends, in order: one queue, one sender, so audio and control never reorder. */
+    private sealed interface StreamOut {
+        class Audio(val pcm: ByteArray) : StreamOut
+        class Edit(val text: String, val seq: Long?) : StreamOut
+        object Stop : StreamOut
+    }
+
+    /** One recording's stream: its socket session, what it has sent, and what the broker said. */
+    private class LiveStream(val id: String) {
+        /** Unbounded, so queueing never suspends: audio read from the mic is queued at once, and
+         *  what is queued before the socket opens is simply sent when it does. */
+        val out = Channel<StreamOut>(Channel.UNLIMITED)
+        /** PCM bytes already queued — where the next read from the mic starts. */
+        var offset = 0L
+        /** The dictated text as this stream last wrote it into the field (or the user's version,
+         *  once sent to the broker). */
+        var lastShown = ""
+        /** The broker's number for [lastShown], when it numbers its texts. */
+        var lastSeq: Long? = null
+        /** Our writes not yet seen in the field (it updates through recomposition), oldest first,
+         *  and the last text the field was seen holding. */
+        val unseenWrites = ArrayDeque<String>()
+        var fieldSeen = ""
+        /** A hand edit waiting to settle, and how long it has been unchanged. */
+        var editCandidate: String? = null
+        var editStableMs = 0L
+        /** Stop's answer; null = the stream failed or ended without one (upload instead). */
+        val final = CompletableDeferred<DictationStreamEvent.Final?>()
+        /** The text Stop wrote — a late spoken edit applies only while the field still holds it. */
+        var finalText: String? = null
+        var sessionJob: Job? = null
+        var pumpJob: Job? = null
+        var socket: DictationStreamSocket? = null
+
+        fun fail() {
+            if (!final.isCompleted) final.complete(null)
+        }
+
+        fun close() {
+            pumpJob?.cancel()
+            out.close()
+            socket?.close()
+            sessionJob?.cancel()
+            fail()
+        }
+    }
+
+    /** Streaming applies to this recording: the composer can open one, the broker takes it, and
+     *  the mic (already started) hands out raw PCM. */
+    private fun canStream(): OpenDictationStream? {
+        val open = openDictationStream ?: return null
+        if (streamingAvailable != true) return null
+        return open.takeIf { mic.pcmSince(0) != null }
+    }
+
+    private fun startStream(open: OpenDictationStream) {
+        val s = LiveStream(newDictationId())
+        stream = s
+        liveTranscript = ""
+        s.sessionJob = scope.launch {
+            try {
+                open(s.id) { socket ->
+                    s.socket = socket
+                    try {
+                        coroutineScope {
+                            val sender = launch {
+                                for (m in s.out) {
+                                    when (m) {
+                                        is StreamOut.Audio -> socket.sendAudio(m.pcm)
+                                        is StreamOut.Edit -> socket.sendEdit(m.text, m.seq)
+                                        StreamOut.Stop -> socket.sendStop()
+                                    }
+                                }
+                            }
+                            try {
+                                while (true) {
+                                    val ev = socket.receive() ?: break
+                                    if (!onStreamEvent(s, ev)) break
+                                }
+                            } finally {
+                                sender.cancel()
+                            }
+                        }
+                    } finally {
+                        // `done`, a fatal error or the end of the late-edit wait: hang up.
+                        socket.close()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Could not connect, or the socket broke: Stop uploads the recording instead.
+            } finally {
+                s.socket = null
+                s.fail()
+            }
+        }
+        s.pumpJob = scope.launch {
+            while (recording && stream === s) {
+                delay(streamTiming.pumpMs)
+                if (!recording || stream !== s) break
+                queueNewAudio(s)
+                checkHandEdit(s)
+            }
+        }
+    }
+
+    /**
+     * Queue the audio captured since the last call. The read and the offset move happen with no
+     * suspension between them, so the pump and Stop can never send a stretch twice or skip one.
+     */
+    private fun queueNewAudio(s: LiveStream) {
+        val pcm = mic.pcmSince(s.offset) ?: return
+        if (pcm.isEmpty()) return
+        s.offset += pcm.size
+        s.out.trySend(StreamOut.Audio(pcm))
+    }
+
+    /**
+     * What the dictated stretch of the field holds now, for spotting the user's own edits — or null
+     * while a write of ours is still on its way: the composer's text comes back through
+     * recomposition (which stops altogether while the app is in the background), and until it does
+     * the field still shows the text BEFORE our write — not an edit. Only text that is neither
+     * what the field last held nor one of our writes is the user's.
+     */
+    private fun settledFieldText(s: LiveStream): String? {
+        val now = currentText()?.trim() ?: return null
+        if (s.unseenWrites.isNotEmpty()) {
+            if (now == s.unseenWrites.last()) {
+                s.unseenWrites.clear()
+            } else if (now == s.fieldSeen || now in s.unseenWrites) {
+                return null
+            } else {
+                s.unseenWrites.clear()
+            }
+        }
+        s.fieldSeen = now
+        return now
+    }
+
+    /** The pump's check: the user changed the dictated text and it has settled → send their version. */
+    private fun checkHandEdit(s: LiveStream) {
+        val now = settledFieldText(s) ?: return
+        if (now == s.lastShown) {
+            s.editCandidate = null
+            return
+        }
+        if (now != s.editCandidate) {
+            s.editCandidate = now
+            s.editStableMs = 0
+            return
+        }
+        s.editStableMs += streamTiming.pumpMs
+        if (s.editStableMs >= streamTiming.editSettleMs) sendHandEdit(s, now)
+    }
+
+    /** The user's version wins: the broker takes it as the text so far and carries on after it. */
+    private fun sendHandEdit(s: LiveStream, text: String) {
+        s.out.trySend(StreamOut.Edit(text, s.lastSeq))
+        s.lastShown = text
+        s.editCandidate = null
+    }
+
+    /** Write [text] into the dictated stretch, remembering it so its echo is not taken for an edit. */
+    private fun writeStreamText(s: LiveStream, text: String) {
+        s.lastShown = text.trim()
+        s.unseenWrites.addLast(s.lastShown)
+        while (s.unseenWrites.size > 8) s.unseenWrites.removeFirst()
+        showLive(text)
+    }
+
+    /** One event from the broker; false = this stream is over. */
+    private fun onStreamEvent(s: LiveStream, ev: DictationStreamEvent): Boolean {
+        if (stream !== s) return false
+        when (ev) {
+            is DictationStreamEvent.Text -> {
+                val fin = s.finalText
+                if (fin != null) {
+                    // A spoken edit that landed after Stop: only over the text Stop wrote, untouched
+                    // (not sent, not edited, not a new dictation's). A field still showing an
+                    // earlier write of ours has simply not caught up yet; an EMPTY field was sent.
+                    val now = currentText()?.trim()
+                    val untouched = now == fin || (!now.isNullOrEmpty() && now in s.unseenWrites)
+                    if (untouched) {
+                        s.finalText = ev.text.trim()
+                        writeStreamText(s, ev.text)
+                        liveTranscript = null
+                    }
+                    return true
+                }
+                // Hand edits count only while recording: after Stop the broker is finishing the text,
+                // and an edit then would make it start over.
+                val now = if (recording) settledFieldText(s) else null
+                if (now != null && now != s.lastShown) {
+                    // The user is changing the text by hand: their version wins over this one.
+                    sendHandEdit(s, now)
+                    return true
+                }
+                s.lastSeq = ev.seq
+                writeStreamText(s, ev.text)
+            }
+            is DictationStreamEvent.Final -> {
+                s.finalText = ev.text.trim()
+                s.final.complete(ev)
+                return ev.pendingEdit
+            }
+            DictationStreamEvent.Done -> return false
+            is DictationStreamEvent.Error -> if (ev.fatal) {
+                s.fail()
+                return false
+            }
+        }
+        return true
+    }
+
+    private fun closeStream(s: LiveStream) {
+        s.close()
+        if (stream === s) stream = null
+    }
+
+    /**
+     * Stop, streamed: hand the broker the last of the audio and `stop`, and take its `final` — the
+     * complete text, already transcribed up to the last pause. A stream that failed (or never
+     * answers) falls back to uploading the recording, exactly as a broker without streaming would.
+     */
+    private fun stopStream(s: LiveStream) {
+        recording = false
+        val liveText = liveTranscript
+        // Up on the frame the user tapped Stop, like the other paths (see stopMic).
+        transcribing = true
+        transcribeJob = scope.launch {
+            try {
+                val audio: CapturedAudio? = try {
+                    mic.flush()
+                    // The tail, read BEFORE stop(): the recorders let go of their buffer there.
+                    queueNewAudio(s)
+                    mic.stop()
+                } finally {
+                    audioSessionOpen = false
+                }
+                s.pumpJob?.cancel()
+                s.out.trySend(StreamOut.Stop)
+                val fin = withTimeoutOrNull(streamTiming.finalTimeoutMs) { s.final.await() }
+                if (fin != null) {
+                    when {
+                        fin.text.isNotBlank() || s.lastShown.isNotBlank() -> writeStreamText(s, fin.text)
+                        else -> fail("Didn't catch that")
+                    }
+                    liveTranscript = null
+                    if (fin.pendingEdit) {
+                        // Keep listening for the late edit, but not for ever.
+                        scope.launch {
+                            delay(streamTiming.lateEditMs)
+                            if (stream === s) closeStream(s)
+                        }
+                    } else {
+                        closeStream(s)
+                    }
+                    return@launch
+                }
+                liveTranscript = null
+                closeStream(s)
+                if (audio == null) {
+                    fail("Didn't catch that")
+                    return@launch
+                }
+                // What the stream already showed stays if the upload fails too.
+                val shown = s.lastShown.ifBlank { liveText }
+                transcribeAndAppend(rawFallback = shown, audio = audio) {
+                    transcribeAudio(audio.bytes, audio.filename, audio.mime)
+                }
+            } finally {
+                transcribing = false
+            }
+        }
+    }
+
     /** Begin capture. Assumes permission is already granted — [onMicClick] is the entry point. */
     fun startMic() {
         if (active || transcribing) return
+        // A previous recording's stream still waiting for a late edit: this recording replaces it.
+        stream?.let { closeStream(it) }
         haptic.perform(HapticKind.Tick)
         banner = null
         errorMessage = null
@@ -453,6 +779,10 @@ class DictationController(
         audioSessionOpen = recording
         if (!recording) {
             micUnavailable = true
+            return
+        }
+        canStream()?.let { open ->
+            startStream(open)
             return
         }
         val level = mic.level
@@ -688,6 +1018,10 @@ class DictationController(
                 }
             }
         } else if (recording) {
+            stream?.let {
+                stopStream(it)
+                return
+            }
             recording = false
             val liveText = liveTranscript
             // Same shape as the on-device branch above, and for the same reason: `transcribing` is
@@ -746,6 +1080,8 @@ class DictationController(
         partialJob?.cancel()
         partialJob = null
         stopLivePasses()
+        // Closing the socket is the broker's cue to discard the recording.
+        stream?.let { closeStream(it) }
         editJobs.toList().forEach { it.cancel() }
         editJobs.clear()
         // Cancel a pending transcription too (not just a live recording): on a session switch the
@@ -807,6 +1143,7 @@ fun rememberDictation(
     loadVoiceCaps: suspend () -> VoiceCaps? = { null },
     checkEdit: (suspend (String, String) -> String?)? = null,
     transcribeWarm: (suspend (String) -> Unit)? = null,
+    openDictationStream: OpenDictationStream? = null,
 ): DictationController {
     val scope = rememberCoroutineScope()
     val haptic = rememberHaptics()
@@ -818,6 +1155,7 @@ fun rememberDictation(
     controller.transcribePartial = transcribePartial
     controller.checkEdit = checkEdit
     controller.transcribeWarm = transcribeWarm
+    controller.openDictationStream = openDictationStream
     controller.onAppend = onAppend
 
     LaunchedEffect(controller) {
@@ -834,6 +1172,7 @@ fun rememberDictation(
         val caps = runCatching { loadVoiceCaps() }.getOrNull() ?: return@LaunchedEffect
         controller.codexAvailable = caps.codexAvailable
         controller.livePartialsAvailable = caps.livePartials
+        controller.streamingAvailable = caps.streaming
     }
     LaunchedEffect(controller, controller.active) {
         if (controller.active) {

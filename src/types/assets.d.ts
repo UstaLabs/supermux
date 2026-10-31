@@ -63,6 +63,8 @@ declare module "*.mjs" { const path: string; export default path }
 // The native editor's grammar tables (assets/editor-syntax/tables/<digest>/*.sesz, fetched by
 // name by the syntax module; served as application/octet-stream).
 declare module "*.sesz" { const path: string; export default path }
+// The dictation stream's speech models (src/core/transcription/stream/models/).
+declare module "*.onnx" { const path: string; export default path }
 
 // The wasm bundle's composeResources emit platform fonts and misc text/xml
 // resources alongside the app's static assets.

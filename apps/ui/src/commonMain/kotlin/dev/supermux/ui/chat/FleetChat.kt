@@ -77,6 +77,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 loadVoiceCaps = { fleet.voiceConfig(sessionId)?.toVoiceCaps() },
                 checkEdit = { text, newWords -> fleet.transcribeEdit(sessionId, text, newWords) },
                 transcribeWarm = { id -> fleet.transcribeWarm(sessionId, id) },
+                openDictationStream = { id, session -> fleet.openDictationStream(sessionId, id, session) },
                 gitFetch = { fleet.gitFetch(sessionId) },
                 gitPull = { fleet.gitPull(sessionId) },
                 gitPush = { fleet.gitPush(sessionId) },
@@ -95,8 +96,8 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             setPermissionMode = { fleet.setPermissionMode(sessionId, it) },
             messageSubagent = { id, text -> fleet.messageSubagent(sessionId, id, text) },
             stopSubagent = { id -> fleet.stopSubagent(sessionId, id) },
-            // A member is a hidden session of the caller's host: route by the caller.
-            killSession = { id -> fleet.appFor(sessionId)?.kill(id) },
+            // A council lives on the caller's host: route by the caller.
+            endCouncil = { id -> fleet.appFor(sessionId)?.endCouncil(id) },
             accounts = fleet.appFor(sessionId)?.accounts ?: kotlinx.coroutines.flow.flowOf(null),
             ensureAccounts = { fleet.appFor(sessionId)?.ensureAccounts() },
             setAccount = { id ->

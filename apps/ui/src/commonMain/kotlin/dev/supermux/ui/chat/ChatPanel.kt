@@ -241,7 +241,7 @@ class ChatActions(
      * End a session of this chat's host: a council member (the council card's Stop). The same kill
      * the header's Kill does. Null = this client cannot, and the card shows no Stop.
      */
-    val killSession: ((sessionId: String) -> Unit)? = null,
+    val endCouncil: ((councilId: String) -> Unit)? = null,
     /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
     val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     /** Start following [accounts] (the first call fetches GET /accounts). */
@@ -286,7 +286,7 @@ fun rememberChatActions(
             setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
             messageSubagent = { id, text -> app.messageSubagent(session.id, id, text) },
             stopSubagent = { id -> app.stopSubagent(session.id, id) },
-            killSession = { id -> app.kill(id) },
+            endCouncil = { id -> app.endCouncil(id) },
             accounts = app.accounts,
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
@@ -957,7 +957,7 @@ fun ChatPanel(
                                 onOpenWalkthrough = { onOpenWalkthrough(null) },
                                 subagentUi = subagentUi,
                                 canOpenChat = canOpenChat,
-                                killSession = actions.killSession,
+                                endCouncil = actions.endCouncil,
                             )
                         }
                     }
@@ -1088,7 +1088,7 @@ fun ChatPanel(
                                 CouncilStrips(
                                     cards = remember(timelineItems) { timelineItems.filterIsInstance<TimelineItem.CouncilCard>() },
                                     onOpenFile = onOpenFile,
-                                    killSession = actions.killSession,
+                                    endCouncil = actions.endCouncil,
                                 )
                             }
                             RunningStrip(

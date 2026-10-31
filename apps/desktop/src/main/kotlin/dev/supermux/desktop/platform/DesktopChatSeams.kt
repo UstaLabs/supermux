@@ -183,6 +183,8 @@ internal class DesktopMicCapture(
         return CapturedAudio(wav, "dictation-live.wav", "audio/wav")
     }
 
+    override fun pcmSince(byteOffset: Long): ByteArray? = recorder.pcmSince(byteOffset)
+
     override suspend fun requestPermission(): Boolean = true
 
     override val available: Boolean

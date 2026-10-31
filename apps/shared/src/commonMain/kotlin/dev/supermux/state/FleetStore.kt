@@ -463,6 +463,14 @@ class FleetStore(
             }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
 
+    /** The ACTIVE host's mux home, bound like [activeProjectCatalog]. Null until its snapshot. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMuxHome: StateFlow<String?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.muxHome ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
     /**
      * Record ids of the connected hosts whose broker has sent a project catalog (an empty one
      * counts) — [HostStore.projectCatalogKnown] per host. An old broker never does, so "New
@@ -1347,6 +1355,15 @@ class FleetStore(
     }
     suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
+    /** Live dictation stream to the host a dictation would go to. THROWS when there is none or it fails. */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) {
+        val app = (sessionId?.let(::appFor) ?: activeApp()) ?: error("no host for this dictation")
+        app.openDictationStream(sessionId, dictationId, session)
+    }
     /** The probed voice capabilities of the host a dictation would go to. */
     suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
         (sessionId?.let(::appFor) ?: activeApp())?.appConfig()

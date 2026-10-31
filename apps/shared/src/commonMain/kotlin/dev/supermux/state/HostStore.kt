@@ -317,6 +317,8 @@ class HostStore(
         _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =
         _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val muxHome: StateFlow<String?> =
+        _state.map { it.muxHome }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentStateWithAgents() }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
@@ -930,6 +932,11 @@ class HostStore(
             runApi("kill") { api.kill(id) }
             onDone()
         }
+    }
+
+    /** Stop council: the broker ends the council and stops its members (a `council_update` follows). */
+    fun endCouncil(id: String) {
+        stateScope.launch { runApi("endCouncil") { api.endCouncil(id) } }
     }
 
     // ── Git ops + proxies (M4c; mirrors AppViewModel.gitFetch/gitPush/gitPull/gitPublish:566-569
@@ -2358,6 +2365,17 @@ class HostStore(
     /** Spoken-edit check for live dictation: the edited text, or null (dictation, or any failure). */
     suspend fun transcribeEdit(text: String, newWords: String): String? =
         runApi("transcribeEdit") { apiDictate.transcribeEdit(text, newWords) }?.text
+
+    /**
+     * Live dictation as a stream (`/transcribe/stream`, see [dev.supermux.net.DictationStreamClient]):
+     * runs [session] with the open socket and closes it when [session] returns. THROWS when the
+     * socket cannot be opened or breaks — the dictation then falls back to uploading its recording.
+     */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) = dev.supermux.net.DictationStreamClient(baseUrl, token, http).open(dictationId, sessionId, session)
 
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =

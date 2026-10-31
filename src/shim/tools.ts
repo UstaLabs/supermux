@@ -12,6 +12,24 @@ export function toolCallIdOf(meta: unknown): string | undefined {
   return typeof id === "string" && id ? id : undefined
 }
 
+/**
+ * Marks a tool that only sends an answer or a message and changes nothing on the machine. Claude in Plan
+ * mode refuses an MCP tool without it even when --allowedTools lists the tool (verified on 2.1.308,
+ * 2026-10-31): a council member or delegated child in Plan could then never report.
+ */
+const SENDS_ONLY = { readOnlyHint: true }
+
+/** A council member to start (council, council_add). */
+const COUNCIL_MEMBERS = {
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
+    required: ["agent", "access"],
+  },
+}
+
 const OUTBOUND_TOOLS = [
   {
     name: "attach",
@@ -78,7 +96,7 @@ const ORCHESTRATION_TOOLS = [
     description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
       "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
       "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. If it goes idle without reporting, supermux reminds it, then tells you. access: one of that agent's " +
-      "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
+      "ids in the access field (only modes that never wait for a person to approve: nobody sees a hidden session's prompts). checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
       "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
       "the task when omitted). It runs on the agent's account with the most room left.",
     inputSchema: {
@@ -101,23 +119,20 @@ const ORCHESTRATION_TOOLS = [
       "session list) that gets the question and answers with council_report; every answer is forwarded to you " +
       "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
       "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
-      "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
-      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made. " +
-      "Each member runs on its agent's account with the most room left. You are told when a member crashes, is killed " +
-      "by someone else, or a turn of it ends in an error.",
+      "that agent's ids in the access field (only modes that never wait for a person to approve). checkout applies to every member: \"shared\" works in your folder; " +
+      "\"worktree\" gives each member a new git worktree from your current branch. " +
+      "It returns as soon as the council is saved; the members start in the background, so don't wait for them or check " +
+      "on them: their answers arrive in your inbox. " +
+      "The user sees every member start, answer and fail live on the council card: don't update the user as answers " +
+      "arrive. You run the council: replace a member that fails with council_remove and council_add, start rounds with " +
+      "council_round, and when you have what you need, end it with council_end and a verdict, then tell the user the verdict once. " +
+      "Each member runs on its agent's account with the most room left. You are told when a member can't start, crashes, " +
+      "is stopped by the user or killed by someone else, or a turn of it ends in an error.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string" },
-        members: {
-          type: "array",
-          minItems: 1,
-          items: {
-            type: "object",
-            properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
-            required: ["agent", "access"],
-          },
-        },
+        members: COUNCIL_MEMBERS,
         checkout: { type: "string", enum: ["shared", "worktree"] },
       },
       required: ["question", "members", "checkout"],
@@ -130,8 +145,31 @@ const ORCHESTRATION_TOOLS = [
     inputSchema: { type: "object", properties: { council: { type: "string" }, focus: { type: "string" } }, required: ["council", "focus"] },
   },
   {
+    name: "council_add",
+    description: "Add members to a council you called, in its current round, with the next letters (e.g. to replace one that " +
+      "failed). Same member shape and checkout as council. Each gets the question, and after round 1 also the round's focus " +
+      "and the previous round's reports. Returns at once; they start in the background.",
+    inputSchema: {
+      type: "object",
+      properties: { council: { type: "string" }, members: COUNCIL_MEMBERS, checkout: { type: "string", enum: ["shared", "worktree"] } },
+      required: ["council", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_remove",
+    description: "Remove members from a council you called, by letter: their sessions are stopped. Their answers so far stay.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, letters: { type: "array", items: { type: "string" }, minItems: 1 } }, required: ["council", "letters"] },
+  },
+  {
+    name: "council_end",
+    description: "End a council you called once you have what you need: verdict is your conclusion in a few sentences, shown " +
+      "to the user on the council card. Stops the members still running. Then tell the user the verdict.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, verdict: { type: "string" } }, required: ["council", "verdict"] },
+  },
+  {
     name: "council_report",
     description: "Report your answer to the council you are a member of, for its current round. You can report more than once.",
+    annotations: SENDS_ONLY,
     inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
   },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
@@ -228,6 +266,7 @@ const ORCHESTRATION_TOOLS = [
     description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
       "interrupt=true interrupts its current turn; interrupt=false delivers after the current turn ends. " +
       "Your normal reply already reaches the user: this is only for other sessions.",
+    annotations: SENDS_ONLY,
     inputSchema: {
       type: "object",
       properties: {
@@ -273,9 +312,54 @@ type ToolCaller = {
 /** council_report is only for council members (spec §5): listed for them, refused for anyone else. */
 const MEMBER_ONLY = new Set(["council_report"])
 
-export function listTools(rpcOnly = false, opts: { councilMember?: boolean } = {}) {
+/**
+ * The access levels and efforts each agent takes (src/core/models/agent-choices.ts), from the broker's live catalog.
+ * A shim started by an older broker has none and serves the plain strings.
+ */
+export type ToolAgentChoices = Record<string, { access: Array<{ id: string; level: string; description: string }>; efforts: string[] | null }>
+
+/** The tools that start sessions on an agent: their access and effort get the catalog's values as enums. */
+const STARTS_SESSIONS = new Set(["delegate", "council", "council_add"])
+
+export function listTools(rpcOnly = false, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}) {
   if (rpcOnly) return RPC_TOOLS
-  return opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
+  const tools = opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
+  const choices = opts.choices
+  if (!choices) return tools
+  return tools.map((t) => (STARTS_SESSIONS.has(t.name) ? { ...t, inputSchema: withChoices(t.inputSchema as Record<string, unknown>, choices) as typeof t.inputSchema } : t))
+}
+
+/**
+ * access and effort as enums (every agent's values together: they depend on the agent, and a per-agent oneOf is
+ * poorly followed by some models), each described per agent so nothing is guessed. The broker checks the pair.
+ */
+function choiceProperties(choices: ToolAgentChoices): { access: Record<string, unknown>; effort: Record<string, unknown> } {
+  const agents = Object.keys(choices)
+  const accessIds = [...new Set(agents.flatMap((a) => choices[a]!.access.map((m) => m.id)))]
+  const efforts = [...new Set(agents.flatMap((a) => choices[a]!.efforts ?? []))]
+  // An agent whose efforts aren't known yet (no model catalog): no enum, or its valid values would be refused.
+  const unknown = agents.some((a) => choices[a]!.efforts === null)
+  const accessText = agents.map((a) => `${a}: ${choices[a]!.access.map((m) => `${m.id} (${m.level}: ${m.description})`).join("; ")}`).join("\n")
+  const effortText = agents.map((a) => {
+    const e = choices[a]!.efforts
+    return `${a}: ${e === null ? "see list_models" : e.length ? e.join(", ") : "none, leave effort out"}`
+  }).join("\n")
+  return {
+    access: { type: "string", enum: accessIds, description: `The member's access level; the agent's own ids only:\n${accessText}` },
+    effort: efforts.length && !unknown
+      ? { type: "string", enum: efforts, description: `Reasoning effort, optional; the agent's own values only (some depend on the model, see list_models):\n${effortText}` }
+      : { type: "string", description: `Reasoning effort, optional; the agent's own values only:\n${effortText}` },
+  }
+}
+
+function withChoices(schema: Record<string, unknown>, choices: ToolAgentChoices): Record<string, unknown> {
+  const fields = choiceProperties(choices)
+  const patch = (props: Record<string, unknown>) => ({ ...props, access: fields.access, effort: fields.effort })
+  const props = schema.properties as Record<string, unknown>
+  if ("access" in props) return { ...schema, properties: patch(props) }
+  // council / council_add: the fields sit in members' items.
+  const members = props.members as { items: { properties: Record<string, unknown> } } & Record<string, unknown>
+  return { ...schema, properties: { ...props, members: { ...members, items: { ...members.items, properties: patch(members.items.properties) } } } }
 }
 
 /**
@@ -294,10 +378,10 @@ export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined 
  * every register reply, so a shim started by an older build serves (and routes) this build's list.
  * undefined for mux-channel (it serves no tools) and for a shim that does not say which it is.
  */
-export function shimTools(server: string | undefined, opts: { councilMember?: boolean } = {}): ShimTool[] | undefined {
+export function shimTools(server: string | undefined, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}): ShimTool[] | undefined {
   if (server !== "mux-shim" && server !== "mux-rpc") return undefined
   const rpcOnly = server === "mux-rpc"
-  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, route: toolRoute(t.name, rpcOnly)! }))
+  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...("annotations" in t && t.annotations ? { annotations: t.annotations } : {}), route: toolRoute(t.name, rpcOnly)! }))
 }
 
 /**

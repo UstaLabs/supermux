@@ -4,13 +4,15 @@
  * council's name, round and focus, and how many members still work. A row per member: its letter,
  * agent and model, its status for the shown round and its latest report there in two lines. A tap
  * on a row opens every report of that member, round by round. Round chips at the foot switch the
- * round the rows show; Stop ends every member still alive, after a confirm.
+ * round the rows show; Stop ends the council (the broker stops its members), after a confirm.
+ *
+ * Once ended, the caller's verdict sits under the header (or who ended it, when there is none).
  *
  * The forwarded reports live only here (`mergeTimeline` folds their inbox rows out of the chat).
  *
  * Test tags: `council-card:<id>`, `council-headline:<id>`, `council-row:<id>:<letter>`,
  * `council-status:<id>:<letter>`, `council-preview:<id>:<letter>`, `council-body:<id>:<letter>`,
- * `council-chip:<id>:<round>`, `council-stop:<id>`, `council-stop-confirm:<id>`.
+ * `council-chip:<id>:<round>`, `council-stop:<id>`, `council-stop-confirm:<id>`, `council-verdict:<id>`.
  */
 package dev.supermux.ui.chat
 
@@ -36,6 +38,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -187,8 +190,8 @@ internal fun councilPreview(c: CouncilView, m: CouncilMember, round: Int, status
 fun CouncilCard(
     item: TimelineItem.CouncilCard,
     onOpenFile: (FilePathRef) -> Unit = {},
-    /** Ends one member's session (the session kill the header's Kill uses); null = no Stop. */
-    killSession: ((String) -> Unit)? = null,
+    /** Ends the council (POST /councils/<id>/end); null = no Stop. */
+    endCouncil: ((String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.md)
@@ -202,7 +205,7 @@ fun CouncilCard(
             .animateContentSize()
             .testTag("council-card:${item.council.id}"),
     ) {
-        CouncilCardBody(item, onOpenFile, killSession)
+        CouncilCardBody(item, onOpenFile, endCouncil)
     }
 }
 
@@ -211,7 +214,7 @@ fun CouncilCard(
 internal fun CouncilCardBody(
     item: TimelineItem.CouncilCard,
     onOpenFile: (FilePathRef) -> Unit = {},
-    killSession: ((String) -> Unit)? = null,
+    endCouncil: ((String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val c = item.council
@@ -226,6 +229,7 @@ internal fun CouncilCardBody(
     val open = openLetters.split(',').filter { it.isNotEmpty() }.toSet()
     val line = cs.outlineVariant.copy(alpha = 0.6f)
     Header(c, rounds, round, onPick = { pickedRound = it })
+    if (c.status == "ended") Verdict(c)
     for (m in c.members) {
         HorizontalDivider(thickness = Stroke.hairline, color = line, modifier = Modifier.padding(start = 14.dp))
         val status = councilMemberStatus(c, m, round)
@@ -245,7 +249,7 @@ internal fun CouncilCardBody(
         )
         if (expanded) MemberReports(c, m, onOpenFile)
     }
-    Footer(c, killSession = killSession)
+    Footer(c, endCouncil = endCouncil)
 }
 
 @Composable
@@ -425,11 +429,40 @@ private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePat
     }
 }
 
-/** Stop, as a quiet text action at the card's foot: only while a member still runs. */
+/** An ended council: the caller's verdict, or who ended it when there is none. */
 @Composable
-private fun Footer(c: CouncilView, killSession: ((String) -> Unit)?) {
-    val live = c.members.filter(::isLiveCouncilMember)
-    if (killSession == null || live.isEmpty()) return
+private fun Verdict(c: CouncilView) {
+    val cs = MaterialTheme.colorScheme
+    val verdict = c.verdict?.takeIf { it.isNotBlank() }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+            // Read as one: "Verdict" and the text.
+            .semantics(mergeDescendants = true) {}
+            .testTag("council-verdict:${c.id}"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            if (verdict != null) "Verdict" else councilEndedLabel(c),
+            style = MaterialTheme.typography.labelMedium,
+            color = cs.onSurfaceVariant,
+        )
+        if (verdict != null) Text(verdict, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+    }
+}
+
+/** Who ended a council that has no verdict. */
+internal fun councilEndedLabel(c: CouncilView): String = when (c.endedBy) {
+    "user" -> "Stopped by you"
+    "empty" -> "Ended: no members left"
+    else -> "Ended"
+}
+
+/** The card's foot: Show / Hide answers, and Stop as a quiet text action while the council is open. */
+@Composable
+private fun Footer(c: CouncilView, endCouncil: ((String) -> Unit)?) {
+    if (endCouncil == null || c.status != "open") return
     val cs = MaterialTheme.colorScheme
     var confirming by remember(c.id) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
@@ -438,21 +471,15 @@ private fun Footer(c: CouncilView, killSession: ((String) -> Unit)?) {
         }
     }
     if (confirming) {
-        val letters = live.joinToString(", ") { it.letter }
         AlertDialog(
             onDismissRequest = { confirming = false },
             title = { Text("Stop ${c.name.ifBlank { "the council" }}?") },
-            text = {
-                Text(
-                    if (live.size == 1) "This ends member $letters and its session. Its answers stay here."
-                    else "This ends members $letters and their sessions. Their answers stay here.",
-                )
-            },
+            text = { Text("This ends the council and stops its members. Their answers stay here.") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirming = false
-                        live.forEach { killSession(it.session) }
+                        endCouncil(c.id)
                     },
                     modifier = Modifier.testTag("council-stop-confirm:${c.id}"),
                 ) { Text("Stop", color = cs.error) }

@@ -267,8 +267,8 @@ afterEach(async () => {
 })
 
 function listen(adapter: CoreAdapter) {
-  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "session-failed", "commands-update", "activity"]) {
+  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean }> = []
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
@@ -951,6 +951,7 @@ acrossQueue("stall watchdog cancels through core after no activity", async (kind
   await flush()
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
   expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([expect.stringMatching(/stalled/)])
+  expect(events.filter((e) => e.kind === "turn-failed")).toHaveLength(0)
   expect(fake.interruptCalls).toBeGreaterThan(0)
 })
 
@@ -1114,8 +1115,14 @@ acrossQueue("unconfirmed stall retains latch", async (kind) => {
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(0)
   expect(events.filter((e) => e.kind === "turn-start")).toHaveLength(1)
+  // The turn stays open, so its failure is told now (a parent or council caller would wait forever)...
+  expect(events.filter((e) => e.kind === "turn-failed").map((e) => e.error?.message)).toEqual([expect.stringMatching(/stalled/)])
   fake.completePrompt()
   await sent.catch(() => {})
+  // ...and not told again when the turn does end.
+  await waitUntil(() => events.some((e) => e.kind === "turn-complete"))
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => [e.error?.message, e.reported])).toEqual([[expect.stringMatching(/stalled/), true]])
+  expect(events.filter((e) => e.kind === "turn-failed")).toHaveLength(1)
 })
 
 acrossGrok("direct and nested native params both flush assistant and replay commands", async (kind) => {

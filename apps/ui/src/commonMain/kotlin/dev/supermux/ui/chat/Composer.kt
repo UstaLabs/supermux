@@ -248,6 +248,9 @@ class ComposerActions(
     val checkEdit: (suspend (String, String) -> String?)? = null,
     /** Mic start (`/transcribe/warm`): open the broker connection a recording's passes reuse. */
     val transcribeWarm: (suspend (String) -> Unit)? = null,
+    /** Live dictation as a stream (`/transcribe/stream`): the broker hears the pauses and owns the
+     *  text. Used only when the broker says it can ([VoiceCaps.streaming]). */
+    val openDictationStream: OpenDictationStream? = null,
     /** Git ops for [ComposerFooter]; null hides the branch chip's menu (the label still renders). */
     val gitFetch: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
@@ -261,7 +264,7 @@ fun dev.supermux.net.TranscribeResponse.toLivePass(): LivePass =
 
 /** The probed voice fields of `/settings/config`, as the dictation controller wants them. */
 fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
-    VoiceCaps(codexAvailable = voiceCodexAvailable, livePartials = voiceLivePartials)
+    VoiceCaps(codexAvailable = voiceCodexAvailable, livePartials = voiceLivePartials, streaming = voiceStreaming)
 
 /**
  * [ComposerActions] wired to a [dev.supermux.state.HostStore] for one session — the ergonomic
@@ -282,6 +285,7 @@ fun rememberComposerActions(
         loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
         checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
         transcribeWarm = { id -> app.transcribeWarm(id) },
+        openDictationStream = { id, session -> app.openDictationStream(sessionId, id, session) },
         consumePendingFirst = { id -> app.consumePendingFirst(id)?.let { it.text to it.attachments } },
         gitFetch = { app.gitFetch(sessionId) },
         gitPull = { app.gitPull(sessionId) },
@@ -900,6 +904,7 @@ fun Composer(
         loadVoiceCaps = actions.loadVoiceCaps,
         checkEdit = actions.checkEdit,
         transcribeWarm = actions.transcribeWarm,
+        openDictationStream = actions.openDictationStream,
     )
     dictation.onDiscard = {
         dictationSegment?.let { setText(it.remove(text)) }

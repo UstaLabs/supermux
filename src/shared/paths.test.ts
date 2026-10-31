@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { dirname, join, sep } from "path"
-import { HOST_KEY_FILE, SESSION_INBOX_DIR, STATE_DIR, homeDirName, inboxFilePath } from "./paths"
+import { HOST_KEY_FILE, SESSION_INBOX_DIR, STATE_DIR, agentWorkdir, homeDirName, inboxFilePath, isMuxInternalPath } from "./paths"
 
 test("HOST_KEY_FILE lives under STATE_DIR", () => {
   expect(HOST_KEY_FILE).toBe(`${STATE_DIR}/host-key`)
@@ -22,4 +22,20 @@ test("homeDirName keeps an ordinary name, and makes any other one a single folde
   expect(homeDirName(escape)).toBe("..-..-..-..-.codex")
   expect(join(base, homeDirName(escape)).startsWith(base + sep)).toBe(true)
   expect(dirname(join(base, homeDirName(escape)))).toBe(base)
+})
+
+describe("isMuxInternalPath", () => {
+  const mux = "/home/a/.mux"
+  test("the mux home and agent folders are internal", () => {
+    expect(isMuxInternalPath("/home/a/.mux", mux)).toBe(true)
+    expect(isMuxInternalPath("/home/a/.mux/", mux)).toBe(true)
+    expect(isMuxInternalPath(agentWorkdir("Kahya", mux), mux)).toBe(true)
+    expect(isMuxInternalPath("/home/a/.mux/workspace/Kahya/sub", mux)).toBe(true)
+  })
+  test("everything else is a project", () => {
+    expect(isMuxInternalPath("/home/a/.mux/workspace", mux)).toBe(false)
+    expect(isMuxInternalPath("/home/a/.mux/state/projects/local/telpa", mux)).toBe(false)
+    expect(isMuxInternalPath("/home/a/.mux-other", mux)).toBe(false)
+    expect(isMuxInternalPath("/home/a/code/supermux", mux)).toBe(false)
+  })
 })

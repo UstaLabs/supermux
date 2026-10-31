@@ -15,6 +15,8 @@
 //   supermux __core-bridge → supermux-core's host-MCP bridge (spawned by an agent from its MCP config)
 //     A compiled binary has no keeper.js/bridge.js on disk, so the core launches these as
 //     `<binary> <subcommand>` (packages/supermux-core/src/self-entry.ts CORE_SUBCOMMANDS).
+//   supermux __speech-models-check → load the dictation stream's speech models in their workers
+//     and score one stretch of audio (scripts/smoke-binary.sh check 6)
 //
 // Dynamic imports are string literals so `bun build --compile` bundles them.
 import { versionString } from "./shared/build-info"
@@ -72,6 +74,10 @@ switch (sub) {
     process.argv.splice(2, 1)
     await import("../packages/supermux-core/src/mcp/bridge")
     break
+  case "__speech-models-check": {
+    const { runSpeechModelsCheck } = await import("./core/transcription/stream/check")
+    process.exit(await runSpeechModelsCheck())
+  }
   default:
     console.error(`supermux: unknown subcommand '${sub}'`)
     console.error(

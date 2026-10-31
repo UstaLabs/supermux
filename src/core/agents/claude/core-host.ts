@@ -184,8 +184,9 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         fastMode: registration.extra?.fastMode === true,
         tools: "default",
         // The rules every session launches with (--allowedTools): reading its inbox, with the Read tool (the whole
-        // inbox folder) and from a shell (exact commands on its own file only).
-        allowedTools: [...(inboxRule ? [inboxRule] : []), ...claudeInboxShellRules(inboxFilePath(registration.id, inboxDir))],
+        // inbox folder) and from a shell (exact commands on its own file only); and supermux's tools that only send
+        // an answer or a message, so an asking or "Don't ask" member/child can always report (verified 2026-10-31).
+        allowedTools: [...(inboxRule ? [inboxRule] : []), ...claudeInboxShellRules(inboxFilePath(registration.id, inboxDir)), ...CLAUDE_SENDS_ONLY_RULES],
         permissions: settings.initial,
         permissionPrompts: settings.permissionPrompts,
         partialMessages: true,
@@ -260,3 +261,6 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
 export function claudeSessionHome(name: string): string {
   return join(STATE_DIR, "agents", "claude", homeDirName(name))
 }
+
+/** supermux's mux-shim tools that only send an answer or a message: allowed in every Claude permission mode. */
+export const CLAUDE_SENDS_ONLY_RULES = ["mcp__mux-shim__council_report", "mcp__mux-shim__message_session"]

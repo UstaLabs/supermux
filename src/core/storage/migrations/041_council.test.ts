@@ -4,7 +4,7 @@ import { MIGRATIONS } from "./index"
 
 test("041 adds the council tables and the council tag columns on messages", () => {
   const db = openDb(":memory:")
-  runMigrations(db, MIGRATIONS)
+  runMigrations(db, MIGRATIONS.filter((m) => m.version <= 41))
   const cols = (t: string) => (db.query(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name)
   expect(cols("councils")).toEqual(["id", "name", "caller_session_id", "question", "current_round", "status", "call_id", "created_at"])
   expect(cols("council_members")).toEqual(["council_id", "session_id", "letter"])
