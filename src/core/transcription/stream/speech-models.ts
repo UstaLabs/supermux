@@ -4,8 +4,9 @@
 // One worker per model. They shared one for a day to save ~87 MB, but on the loaded box a Smart
 // Turn check took up to 5 s, and the speech frames queued behind it put the pause detector 1.4 s
 // behind the audio — and the pause detector is what every transcription waits for. The workers
-// start with the first dictation rather than at boot (the box is short of memory), warm up while
-// the user says their first words, and stop after [IDLE_MS] with no dictation.
+// start when a composer asks for the voice settings ([prewarm] — a cold start cost the first
+// sentence several seconds on the loaded box) or with a dictation, never at boot (the box is
+// short of memory), and stop after [IDLE_MS] with neither.
 
 import { IS_COMPILED } from "../../../shared/build-info"
 import { makeLogger } from "../../../shared/log"
@@ -44,6 +45,8 @@ export interface SpeechModels {
   openVad(onProbs: (probs: Float32Array) => void, onError: (err: Error) => void): VadStream
   /** Smart Turn: the probability that the speaker has finished, for 16 kHz audio ending now. */
   turn(audio: Float32Array): Promise<number>
+  /** Start both workers now (if they are not running), so a dictation soon finds them warm. */
+  prewarm?(): void
 }
 
 /** The part of a Worker this module uses; a parameter so tests can run without threads. */
@@ -177,6 +180,13 @@ export class WorkerSpeechModels implements SpeechModels {
     this.touch()
     worker.post({ op: "turn", reqId, audio: copy }, [copy.buffer])
     return p.finally(() => this.touch())
+  }
+
+  prewarm(): void {
+    for (const role of ["vad", "turn"] as const) {
+      try { this.worker(role) } catch { /* backing off after a failure: the dictation will say so */ }
+    }
+    this.touch()
   }
 
   /** Stop both workers now (tests, shutdown). */

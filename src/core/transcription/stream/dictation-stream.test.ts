@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DictationStream, type DictationStreamDeps, type StreamEvent } from "./dictation-stream"
+import { DictationStream, stripLeadingWords, type DictationStreamDeps, type StreamEvent } from "./dictation-stream"
 import type { VadStream } from "./speech-models"
 
 // The fakes speak a tiny language: audio is "speech" wherever it is non-zero, and a stretch of one
@@ -60,6 +60,8 @@ interface Harness {
   raw: StreamEvent[]
   texts: () => string[]
   stt: { words: number[]; context: string; final: boolean }[]
+  /** The lane of each [stt] call, in the same order. */
+  lanes: string[]
   turns: number
   vad: ReturnType<typeof fakeVad>
   push: (...parts: Int16Array[]) => Promise<void>
@@ -69,11 +71,13 @@ function harness(over: Partial<DictationStreamDeps> = {}): Harness {
   const events: unknown[] = []
   const raw: StreamEvent[] = []
   const stt: Harness["stt"] = []
+  const lanes: string[] = []
   const vad = fakeVad()
   const h: Harness = {
     events,
     raw,
     stt,
+    lanes,
     turns: 0,
     vad,
     texts: () => raw.filter((e) => e.type === "text").map((e) => (e as { text: string }).text),
@@ -89,6 +93,7 @@ function harness(over: Partial<DictationStreamDeps> = {}): Harness {
     transcribe: async (pcm, o) => {
       const ws = wordsOf(pcm)
       stt.push({ words: ws, context: o.context, final: o.final })
+      lanes.push(o.lane)
       return say(ws)
     },
     turn: async (audio) => {
@@ -105,6 +110,18 @@ function harness(over: Partial<DictationStreamDeps> = {}): Harness {
   })
   return h
 }
+
+describe("stripLeadingWords", () => {
+  test("drops a sentence's words off the front, ignoring case and punctuation", () => {
+    expect(stripLeadingWords("Then merge it to dev, and tell me.", "then merge it to dev.")).toBe("and tell me.")
+    expect(stripLeadingWords("On the screen. Can you check?", "on the screen")).toBe("Can you check?")
+    expect(stripLeadingWords("Same words.", "Same words")).toBe("")
+  })
+  test("null when the text does not begin with them", () => {
+    expect(stripLeadingWords("On a screen. Can you", "on the screen")).toBeNull()
+    expect(stripLeadingWords("short", "short and long")).toBeNull()
+  })
+})
 
 describe("DictationStream", () => {
   test("a pause sends the sentence; a finished one is locked and the next pass starts after it", async () => {
@@ -136,14 +153,63 @@ describe("DictationStream", () => {
     expect(h.events).toEqual([])
   })
 
-  test("talking without a pause still updates the text, without locking", async () => {
+  test("words show while talking, on their own lane, without locking", async () => {
     const h = harness()
-    await h.push(word(1, 3000), word(2, 2500))
-    expect(h.stt.length).toBe(1)
+    await h.push(word(1, 1500), word(2, 1500))
+    // A pass about every 1.2 s of speech, none of them judged or locked.
+    expect(h.stt.length).toBeGreaterThanOrEqual(2)
+    expect(h.lanes.every((l) => l === "live")).toBe(true)
     expect(h.turns).toBe(0)
+    expect(h.texts().length).toBeGreaterThanOrEqual(2)
     await h.push(quiet(400))
-    // The pause redoes the whole stretch, from the same start.
-    expect(h.stt[1]!.words).toEqual([1, 2])
+    // The pause transcribes the whole stretch again, from the same start, on the main lane.
+    expect(h.stt.at(-1)!.words).toEqual([1, 2])
+    expect(h.lanes.at(-1)).toBe("main")
+  })
+
+  test("a sentence that ends just after a while-talking pass still gets its pause pass", async () => {
+    const h = harness()
+    // 1.3 s of speech: the while-talking pass comes at ~1.2 s, the sentence ends ~0.1 s later.
+    await h.push(word(1, 1300), quiet(400))
+    expect(h.lanes).toEqual(["live", "main"])
+    expect(h.turns).toBe(1)
+  })
+
+  test("a slow while-talking pass never holds up the pause, and its late answer is dropped", async () => {
+    let releaseRun!: () => void
+    const runGate = new Promise<void>((r) => { releaseRun = r })
+    const h = harness({ transcribe: async (pcm, o) => { if (o.lane === "live") await runGate; return say(wordsOf(pcm)) } })
+    h.stream.pushAudio(bytes(word(1, 1300)))
+    h.stream.pushAudio(bytes(word(101, 400), quiet(400)))
+    await h.stream.whenIdle(false)
+    expect(h.texts()).toEqual(["w1 w101"])
+    releaseRun()
+    await h.stream.whenIdle()
+    // The stuck pass covered less audio than the pause's: it must not take words back.
+    expect(h.texts()).toEqual(["w1 w101"])
+  })
+
+  test("Stop does not wait for a while-talking pass, and drops its answer", async () => {
+    let releaseRun!: () => void
+    const runGate = new Promise<void>((r) => { releaseRun = r })
+    const h = harness({ transcribe: async (pcm, o) => { if (o.lane === "live") await runGate; return say(wordsOf(pcm)) } })
+    h.stream.pushAudio(bytes(word(1, 1300)))
+    await h.stream.stop()
+    expect(h.events.slice(-2)).toEqual([{ type: "final", text: "w1" }, { type: "done" }])
+    releaseRun()
+    await h.stream.whenIdle()
+    expect(h.texts()).toEqual([])
+  })
+
+  test("Stop after a while-talking text runs a final pass: that text may end mid-word", async () => {
+    const h = harness()
+    // 1.25 s of speech: the while-talking pass at ~1.2 s leaves too little speech after it for the
+    // usual "more was said" rule.
+    await h.push(word(1, 1250))
+    expect(h.lanes).toEqual(["live"])
+    await h.stream.stop()
+    expect(h.lanes.at(-1)).toBe("main")
+    expect(h.stt.at(-1)).toEqual({ words: [1], context: "", final: true })
   })
 
   test("Stop right after a pass: no extra transcription", async () => {
@@ -215,6 +281,26 @@ describe("DictationStream", () => {
     expect(h.stt.map((c) => c.words)).toEqual([[1, 101], [2, 102]])
     expect(h.stt[1]!.context).toBe("w1 w101")
     expect(h.texts().at(-1)).toBe("w1 w101 w2 w102")
+  })
+
+  test("a late 'finished' splits its sentence off a newer while-talking text", async () => {
+    const h = harness({
+      turn: (audio) => {
+        const ws = wordsOf(audio)
+        const p = (ws[ws.length - 1] ?? 0) >= 100 ? 0.9 : 0.1
+        return new Promise((r) => setTimeout(() => r(p), 700))
+      },
+    })
+    await h.push(word(1), word(101), quiet(400))
+    // The user talks on: a while-talking pass shows the next words before the verdict lands.
+    await h.push(word(2, 1300))
+    expect(h.texts().at(-1)).toBe("w1 w101 w2")
+    await Bun.sleep(400)
+    // The verdict ("finished") has landed: the first sentence is locked, the rest stays open...
+    expect(h.texts().at(-1)).toBe("w1 w101 w2")
+    await h.push(quiet(400))
+    // ...so the next pause transcribes only the new sentence.
+    expect(h.stt.at(-1)).toEqual({ words: [2], context: "w1 w101", final: false })
   })
 
   test("Stop does not wait for Smart Turn", async () => {
