@@ -1,9 +1,8 @@
 // The dictation stream's speech models, in a worker thread so their inference never runs on the
 // broker's main thread: a Smart Turn check takes ~0.4 s on the WebAssembly runtime, and Silero
-// scores every 32 ms of every live dictation. Both share ONE worker: each worker costs ~100 MB
-// for the runtime alone (measured 2026-10-31: 141 MB with Silero, +114 MB for a second one with
-// Smart Turn), and frames that wait behind a turn check (which only runs right after a pause)
-// catch up in a few milliseconds.
+// scores every 32 ms of every live dictation. One worker per model (`init` names the role):
+// sharing one saved ~87 MB, but on the loaded box a Smart Turn check took up to 5 s, and the
+// speech frames queued behind it put the pause detector 1.4 s behind the audio (2026-10-31).
 //
 // The runtime is onnxruntime-web's WebAssembly build, not onnxruntime-node: it works inside a
 // `bun build --compile` binary (the `/wasm` entry inlines its glue and the .wasm is embedded as a
@@ -18,7 +17,7 @@ import * as ort from "onnxruntime-web/wasm"
 import wasmPath from "onnxruntime-web/ort-wasm-simd-threaded.wasm" with { type: "file" }
 import sileroPath from "./models/silero_vad_v5.onnx" with { type: "file" }
 import smartTurnPath from "./models/smart-turn-v3.2-cpu.onnx" with { type: "file" }
-import type { ToWorker, FromWorker } from "./speech-models"
+import type { ToWorker, FromWorker, ModelRole } from "./speech-models"
 
 declare var self: Worker
 
@@ -44,13 +43,16 @@ const streams = new Map<string, VadState>()
 
 const post = (msg: FromWorker, transfer?: ArrayBuffer[]) => self.postMessage(msg, transfer ?? [])
 
-async function load(): Promise<void> {
-  silero = await ort.InferenceSession.create(readFileSync(sileroPath))
-  smartTurn = await ort.InferenceSession.create(readFileSync(smartTurnPath))
+async function load(role: ModelRole): Promise<void> {
   // The first inference is several times slower than the rest (~1.4 s vs ~0.4 s for Smart Turn
   // on the GMKtec box): pay it here, not at the user's first pause.
-  await vadFrames({ state: new Float32Array(256), context: new Float32Array(CONTEXT), carry: new Float32Array(0) }, new Float32Array(FRAME))
-  await turnProbability(new Float32Array(16_000))
+  if (role === "vad") {
+    silero = await ort.InferenceSession.create(readFileSync(sileroPath))
+    await vadFrames({ state: new Float32Array(256), context: new Float32Array(CONTEXT), carry: new Float32Array(0) }, new Float32Array(FRAME))
+  } else {
+    smartTurn = await ort.InferenceSession.create(readFileSync(smartTurnPath))
+    await turnProbability(new Float32Array(16_000))
+  }
 }
 
 /** Score every whole frame in [samples] (appended to the stream's carry), in order. */
@@ -91,7 +93,7 @@ async function handle(msg: ToWorker): Promise<void> {
   switch (msg.op) {
     case "init":
       try {
-        await load()
+        await load(msg.role)
         post({ op: "ready" })
       } catch (e) {
         post({ op: "failed", message: e instanceof Error ? e.message : String(e) })
