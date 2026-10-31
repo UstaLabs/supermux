@@ -265,6 +265,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private failureEmitted = false
   /** Why the running turn failed (decision #17): its first failure, sent with its turn-complete. */
   private turnFailure?: Error
+  /** The running turn's failure was already told with a turn-failed event (an unconfirmed stall). */
+  private turnFailureReported = false
   /** A retry the agent announced (a recoverable error, e.g. Codex "Reconnecting... 1/5") was shown this turn. */
   private retryEmitted = false
   private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
@@ -1199,6 +1201,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.failureEmitted = false
       this.retryEmitted = false
       this.turnFailure = undefined
+      this.turnFailureReported = false
       this.emit("turn-start", { kind: "turn-start" })
     }
   }
@@ -1235,10 +1238,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   /** Ends the running turn: turn-complete, with the turn's failure when it failed (decision #17). */
   private endTurn(): void {
     const error = this.turnFailure
+    const reported = this.turnFailureReported
     this.turnFailure = undefined
+    this.turnFailureReported = false
     if (!this.turnActive) return
     this.turnActive = false
-    this.emit("turn-complete", { kind: "turn-complete", ...(error ? { error } : {}) })
+    this.emit("turn-complete", { kind: "turn-complete", ...(error ? { error } : {}), ...(error && reported ? { reported } : {}) })
   }
 
   private armStall(): void {
@@ -1250,8 +1255,16 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       )
       this.noteTurnFailure(error)
       this.surfaceFailure(error, { completeTurn: false })
-      void this.interrupt().catch(() => {})
+      // An unconfirmed interrupt leaves the turn open, maybe for good (a wedged agent ignores every cancel):
+      // its failure is told now, or a parent or council caller waiting on it would never hear.
+      void this.interrupt().catch(() => this.reportOpenFailure())
     }, this.stallTimeoutMs)
+  }
+
+  private reportOpenFailure(): void {
+    if (!this.turnActive || !this.turnFailure || this.turnFailureReported) return
+    this.turnFailureReported = true
+    this.emit("turn-failed", { kind: "turn-failed", error: this.turnFailure })
   }
 
   private disarmStall(): void {

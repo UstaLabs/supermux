@@ -164,7 +164,7 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -1789,14 +1789,26 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       settleChanged(sessionId)
       return
     }
-    // A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
-    // unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
-    // willSwitchAccount is read now, while the switch is still pending.
+    // Told already while the turn still ran (turn-failed).
+    if (ev.reported) {
+      settleChanged(sessionId)
+      return
+    }
+    reportFailedTurn(ev.error)
+  })
+  // A turn that failed but stays open (an unconfirmed stall): told now, its turn-complete may never come.
+  adapter.on("turn-failed", (ev: TurnFailedEvent) => reportFailedTurn(ev.error))
+  /**
+   * A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
+   * unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
+   * willSwitchAccount is read now, while the switch is still pending.
+   */
+  function reportFailedTurn(error: Error): void {
     const turnAtEnd = turnsStarted
     const crashesAtEnd = crashes
     // Not settled while it is decided: a failed-turn notice tells the parent already (decision #21).
     const hold = childSettle.hold(sessionId)
-    void failedTurn(ev.error.message, {
+    void failedTurn(error.message, {
       isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
       newerTurn: () => turnsStarted !== turnAtEnd,
       continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
@@ -1807,7 +1819,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       },
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(hold.release)
-  })
+  }
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the

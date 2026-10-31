@@ -30,7 +30,13 @@ export type ToolCallEvent = {
 
 export type TurnStartEvent    = { kind: "turn-start" }
 /** `error`: the turn ended in this failure (decision #17). The agent still runs unless "session-failed" follows. */
-export type TurnCompleteEvent = { kind: "turn-complete"; error?: Error }
+/** `reported`: a turn-failed event already told about this failure while the turn still ran. */
+export type TurnCompleteEvent = { kind: "turn-complete"; error?: Error; reported?: boolean }
+/**
+ * The running turn failed but could not be ended: it stalled and the interrupt went unconfirmed, so the
+ * agent may never finish it. Its parent or council caller hears it now, not at a turn-complete that may never come.
+ */
+export type TurnFailedEvent = { kind: "turn-failed"; error: Error }
 // errorType is the agent's own classification (e.g. Claude's StopFailure error_type);
 // omitted by stream-derived adapters, which fall back to a generic "error".
 // recoverable: the agent retries on its own (Codex willRetry), so the turn goes on.
@@ -107,6 +113,7 @@ export type AgentEvent =
   | ToolCallEvent
   | TurnStartEvent
   | TurnCompleteEvent
+  | TurnFailedEvent
   | AgentErrorEvent
   | ActivityCardsEvent
   | RequestOpenEvent
