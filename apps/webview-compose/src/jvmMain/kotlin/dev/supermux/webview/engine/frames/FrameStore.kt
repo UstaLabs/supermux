@@ -103,6 +103,13 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
     val hidesAll: Boolean get() = showFrom == Long.MAX_VALUE
 
     /**
+     * Whether the last [pull] found every block held (guarded): the engine's newest frame waits, and must be pulled again
+     * once a recording is drawn, as nothing new may come from a page that stopped changing.
+     */
+    var waiting: Boolean = false
+        private set
+
+    /**
      * Shows nothing older than the engine's frame [seq]: the frame shown goes unless it is that one or a newer one. Hidden
      * frames are still pulled, as WebKit waits for that, and the first one shown after them is copied whole.
      */
@@ -121,10 +128,14 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
 
     /** Copies the engine's newest frame: only what changed in it, unless [full]. True if [image] changed. */
     fun pull(full: Boolean): Boolean {
+        waiting = false
         if (closed) return false
         var block = writable()
         // Every block may still be drawn (guarded): the frame waits; the engine keeps its newest for the next pull.
-        if (block == null && blocks.isNotEmpty()) return false
+        if (block == null && blocks.isNotEmpty()) {
+            waiting = true
+            return false
+        }
         // A guarded store's other blocks have the room of the frames of their time: the glue copies the frame at the
         // store's size, so a block without room for it is given room first (else the copy writes past its end).
         if (block != null && !block.fits(width, height)) block = sized(block, width, height)

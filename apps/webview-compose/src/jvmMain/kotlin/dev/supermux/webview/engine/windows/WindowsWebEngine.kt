@@ -1042,6 +1042,9 @@ internal class WindowsWebEngine(
     internal fun onSurfaceFrame(full: Boolean) {
         if (released) return
         frames.pull(full)
+        // Every block still held by skiko's recordings: the surface pulls again at its next frame, as WebView2 sends no
+        // other for a page that stopped changing.
+        if (frames.waiting) frameSignal.trySend(Unit)
         advanceHandoff()
     }
 

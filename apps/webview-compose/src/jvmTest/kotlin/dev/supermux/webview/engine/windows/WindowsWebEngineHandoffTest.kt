@@ -14,7 +14,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.Bitmap
+import org.jetbrains.skia.Image
+import org.jetbrains.skia.Picture
 import org.jetbrains.skia.PictureRecorder
 import org.jetbrains.skia.Rect
 import org.jetbrains.skia.Surface
@@ -258,6 +261,37 @@ class WindowsWebEngineHandoffTest {
         surface.close()
         recording.close()
         rig.close()
+    }
+
+    @Test fun aFrameWaitingForAFreeBlockIsPulledWithoutAnotherFromWebView2() = runTest {
+        // Every block held by recordings skiko hasn't drawn yet: the newest frame waits. WebView2 sends nothing more for a
+        // page that stopped changing, so the surface must be asked to pull again, or the view shows an older frame.
+        val rig = WinRig(this)
+        rig.warm()
+        rig.show(demo, demo.origin.url)
+        rig.paints()
+        rig.drawnInPlace()
+        val held = mutableListOf<Picture>()
+        var seq = 1L
+        while (true) {
+            held += record(assertNotNull(rig.engine.frames.image))
+            rig.page.frame = Triple(320, 480, ++seq)
+            while (withTimeoutOrNull(10) { rig.engine.awaitSurfaceWork() } != null) Unit   // what was asked before
+            rig.engine.onSurfaceFrame(full = false)
+            if (rig.engine.frames.seq != seq) break   // every block held: the frame waits
+            assertTrue(seq < 10, "the store took a block for every frame")
+        }
+        assertNotNull(withTimeoutOrNull(10) { rig.engine.awaitSurfaceWork() }, "the surface is asked to pull again")
+        held.removeAt(0).close()   // skiko drew the oldest recording
+        rig.engine.onSurfaceFrame(full = false)
+        assertEquals(seq, rig.engine.frames.seq, "the waiting frame, once a block is free")
+        held.forEach { it.close() }
+        rig.close()
+    }
+
+    private fun record(image: Image): Picture = PictureRecorder().let { recorder ->
+        recorder.beginRecording(Rect.makeWH(image.width.toFloat(), image.height.toFloat())).drawImage(image, 0f, 0f)
+        recorder.finishRecordingAsPicture().also { recorder.close() }
     }
 
     @Test fun theSnapshotIsTheLastFrameAtItsPixels() = runTest {
