@@ -10,8 +10,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * What the Windows engine needs before its first page (D20): Windows with visual capture, the glue, a WebView2 runtime of
  * 120 or later, and the process's environment on the app's own data folder. Started once, off the EDT, when the factory
- * is made (L29); a browser process that exits makes the next start open a new environment. Every failure is
- * [State.Unavailable] with its reason, never a crash.
+ * is made (L29); a browser process that exits, or a page the environment can't make, makes the next start ask again.
+ * Every failure is [State.Unavailable] with its reason, never a crash.
  */
 internal object Wv2Runtime {
     const val MIN_RUNTIME: String = "120.0.0.0"
@@ -62,12 +62,16 @@ internal object Wv2Runtime {
     @Volatile
     private var state: State? = null
 
-    /** The process's start: once, and again after the browser process exited ([browserExited]). */
+    /**
+     * The process's start: once, and again after its browser process exited or a page couldn't be made
+     * ([browserExited]).
+     */
     suspend fun start(host: Host = Host.system()): State = mutex.withLock { state ?: load(host).also { state = it } }
 
     /**
-     * The environment's browser process is gone: it crashed (its engines crashed with it), or its last page closed (it
-     * exits then, and `createPage` fails with no environment). Either way the next engine's [start] opens it again.
+     * The environment's browser process is gone (it crashed, its engines with it, or its last page closed), or a page
+     * couldn't be made on the environment. The next engine's [start] asks the glue again: for the same environment, to
+     * which WebView2 binds a new browser process, or for a new one if the glue let it go (a page's making failed on it).
      */
     fun browserExited() {
         if (state is State.Ready) state = null

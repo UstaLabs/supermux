@@ -474,6 +474,28 @@ object WindowsChecks {
             val floor = events.events.filterIsInstance<EngineEvent.UrlChanged>().filter { it.url?.contains("floor.invalid") == true }
             assertTrue(floor.isEmpty(), "the floor was reported: $floor")
         },
+        Check("an-engine-made-right-after-the-last-ones-release-is-quick") {
+            // An app's last engine released, another made 300 ms later, then a second as the browser's exit is told: each
+            // in under 3 s. WebView2 starts a browser for the folder only once the last one has exited, and a page that
+            // went right after its load left a SmartScreen check that held that exit 6 s; an environment opened again
+            // after the exit made the second page wait for the first's browser (run 8's "phase Cold" for 10 s).
+            for ((round, after) in listOf(0L, 150L, 300L, 600L, 1_000L).withIndex()) {
+                val last = engine()
+                val events = record(last)
+                start(last, page("brief-$round"))
+                events.await("the commit") { it is EngineEvent.UrlChanged }
+                delay(after)
+                last.release()
+                delay(300)   // the browser goes, with nothing of the app's left: an engine made now needs another
+                val (first, firstMs) = timed { engine() }
+                delay(600)
+                val (second, secondMs) = timed { engine() }
+                assertTrue(firstMs < 3_000 && secondMs < 3_000, "released $after ms after its commit: made in $firstMs and $secondMs ms")
+                first.release()
+                second.release()
+                delay(1_500)
+            }
+        },
         Check("an-app-started-offline-shows-the-error") {
             // L3: a view whose page fails shows the error (live, no cover), within 10 s.
             val stage = ViewStage(WebContent.Url("https://nowhere.invalid/page"))
@@ -697,6 +719,7 @@ object WindowsChecks {
         },
     )
 
+
     /** The V-questions that only running WebView2 answers (the plan's V4, V5, V7), as checks. */
     private val questions: List<Check> = listOf(
         Check("a-back-navigation-is-a-new-document") {
@@ -798,6 +821,13 @@ object WindowsChecks {
         val out = process.inputStream.bufferedReader().readText()
         process.waitFor()
         out.lines().mapNotNull { it.trim().toLongOrNull() }.toSet()
+    }
+
+    /** What [block] gives, and how long it took, in ms. */
+    private suspend fun <T> timed(block: suspend () -> T): Pair<T, Long> {
+        val start = System.nanoTime()
+        val value = block()
+        return value to (System.nanoTime() - start) / 1_000_000
     }
 
     /** Hangs [engine]'s page in a loop, and returns its renderer: the one that then spins. */

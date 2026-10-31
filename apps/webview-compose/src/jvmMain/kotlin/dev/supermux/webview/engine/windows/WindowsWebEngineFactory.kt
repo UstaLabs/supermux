@@ -52,6 +52,8 @@ internal class WindowsWebEngineFactory(
             throw e
         }
         if (made == null || !made.ok) {
+            // The glue let the environment go if it couldn't make the page on it: the next engine opens it anew.
+            Wv2Runtime.browserExited()
             // Released now: a page WebView2 makes after all is closed as it arrives (WvPage::onCreated).
             WinGlue.release(token)
             WinPages.forget(token)

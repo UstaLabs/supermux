@@ -67,6 +67,8 @@ void WvPage::create(std::wstring profile, bool inPrivate, uint32_t background) {
                     return S_OK;
                 }
                 if (FAILED(result) || !composition) {
+                    // The environment can't make pages: the next page opens a new one (the engine's factory asks again).
+                    Environment::get().forget(self->env_.get());
                     emit(self->token_, kCreated, 0, 0, FAILED(result) ? result : E_POINTER, L"CreateCoreWebView2CompositionController");
                     return S_OK;
                 }
@@ -166,6 +168,10 @@ void WvPage::applySettings() {
     settings_->put_IsPinchZoomEnabled(FALSE);
     settings_->put_IsSwipeNavigationEnabled(FALSE);
     settings_->put_AreDevToolsEnabled(FALSE);
+    // SmartScreen off: it sent every page's URL to Microsoft at its navigation (the app's own https://*.invalid content
+    // too), and a check still on its way when the page closed held WebView2's browser process 6 s from exiting, so the
+    // next engine, which needs a browser of its own once the last is going, waited for it (8 s on the VM).
+    if (auto settings8 = settings_.try_as<ICoreWebView2Settings8>()) settings8->put_IsReputationCheckingRequired(FALSE);
     profile_->put_IsPasswordAutosaveEnabled(FALSE);
     profile_->put_IsGeneralAutofillEnabled(FALSE);
     CoString agent;

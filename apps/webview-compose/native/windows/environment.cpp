@@ -56,13 +56,14 @@ void Environment::open(int64_t request, std::wstring folder, std::wstring argume
                     env5->add_BrowserProcessExited(
                         Callback<ICoreWebView2BrowserProcessExitedEventHandler>(
                             [this](ICoreWebView2Environment* sender, ICoreWebView2BrowserProcessExitedEventArgs*) -> HRESULT {
-                                // Only the current environment's: an older one's late news must not drop a newer one.
+                                // Only the current environment's: an older one's late news is no one's.
                                 winrt::com_ptr<IUnknown> who;
                                 if (sender) sender->QueryInterface(IID_PPV_ARGS(who.put()));
                                 if (!identity_ || who.get() != identity_.get()) return S_OK;
-                                env10_ = nullptr;
-                                env3_ = nullptr;
-                                identity_ = nullptr;
+                                // The environment stays: WebView2 binds a new browser process to it for the next page (the
+                                // SDK's BrowserProcessExited). Made anew here, it was a second environment on the same
+                                // folder, while a page made in the exit window had WebView2 start a browser for the first:
+                                // the second's pages waited seconds for that browser to go.
                                 emit(0, kBrowserExited, 0, 0, 0);
                                 return S_OK;
                             }).Get(),
@@ -72,6 +73,13 @@ void Environment::open(int64_t request, std::wstring folder, std::wstring argume
                 return S_OK;
             }).Get());
     if (FAILED(hr)) finish(hr, L"");
+}
+
+void Environment::forget(ICoreWebView2Environment10* env) {
+    if (!env || env != env10_.get()) return;
+    env10_ = nullptr;
+    env3_ = nullptr;
+    identity_ = nullptr;
 }
 
 void Environment::finish(HRESULT hr, std::wstring const& version) {
