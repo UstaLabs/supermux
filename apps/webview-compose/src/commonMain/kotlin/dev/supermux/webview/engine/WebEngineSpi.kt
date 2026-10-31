@@ -14,7 +14,7 @@ package dev.supermux.webview.engine
  * parking and [WebEngine.replayState]; [WebEngine.overlaysAtSnapshot]; [EngineEvent.PaintLost];
  * [WebEngineFactory.namedProfilesPersist]; [WebEngine.onUnusable]), and it will change again, with no deprecation
  * cycle. Apps pass factories around ([dev.supermux.webview.runtime.platformWebEngineFactory],
- * [dev.supermux.webview.runtime.WebViewRuntime.factory]) without opting in.
+ * [dev.supermux.webview.runtime.RuntimeConfig.factory]) without opting in.
  *
  * Opt in where you implement or drive an engine, `@OptIn(WebEngineSpi::class)`, or for a module of engines with the
  * compiler option `-opt-in=dev.supermux.webview.engine.WebEngineSpi` (Gradle: `languageSettings.optIn(…)` on each source
