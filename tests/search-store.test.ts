@@ -5,6 +5,7 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { MIGRATIONS } from "../src/core/storage/migrations"
 import { SearchStore, messageSnippet } from "../src/core/search/store"
+import { SessionStore } from "../src/core/session-manager/session-store"
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "mux-search-"))
@@ -119,6 +120,32 @@ test("message search: LIKE wildcards in the query are literal; one session filte
   expect(s.searchMessages("   ")).toEqual([])
 })
 
+test("message search: every hit says its channel, and an inbox message names its sender", () => {
+  const { db, home } = setup()
+  seedMessages(db)
+  db.run(
+    "INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, text, from_session_id, from_session_name) VALUES (?, '', ?, ?, 'inbound', 'inbox', '', ?, ?, ?)",
+    ["in:inbox:m1", "s1", "2026-10-06T10:00:00.000Z", "deploy the hotfix please", "s-4", "personal-4"],
+  )
+  const hits = new SearchStore(db, home).searchMessages("deploy")
+  expect(hits.find((h) => h.message_id === "in:inbox:m1")).toMatchObject({ direction: "inbound", channel: "inbox", from_session_name: "personal-4" })
+  const typed = hits.find((h) => h.message_id === "m1")
+  expect(typed).toMatchObject({ direction: "inbound", channel: "web" })
+  expect(typed).not.toHaveProperty("from_session_name")
+})
+
+test("message search: a delegated child's messages are left out", () => {
+  const { db, home } = setup()
+  const ins = "INSERT INTO sessions (id, name, status, agent, workdir, mute, can_orchestrate, created_at, role, is_default, internal) VALUES (?,?,?,?,?,0,0,'2026-10-01T00:00:00.000Z','worker',0,0)"
+  db.run(ins, ["p1", "parent", "active", "claude", "/repo/a"])
+  db.run(ins, ["c1", "child", "active", "codex", "/repo/a"])
+  new SessionStore(db).setParent("c1", "p1")
+  const msg = "INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, op, text) VALUES (?, '', ?, ?, 'outbound', 'web', 'web:x', 'reply', ?)"
+  db.run(msg, ["m1", "p1", "2026-10-01T10:00:00.000Z", "the migration is done"])
+  db.run(msg, ["m2", "c1", "2026-10-02T10:00:00.000Z", "the migration is done here too"])
+  expect(new SearchStore(db, home).searchMessages("migration").map((h) => h.message_id)).toEqual(["m1"])
+})
+
 test("message snippet centres the match and marks cuts", () => {
   const long = `${"a ".repeat(100)}NEEDLE here${" b".repeat(100)}`
   const snip = messageSnippet(long, "needle", 10)
@@ -126,4 +153,36 @@ test("message snippet centres the match and marks cuts", () => {
   expect(snip.endsWith("…")).toBe(true)
   expect(snip).toContain("NEEDLE here")
   expect(messageSnippet("short\n\ntext", "text")).toBe("short text")
+})
+
+function withAgentMemory() {
+  const { db, home } = setup()
+  mkdirSync(join(home, "agent-memory"), { recursive: true })
+  writeFileSync(join(home, "agent-memory", "agent-a.md"), "## Watch PRs (2026-10-29)\nWatch the zephyr repo.\n")
+  writeFileSync(join(home, "agent-memory", "agent-a.digest.md"), "## Current\nThe zephyr repo is watched daily.\n")
+  writeFileSync(join(home, "agent-memory", "agent-b.digest.md"), "## Current\nZephyr deploys on Fridays.\n")
+  return { db, home }
+}
+
+test("a worker's search never returns Agent memory", () => {
+  const { db, home } = withAgentMemory()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  expect(s.searchKnowledge("zephyr", { includePersonal: false, limit: 10 })).toEqual([])
+})
+
+test("an Agent's search covers its own two files, never another Agent's", () => {
+  const { db, home } = withAgentMemory()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  const hits = s.searchKnowledge("zephyr", { includePersonal: true, agentId: "agent-a", limit: 10 })
+  expect(hits.map(h => h.path).sort()).toEqual([join(home, "agent-memory", "agent-a.digest.md"), join(home, "agent-memory", "agent-a.md")])
+})
+
+test("soul.md is no longer indexed", () => {
+  const { db, home } = setup()
+  writeFileSync(join(home, "soul.md"), "## Soul\nquixotic\n")
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  expect(s.searchKnowledge("quixotic", { includePersonal: true, limit: 10 })).toEqual([])
 })

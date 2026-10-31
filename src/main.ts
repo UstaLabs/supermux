@@ -1,8 +1,10 @@
 // src/main.ts
+import { avatarRev } from "./core/agents/avatar"
+import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
 import { WhatsAppChannel } from "./channels/whatsapp"
-import { WebChannel } from "./channels/web"
+import { WebChannel, WEB_CAPABILITIES, type WebChannelOpts } from "./channels/web"
 import { buildProxyPublicUrl } from "./channels/web/proxy"
 import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
@@ -44,7 +46,9 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
+import { announceCreated, createSession, type CreateSessionArgs, type CreateSessionDeps, type CreatedSession } from "./core/session-manager/create-session"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { setSessionRoleLookup } from "./core/agents/instructions"
 import { closeAntigravityCoreHost, getAntigravityCoreHost } from "./core/agents/antigravity/core-host-provider"
 import { closeCodexCoreHost, getCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { attachmentMeta } from "./core/agents/attachment-meta"
@@ -52,6 +56,7 @@ import { closeOpenCodeCoreHost, getOpenCodeCoreHost } from "./core/agents/openco
 import { closeCursorCoreHost, getCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { closeClaudeCoreHost, getClaudeCoreHost } from "./core/agents/claude/core-host-provider"
 import {
+  AUTO_ACCOUNT,
   AccountsApiError,
   BrokerAccounts,
   SETTINGS_KEY_ACCOUNTS,
@@ -72,30 +77,44 @@ import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { joinContinuation } from "./core/transcription/continuation"
 import { checkDictationEdit } from "./core/transcription/dictation-edit"
+import { DictationStream } from "./core/transcription/stream/dictation-stream"
+import { speechModels } from "./core/transcription/stream/speech-models"
+import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
-import { getUsageStore, isUsageProvider } from "./core/usage/store"
+import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
+import { recordFetched } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
-import { AgentKind } from "./shared/agents"
+import { AgentKind, agentDisplayName } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
 import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode } from "./core/mux-tools/mode"
 import { bindMuxTools } from "./core/mux-tools/server"
+import { bindCreatedBy } from "./core/agents/instructions"
+import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { agentChoices } from "./core/models/agent-choices"
+import { failedTurn } from "./core/delegate/failed-turn"
+import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
+import { CouncilStore } from "./core/council/store"
+import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
+import { addCouncilMembers, createCouncil, type AddMembersArgs, type StartCouncilArgs, type StartCouncilDeps, type StartedCouncil } from "./core/council/start"
+import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
-import { isPersistentRuntimeSession } from "./core/session-manager/types"
+import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
+import { checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
+import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
-import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
@@ -106,7 +125,8 @@ import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
 import { NullRelayProvider } from "./core/relay/provider"
-import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provider"
+import { FrpRelayProvider } from "./core/relay/frp-provider"
+import { embeddedFrpc } from "./core/relay/embedded-frpc"
 import { UpdateChecker } from "./core/update/checker"
 import { detectInstallMode, detectUpdateMode } from "./core/update/mode"
 import { TelemetryService } from "./core/telemetry/service"
@@ -126,7 +146,7 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
@@ -144,11 +164,11 @@ import {
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
-import { homedir, hostname } from "os"
+import { homedir, hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent } from "./core/agents/types"
+import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -174,7 +194,7 @@ import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
 import { runCurator, type CuratorDeps } from "./core/curator/run"
-import { curatorPromptPath, frpcPath } from "./core/runtime-assets"
+import { curatorPromptPath } from "./core/runtime-assets"
 import { SettingsStore } from "./core/settings/store"
 import { KeepAwake, batteryProbe, loginSessionProbe, spawnInhibitor } from "./core/power/keep-awake"
 import { WakeDetector, runWakeActions } from "./core/power/wake"
@@ -198,7 +218,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
-import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, ensureWorktreeAt, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
@@ -208,6 +228,9 @@ import { GitStatusService, type ServiceSession } from "./core/worktree/git-statu
 import { WorktreeService } from "./core/worktree/service"
 import type { OwnerRow } from "./core/worktree/inventory"
 import { deriveName, ensureUnique } from "./core/session-manager/naming"
+import { InboxStore } from "./core/inbox/store"
+import { InboxCursorStore } from "./core/inbox/cursor"
+import { InboxDelivery } from "./core/inbox/delivery"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -217,7 +240,6 @@ const relayLog = makeLogger("core/relay/frp-provider")
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STATIC_DIR = join(__dirname, "channels/web/static")
-const SOUL_PATH = join(MUX_HOME, "soul.md")
 const IS_TEST_BROKER = process.env.MUX_TEST_BROKER === "1"
 
 // The browser-journey fixture boots this real entrypoint, but it must never
@@ -377,6 +399,8 @@ try {
 }
 
 const registry = new Registry(db)
+// Agent preambles come from the session row, for every provider (spec §5.1).
+setSessionRoleLookup((id) => registry.sessions.getById(id)?.role)
 // Repair any session that has no workspace before anything reads the tables.
 // A heal logs at warn — it means a crash between the session insert and the
 // workspace insert, not a normal path. Called once at startup, never from the
@@ -538,8 +562,6 @@ const forgeService = new ForgeService(forgeStore, {
 // Onboarding-editable config: stored values layer over env over built-in defaults.
 // Empty store (every existing install) ⇒ resolves exactly to the old env reads.
 const appConfigEnv = {
-  MUX_PA_NAME: process.env.MUX_PA_NAME,
-  MUX_PA_WORKDIR: process.env.MUX_PA_WORKDIR,
   MUX_TELEGRAM_BOT_TOKEN: process.env.MUX_TELEGRAM_BOT_TOKEN,
   MUX_WEB_PUBLIC_URL: process.env.MUX_WEB_PUBLIC_URL,
   MUX_WEB_PORT: process.env.MUX_WEB_PORT,
@@ -597,6 +619,14 @@ const brokerAccounts = new BrokerAccounts({
       if (lookupModels(kind).length === 0) void refreshAgentModels(kind)
     }
   },
+  // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
+  refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
+})
+// Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
+// once the saved windows are loaded (a fetch can land first at boot).
+getUsageStore().on("fetched", (e: UsageFetched) => {
+  void recordFetched(sharedAccounts().usage, e)
+    .catch((err) => log.warn("provider_usage_record_failed", { provider: e.provider, account: e.account, err: String(err) }))
 })
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
@@ -718,6 +748,131 @@ subagentStore.load()
 for (const sessionId of subagentStore.sessionIds()) {
   for (const row of subagentStore.messages(sessionId)) activityStore.append(sessionId, { ...row })
 }
+// Councils (spec §5, §6): a member's membership is recorded before it starts.
+const councilStore = new CouncilStore(db)
+/** "Opus 5.5": a model's display name from the catalog, else its id. */
+const modelLabel = (agent: AgentKind, model: string | undefined): string | undefined =>
+  model ? (lookupModels(agent).find((m) => m.id === model)?.displayName ?? model) : undefined
+// Delegated children (spec §3): their cards in the parent's subagent list, and the notices.
+const delegatedChildren = new DelegatedChildren({
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  subagents: subagentStore,
+  lastReply: (id) => messageLog.lastReply(id),
+  describe: (child) => {
+    const model = modelLabel(child.agent, child.model)
+    return model ? `${agentDisplayName(child.agent)} · ${model}` : agentDisplayName(child.agent)
+  },
+  notify: (sessionId, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [sessionId], text, "queue") }
+    catch (err) { log.warn("delegate_notice_failed", { session: sessionId, err: String(err) }) }
+  },
+  isCouncilMember: (id) => !!councilStore.membership(id),
+})
+// Councils (spec §5): reports, rounds, forwards, notices, and the caller's council card.
+const councils = new Council({
+  store: councilStore,
+  session: (id) => registry.sessions.getById(id),
+  isLive: (id) => !!registry.get(id),
+  label: (s) => modelLabel(s.agent, s.model) ?? agentDisplayName(s.agent),
+  send: (from, to, text, tag) => {
+    try { inboxDelivery!.send(from, [to], text, "queue", tag) }
+    catch (err) { log.warn("council_send_failed", { to, err: String(err) }) }
+  },
+  notify: (to, text) => {
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [to], text, "queue") }
+    catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
+  },
+  lastReply: (id) => messageLog.lastReply(id),
+  kill: (id): Promise<void> => sessionManager.killAndArchive(id, { endedBy: "parent" }),
+  // A member holds its caller's settle only while it really works (decision #21).
+  busy: (id: string): boolean => turnRunning(id) || !!inboxDelivery?.pending(id) || corePendingInput(id) > 0,
+  changed: (caller, view) => {
+    webChannel?.broadcastToAll({ type: "council_update", session: caller, council: view })
+    // A report or round moves whether a delegated caller still waits on its council (decision #21).
+    childSettle.changed(caller)
+  },
+})
+// A delegated child or council member that goes quiet without reporting (decision #21): nudged once, then
+// its parent (or the council's caller) is told once.
+const parentOfChild = (id: string): string | undefined =>
+  councilStore.membership(id) ? undefined : registry.sessions.getById(id)?.parent_session_id ?? undefined
+/** Where a session's tasks come from: a child's parent, a member's council (its question and rounds). */
+function settleSource(id: string): SettleSource | undefined {
+  const membership = councilStore.membership(id)
+  // Only members of an open council are watched: an ended one is never touched again (design 2026-10-31 §4).
+  if (membership) return councils.watched(id) ? { kind: "member", from: membership.councilId } : undefined
+  const parent = parentOfChild(id)
+  return parent ? { kind: "child", from: parent } : undefined
+}
+/** Who hears about it: a child's parent, a member's council caller. */
+function settleListener(id: string): string | undefined {
+  const membership = councilStore.membership(id)
+  return membership ? councilStore.get(membership.councilId)?.callerSessionId : parentOfChild(id)
+}
+/**
+ * Re-check a session and the session that created it: a member's or child's turn and input move whether
+ * its caller still waits on it (decision #21).
+ */
+function settleChanged(id: string): void {
+  childSettle.changed(id)
+  const parent = registry.sessions.getById(id)?.parent_session_id
+  if (parent) childSettle.changed(parent)
+}
+/** Input queued in the session's core adapter (0 for none). */
+function corePendingInput(id: string): number {
+  const adapter: AgentAdapter | undefined = sessionManager.adapterFor(id)
+  return adapter instanceof CoreAdapter ? adapter.pendingInput() : 0
+}
+/** A turn of the session runs (its agent state, or its core adapter's own turn). */
+function turnRunning(id: string): boolean {
+  const phase = agentStateStore.get(id).phase
+  const adapter = sessionManager.adapterFor(id)
+  return phase === "thinking" || phase === "running" || (adapter instanceof CoreAdapter && adapter.turnIsRunning())
+}
+/**
+ * Work a session waits on: its background subagents and tasks, its own delegated children still working
+ * (their card runs, or their turn does), and a council it called still waiting on a member's report.
+ * Without it a child waiting on its own children counts as settled (decision #21).
+ */
+function waitsOnOthers(id: string): boolean {
+  if (bgOpenCount(id) > 0 || councils.waiting(id)) return true
+  return registry.childrenOf(id).some((kid) =>
+    !councilStore.membership(kid.id) && (subagentStore.find(id, kid.id)?.status === "running" || turnRunning(kid.id)))
+}
+const childSettle = new ChildSettle({
+  source: settleSource,
+  inputs: (id) => {
+    const listener = settleListener(id)
+    // An archived child or member has its own notices; a message to an archived parent or caller would restore it.
+    if (!listener || !registry.get(id) || !registry.get(listener)) return undefined
+    const adapter = sessionManager.adapterFor(id)
+    const core = adapter instanceof CoreAdapter ? adapter : undefined
+    return {
+      alive: !!adapter && agentStateStore.get(id).phase !== "dead" && (adapter.isAlive?.() ?? true),
+      running: turnRunning(id),
+      queuedInput: !!inboxDelivery?.pending(id) || (core?.pendingInput() ?? 0) > 0,
+      backgroundWork: waitsOnOthers(id),
+      pendingRequest: (adapter?.openRequests?.() ?? []).length > 0,
+    }
+  },
+  nudge: (childId) => {
+    if (councilStore.membership(childId)) return councils.nudgeMember(childId)
+    const parent = registry.sessions.getById(parentOfChild(childId) ?? "")
+    if (!parent) return
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [childId], nudgeText(parent), "queue") }
+    catch (err) { log.warn("delegate_nudge_failed", { session: childId, err: String(err) }) }
+  },
+  notify: (childId) => {
+    if (councilStore.membership(childId)) return councils.memberQuiet(childId)
+    const child = registry.sessions.getById(childId)
+    const parentId = parentOfChild(childId)
+    if (!child || !parentId) return
+    try { inboxDelivery!.send(SUPERMUX_SENDER, [parentId], quietText(child, messageLog.lastReply(childId)), "queue") }
+    catch (err) { log.warn("delegate_quiet_notice_failed", { session: parentId, err: String(err) }) }
+  },
+  timer: { set: (fn, ms) => setTimeout(fn, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
+})
 /** "Waiting · N background": open background tasks plus background subagents still running. */
 function bgOpenCount(sessionId: string): number {
   return bgTaskStore.openCount(sessionId) + subagentStore.backgroundRunning(sessionId)
@@ -847,37 +1002,6 @@ function sessionFast(session: { agent: AgentKind; model?: string; fastMode?: boo
   return resolveSessionFast(session, lookupModels)
 }
 
-async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
-  const session = registry.get(sessionId)
-  if (!session) return
-  const state = readSoulSetupState()
-  const messages = messageLog.get(session.id, 20)
-  if (!shouldAutoSendSoulSetup({
-    session,
-    messages,
-    state,
-    alreadyQueued: soulSetupQueued.has(session.id),
-  })) return
-
-  soulSetupQueued.add(session.id)
-  // Through the ONE funnel (was: an inline adapter-or-socket branch that fell
-  // back to the claude shim socket for ANY kind — a non-claude PA's invocation
-  // queued there and expired). A not-ready adapter throws so the catch below
-  // clears the queued flag and the next register attempt retries.
-  const deliver = async (id: string, text: string, meta: Record<string, string>) => {
-    const r = await sessionManager.deliver(id, text, meta)
-    if (!r.ok) throw new Error(`soul-setup delivery not ready: ${r.reason}`)
-  }
-
-  try {
-    await appendSoulSetupInvocation({ session, messageLog, deliver })
-    log.info("soul_setup_auto_sent", { session: session.name, id: session.id })
-  } catch (err: any) {
-    soulSetupQueued.delete(session.id)
-    log.warn("soul_setup_auto_send_failed", { session: session.name, err: err?.message ?? String(err) })
-  }
-}
-
 const vapidSubject = process.env.MUX_WEB_VAPID_SUBJECT ?? (() => {
   try {
     const u = new URL(process.env.MUX_WEB_PUBLIC_URL ?? "https://localhost")
@@ -947,6 +1071,14 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
+// Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
+// read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
+// allow, so it must exist before any session launches.
+mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
+// Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
+let inboxDelivery: InboxDelivery | undefined
+const inboxStore = new InboxStore(SESSION_INBOX_DIR)
+
 // The SessionManager component owns per-session runtime state (Move 2). The
 // thin aliases below keep existing call sites unchanged while the handlers
 // migrate into the component stage by stage.
@@ -957,6 +1089,7 @@ const channels: Record<string, Channel> = {
 const sessionManager = new SessionManager(registry, {
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
+  getInbox: () => inboxDelivery,
   inbound: {
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
     // clients clear their local "Sending…" bubble even when the turn-start
@@ -965,6 +1098,9 @@ const sessionManager = new SessionManager(registry, {
     // the change-listener would send (keeps delivery a pure reflector).
     onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
+    // Input from its parent (inbox) or the user begins a delegated child's task (decision #21). Fired only
+    // for a real hand-over: a deduped retry or a missing adapter starts nothing.
+    onAccepted: (id, meta, how) => childSettle.inbound(id, meta?.system_generated === "inbox" ? meta.user_id : undefined, how),
   },
   backend: {
     runtimeTargetIdOf,
@@ -980,6 +1116,16 @@ const sessionManager = new SessionManager(registry, {
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
 
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
+    forgetReplyTarget: (id) => replyTargets.forget(id),
+    retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
+  },
+  children: { archived: (s, how) => { childSettle.forget(s.id); delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
+  councils: {
+    isMember: (id) => !!councilStore.membership(id),
+    membership: (id) => {
+      const m = councilStore.membership(id)
+      return m ? { councilId: m.councilId, letter: m.letter } : undefined
+    },
   },
   displays: {
     killAllForSession: (name) => displayManager.killAllForSession(name),
@@ -994,12 +1140,17 @@ const sessionManager = new SessionManager(registry, {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
   },
-  config: { lookupModels },
+  config: {
+    lookupModels,
+    agentStatuses: () => detectAgentStatuses().map((s) => ({ kind: s.kind, installed: s.installed, authed: s.authed, usableWithoutAuth: s.capabilities.usableWithoutAuth })),
+    modelGates: (agent) => agent === AgentKind.Codex
+      ? (getUsageStore().snapshot().codex?.models ?? []).map((m) => ({ id: m.id, available: m.available, availableAtIso: m.availableAtIso }))
+      : [],
+  },
   register: {
     interruptClaudePane,
     notifyAgentError,
     ensureClaudeTailer,
-    maybeAutoSendSoulSetup,
   },
   outbound: {
     onAssistantMessage,
@@ -1007,7 +1158,11 @@ const sessionManager = new SessionManager(registry, {
     telegramApi: telegram ? { token: TG_TOKEN!, getFile: (id: string) => telegram.getFile(id) } : undefined,
   },
   orchestration: {
-    spawnSession: (args) => spawnSession(args),
+    // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
+    spawnSession: async (args) => {
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent })
+      return { name: created.name, session_id: created.id }
+    },
     refreshTelegramMenu,
     wsDto: (id) => wsDto(id),
     exposedProxyLinksBaseUrl,
@@ -1017,6 +1172,22 @@ const sessionManager = new SessionManager(registry, {
       refresh: () => proxyLivenessMonitor.refresh(),
     },
     postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
+    createAgentDeps: () => createAgentDeps,
+    agentAvatarChanged: (id) => announceAgentAvatar(id),
+    delegate: (args) => delegateSession(args),
+    council: (args) => councilSession(args),
+    councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
+    councilAdd: (args) => councilAddMembers(args),
+    councilRemove: (args) => councils.remove(args.callerId, args.council, args.letters),
+    councilEnd: async (args) => {
+      await councils.end(args.council, "caller", { callerId: args.callerId, verdict: args.verdict })
+      return { ended: true as const }
+    },
+    councilReport: async (args) => {
+      const report = councils.report(args.memberId, args.text)
+      childSettle.reported(args.memberId)
+      return report
+    },
   },
   stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
@@ -1030,15 +1201,44 @@ const sessionManager = new SessionManager(registry, {
     tmuxSession: TMUX_SESSION,
   },
 })
+inboxDelivery = new InboxDelivery({
+  store: inboxStore,
+  cursor: new InboxCursorStore(db),
+  messageLog,
+  session: (id) => registry.sessions.getById(id),
+  resumeFromArchive: (id) => sessionManager.resumeFromArchive(id),
+  resumeSuspended: (s) => sessionManager.resumeSuspended(s),
+  adapterState: (id) => {
+    const adapter = sessionManager.adapterFor(id)
+    if (!adapter) return "none"
+    return adapter instanceof CoreAdapter && !adapter.isAlive() ? "dead" : "alive"
+  },
+  resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
+  waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
+  deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
+  agentOf: (id) => registry.sessions.getById(id)?.agent,
+  sent: (from, to) => childSettle.sent(from, to),
+  changed: (id) => settleChanged(id),
+})
 // The broker's host MCP servers (mux-shim / mux-rpc, C3b) call the same shared handlers as the
 // external shim's socket. Bound in both modes: a record that names the host server can resume
 // after a flip back to "external" and still be served while it runs.
 bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
+  councilMember: (id) => !!councilStore.membership(id),
+  choices: () => agentChoices((kind) => lookupModels(kind)),
+})
+// A delegated child's preamble names the session that created it (spec §3); a council member's, its council (spec §5).
+bindCreatedBy((sessionId) => {
+  const membership = councilStore.membership(sessionId)
+  const council = membership ? councilStore.get(membership.councilId) : undefined
+  if (council) return { kind: "council", name: council.name, id: council.id }
+  const parentId = registry.sessions.getById(sessionId)?.parent_session_id
+  const parent = parentId ? registry.sessions.getById(parentId) : undefined
+  return parent ? { name: parent.name, id: parent.id, agent: parent.agent, model: modelLabel(parent.agent, parent.model) } : undefined
 })
 const runtimes = sessionManager.runtimes
-const soulSetupQueued = new Set<string>()
 
 const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
 
@@ -1091,7 +1291,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => { replyTargets.forget(id); return sessionManager.unregister(id) }
+const unregisterSession = (id: string) => sessionManager.unregister(id)   // also forgets its reply target
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -1120,6 +1320,11 @@ async function onAssistantMessage(
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
+  // A delegated child (spec §3) has no chat in any client: its output only goes into its own log
+  // (no channel send, no push, no desktop notification), and broker notices are not logged for it.
+  // getById, not get: get hides archived rows, and a just-killed child's late reply is still a child's.
+  const child = !!registry.sessions.getById(sessionId)?.parent_session_id
+  if (child && ev.system) return { ok: true, delivered: 0 }
   // Claude has no adapter turn-complete event (it replies through the shim), so
   // this is where its activity feeds the usage store's 5-minute refresh gate.
   if (!ev.system) {
@@ -1143,19 +1348,21 @@ async function onAssistantMessage(
   //   3. else web — every session has its own chat there, so a session that has
   //      never received a turn (one agent spawned by another) is still visible.
   // Without (3) such a reply had no target at all and was dropped in silence.
-  const destination = resolveReplyTarget(sessionId)
+  const destination = child ? undefined : resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
   const addressed = parseAddress(destination)
   if (addressed) {
     targets.push({ channelName: addressed.channel, chat_id: addressed.chatId })
   } else {
-    for (const [rawChatId, state] of registry.chats.allChats()) {
-      if (state.active_session_id !== sessionId) continue
-      const a = parseAddress(rawChatId)
-      if (!a || !channels[a.channel]) continue
-      targets.push({ channelName: a.channel, chat_id: a.chatId })
+    if (!child) {
+      for (const [rawChatId, state] of registry.chats.allChats()) {
+        if (state.active_session_id !== sessionId) continue
+        const a = parseAddress(rawChatId)
+        if (!a || !channels[a.channel]) continue
+        targets.push({ channelName: a.channel, chat_id: a.chatId })
+      }
     }
-    if (targets.length === 0 && channels[WEB_CHANNEL]) {
+    if (targets.length === 0 && (child || channels[WEB_CHANNEL])) {
       targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
     }
   }
@@ -1164,8 +1371,9 @@ async function onAssistantMessage(
   for (const { channelName, chat_id } of targets) {
     // A chat can name a channel this broker does not run (a telegram id held by
     // a session after the token was removed, say). Say so; do not throw.
+    // A child's row needs no live channel: it is only logged.
     const ch = channels[channelName]
-    if (!ch) {
+    if (!ch && !child) {
       lastError = `no ${channelName} channel is configured`
       log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
       continue
@@ -1175,7 +1383,7 @@ async function onAssistantMessage(
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
     }
     try {
-      const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
+      const action = await transformOutbound(initial, sessionId, ch?.capabilities ?? WEB_CAPABILITIES, fileStore, registry)
       if (action.op !== "reply") continue
 
       // Store BEFORE the send. Two reasons:
@@ -1201,6 +1409,11 @@ async function onAssistantMessage(
         })),
       }
       messageLog.append(sessionId, entry)
+      if (child || !ch) {
+        if (child && !ev.error) delegatedChildren.replied(sessionId, action.text ?? ev.text)
+        dispatchedCount++
+        continue
+      }
 
       const res = await ch.send(action, { sessionId, entry })
       if (!res.ok) {
@@ -1283,8 +1496,10 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // clear the live status (the turn ended in failure)
   agentStateStore.applyEvent(sessionId, "Stop")
   recordTurnCompleted(sessionId, "error")
-  // in-app toast for any open PWA
-  webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  // In-app toast for any open PWA; none for a delegated child, archived ones included: it has no chat to open (spec §3).
+  if (!registry.sessions.getById(sessionId)?.parent_session_id) {
+    webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  }
   // Deliver the error into the chat transcript, same fan-out as an assistant
   // reply, so the failure is visible in the conversation history on every
   // channel (not just as an ephemeral toast). The text is the agent's error
@@ -1427,6 +1642,33 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 
 
 /**
+ * A message typed in a delegated child's card (spec §3.1; decided 2026-10-29): it reaches the child
+ * from you, like a message typed in its own chat, once the child is woken (restored, resumed or
+ * revived). The parent's transcript gets the same "↪ to" line a native subagent's message gets.
+ */
+async function messageChild(parent: Session, childId: string, text: string): Promise<SubagentActionResult> {
+  try {
+    await inboxDelivery!.wake(childId)
+  } catch (err) {
+    return { ok: false, status: 409, error: `the subagent could not be woken: ${err instanceof Error ? err.message : String(err)}` }
+  }
+  // Core adapters resolve a send when the TURN completes: hand it over, don't wait for the turn.
+  void deliverUserMessage(childId, text).then(
+    (r) => { if (!r.ok) log.warn("subagent_child_message_failed", { child: childId, reason: r.reason }) },
+    (err) => log.warn("subagent_child_message_failed", { child: childId, reason: String(err) }),
+  )
+  const label = registry.sessions.getById(childId)?.name ?? childId.slice(0, 8)
+  const messageId = `msg-${Date.now()}`
+  try {
+    messageLog.append(parent.id, {
+      id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web",
+      message_id: messageId, text: `↪ to ${label}: ${text}`, subagent_id: childId,
+    })
+  } catch (err: any) { log.error("subagent_message_append_failed", { session: parent.name, err: err?.message ?? String(err) }) }
+  return { ok: true, via: "direct" }
+}
+
+/**
  * POST /sessions/:id/subagents/:subagentId/message. The transcript gets ONE compact line in
  * the user's own words — "↪ to <subagent>: <text>" — tagged with `subagent_id`; the relay
  * boilerplate a Claude/Cursor parent receives is never logged.
@@ -1434,6 +1676,7 @@ function applyTaskEvent(sessionId: string, ev: TaskEvent): void {
 async function messageSubagent(id: string, subagentId: string, text: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) return messageChild(s, subagentId, text)
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.messageSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot message subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1467,6 +1710,15 @@ async function messageSubagent(id: string, subagentId: string, text: string): Pr
 async function stopSubagent(id: string, subagentId: string): Promise<SubagentActionResult> {
   const s = registry.get(id)
   if (!s) return { ok: false, status: 404, error: "session not found" }
+  if (delegatedChildren.isChild(s.id, subagentId)) {
+    if (!registry.get(subagentId)) return { ok: false, status: 409, error: "the subagent was already killed" }
+    try {
+      await sessionManager.killAndArchive(subagentId, { endedBy: "client" })
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, status: 500, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
   const adapter = sessionManager.adapterFor(s.id)
   if (!adapter?.stopSubagent) return { ok: false, status: 409, error: `${s.agent} sessions cannot stop subagents` }
   const known = subagentStore.find(s.id, subagentId)
@@ -1488,6 +1740,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     codex.onUsageUpdate = (data) => store.apply("codex", data, "agent")
     codex.getPrevUsage = () => store.snapshot().codex
   }
+  // What happened since a failed turn ended, for its report a grace period later (decision #17): a newer
+  // turn owns the card, and a crash speaks for the turn even when the agent was revived meanwhile.
+  let turnsStarted = 0
+  let crashes = 0
   adapter.on("assistant-message", (ev: any) => {
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
@@ -1528,12 +1784,55 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     try { subagentStore.applyChildActivity(sessionId, ev.subagentId, ev.activity) } catch (err) { log.warn("adapter_subagent_activity_failed", { err: String(err) }) }
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
-  adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
-  adapter.on("turn-complete", () => {
+  adapter.on("turn-start", () => {
+    turnsStarted++
+    // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
+    delegatedChildren.turnStarted(sessionId)
+    councils.memberTurnStarted(sessionId)
+    agentStateStore.applyEvent(sessionId, "turn-start")
+    childSettle.turnStarted(sessionId)
+    settleChanged(sessionId)
+  })
+  adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+    if (!ev?.error) {
+      delegatedChildren.turnCompleted(sessionId)
+      settleChanged(sessionId)
+      return
+    }
+    // Told already while the turn still ran (turn-failed).
+    if (ev.reported) {
+      settleChanged(sessionId)
+      return
+    }
+    reportFailedTurn(ev.error)
   })
+  // A turn that failed but stays open (an unconfirmed stall): told now, its turn-complete may never come.
+  adapter.on("turn-failed", (ev: TurnFailedEvent) => reportFailedTurn(ev.error))
+  /**
+   * A failed turn (decision #17): a delegated child's parent, or a council member's caller, hears it,
+   * unless the agent died with it (session-failed speaks for it) or an account switch moves it on.
+   * willSwitchAccount is read now, while the switch is still pending.
+   */
+  function reportFailedTurn(error: Error): void {
+    const turnAtEnd = turnsStarted
+    const crashesAtEnd = crashes
+    // Not settled while it is decided: a failed-turn notice tells the parent already (decision #21).
+    const hold = childSettle.hold(sessionId)
+    void failedTurn(error.message, {
+      isAlive: () => crashes === crashesAtEnd && (adapter.isAlive?.() ?? true),
+      newerTurn: () => turnsStarted !== turnAtEnd,
+      continues: adapter.willSwitchAccount?.() ?? Promise.resolve(false),
+      report: (error, card) => {
+        hold.told()
+        delegatedChildren.turnFailed(sessionId, error, { card })
+        councils.memberTurnFailed(sessionId, error, { status: card })
+      },
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    }).catch((err) => log.warn("failed_turn_report_failed", { session: sessionId, err: String(err) })).finally(hold.release)
+  }
   // Accounts: a switch (manual, or Core's auto-switch on a limit or a refused account) is persisted,
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
@@ -1559,10 +1858,17 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
   })
+  // A delegated child's crash reaches its card and its parent (spec §3); a council member's, its council (spec §5).
+  // One macrotask later: a reply still in flight (onAssistantMessage awaits transformOutbound) is logged first, so the notice can quote it.
+  adapter.on("session-failed", () => {
+    crashes++
+    setTimeout(() => { childSettle.told(sessionId); delegatedChildren.crashed(sessionId); councils.memberCrashed(sessionId) }, 0)
+  })
   // The agent pushed a fresh command/skill list (grok: ACP
   // available_commands_update) — recompute this session's slash commands. The
   // provider reads the adapter's cached list via resolveSession.
   adapter.on("request-open", (ev: RequestOpenEvent) => {
+    childSettle.changed(sessionId)
     const request = {
       requestId: ev.requestId,
       kind: ev.requestKind,
@@ -1593,6 +1899,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     }
   })
   adapter.on("request-closed", (ev: { requestId: string; outcome: "answered" | "expired" | "cancelled"; answerLabel?: string }) => {
+    childSettle.changed(sessionId)
     webChannel?.broadcastToAll({
       type: "request_closed",
       session: sessionId,
@@ -1631,6 +1938,28 @@ if (channelCheck.error) { log.error("no_channel_configured", { error: channelChe
 const MUX_WEB_PORT = process.env.MUX_WEB_PORT ? parseInt(process.env.MUX_WEB_PORT, 10) : undefined
 const MUX_WEB_PUBLIC_URL = process.env.MUX_WEB_PUBLIC_URL
 let webChannel: WebChannel | undefined
+// agents_changed: the Agent list changed (create, kill/archive, rename, default). No payload —
+// a client that knows it refetches GET /api/agents; an older client drops the unknown frame.
+registry.onAgentsChanged(() => webChannel?.broadcastToAll({ type: "agents_changed" }))
+// agent_avatar_changed: an Agent's avatar file changed (set_avatar, or edited on disk). Clients
+// refetch GET /agents/<id>/avatar when `avatar` (the content hash) differs from what they hold.
+function announceAgentAvatar(id: string): void {
+  webChannel?.broadcastToAll({ type: "agent_avatar_changed", id, avatar: avatarRev(id) ?? null })
+  webChannel?.broadcastToAll({ type: "agents_changed" })
+}
+// Hand edits (an editor, git pull) are picked up too: watch agent-memory/ for *.avatar.json.
+try {
+  const dir = join(getMuxHome(), "agent-memory")
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  fsWatch(dir, (_event, file) => {
+    const m = typeof file === "string" ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
+    const id = m?.[1]
+    if (!id) return
+    clearTimeout(pending.get(id))
+    pending.set(id, setTimeout(() => { pending.delete(id); announceAgentAvatar(id) }, 200))
+  })
+} catch (err) { log.warn("avatar_watch_failed", { error: err instanceof Error ? err.message : String(err) }) }
 // Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). Constructed
 // BEFORE the WebChannel so its opts can call into it; its broadcast closes over
 // webChannel the same way every other service below does — only invoked at
@@ -1671,8 +2000,8 @@ const displayManager = new DisplayManager({
   onRemoved: (id) => webChannel?.broadcastToAll({ type: "display_removed", id }),
 })
 // Workspace behaviour layer: close-a-view side effects and create-for-session.
-// archiveSession closes over killSession/unregisterSession/webChannel the same
-// way the killSession opt does; those are only invoked after startup wiring.
+// archiveSession closes over killSession/unregisterSession/webChannel, which are
+// only invoked after startup wiring.
 const workspaceService = new WorkspaceService(
   registry.workspaces,
   {
@@ -1771,6 +2100,139 @@ const wsDto = (id: string) => {
   return w ? toWsDto(w) : undefined
 }
 
+/** A just-created session joins or gets a workspace, then every client hears about it
+ *  (workspace_added/changed before session_added, spec §9.1 step 6). The announce half of the one
+ *  create path (src/core/session-manager/create-session.ts). */
+function announceCreatedSession(entry: Session, opts: { workspaceId?: string; viewId?: string; inheritFrom?: string } = {}): void {
+  announceCreated(sessionCreateDeps(), entry, opts)
+}
+
+/** main.ts's collaborators for the one create path; a function declaration, so closures built earlier can call it. */
+function sessionCreateDeps(): CreateSessionDeps {
+  return {
+    spawn: (a) => spawnSession(a),
+    getSession: (id) => registry.get(id),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id || undefined,
+    workspaceExists: (id) => !!registry.workspaces.getById(id),
+    joinWorkspace: (workspaceId, sessionId, viewId) => { workspaceService.addChatSession(workspaceId, sessionId, viewId) },
+    createWorkspace: (entry) => {
+      projectCatalogDirty = false
+      const ws = workspaceService.createForSession({
+        sessionId: entry.id,
+        name: entry.name,
+        workdir: entry.workdir,
+        repo_root: entry.repo_root || undefined,
+        base_branch: entry.base_branch || undefined,
+        branch: entry.session_branch || undefined,
+        sort_order: entry.sort_order,
+        internal: entry.internal,
+      })
+      const projectsChanged = projectCatalogDirty
+      projectCatalogDirty = false
+      return { id: ws.id, projectsChanged }
+    },
+    workspaceDto: (id) => wsDto(id),
+    broadcast: (frame) => webChannel?.broadcastToAll(frame),
+    broadcastProjects,
+    refreshTelegramMenu,
+    sessionFrame: (entry) => sessionAddedPayload(entry),
+    sessionEffort: (entry) => sessionEffort(entry),
+  }
+}
+
+function sessionAddedPayload(entry: Session) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    workdir: entry.workdir,
+    mute: !!entry.mute,
+    connected: true,
+    agent: entry.agent,
+    capabilities: sessionCapabilities(entry.agent),
+    model: entry.model,
+    reasoningLevel: sessionEffort(entry),
+    fastMode: sessionFast(entry),
+    permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
+    ...sessionAccountFields(entry),
+    repo_root: entry.repo_root || undefined,
+    session_branch: entry.session_branch || undefined,
+    finish_job: entry.finish_job,
+    user_status: entry.user_status,
+    sort_order: entry.sort_order,
+    draft_payload: entry.draft_payload,
+    // An Agent must arrive pinned: the snapshot (getSessionsSnapshot) carries these too.
+    role: entry.role,
+    isDefault: entry.is_default,
+    avatar: entry.role === "personal_assistant" ? avatarRev(entry.id) : undefined,
+  }
+}
+
+/** Rename a session and tell every client; the workspace name follows its primary session (spec §9.5). */
+async function renameSessionAndAnnounce(id: string, newName: string): Promise<void> {
+  const s = registry.get(id)
+  if (!s) throw new Error("session not found")
+  const checked = checkSessionRename(s, newName, () => registry.takenNames())
+  if (!checked.ok) throw new CreateAgentError(checked.error, checked.status, checked.code)
+  newName = checked.name
+  const oldName = s.name
+  registry.rename(s.id, newName)
+  await refreshTelegramMenu()
+  webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
+  // Spec §9.5: the workspace name follows its primary session. Both frames
+  // go out — an old client only knows the first one. propagateSessionRename
+  // returns undefined when the name did not change (loop guard).
+  const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
+  if (wsId) {
+    const dto = wsDto(wsId)
+    if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+  }
+}
+
+function persistAgentSessionIdByName(name: string, sid: string): void {
+  const s = registry.resolveName(name)
+  if (s) registry.sessions.setAgentSessionId(s.id, sid)
+}
+
+/** The one Agent create path's broker half (spec §3): web, Telegram and the create_agent tool share it. */
+const createAgentDeps: CreateAgentDeps = {
+  muxHome: MUX_HOME,
+  takenNames: () => registry.takenNames(),
+  // registry.list() is active + suspended only: a folder left by archived sessions is reused.
+  workdirInUse: (workdir) => registry.list().some((s) => resolve(s.workdir) === resolve(workdir)),
+  assertInstalled: (provider) => assertAgentInstalled(provider),
+  spawn: async (a) => {
+    const r = await spawnPA({
+      registry,
+      id: a.id,
+      name: a.name,
+      agent: a.provider,
+      workdir: a.workdir,
+      model: a.model,
+      reasoningLevel: a.reasoningLevel,
+      bind: (sid: string) => server.bind(sid),
+      tmuxSession: TMUX_SESSION,
+      resolveEffort: (s) => sessionEffort(s),
+      registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
+      onCodexSessionId: (brokerSessionId, sid) => {
+        if (registry.get(brokerSessionId)) registry.sessions.setAgentSessionId(brokerSessionId, sid)
+      },
+      onCursorSessionId: persistAgentSessionIdByName,
+      onOpenCodeSessionId: persistAgentSessionIdByName,
+      onGrokSessionId: persistAgentSessionIdByName,
+      onAntigravitySessionId: persistAgentSessionIdByName,
+      onClaudeSessionId: persistAgentSessionIdByName,
+      // Every Agent spawn resolves inbound files (the Telegram path used to omit this).
+      resolveAttachment: resolveAttachmentPath,
+    })
+    return { id: r.id, name: r.name }
+  },
+  announce: async (id) => {
+    const entry = registry.get(id)
+    await refreshTelegramMenu()
+    if (entry) announceCreatedSession(entry)
+  },
+}
+
 function spawnLoginProc(kind: string) {
   // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
   // generic runner. null descriptor = the kind has no CLI device login.
@@ -1859,7 +2321,7 @@ setInterval(() => claimStore.sweep(), 60_000).unref()
 const hostPlatform = process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux"
 const advertisedHostName = process.env.MUX_HOST_NAME?.trim() || hostname()
 
-// Relay data plane (frp). Fresh native CLI + desktop setups enable the hosted
+// Relay data plane (frp, in-process). Fresh native CLI + desktop setups enable the hosted
 // relay by default; an empty/absent MUX_RELAY_DOMAIN keeps the broker LAN-only.
 // The provider boundary still permits custom/self-hosted relay implementations.
 const relayProvider = process.env.MUX_RELAY_DOMAIN
@@ -1872,35 +2334,11 @@ const relayProvider = process.env.MUX_RELAY_DOMAIN
         const r = await fetch(`${process.env.MUX_RELAY_BASE ?? `https://control.${process.env.MUX_RELAY_DOMAIN}`}/relay/nonce`, { signal })
         return ((await r.json()) as { nonce: string }).nonce
       },
-      activationGated: process.platform !== "win32",
-      spawn: (argv) => {
-        const frpc = frpcPath(STATE_DIR)
-        const command = parentBoundFrpcCommand([frpc, ...argv.slice(1)])
-        if (process.platform === "win32") {
-          let proc: ReturnType<typeof Bun.spawn>
-          try {
-            proc = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
-          } catch (e) {
-            // The provider logs only the failure code; name the binary it could not start.
-            relayLog.warn("relay_frpc_spawn_error", { frpc, exists: existsSync(frpc), code: (e as NodeJS.ErrnoException).code })
-            throw e
-          }
-          return { kill: () => proc.kill(), activate: () => {}, exited: proc.exited }
-        }
-        const proc = Bun.spawn(command, { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
-        let activated = false
-        return {
-          kill: () => proc.kill(),
-          activate: async () => {
-            if (activated) return
-            activated = true
-            await proc.stdin.write("activate\n")
-            await proc.stdin.end()
-          },
-          exited: proc.exited,
-        }
-      },
-      writeConfig: (toml) => { const p = join(STATE_DIR, "frpc.toml"); writeFileSync(p, toml, { mode: 0o600 }); return p },
+      ...(process.env.MUX_RELAY_FRPS_PORT ? { serverPort: Number(process.env.MUX_RELAY_FRPS_PORT) } : {}),
+      // The tunnel runs in-process (@supermux/frp-client): no frpc binary, which Windows Defender
+      // quarantines as PUA:Win32/FRProxy. It verifies the relay's certificate; MUX_RELAY_TLS_VERIFY=0
+      // skips that for a self-hosted frps without a real one. http_proxy is honoured as frpc did.
+      start: embeddedFrpc({ verifyTls: process.env.MUX_RELAY_TLS_VERIFY !== "0", httpProxy: process.env.http_proxy || undefined, log: relayLog }),
       log: relayLog,
     })
   : new NullRelayProvider()
@@ -1934,6 +2372,112 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   const ttsAudio = new TtsAudioStreams()
   // One long-lived store so its parsed-records cache survives across requests.
   const proxyDeviceStore = new DeviceStore(DEVICES_FILE)
+  // Voice transcription: pluggable STT engine (when audio) → optional agent cleanup →
+  // composer-ready text. A named function rather than inline in the WebChannel options because
+  // a streamed dictation's Stop runs the same pipeline for engines too slow for live passes.
+  const transcribeVoice: NonNullable<WebChannelOpts["transcribe"]> = async (sessionId, input) => {
+    // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
+    // present it enriches the cleanup with prior messages + the session's agent skills; when
+    // absent the cleanup still runs off the draft + global glossary/engine/model.
+    const s = sessionId ? registry.get(sessionId) : undefined
+    const cfg = settings.getAppConfig(appConfigEnv)
+    let draft = input.draft ?? ""
+    let sttMs = 0
+    let sttEngine = "client"
+    let prefersCleanup = true
+    if (input.partial) {
+      // A live dictation pass: the text so far + the audio since the last pass → the complete
+      // text (`full: true`), which the client puts in place of everything dictated.
+      // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
+      // would take longer than the user's next pause). A slow engine declines outright.
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
+      const currentText = input.previousText ?? ""
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const t0 = Date.now()
+      // Transcribe only the new audio when the engine can cut, and append it to the text so far;
+      // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
+      // spoken edits was tried and dropped 2026-10-11: like every conversational model it
+      // INVENTS sentences for clips with little or no speech in them.)
+      const r = await runStt(input.audioPath, {
+        engine,
+        lang,
+        languages: cfg.voiceLanguages,
+        keyterms: cfg.voiceCleanupGlossary,
+        fromMs: input.fromMs,
+        previousText: currentText,
+        stream: input.dictationId,
+        endStream: input.final,
+        fallback: false,
+      })
+      const cut = (r.fromMs ?? 0) > 0
+      const text = cut ? joinContinuation(currentText, r.text) : r.text
+      // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
+      const added = cut ? text.slice(currentText.trim().length).trim() : ""
+      log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
+      return {
+        text,
+        full: true,
+        ...(added ? { added } : {}),
+        ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+      }
+    }
+    if (input.audioPath) {
+      // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
+      // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
+      // parallel with the STT call so real speech pays no extra latency.
+      const silent = isDigitalSilence(input.audioPath)
+      const t0 = Date.now()
+      const stt = runStt(input.audioPath, {
+        engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
+        // whisper-specific knobs stay on app-config until engines grow their own model fields
+        model: cfg.whisperModel,
+        // Single-language engines get a pin only when the user dictates in exactly one
+        // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
+        // whole list as a prompt hint instead.
+        lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
+        languages: cfg.voiceLanguages,
+        // claude-voice biases recognition with the voice glossary (x-config-keyterms);
+        // codex-realtime puts it in its transcription prompt.
+        keyterms: cfg.voiceCleanupGlossary,
+      })
+      if (await silent) {
+        stt.catch(() => {})
+        log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
+        return { text: "" }
+      }
+      const r = await stt
+      sttMs = Date.now() - t0
+      draft = r.text
+      sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
+      prefersCleanup = r.prefersCleanup
+    }
+    if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
+    const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
+    const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
+    const payload = buildVoicePayload(draft, messages, skills)
+    // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
+    // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
+    if (!prefersCleanup) {
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
+      return { text: draft }
+    }
+    log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+    try {
+      const t1 = Date.now()
+      const out = await cleanupDraft(
+        { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
+        { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
+      )
+      const cleanupMs = Date.now() - t1
+      const text = out.text || draft
+      log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
+      return { text }
+    } catch (e) {
+      log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
+      return { text: draft, degraded: true }
+    }
+  }
   webChannel = new WebChannel({
     updateChecker,
     getHostInfo: () => ({
@@ -1969,7 +2513,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     claimStore,
     // CSRF trusts this as a second allowed Origin for cookie browsers on the
     // hosted relay. Prefer the live online URL, but fall back to the
-    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — frpc can be
+    // deterministic host URL whenever MUX_RELAY_DOMAIN is set — the tunnel can be
     // mid-reconnect (status.state !== "online", relayUrl cleared) while a
     // browser still POSTs from https://h-<hostId>.relay… and must not get
     // "bad origin". Same fallback as exposedLinksPublicUrl.
@@ -2044,6 +2588,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         capabilities: sessionCapabilities(s.agent),
         role: s.role,
         isDefault: s.is_default,
+        avatar: s.role === "personal_assistant" ? avatarRev(s.id) : undefined,
         model: s.model,
         reasoningLevel: s.reasoningLevel,
         fastMode: sessionFast(s),
@@ -2081,8 +2626,18 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return s ? subagentStore.get(s.id) : []
     },
+    getSessionCouncils: (id) => councils.forCaller(id),
     messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
     stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
+    endCouncil: async (councilId) => {
+      if (!councilStore.get(councilId)) return { ok: false, status: 404, error: "council not found" }
+      try {
+        await councils.end(councilId, "user")
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -2195,93 +2750,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     finishSession: async (id, req) => finishSessionById(id, req),
     finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
-      const r = await spawnSession({
+      const created = await createSessionWithWorkspace({
         workdir: args.workdir,
-        requestedName: args.name,
-        agent: (args.agent as any) ?? "claude",
+        name: args.name,
+        agent: args.agent,
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         permissionMode: args.permissionMode,
         account: args.account,
         worktree: args.worktree,
         baseBranch: args.baseBranch,
-        inheritFromSessionId: args.inheritFrom,
+        inheritFrom: args.inheritFrom,
+        workspaceId: args.workspaceId,
+        viewId: args.viewId,
       })
-      const entry = registry.get(r.session_id)
-      // Spec §9.1: a session without a workspaceId gets a fresh workspace.
-      // With one, it joins that workspace as a second chat.
-      // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
-      // but historically omitted workspaceId, so every handoff minted a SECOND
-      // workspace. If the client didn't name a workspace, join the source
-      // session's — same checkout, same workspace.
-      // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
-      if (entry) {
-        let joinWorkspaceId = args.workspaceId?.trim() || undefined
-        if (!joinWorkspaceId && args.inheritFrom) {
-          const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(args.inheritFrom) as
-            | { workspace_id: string | null }
-            | null
-          joinWorkspaceId = row?.workspace_id || undefined
-        }
-        if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) {
-          joinWorkspaceId = undefined
-        }
-        if (joinWorkspaceId) {
-          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
-          const dto = wsDto(joinWorkspaceId)
-          if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-        } else {
-          projectCatalogDirty = false
-          const ws = workspaceService.createForSession({
-            sessionId: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            repo_root: entry.repo_root || undefined,
-            base_branch: entry.base_branch || undefined,
-            branch: entry.session_branch || undefined,
-            sort_order: entry.sort_order,
-            internal: entry.internal,
-          })
-          // Catalog first, so the client knows the project the workspace points at.
-          if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
-          webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
-        }
-      }
-      await refreshTelegramMenu()
-      // Codex/cursor register synchronously; Claude registers via onRegister.
-      // onRegister's reconnect path does not broadcast, so always notify web
-      // clients here (sessions.add dedupes duplicate session_added frames).
-      if (entry) {
-        webChannel?.broadcastToAll({
-          type: "session_added",
-          session: {
-            id: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            mute: !!entry.mute,
-            connected: true,
-            agent: entry.agent,
-            capabilities: sessionCapabilities(entry.agent),
-            model: entry.model,
-            reasoningLevel: sessionEffort(entry),
-            fastMode: sessionFast(entry),
-
-            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-            ...sessionAccountFields(entry),
-            repo_root: entry.repo_root || undefined,
-            session_branch: entry.session_branch || undefined,
-            finish_job: entry.finish_job,
-            user_status: entry.user_status,
-            sort_order: entry.sort_order,
-            draft_payload: entry.draft_payload,
-          },
-        })
-        // Continue / spawn first turn: deliver AFTER session_added so the
-        // client already has the row when message_append lands. spawnSession
-        // has already waited for a persistent agent to connect.
-        // The launcher's first turn may carry files (uploaded before the spawn);
-        // those go through the same log+deliver tail as a WS `send`.
+      // Continue / spawn first turn: deliver AFTER session_added (the create path sent it) so the
+      // client already has the row when message_append lands. spawnSession has already waited for
+      // a persistent agent to connect. The launcher's first turn may carry files (uploaded before
+      // the spawn); those go through the same log+deliver tail as a WS `send`.
+      if (registry.get(created.id)) {
         const first = args.firstMessage?.trim()
         if (args.firstAttachments?.length) {
           const messageId = `spawn-${Date.now()}`
@@ -2294,29 +2781,19 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             user_id: args.device ?? "web",
             ts: new Date().toISOString(),
             text: first,
-            target_session_id: entry.id,
+            target_session_id: created.id,
             attachments: args.firstAttachments,
-          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         } else if (first) {
           // Core adapters resolve send() when the TURN completes; the launcher
           // must navigate to the new chat as soon as the message is handed
           // over, not after the agent's first reply, so this is not awaited.
-          void deliverUserMessage(entry.id, first).then((delivered) => {
-            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
-          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
+          void deliverUserMessage(created.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: created.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
         }
       }
-      return {
-        id: entry?.id ?? r.session_id,
-        name: entry?.name ?? r.name,
-        workdir: entry?.workdir ?? args.workdir,
-        agent: entry?.agent ?? "claude",
-        model: entry?.model,
-        reasoningLevel: entry ? sessionEffort(entry) : undefined,
-        permissionMode: entry?.permissionMode ?? undefined,
-        repo_root: entry?.repo_root || undefined,
-        session_branch: entry?.session_branch || undefined,
-      }
+      return created
     },
     createDraft: async (args) => {
       // Drafts have no process, so they never get a tmux window; a unique
@@ -2367,79 +2844,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       })
       return { id: s.id, name: s.name, workdir: s.workdir, agent: s.agent }
     },
-    spawnPA: async (args) => {
-      assertAgentInstalled((args.agent as AgentKind | undefined) ?? AgentKind.Claude)
-      const r = await spawnPA({
-        registry,
-        name: args.name,
-        agent: (args.agent as any) ?? "claude",
-        workdir: args.workdir,
-        model: args.model,
-        reasoningLevel: args.reasoningLevel,
-        bind: (sid: string) => server.bind(sid),
-        tmuxSession: TMUX_SESSION,
-        resolveEffort: (s) => sessionEffort(s),
-        registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
-        onCodexSessionId: (brokerSessionId, sessionId) => {
-          const session = registry.get(brokerSessionId)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onCursorSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onOpenCodeSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onGrokSessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        onAntigravitySessionId: (name, sessionId) => {
-          const session = registry.resolveName(name)
-          if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-        },
-        resolveAttachment: resolveAttachmentPath,
-      })
-      const entry = registry.get(r.id)
-      await refreshTelegramMenu()
-      if (entry) {
-        webChannel?.broadcastToAll({
-          type: "session_added",
-          session: {
-            id: entry.id,
-            name: entry.name,
-            workdir: entry.workdir,
-            mute: !!entry.mute,
-            connected: true,
-            agent: entry.agent,
-            capabilities: sessionCapabilities(entry.agent),
-            model: entry.model,
-            reasoningLevel: sessionEffort(entry),
-            fastMode: sessionFast(entry),
-
-            permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-            ...sessionAccountFields(entry),
-            repo_root: entry.repo_root || undefined,
-            session_branch: entry.session_branch || undefined,
-            finish_job: entry.finish_job,
-            user_status: entry.user_status,
-            sort_order: entry.sort_order,
-            draft_payload: entry.draft_payload,
-          },
-        })
-      }
-      return {
-        id: entry?.id ?? r.id,
-        name: r.name,
-        workdir: entry?.workdir ?? args.workdir,
-        agent: entry?.agent ?? "claude",
-        model: entry?.model,
-        reasoningLevel: entry ? sessionEffort(entry) : undefined,
-      }
-    },
+    createAgent: (args) => createAgent(createAgentDeps, args),
+    agentAvatarChanged: (id) => announceAgentAvatar(id),
     listPAs: () => registry.listPAs().map((s) => ({
       id: s.id,
       name: s.name,
@@ -2449,46 +2855,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       agent: s.agent,
       role: s.role,
       isDefault: s.is_default,
+      avatar: avatarRev(s.id),
       model: s.model,
       reasoningLevel: s.reasoningLevel,
       status: s.status,
       user_status: s.user_status,
       sort_order: s.sort_order,
     })),
-    updatePA: async (name, patch) => {
-      const s = registry.resolveName(name)
-      if (!s) return { ok: false, error: "session not found" }
-      if (patch.model) {
-        const modelResult = await switchSessionModel(s.id, patch.model)
-        if (!modelResult.ok) return modelResult
-      }
-      if (patch.reasoningLevel) {
-        const reasoningResult = await switchSessionReasoningLevel(s.id, patch.reasoningLevel)
-        if (!reasoningResult.ok) return reasoningResult
-      }
-      return { ok: true }
-    },
-    killSession: async (id) => {
-      const s = registry.get(id)
-      if (!s) throw new Error("session not found")
-      // SessionRecord carries no workspace_id (the column exists, the type does
-      // not) — read it straight from the row before the session goes.
-      const workspaceId = (registry.db
-        .query("SELECT workspace_id FROM sessions WHERE id = ?")
-        .get(s.id) as { workspace_id?: string } | null)?.workspace_id
-      await killSession(s.id)
-      unregisterSession(s.id)
-      await refreshTelegramMenu()
-      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
-      // Archiving a session used to leave its workspace behind forever: the row
-      // stayed in the sidebar with a dead chat, and "archive" did nothing because
-      // there was no live session left to kill. Retire the workspace once nothing
-      // live remains in it.
-      //
-      // A workspace with non-chat views (terminal / editor / display) SURVIVES —
-      // spec §9.3: closing the last chat does not close the workspace.
-      if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
-    },
+    updatePA: (key, patch) => updateAgent({
+      find: (k) => registry.get(k) ?? registry.resolveName(k),
+      takenNames: () => registry.takenNames(),
+      setDefault: (id) => registry.setDefaultAgent(id),
+      // The workdir (~/.mux/workspace/<old name>) deliberately stays: memory is keyed by id
+      // and the running session keeps that folder.
+      rename: renameSessionAndAnnounce,
+      switchModel: (id, model) => switchSessionModel(id, model),
+      switchReasoning: (id, level) => switchSessionReasoningLevel(id, level),
+    }, key, patch),
+    // The app's kill and archive: SessionManager.killAndArchive (kill_session and /kill use it too).
+    killSession: (id) => sessionManager.killAndArchive(id, { endedBy: "client" }),
     worktrees: {
       root: () => worktreesRoot(),
       list: (opts) => worktreeService.list(opts),
@@ -2498,22 +2883,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       forWorkdir: (w) => worktreeService.forWorkdir(w),
       remove: (ids) => worktreeService.remove(ids),
     },
-    renameSession: async (id, newName) => {
-      const s = registry.get(id)
-      if (!s) throw new Error("session not found")
-      const oldName = s.name
-      registry.rename(s.id, newName)
-      await refreshTelegramMenu()
-      webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
-      // Spec §9.5: the workspace name follows its primary session. Both frames
-      // go out — an old client only knows the first one. propagateSessionRename
-      // returns undefined when the name did not change (loop guard).
-      const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
-      if (wsId) {
-        const dto = wsDto(wsId)
-        if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
-      }
-    },
+    renameSession: (id, newName) => renameSessionAndAnnounce(id, newName),
     reorderSessions: (orderedIds) => {
       registry.sessions.reorder(orderedIds)
       // Fan out so every connected client (web / native) re-sorts live —
@@ -2521,8 +2891,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
     },
     listWorkspaces: () => {
-      // Hide workspaces owned by an INTERNAL session, exactly as the session list
-      // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
+      // Hide workspaces owned by an INTERNAL session, as the session list does via
+      // registry.listVisible() (which also leaves out delegated children). Without this
       // the rpc-worker sessions — invisible in the session sidebar since forever —
       // reappear as workspace rows, which is what the user hit.
       const internal = internalSessionIds()
@@ -2699,7 +3069,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionBaseCommits: (id) => registry.get(id)?.base_commits,
     getSessionCreatedAt: (id) => registry.get(id)?.created_at,
     listArchivedSessions: () =>
-      registry.sessions.listArchived().map((s) => ({
+      registry.sessions.listArchived().filter((s) => !s.parent_session_id).map((s) => ({
         id: s.id,
         name: s.name,
         workdir: s.workdir,
@@ -2707,6 +3077,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: s.model,
         killed_at: s.killed_at,
         repo_root: s.repo_root,
+        role: s.role,
+        avatar: s.role === "personal_assistant" ? avatarRev(s.id) : undefined,
       })),
     resumeFromArchive: (id: string) => resumeFromArchive(id),
     getAppConfig: () => settings.getAppConfig(appConfigEnv),
@@ -2753,8 +3125,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     setOpenCodeApiKey: (id, key) => setOpenCodeApiKey(id, key),
     startOpenCodeOAuth: (id, method) => startOpenCodeOAuth(id, method),
     finishOpenCodeOAuth: (id, method, code) => finishOpenCodeOAuth(id, method, code),
-    getSoul: async () => { try { return await Bun.file(SOUL_PATH).text() } catch { return "" } },
-    setSoul: async (content) => { await Bun.write(SOUL_PATH, content) },
     getExposure: () => {
       const c = settings.getAppConfig(appConfigEnv)
       return { exposureMode: c.exposureMode, publicUrl: c.webPublicUrl, snippets: reverseProxySnippets({ publicUrl: c.webPublicUrl, port: c.webPort }) }
@@ -2825,116 +3195,82 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // The same hints the first pass will use, so it needs no session.update either.
       return warmStt(engine, dictationId, { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary })
     },
-    transcribe: async (sessionId, input) => {
-      // The session id is OPTIONAL (id-less /transcribe is used by the pre-spawn launcher). When
-      // present it enriches the cleanup with prior messages + the session's agent skills; when
-      // absent the cleanup still runs off the draft + global glossary/engine/model.
-      const s = sessionId ? registry.get(sessionId) : undefined
-      const cfg = settings.getAppConfig(appConfigEnv)
-      let draft = input.draft ?? ""
-      let sttMs = 0
-      let sttEngine = "client"
-      let prefersCleanup = true
-      if (input.partial) {
-        // A live dictation pass: the text so far + the audio since the last pass → the complete
-        // text (`full: true`), which the client puts in place of everything dictated.
-        // No silence probe (the next pass or Stop will catch a dead mic), no whisper fallback (it
-        // would take longer than the user's next pause). A slow engine declines outright.
-        const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
-        if (!input.audioPath || !livePartialsUsable(engine)) return { text: "", skipped: true }
-        const currentText = input.previousText ?? ""
-        const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
-        const t0 = Date.now()
-        // Transcribe only the new audio when the engine can cut, and append it to the text so far;
-        // otherwise the whole recording is the text. (A gpt-realtime merge that also applied
-        // spoken edits was tried and dropped 2026-10-11: like every conversational model it
-        // INVENTS sentences for clips with little or no speech in them.)
-        const r = await runStt(input.audioPath, {
-          engine,
-          lang,
-          languages: cfg.voiceLanguages,
-          keyterms: cfg.voiceCleanupGlossary,
-          fromMs: input.fromMs,
-          previousText: currentText,
-          stream: input.dictationId,
-          endStream: input.final,
-          fallback: false,
-        })
-        const cut = (r.fromMs ?? 0) > 0
-        const text = cut ? joinContinuation(currentText, r.text) : r.text
-        // What this pass added, for the client's spoken-edit check (`/transcribe/edit`).
-        const added = cut ? text.slice(currentText.trim().length).trim() : ""
-        log.info("voice_transcribe_partial", { sessionId: sessionId ?? null, dictationId: input.dictationId ?? null, final: input.final ?? false, mode: cut ? "append" : "whole", sttEngine: r.engine, ms: Date.now() - t0, chars: text.length, fromMs: r.fromMs ?? 0, durationMs: r.durationMs ?? null })
-        return {
-          text,
-          full: true,
-          ...(added ? { added } : {}),
-          ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
-        }
-      }
-      if (input.audioPath) {
-        // A cut-off mic uploads exact zeros, and STT models invent a sentence from silence —
-        // answer "" (the client shows "Didn't catch that") instead of made-up text. Measured in
-        // parallel with the STT call so real speech pays no extra latency.
-        const silent = isDigitalSilence(input.audioPath)
-        const t0 = Date.now()
-        const stt = runStt(input.audioPath, {
-          engine: cfg.voiceSttEngine ?? VOICE_STT_ENGINE,
-          // whisper-specific knobs stay on app-config until engines grow their own model fields
-          model: cfg.whisperModel,
-          // Single-language engines get a pin only when the user dictates in exactly one
-          // language; with several (e.g. tr + en) they auto-detect, and codex-realtime gets the
-          // whole list as a prompt hint instead.
-          lang: cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang,
-          languages: cfg.voiceLanguages,
-          // claude-voice biases recognition with the voice glossary (x-config-keyterms);
-          // codex-realtime puts it in its transcription prompt.
-          keyterms: cfg.voiceCleanupGlossary,
-        })
-        if (await silent) {
-          stt.catch(() => {})
-          log.warn("voice_transcribe_silent", { sessionId: sessionId ?? null, note: "all-zero audio — client mic likely denied or held by another app" })
-          return { text: "" }
-        }
-        const r = await stt
-        sttMs = Date.now() - t0
-        draft = r.text
-        sttEngine = r.fellBack ? `${r.engine}(fallback)` : r.engine
-        prefersCleanup = r.prefersCleanup
-      }
-      if (!draft.trim()) { log.info("voice_transcribe_empty", { sessionId: sessionId ?? null, sttEngine, sttMs }); return { text: "" } }
-      const skills = s ? commandRegistry.get(s.name).filter((c) => c.family === "agent").map((c) => c.name) : []
-      const messages = sessionId ? messageLog.get(s?.id ?? sessionId, 10) : []
-      const payload = buildVoicePayload(draft, messages, skills)
-      // Client-side STT drafts (no audioPath) always go through cleanup; engine-produced
-      // drafts honor prefersCleanup (whisper: true; codex-realtime / claude-voice / cursor-stt: false).
-      if (!prefersCleanup) {
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text: draft, sttMs, cleanupMs: 0, sttEngine, cleanupEngine: "skipped" })
-        return { text: draft }
-      }
-      log.info("voice_transcribe_in", { sessionId: sessionId ?? null, sttEngine, draft, sttMs, ctxMsgs: messages.length, skills, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-      try {
-        const t1 = Date.now()
-        const out = await cleanupDraft(
-          { draft, recentMessages: payload.context.recentMessages, skills, glossary: cfg.voiceCleanupGlossary ?? [] },
-          { engine: cfg.voiceCleanupEngine, model: cfg.voiceCleanupModel },
-        )
-        const cleanupMs = Date.now() - t1
-        const text = out.text || draft
-        log.info("voice_transcribe_out", { sessionId: sessionId ?? null, draft, text, sttMs, cleanupMs, sttEngine, cleanupEngine: out.engine, model: cfg.voiceCleanupModel ?? VOICE_CLEANUP_MODEL })
-        return { text }
-      } catch (e) {
-        log.warn("voice_cleanup_failed", { sessionId: sessionId ?? null, draft, sttMs, sttEngine, err: String(e) })
-        return { text: draft, degraded: true }
-      }
-    },
+    transcribe: transcribeVoice,
     // Spoken edits: were the newly dictated words an instruction to change the text? (Luna, text only.)
     dictationEdit: (input) => checkDictationEdit(input, codexAdapter()),
+    // Streamed dictation (`/transcribe/stream`): the app sends its mic audio as it records; the
+    // broker hears the pauses (Silero), judges sentence ends (Smart Turn), transcribes, and sends
+    // the whole dictated text back. See src/core/transcription/stream/dictation-stream.ts.
+    openDictationStream: ({ dictationId, sessionId, send, close }) => {
+      const cfg = settings.getAppConfig(appConfigEnv)
+      const engine = cfg.voiceSttEngine ?? VOICE_STT_ENGINE
+      const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
+      const hints = { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary }
+      const livePasses = livePartialsUsable(engine)
+      // Two engine connections: one for the passes at pauses and Stop, one for the passes while
+      // talking, so the first never waits behind the second.
+      const liveStream = `${dictationId}~live`
+      if (livePasses) {
+        for (const key of [dictationId, liveStream]) {
+          warmStt(engine, key, hints).catch((err) => log.warn("dictation_stream_warm_failed", { dictationId: key, err: String(err) }))
+        }
+      }
+      const models = speechModels()
+      // Engines take a file: each pass writes its stretch as a WAV and removes it straight after.
+      const scratch = join(tmpdir(), "mux-voice-stream")
+      const fileId = dictationId.replace(/[^\w-]/g, "").slice(0, 64)
+      let files = 0
+      const withWav = async <T,>(pcm: Int16Array, run: (path: string) => Promise<T>): Promise<T> => {
+        mkdirSync(scratch, { recursive: true })
+        const path = join(scratch, `${fileId}-${++files}.wav`)
+        writeFileSync(path, encodeWav16(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength), 16_000))
+        try {
+          return await run(path)
+        } finally {
+          try { unlinkSync(path) } catch { /* already gone */ }
+        }
+      }
+      const stream = new DictationStream({
+        id: dictationId,
+        vad: (onProbs, onError) => models.openVad(onProbs, onError),
+        turn: (audio) => models.turn(audio),
+        livePasses,
+        transcribe: (pcm, o) => withWav(pcm, async (path) => (await runStt(path, {
+          engine, ...hints, context: o.context, stream: o.lane === "live" ? liveStream : dictationId, endStream: o.final, fallback: false,
+        })).text),
+        transcribeWhole: (pcm) => withWav(pcm, async (path) => (await transcribeVoice(sessionId, { audioPath: path })).text),
+        checkEdit: async (text, newWords) => (await checkDictationEdit({ text, newWords }, codexAdapter())).text,
+        endStream: () => {
+          const e = selectStt(engine)
+          e.endStream?.(dictationId)
+          e.endStream?.(liveStream)
+        },
+        send: (ev) => {
+          send(ev)
+          if (ev.type === "done" || (ev.type === "error" && ev.fatal)) close()
+        },
+      })
+      return {
+        audio: (bytes) => stream.pushAudio(bytes),
+        control: (msg) => {
+          if (msg.type === "stop") void stream.stop()
+          else if (msg.type === "cancel") stream.cancel()
+          else if (msg.type === "edit" && typeof msg.text === "string") stream.edit(msg.text, typeof msg.seq === "number" ? msg.seq : undefined)
+        },
+        closed: () => stream.cancel(),
+      }
+    },
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
+      const streaming = process.env.MUX_VOICE_STREAMING !== "0"
+      // Every composer asks for these when it opens, so a dictation may follow: warm the speech
+      // models now rather than on the first words (a cold start cost several seconds).
+      if (streaming && livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE)) speechModels().prewarm?.()
       return {
         codexAvailable: selectStt("codex-realtime").isAvailable(),
         livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
+        // Apps stream their mic here instead of judging pauses themselves (MUX_VOICE_STREAMING=0 = off).
+        streaming,
       }
     },
     // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.
@@ -3124,7 +3460,7 @@ function applyConnectionStatus(session_id: string, connected: boolean, last_pong
     if (coreAlive) return
     agentStateStore.applyEvent(session_id, "dead")               // crash/shim-gone — but NOT an intentional suspend
     bgTaskStore.clear(session_id)  // a dead harness can never deliver its wakes — no fake "waiting"
-    subagentStore.abandonRunning(session_id)  // nor finish its subagents
+    subagentStore.abandonRunning(session_id, Date.now(), (id) => delegatedChildren.isChild(session_id, id))  // a delegated child is a session of its own
   }
 }
 
@@ -3250,7 +3586,7 @@ async function spawnSession(args: {
   model?: string
   reasoningLevel?: string
   permissionMode?: string
-  /** Account id (validated here). Absent or the system account = today's login. */
+  /** Account id (validated here). Absent or "auto" = Auto, the account with the most room left; `<agent>:system` = the system login. */
   account?: string
   worktree?: boolean
   baseBranch?: string
@@ -3258,13 +3594,24 @@ async function spawnSession(args: {
   inheritFromSessionId?: string
   internal?: boolean
   rpcMcpConfig?: string
+  /** delegate (spec §3): fail instead of falling back to the folder when the worktree can't be made. */
+  requireWorktree?: boolean
+  /** delegate / council (spec §3): the creating session, and the workspace the child joins hidden. */
+  parentSessionId?: string
+  workspaceId?: string
+  /** council: the member's id, minted first so its membership is recorded before it starts (spec §5). */
+  id?: string
+  /** council: a worktree made beforehand (all of a council's are made before any member starts). */
+  worktreeHandle?: WorktreeHandle
 }) {
   const agent = args.agent ?? AgentKind.Claude
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
   // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
   assertAgentInstalled(agent)
-  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request.
-  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, args.account)
+  // Before any worktree/name work: an unknown, foreign or unsupported account fails the request. No
+  // account, or "auto", is Auto (decision #18): the account with the most room left.
+  const asked = !args.account || args.account === AUTO_ACCOUNT ? await brokerAccounts.autoAccount(agent) : args.account
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
@@ -3276,7 +3623,10 @@ async function spawnSession(args: {
   // explicitly disabled, spawn the agent in an isolated external worktree.
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
-  if (args.worktree !== false) {
+  if (args.worktreeHandle) {
+    wt = args.worktreeHandle
+    effectiveWorkdir = wt.worktreeDir
+  } else if (args.worktree !== false) {
     const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
@@ -3288,8 +3638,11 @@ async function spawnSession(args: {
         effectiveWorkdir = wt.worktreeDir
       } catch (err) {
         log.warn("worktree_create_failed", { workdir, error: String(err) })
+        if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         // Fall back to spawning directly in the repo (today's behavior).
       }
+    } else if (args.requireWorktree) {
+      throw new Error(`${workdir} is not a single git repository, so no worktree can be made`)
     }
   }
   const effort = resolveSessionEffort(
@@ -3333,7 +3686,7 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: args.id },
   )
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
@@ -3360,14 +3713,14 @@ async function spawnSession(args: {
     // session from the spawn path. Duplicate session_added frames are safe:
     // clients upsert by id (see web sessions.add).
     const bornRow = registry.get(r.session_id)
-    if (bornRow && !bornRow.internal) {
+    if (bornRow && !bornRow.internal && !bornRow.parent_session_id) {
       webChannel?.broadcastToAll({
         type: "session_added",
         session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
       await refreshTelegramMenu()
     }
-  } else if (registered?.core && !registered.internal) {
+  } else if (registered?.core && !registered.internal && !registered.parent_session_id) {
     webChannel?.broadcastToAll({
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
@@ -3408,6 +3761,79 @@ async function spawnSession(args: {
   }
   gitStatusService.sync(gitServiceSessions())
   return r
+}
+
+/** The one create path (spec §4): the launcher (POST /sessions) and spawn_session call it. */
+function createSessionWithWorkspace(args: CreateSessionArgs): Promise<CreatedSession> {
+  return createSession(sessionCreateDeps(), args)
+}
+
+/**
+ * delegate (spec §3): a child of `parentId`, linked and hidden in its workspace from the moment its
+ * row exists, in the parent's folder ("shared") or a new worktree from the parent's current branch
+ * ("worktree", or nothing at all). Its card goes into the parent's subagents, then the task is its
+ * first message, from the parent, through the inbox.
+ */
+async function delegateSession(args: {
+  parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string
+  checkout: "shared" | "worktree"; title?: string; callId?: string
+}): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }> {
+  const parent = registry.get(args.parentId)
+  if (!parent) throw new Error("unknown session")
+  const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(parent.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const r = await spawnSession({
+    workdir: parent.workdir,
+    requestedName: args.title?.trim() || nameFromTask(args.task),
+    agent: args.agent,
+    model: args.model,
+    reasoningLevel: args.effort,
+    permissionMode: args.access,
+    worktree: args.checkout === "worktree",
+    requireWorktree: args.checkout === "worktree",
+    parentSessionId: parent.id,
+    workspaceId,
+  })
+  const child = registry.get(r.session_id)
+  if (!child) throw new Error("the child session ended before it was given its task")
+  delegatedChildren.started(child, args.task, args.callId)
+  inboxDelivery!.send({ name: parent.name, id: parent.id }, [child.id], args.task, "queue")
+  return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
+}
+
+/**
+ * council (spec §5): the council is saved and returned at once (createCouncil); its members start in
+ * the background, and the card and the caller hear each one start or fail.
+ */
+async function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
+  const created = await createCouncil(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_start_failed", { council: created.started.council, err: String(err) }))
+  return created.started
+}
+
+/** council_add (design 2026-10-31 §2): more members for an open council, started like the first ones. */
+async function councilAddMembers(args: AddMembersArgs): Promise<{ added: StartedCouncil["members"] }> {
+  const created = await addCouncilMembers(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_add_failed", { council: args.council, err: String(err) }))
+  return { added: created.added }
+}
+
+function councilStartDeps(): StartCouncilDeps {
+  return {
+    store: councilStore,
+    session: (id) => registry.sessions.getById(id),
+    isLive: (id) => !!registry.get(id),
+    assertInstalled: (agent) => assertAgentInstalled(agent),
+    workspaceOf: (id) => (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined,
+    repoInfo: (workdir) => getRepoInfo(workdir),
+    createWorktree: (opts) => createWorktree(opts),
+    removeWorktree: (repoRoot, worktreeDir, sessionBranch, opts) => removeWorktree(repoRoot, worktreeDir, sessionBranch, opts),
+    newId: () => randomUUID(),
+    spawn: (a) => spawnSession(a),
+    kill: (id) => sessionManager.killAndArchive(id, { endedBy: "parent" }),
+    opened: (councilId) => councils.opened(councilId),
+    memberStarted: (id) => councils.memberStarted(id),
+    memberStartFailed: (id, error) => councils.memberStartFailed(id, error),
+  }
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
@@ -3463,7 +3889,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
         registry.setActive(msg.chat_id, r.session_id)
         return r
       },
-      killSession,
+      killSession: (id: string) => sessionManager.killAndArchive(id, { endedBy: "client" }),
       refreshMenu: refreshTelegramMenu,
       listModels: (agent: AgentKind) => modelCache.get(agent).map((m) => ({ id: m.id, displayName: m.displayName })),
       switchModel: switchSessionModel,
@@ -3484,81 +3910,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
       proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
       proxyPublicUrl: exposedProxyLinksBaseUrl(),
       resumeFromArchive: (id: string) => resumeFromArchive(id),
-      spawnPA: async (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => {
-        assertAgentInstalled(args.agent ?? AgentKind.Claude)
-        const workdir = join(home(), ".mux", "workspace", args.name)
-        mkdirSync(workdir, { recursive: true })
-        if (args.focus != null) {
-          try { writeFileSync(join(workdir, "focus.md"), args.focus, "utf8") } catch {}
-        }
-        const r = await spawnPA({
-          registry,
-          name: args.name,
-          agent: args.agent ?? "claude",
-          workdir,
-          model: args.model,
-          bind: (sid: string) => server.bind(sid),
-          tmuxSession: TMUX_SESSION,
-          resolveEffort: (s) => sessionEffort(s),
-          registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
-          onCodexSessionId: (brokerSessionId, sessionId) => {
-            const session = registry.get(brokerSessionId)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onCursorSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onOpenCodeSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onGrokSessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-          onAntigravitySessionId: (name, sessionId) => {
-            const session = registry.resolveName(name)
-            if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
-          },
-        })
-        const entry = registry.get(r.id)
-        await refreshTelegramMenu()
-        if (entry) {
-          webChannel?.broadcastToAll({
-            type: "session_added",
-            session: {
-              id: entry.id,
-              name: entry.name,
-              workdir: entry.workdir,
-              mute: !!entry.mute,
-              connected: true,
-              agent: entry.agent,
-              capabilities: sessionCapabilities(entry.agent),
-              model: entry.model,
-              reasoningLevel: sessionEffort(entry),
-              fastMode: sessionFast(entry),
-
-              permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
-
-              ...sessionAccountFields(entry),
-              repo_root: entry.repo_root || undefined,
-              session_branch: entry.session_branch || undefined,
-              finish_job: entry.finish_job,
-              user_status: entry.user_status,
-              sort_order: entry.sort_order,
-              draft_payload: entry.draft_payload,
-            },
-          })
-        }
-        return {
-          id: entry?.id ?? r.id,
-          name: r.name,
-          workdir: entry?.workdir ?? workdir,
-          agent: entry?.agent ?? args.agent ?? "claude",
-          model: entry?.model,
-        }
-      },
+      createAgent: (args: { name: string; provider?: AgentKind; model?: string }) => createAgent(createAgentDeps, args),
       interrupt: async (name: string) => {
         const s = registry.get(name)
         return s ? interruptSessionById(s.id) : { ok: false, reason: "no such session" }
@@ -3685,11 +4037,13 @@ activityStore.on("append", (sessionId: string, event) => {
   webChannel?.broadcastToAll({ type: "activity_append", session: sessionId, event })
 })
 bgTaskStore.on("change", (sessionId: string) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
 subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
   // A background subagent starting or finishing moves the "waiting · N background" count.
   if (subagent.background === true) {
@@ -3697,6 +4051,7 @@ subagentStore.on("change", (sessionId: string, subagent: { background?: boolean 
   }
 })
 subagentStore.on("clear", (sessionId: string) => {
+  childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
 })
@@ -3705,6 +4060,9 @@ agentStateStore.on("change", (sessionId: string, state) => {
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
+  settleChanged(sessionId)
+  if (state.phase === "running") delegatedChildren.activity(sessionId, state.tool ?? "Working")
+  else if (state.phase === "thinking") delegatedChildren.activity(sessionId, "Thinking")
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   if (state.phase !== "idle") return
@@ -3888,12 +4246,22 @@ agentRpc = createAgentRpc({
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
-  paWorkdir: appConfig.paWorkdir || undefined,
-  resolveEffort: (s) => sessionEffort(s),
-  // Adapter registration + session-id persistence for supervisor-spawned
-  // non-claude PAs derive from the component — the half-filled-bag bug
-  // (adapters built then dropped) is structurally closed.
-  sessionManager,
+  // Agents restart through the same paths as every session: the adapter's own revive, then the
+  // normal resume (resolveAttachment and native-id persistence included, for every provider).
+  sessionManager: {
+    registerSpawnedAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter as never, handle),
+    adapterFor: (id) => sessionManager.adapterFor(id),
+    resumeSuspended: (s) => sessionManager.resumeSuspended(s as never),
+    bootResumeInFlight: (id) => sessionManager.bootResumeInFlight(id),
+    reviveArchivedWorkspaceOf: (id) => sessionManager.reviveArchivedWorkspaceOf(id),
+  },
+  // A row that cannot resume (never had a conversation): start it under its own id, through the
+  // same spawn deps as createAgent, so attachments resolve and native ids persist for every provider.
+  startAgentFresh: async (s) => {
+    await createAgentDeps.spawn({ id: s.id, name: s.name, provider: s.agent as AgentKind, workdir: s.workdir, model: s.model, reasoningLevel: s.reasoningLevel })
+  },
+  // The tick leaves Agents alone until the boot pass below (after resumeAtBoot) has run.
+  awaitBootPass: true,
   // check() first: if the computer just woke, the wake shifts the idle baselines before the reap
   // judges them (this 30 s timer can fire before the wake detector's own tick).
   reapInternalWorkers: () => { wakeDetector.check(); return agentRpc.reapIdle(RPC_WORKER_IDLE_MS) },
@@ -3907,6 +4275,12 @@ if (!settings.getAppConfig(appConfigEnv).onboarded &&
   settings.setAppConfig({ onboarded: true })
   log.info("onboarded_seeded_existing_install", {})
 }
+// Spec §6: soul.md / focus.md become Agent memory once per install (marker in settings; originals untouched).
+try {
+  if (runAgentMemoryMigrationOnce({ muxHome: MUX_HOME, settings, log: (id) => log.warn("agent_memory_migration_skipped_bad_id", { id }), agents: registry.listAllAgents().map(s => ({ id: s.id, workdir: s.workdir, is_default: !!s.is_default, created_at: s.created_at })) })) {
+    log.info("agent_memory_migrated", {})
+  }
+} catch (err) { log.warn("agent_memory_migration_failed", { err: String(err) }) }
 await reconcileOnStartup({ registry, bindSocket: (sid) => server.bind(sid), supervisor, sessionBackend })
 
 
@@ -3919,7 +4293,7 @@ if (!IS_TEST_BROKER) {
       log.info("mux_core_skills_synced")
     }
     // Register + enable mux-core in plugins.json if absent — without this a fresh
-    // install spawns sessions with zero plugins (no /mux:soul, no mux skills).
+    // install spawns sessions with zero plugins (no mux skills).
     if (ensureMuxCoreRegistered()) {
       log.info("mux_core_plugin_registered")
     }
@@ -3933,11 +4307,68 @@ if (!IS_TEST_BROKER) {
       log.info("antigravity_plugin_scopes_synced")
     }
   } catch (err: any) {
-    log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })
+    log.warn("mux_core_skill_sync_failed", { err: err?.message ?? String(err) })
   }
 }
 
 await sessionManager.resumeAtBoot()
+// Agents that resumeAtBoot could not bring back (e.g. a Codex Agent with no thread yet) start here,
+// AFTER the normal resume, so the supervisor never races it for the host registration.
+await supervisor.superviseAgents()
+// Inbox messages appended but not delivered before the last shutdown (inbox spec §1.3, step 5).
+// Fire-and-forget: a recipient that never becomes deliverable waits up to a minute, and boot must not.
+void inboxDelivery.recoverOnStartup()
+  .catch((err) => log.warn("inbox_recover_failed", { err: err instanceof Error ? err.message : String(err) }))
+  .then(seedChildTasks)
+
+/**
+ * Decision #21 across a restart: watch again each live delegated child whose newest input from its parent
+ * (its inbox) or the user (its message log) is newer than its newest message to its parent.
+ */
+function seedChildTasks(): void {
+  for (const s of registry.list()) {
+    const parent = parentOfChild(s.id)
+    if (!parent) continue
+    try {
+      const own = inboxStore.read(s.id)
+      const parents = inboxStore.read(parent)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === parent).at(-1)?.at, messageLog.lastUserInbound(s.id)],
+        lastReport: parents.filter((m) => m.sender.id === s.id).at(-1)?.at,
+        // Any supermux notice naming it (quiet, failed turn, crash) told the parent already.
+        toldAt: parents.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
+    } catch (err) { log.warn("delegate_seed_failed", { session: s.id, err: String(err) }) }
+  }
+  seedMemberTasks()
+}
+
+/**
+ * The same for council members: the newest council message to a member (its round's question or focus)
+ * against its reports for the current round; a supermux notice to the caller naming it told the caller.
+ */
+function seedMemberTasks(): void {
+  for (const s of registry.list()) {
+    const membership = councilStore.membership(s.id)
+    const council = membership ? councilStore.get(membership.councilId) : undefined
+    if (!membership || !council || council.status !== "open" || !registry.get(council.callerSessionId)) continue
+    try {
+      const own = inboxStore.read(s.id)
+      const seed = seedFor({
+        inputs: [own.filter((m) => m.sender.id === council.id).at(-1)?.at],
+        lastReport: councilStore.reports(council.id, council.currentRound).filter((r) => r.memberSessionId === s.id).at(-1)?.at,
+        toldAt: inboxStore.read(council.callerSessionId)
+          .filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.includes(`:${s.id}]`)).at(-1)?.at,
+        nudgedAt: own.filter((m) => m.sender.id === SUPERMUX_SENDER.id && m.text.startsWith(MEMBER_NUDGE_PREFIX)).at(-1)?.at,
+        repliedAt: messageLog.lastReplyAt(s.id),
+      })
+      if (seed !== "none") childSettle.seed(s.id, { nudged: seed !== "watch", turnSinceNudge: seed === "nudged-turn" })
+    } catch (err) { log.warn("council_member_seed_failed", { session: s.id, err: String(err) }) }
+  }
+}
 // Git appearing (or its install action changing) reaches every client.
 gitRequirement.onChange((requirements) => {
   webChannel?.broadcastToAll({ type: "host_requirements", requirements })
@@ -3947,7 +4378,7 @@ keepAwake.onChange((state) => {
   webChannel?.broadcastToAll({ type: "keep_awake", keepAwake: state })
 })
 // After a sleep (spec "Wake reconnect, sleep ≠ idle"): sleep is not idleness, the relay reconnects
-// now instead of after frpc's own timeouts, every client resubscribes for a fresh snapshot, and the
+// now instead of after the tunnel's keepalive timeout, every client resubscribes for a fresh snapshot, and the
 // git requirement and the power source are re-checked.
 wakeDetector.onWake((sleptMs) => {
   runWakeActions({

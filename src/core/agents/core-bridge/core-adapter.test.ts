@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { createHost } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, DriverContextSupport, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 
-import { CoreAdapter, CORE_ADAPTER_PROFILES } from "./core-adapter"
+import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
 import { createCodexCoreHost } from "../codex/core-host"
 import { createCursorCoreHost } from "../cursor/core-host"
@@ -17,6 +18,9 @@ import { createAntigravityCoreHost } from "../antigravity/core-host"
 import type { AgentKind } from "../types"
 import { askPermissionMode, defaultPermissionMode, permissionsFor } from "../permission-modes"
 import { attachmentMeta } from "../attachment-meta"
+import { InboxDelivery } from "../../inbox/delivery"
+import { InboxStore } from "../../inbox/store"
+import type { Session } from "../../session-manager/types"
 
 const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as const
 type QueueKind = typeof QUEUE_KINDS[number]
@@ -50,7 +54,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean } = {}) {
+function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean; onPrompt?: (text: string) => void } = {}) {
   const opens: DriverContext[] = []
   const prompts: ContentBlock[][] = []
   const promptTexts: string[][] = []
@@ -73,11 +77,14 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let interruptHangs = false
   let interruptError: Error | undefined
   let ignoreAbort = false
+  /** Thrown by every open that resumes a conversation (a fresh open still works). */
+  let resumeError: Error | undefined
 
   const driver: AgentDriver = {
     id: kind,
     async open(ctx) {
       opens.push(ctx)
+      if (ctx.resumeId && resumeError) throw resumeError
       agentSpec = keptAgent ?? ctx.permissions
       keptAgent = undefined
       if (ctx.configuration) liveConfig = { ...ctx.configuration }
@@ -90,6 +97,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         async prompt(content, signal) {
           prompts.push(content)
           promptTexts.push(content.map((c) => ("text" in c ? String(c.text) : "")))
+          options.onPrompt?.(promptTexts.at(-1)![0] ?? "")
           if (nextFail) {
             const err = nextFail
             nextFail = undefined
@@ -144,6 +152,8 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     get interruptCalls() { return interruptCalls },
     holdNextPrompt() { holdPrompt = true },
     completePrompt() { promptGate?.resolve({ stopReason: "end_turn" }); holdPrompt = false },
+    /** Rejects the held prompt: the agent answered the turn with an error. */
+    failPrompt(error: Error) { promptGate?.reject(error); holdPrompt = false },
     failNextPrompt(error: Error) { nextFail = error },
     failNextSetPermissions(error: Error) { nextPermissionsFail = error },
     /** Whether runtimes opened from now on report live permission switching. */
@@ -152,6 +162,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     get agentSpec() { return agentSpec },
     hangInterrupt() { interruptHangs = true },
     failInterrupt(error: Error) { interruptError = error },
+    rejectResume(error: Error | undefined) { resumeError = error },
     ignoreAbort() { ignoreAbort = true },
     emit(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }) {
       opens.at(-1)?.onUpdate(update as Parameters<DriverContext["onUpdate"]>[0])
@@ -256,8 +267,8 @@ afterEach(async () => {
 })
 
 function listen(adapter: CoreAdapter) {
-  const events: Array<{ kind: string; error?: Error; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "commands-update", "activity"]) {
+  const events: Array<{ kind: string; error?: Error; recoverable?: boolean; text?: string; phase?: string; detail?: unknown; events?: unknown[]; reported?: boolean }> = []
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "turn-failed", "error", "session-failed", "commands-update", "activity"]) {
     adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
@@ -466,6 +477,9 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     await first
     await adapter.send("two")
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
+    // Neither the unconfirmed interrupt nor the refused input is a failure of the turn.
+    await flush()
+    expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error)).toEqual([undefined, undefined])
   })
 }
 
@@ -936,6 +950,8 @@ acrossQueue("stall watchdog cancels through core after no activity", async (kind
   await sent
   await flush()
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([expect.stringMatching(/stalled/)])
+  expect(events.filter((e) => e.kind === "turn-failed")).toHaveLength(0)
   expect(fake.interruptCalls).toBeGreaterThan(0)
 })
 
@@ -1099,8 +1115,14 @@ acrossQueue("unconfirmed stall retains latch", async (kind) => {
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(0)
   expect(events.filter((e) => e.kind === "turn-start")).toHaveLength(1)
+  // The turn stays open, so its failure is told now (a parent or council caller would wait forever)...
+  expect(events.filter((e) => e.kind === "turn-failed").map((e) => e.error?.message)).toEqual([expect.stringMatching(/stalled/)])
   fake.completePrompt()
   await sent.catch(() => {})
+  // ...and not told again when the turn does end.
+  await waitUntil(() => events.some((e) => e.kind === "turn-complete"))
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => [e.error?.message, e.reported])).toEqual([[expect.stringMatching(/stalled/), true]])
+  expect(events.filter((e) => e.kind === "turn-failed")).toHaveLength(1)
 })
 
 acrossGrok("direct and nested native params both flush assistant and replay commands", async (kind) => {
@@ -1548,6 +1570,31 @@ test("codex: idle send waits for one completion", async () => {
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
+test("willSteer: a codex send without busy steers only while a turn runs; busy input and other kinds never do", async () => {
+  const fake = fakeAgentDriver("codex")
+  const { host, workdir } = await harness("codex", fake)
+  const adapter = makeAdapter("codex", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  expect(adapter.willSteer()).toBe(false) // idle: a new turn
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.prompts.length === 1)
+  expect(adapter.willSteer()).toBe(true)
+  expect(adapter.willSteer({ busy: "queue" })).toBe(false)
+  fake.completePrompt()
+  await first
+  const grokFake = fakeAgentDriver("grok")
+  const grok = await harness("grok", grokFake)
+  const grokAdapter = makeAdapter("grok", grok.host, { id: "sess-2", sessionName: "s2", workdir: grok.workdir, persistSessionId: async () => {} })
+  await grokAdapter.start()
+  grokFake.holdNextPrompt()
+  const g = grokAdapter.send("one")
+  await waitUntil(() => grokFake.prompts.length === 1)
+  expect(grokAdapter.willSteer()).toBe(false)
+  grokFake.completePrompt()
+  await g
+})
+
 test("codex: mid-turn send uses steer not a second prompt", async () => {
   const kind = "codex" as const
   const fake = fakeAgentDriver(kind)
@@ -1670,3 +1717,844 @@ test("codex: rate-limit notify maps through onUsageUpdate", async () => {
   expect(usage.length).toBeGreaterThan(0)
 })
 
+test("codex: an inbox message with busy=queue waits for the running turn instead of steering", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.prompts.length === 1)
+  const second = adapter.send("from inbox", { busy: "queue" })
+  await flush()
+  expect(fake.steers).toHaveLength(0)
+  expect(fake.prompts).toHaveLength(1)
+  fake.completePrompt()
+  await first
+  await second
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "from inbox"])
+})
+
+/** What the logger wrote to stderr (info level and up) while `fn` ran. */
+async function stderrDuring(fn: () => Promise<void>): Promise<string> {
+  const level = process.env.MUX_LOG_LEVEL
+  process.env.MUX_LOG_LEVEL = "info"
+  const stderr = spyOn(process.stderr, "write")
+  try {
+    await fn()
+    return stderr.mock.calls.map((call) => String(call[0])).join("")
+  } finally {
+    stderr.mockRestore()
+    if (level === undefined) delete process.env.MUX_LOG_LEVEL
+    else process.env.MUX_LOG_LEVEL = level
+  }
+}
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: busy=interrupt ends the running turn, keeps waiting input in order, then runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    // The fake's hold outlives the interrupt that ends "one": release the input that runs after it.
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt()
+    await Promise.all([first, queued, urgent])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+  })
+
+  test(`${kind}: busy=interrupt on an idle session just runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    await adapter.send("hello", { busy: "interrupt" })
+    expect(fake.interruptCalls).toBe(0)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+  })
+
+  test(`${kind}: busy=interrupt after an unconfirmed interrupt runs once the turn has ended`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const logged = await stderrDuring(async () => {
+      const urgent = adapter.send("urgent", { busy: "interrupt" })
+      await waitUntil(() => fake.interruptCalls === 1)
+      // Past the harness's 40 ms interrupt timeout: unconfirmed, the turn still runs and the message waits.
+      await sleep(60)
+      expect(adapter.sessionSnapshotState()).toBe("interrupting")
+      expect(fake.promptTexts).toHaveLength(1)
+      fake.completePrompt()
+      await first
+      await urgent
+    })
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "urgent"])
+    const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
+    expect(warning).toContain('"session_id":"sess-1"')
+    expect(warning).toContain('"outcome":"unconfirmed"')
+  })
+
+  test(`${kind}: busy=interrupt with a driver whose interrupt throws still runs, in order, once the turn has ended`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    fake.failInterrupt(new Error("turn/interrupt refused"))
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    const logged = await stderrDuring(async () => {
+      const urgent = adapter.send("urgent", { busy: "interrupt" })
+      await waitUntil(() => fake.interruptCalls === 1)
+      await flush()
+      expect(fake.promptTexts).toHaveLength(1) // the turn still runs: the message waits for it
+      fake.completePrompt()
+      await Promise.all([first, queued, urgent])
+    })
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+    expect(events.filter((e) => e.kind === "error")).toEqual([])
+    const warning = logged.split("\n").find((line) => line.includes("[WARN]") && line.includes("inbox_interrupt_unconfirmed"))
+    expect(warning).toContain('"outcome":"failed"')
+    expect(warning).toContain('"err":"turn/interrupt refused"')
+  })
+
+  for (const moment of ["its interrupt is pending", "it waits for the turn to end"] as const) {
+    test(`${kind}: busy=interrupt: a Stop while ${moment} drops it with the other pending input`, async () => {
+      const fake = fakeAgentDriver(kind)
+      const { host, workdir } = await harness(kind, fake)
+      const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+      listen(adapter)
+      await adapter.start()
+      fake.hangInterrupt()
+      fake.holdNextPrompt()
+      const first = adapter.send("one")
+      await waitUntil(() => fake.promptTexts.length === 1)
+      const queued = adapter.send("queued", { busy: "queue" })
+      const urgent = adapter.send("urgent", { busy: "interrupt" })
+      await waitUntil(() => fake.interruptCalls === 1)
+      if (moment === "it waits for the turn to end") {
+        await sleep(60) // past the 40 ms interrupt timeout: unconfirmed, the send now waits for idle
+        expect(adapter.sessionSnapshotState()).toBe("interrupting")
+      }
+      await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
+      fake.completePrompt()
+      await first
+      await queued
+      await expect(urgent).rejects.toThrow(/stopped/)
+      // Nothing is left paused: the next input runs.
+      await adapter.send("after")
+      expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "after"])
+    })
+  }
+
+  // ---- busy=interrupt ends only the turn that runs when it is handed over (send() is entered) ----
+
+  test(`${kind}: busy=interrupt handed over while the session is idle does not cut the turn of the message handed over just before it`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    // Handed over together (one delivery pass): no turn runs yet, so "b" has none to end.
+    const a = adapter.send("a", { busy: "queue" })
+    const b = adapter.send("b", { busy: "interrupt" })
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await flush()
+    expect(fake.interruptCalls).toBe(0)
+    fake.completePrompt()
+    await Promise.all([a, b])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["a", "b"])
+    expect(fake.interruptCalls).toBe(0)
+  })
+
+  test(`${kind}: busy=interrupt ends the turn running when it is handed over, also one an earlier interrupt started`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const long = adapter.send("long task", { busy: "interrupt" }) // to an idle session: it just runs
+    await waitUntil(() => fake.promptTexts.length === 1)
+    expect(fake.interruptCalls).toBe(0)
+    const stop = adapter.send("STOP", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt() // the fake's hold outlives the interrupt: release "STOP"
+    await Promise.all([long, stop])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["long task", "STOP"])
+  })
+
+  test(`${kind}: busy=interrupt leaves a turn that started after its hand-over alone, and queues behind it`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const attachment = deferred<string>()
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, resolveAttachment: async () => attachment.promise,
+    })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    // Handed over while "one" runs; its attachment holds it back until that turn is over.
+    const urgent = adapter.send("urgent", { busy: "interrupt", attachment_file_id: "f1" })
+    await flush()
+    fake.completePrompt() // "one" ends ...
+    fake.holdNextPrompt() // ... and "queued" starts its own turn, and stays in it
+    await waitUntil(() => fake.promptTexts.length === 2)
+    attachment.resolve("/tmp/f1")
+    await flush()
+    expect(fake.interruptCalls).toBe(0)
+    fake.completePrompt()
+    await Promise.all([first, queued, urgent])
+    expect(fake.interruptCalls).toBe(0)
+    expect(fake.promptTexts.map((p) => p[0]!.split("\n")[0])).toEqual(["one", "queued", "urgent"])
+  })
+
+  test(`${kind}: two busy=interrupt handed over during one turn: the first ends it, the second queues behind the first`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const u1 = adapter.send("u1", { busy: "interrupt" })
+    const u2 = adapter.send("u2", { busy: "interrupt" })
+    await waitUntil(() => fake.promptTexts.length === 2) // "one" was interrupted; u1 runs (held by the fake)
+    await flush()
+    expect(fake.interruptCalls).toBe(1) // u2 leaves u1's turn alone
+    fake.completePrompt()
+    await Promise.all([first, u1, u2])
+    expect(fake.interruptCalls).toBe(1)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "u1", "u2"])
+  })
+
+  test(`${kind}: pendingInput counts input queued behind the running turn, and is 0 once it has all run`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    expect(adapter.pendingInput()).toBe(0)
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("two", { busy: "queue" })
+    expect(adapter.pendingInput()).toBe(1) // still being handed over
+    await flush()
+    expect(adapter.pendingInput()).toBe(1) // in the core's queue
+    fake.completePrompt()
+    await Promise.all([first, queued])
+    expect(adapter.pendingInput()).toBe(0)
+  })
+
+  // The core tells observers about a turn through queueMicrotask, after its state has changed: the
+  // turn handed over into must be read from the session itself, not from the events seen so far.
+  test(`${kind}: busy=interrupt handed over the moment a turn starts, before its events arrive, ends that turn`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    await adapter.start()
+    fake.holdNextPrompt()
+    void host.core.sessions.live("sess-1")!.send({ content: [{ type: "text", text: "native" }], whenBusy: "queue" }) // the turn starts now
+    expect(adapter.turnIsRunning()).toBe(false) // the adapter has not heard of it yet
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    fake.completePrompt()
+    await urgent
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["native", "urgent"])
+  })
+
+  test(`${kind}: busy=interrupt handed over the moment the next turn starts ends that turn, not the one before`, async () => {
+    let onSecond: (() => void) | undefined
+    const fake = fakeAgentDriver(kind, { onPrompt: (text) => { if (text === "second") onSecond?.() } })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const turnStarts: unknown[] = []
+    host.core.subscribe((e) => { if (e.type === "session.event" && e.event.kind === "turn-start") turnStarts.push(e.event.turnId) })
+    await adapter.start()
+    fake.holdNextPrompt()
+    const first = adapter.send("first")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const second = adapter.send("second", { busy: "queue" })
+    await flush()
+    let urgent: Promise<void> | undefined
+    let startsSeenAtHandOver = -1
+    onSecond = () => { // inside "second"'s prompt: its turn runs, its events are on their way
+      startsSeenAtHandOver = turnStarts.length
+      urgent = adapter.send("urgent", { busy: "interrupt" })
+    }
+    fake.completePrompt() // "first" ends and "second" starts at once ...
+    fake.holdNextPrompt() // ... and stays in its turn
+    await waitUntil(() => fake.interruptCalls === 1)
+    expect(startsSeenAtHandOver).toBe(1) // "first"'s turn end and "second"'s turn start were both still on their way
+    fake.completePrompt()
+    await Promise.all([first, second, urgent!])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["first", "second", "urgent"])
+  })
+}
+
+test("claude: busy=interrupt: a model change that needs a restart is refused while the unconfirmed interrupt waits, and the message runs", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  await sleep(60) // unconfirmed: the turn still runs and the message waits for it
+  await expect(adapter.setConfiguration({ model: "new/model" })).rejects.toMatchObject({ code: "session_busy" })
+  fake.completePrompt()
+  await first
+  await urgent
+  expect(fake.opens).toHaveLength(1)
+  expect(adapter.model).toBe("old/model")
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "urgent"])
+  expect(events.filter((e) => e.kind === "error")).toEqual([])
+})
+
+for (const kind of ["opencode", "cursor"] as const) {
+  test(`${kind}: after an unconfirmed Stop (no inbox input waiting), a model change still restarts the agent, ending the turn`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+    listen(adapter)
+    await adapter.start()
+    fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
+    expect(adapter.sessionSnapshotState()).toBe("interrupting")
+    await adapter.setConfiguration({ model: "new/model" })
+    await first
+    expect(fake.opens).toHaveLength(2)
+    expect(fake.opens[1]?.resumeId).toBe("native-keep")
+    expect(adapter.model).toBe("new/model")
+  })
+}
+
+test("opencode: a Stop while an inbox interrupt waits lifts the restart guard: a model change restarts, the inbox input is dropped as stopped", async () => {
+  const kind = "opencode" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  listen(adapter)
+  await adapter.start()
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  await sleep(60) // unconfirmed: the inbox input waits for the turn to end
+  await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/) // the user's Stop, unconfirmed too
+  expect(adapter.sessionSnapshotState()).toBe("interrupting")
+  const outcome = urgent.then(() => "delivered", (err: Error) => err.message) // it settles while the restart runs
+  await adapter.setConfiguration({ model: "new/model" })
+  expect(await outcome).toMatch(/stopped/)
+  await first
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.model).toBe("new/model")
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one"])
+})
+
+test("opencode: an inbox interrupt that is over no longer holds back a restart", async () => {
+  const kind = "opencode" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const urgent = adapter.send("urgent", { busy: "interrupt" })
+  await waitUntil(() => fake.interruptCalls === 1)
+  fake.completePrompt()
+  await Promise.all([first, urgent])
+  // Then a turn left "interrupting" by an unconfirmed interrupt. Not a Stop: a Stop changes the
+  // input epoch, which lifts the guard by itself, so only the wait counter can hold it here.
+  fake.hangInterrupt()
+  fake.holdNextPrompt()
+  const second = adapter.send("two")
+  await waitUntil(() => fake.promptTexts.length === 3)
+  expect(await host.core.sessions.live("sess-1")!.interrupt({ pending: "keep" })).toEqual({ status: "unconfirmed" })
+  expect(adapter.sessionSnapshotState()).toBe("interrupting")
+  await adapter.setConfiguration({ model: "new/model" })
+  await second
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.model).toBe("new/model")
+})
+
+/** Context updates the core applies by relaunching the session (a "reload"). */
+const RELOAD_CONTEXT: DriverContextSupport = {
+  capabilities: {
+    instructions: { support: "supported", note: "t" }, skills: { support: "supported", note: "t" },
+    plugins: { support: "supported", note: "t" }, mcpServers: { support: "supported", note: "t" },
+  },
+  update: {
+    skills: { add: "reload", remove: "reload", note: "t" }, plugins: { add: "reload", remove: "reload", note: "t" },
+    mcpServers: { add: "reload", remove: "reload", note: "t" },
+  },
+}
+
+// A reload waits for the turn to end with the queue held, then takes the queue (still paused by the
+// interrupt) to a new Session. Which side the turn's end wakes first depends on the interrupt:
+// - confirmed: the adapter, which continues the queue and queues the input before the reload takes
+//   it (this breaks if an await slips in between the reopening check, continue() and the send);
+// - unconfirmed: the reload, which takes the queue first; the input follows it to the new Session.
+for (const interrupt of ["confirmed", "unconfirmed"] as const) {
+  test(`busy=interrupt (${interrupt}) racing a core-side reload that waits for the turn to end: both inputs run on the new Session, in order`, async () => {
+    const fake = fakeAgentDriver("claude")
+    const stateDirectory = await mkdtemp(join(tmpdir(), "claude-core-"))
+    const workdir = await mkdtemp(join(tmpdir(), "claude-wd-"))
+    const skills = await mkdtemp(join(tmpdir(), "claude-skills-"))
+    dirs.push(stateDirectory, workdir, skills)
+    await mkdir(join(skills, "a"))
+    const host = createHost({ stateDirectory, limits: { interruptTimeoutMs: 40, maxPending: 16, outstandingActivity: 256 }, agent: "claude", driver: () => fake.driver, context: RELOAD_CONTEXT })
+    hosts.push(host)
+    const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES.claude, {
+      handle: host.register({ id: "s1", env: {}, context: { instructions: "I" } }),
+      reregister: () => host.register({ id: "s1", env: {} }),
+      core: host.core, id: "s1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    })
+    adapters.push(adapter)
+    const errors: unknown[] = []
+    adapter.on("error", (e) => errors.push(e))
+    let accepted = 0
+    let acceptedWhenOldClosed: number | undefined
+    host.core.subscribe((e) => {
+      if (e.type === "message.accepted") accepted++
+      if (e.type === "session.stateChanged" && e.state === "closed") acceptedWhenOldClosed ??= accepted
+    })
+    await adapter.start()
+    if (interrupt === "unconfirmed") fake.hangInterrupt()
+    fake.holdNextPrompt()
+    const first = adapter.send("one")
+    await waitUntil(() => fake.promptTexts.length === 1)
+    const queued = adapter.send("queued", { busy: "queue" })
+    const reload = host.core.sessions.updateContext("s1", { skills: { add: [skills] } })
+    // Its context is in the live record just before the reload holds the queue and waits for idle.
+    await waitUntil(() => JSON.stringify(host.core.sessions.live("s1")?.snapshot().context ?? {}).includes(skills), 1000)
+    const urgent = adapter.send("urgent", { busy: "interrupt" })
+    await waitUntil(() => fake.interruptCalls === 1)
+    if (interrupt === "unconfirmed") await sleep(60) // past the 40 ms interrupt timeout; the turn still runs
+    fake.completePrompt() // ends the unconfirmed turn; releases the fake's hold for the input after it
+    await Promise.all([first, queued, urgent, reload])
+    expect(fake.opens).toHaveLength(2)
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "queued", "urgent"])
+    expect(host.core.sessions.live("s1")?.snapshot().paused).toBe(false)
+    expect(errors).toEqual([])
+    // "urgent" was accepted by the old Session before it closed (3), or by the new one after (2).
+    expect(acceptedWhenOldClosed).toBe(interrupt === "confirmed" ? 3 : 2)
+  })
+}
+
+
+test("busy=interrupt handed over during a turn of a Session a reload then replaces leaves the new Session's turns alone, though their ids start over", async () => {
+  const fake = fakeAgentDriver("claude")
+  const stateDirectory = await mkdtemp(join(tmpdir(), "claude-core-"))
+  const workdir = await mkdtemp(join(tmpdir(), "claude-wd-"))
+  const skills = await mkdtemp(join(tmpdir(), "claude-skills-"))
+  dirs.push(stateDirectory, workdir, skills)
+  await mkdir(join(skills, "a"))
+  const host = createHost({ stateDirectory, limits: { interruptTimeoutMs: 40, maxPending: 16, outstandingActivity: 256 }, agent: "claude", driver: () => fake.driver, context: RELOAD_CONTEXT })
+  hosts.push(host)
+  const attachment = deferred<string>()
+  const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES.claude, {
+    handle: host.register({ id: "s1", env: {}, context: { instructions: "I" } }),
+    reregister: () => host.register({ id: "s1", env: {} }),
+    core: host.core, id: "s1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    resolveAttachment: async () => attachment.promise,
+  })
+  adapters.push(adapter)
+  const errors: unknown[] = []
+  adapter.on("error", (e) => errors.push(e))
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  const queued = adapter.send("queued", { busy: "queue" })
+  const s1 = host.core.sessions.live("s1")!
+  const handedOverDuring = s1.snapshot().turnId
+  // Handed over during S1's first turn; its attachment holds it back until a reload has replaced S1.
+  const urgent = adapter.send("urgent", { busy: "interrupt", attachment_file_id: "f1" })
+  const reload = host.core.sessions.updateContext("s1", { skills: { add: [skills] } })
+  // Its context is in the live record just before the reload holds the queue and waits for idle.
+  await waitUntil(() => JSON.stringify(host.core.sessions.live("s1")?.snapshot().context ?? {}).includes(skills), 1000)
+  fake.completePrompt() // "one" ends: the reload takes "queued" to a new Session ...
+  fake.holdNextPrompt() // ... where it runs that Session's first turn, and stays in it
+  await reload
+  const s2 = host.core.sessions.live("s1")!
+  expect(s2).not.toBe(s1)
+  expect(s2.snapshot().turnId).toBe(handedOverDuring) // the same id: the new Session counts from turn:1 again
+  attachment.resolve("/tmp/f1")
+  await flush()
+  expect(fake.interruptCalls).toBe(0)
+  fake.completePrompt()
+  await Promise.all([first, queued, urgent])
+  expect(fake.interruptCalls).toBe(0)
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.promptTexts.map((p) => p[0]!.split("\n")[0])).toEqual(["one", "queued", "urgent"])
+  expect(errors).toEqual([])
+})
+
+// ---- reopening a session whose agent crashed ----
+//
+// The host keeps a failed session's slot until that session is closed, and refuses a new start
+// meanwhile ("session … is already live"): resume() closes it first, then reopens the native
+// conversation. Inbox delivery calls resume() on a dead adapter before handing a message over.
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: resume() after its agent crashed closes the failed session and reopens the same native conversation`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    await adapter.send("before")
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    expect(adapter.isAlive()).toBe(false)
+    await adapter.resume()
+    expect(adapter.isAlive()).toBe(true)
+    expect(fake.opens).toHaveLength(2)
+    expect(fake.opens[1]?.resumeId).toBe("native-keep")
+    await adapter.send("after")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "after"])
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual(["child died"])
+  })
+}
+
+test("claude: resume() leaves a live session alone, and two resume() calls after a crash reopen it once", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  listen(adapter)
+  await adapter.start()
+  await adapter.resume()
+  expect(fake.opens).toHaveLength(1)
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  await Promise.all([adapter.resume(), adapter.resume()])
+  expect(fake.opens).toHaveLength(2)
+  expect(adapter.isAlive()).toBe(true)
+})
+
+test("claude: a stop() while resume() reopens a crashed session wins: the adapter stays stopped and leaves no registration behind", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  const reviving = adapter.resume()
+  await adapter.stop()
+  await reviving
+  expect(fake.opens).toHaveLength(1)
+  expect(adapter.isAlive()).toBe(false)
+  // The id is free: a fresh registration for it is taken.
+  expect(() => host.register({ id: "sess-1", env: {} })).not.toThrow()
+})
+
+for (const saved of [true, false]) {
+  test(`inbox delivery wakes a session whose agent crashed ${saved ? "after its first turn" : "before it saved its conversation"}: resume() (main.ts's resumeAdapter) reopens it, and the message runs`, async () => {
+    const kind = "claude" as const
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async (nativeId) => { persisted.push(nativeId) } })
+    listen(adapter)
+    await adapter.start()
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    if (!saved) fake.rejectResume(NEVER_SAVED.claude())
+    const inboxes = await mkdtemp(join(tmpdir(), "inboxes-"))
+    dirs.push(inboxes)
+    const cursor = new Map<string, string>()
+    const delivery = new InboxDelivery({
+      store: new InboxStore(inboxes),
+      cursor: { get: (id) => cursor.get(id), set: (id, messageId) => { cursor.set(id, messageId) } },
+      messageLog: { append: () => {} },
+      session: (id) => (id === "sess-1" ? ({ id, name: "s1", status: "active" } as Session) : undefined),
+      resumeFromArchive: async () => ({ ok: true }),
+      resumeSuspended: async () => true,
+      adapterState: () => (adapter.isAlive() ? "alive" : "dead"),
+      resumeAdapter: () => adapter.resume(),
+      waitDeliverable: async () => true,
+      deliver: async (_id, text, meta) => { await adapter.send(text, meta); return { ok: true } },
+    })
+    const { ids } = delivery.send({ name: "pa", id: "pa-1" }, ["sess-1"], "wake up", "queue")
+    await delivery.idle()
+    await waitUntil(() => fake.promptTexts.length === 1)
+    expect(fake.promptTexts[0]?.[0]).toContain("wake up")
+    expect(cursor.get("sess-1")).toBe(ids["sess-1"])
+    // Saved: the same conversation again. Never saved: its resume fails, and a fresh one opens.
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(saved ? [undefined, "native-1"] : [undefined, "native-1", undefined])
+    expect(persisted).toEqual(saved ? ["native-1", "native-1"] : ["native-1", "native-3"])
+  })
+}
+
+// ---- a conversation the agent never saved: open a fresh one ----
+//
+// An agent killed before its first turn (or whose only turn failed) never saved its conversation:
+// resuming its id fails with "not found", and reopening it again and again would keep the session
+// dead. Only these exact signals open a fresh conversation (nothing was saved, nothing is lost);
+// any other failure (auth, network, a timeout) must not drop history.
+
+/** What the ACP SDK rejects with for a JSON-RPC error: a RequestError carries code, message and data. */
+function acpError(code: number, message: string, data: unknown): Error {
+  return Object.assign(new Error(message), { name: "RequestError", code, data })
+}
+
+/** Each agent's answer to resuming a conversation it never saved (Cursor's as `cursor-agent acp` answers session/load). */
+const NEVER_SAVED = {
+  claude: () => new Error("No conversation found with session ID: a086b5d4-1111-4222-8333-944455556666"),
+  codex: () => new Error("no rollout found for thread id 01a1867e-1111-7222-8333-944455556666"),
+  cursor: () => acpError(-32602, "Invalid params", { message: 'Session "156bb35a-1111-4222-8333-944455556666" not found' }),
+}
+
+for (const kind of ["claude", "codex", "cursor"] as const) {
+  test(`${kind}: resuming a conversation the agent never saved opens a fresh one, persists its id, and input runs`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-old", persistSessionId: async (nativeId) => { persisted.push(nativeId) },
+    })
+    listen(adapter)
+    fake.rejectResume(NEVER_SAVED[kind]())
+    const logged = await stderrDuring(() => adapter.resume()) // as boot opens a session with a stored native id
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(["native-old", undefined])
+    expect(persisted).toEqual(["native-2"])
+    expect(adapter.isAlive()).toBe(true)
+    await adapter.send("hello")
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+    const warnings = logged.split("\n").filter((line) => line.includes("core_resume_fresh_fallback"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('"session":"s1"')
+    expect(warnings[0]).toContain(`"agent":"${kind}"`)
+    expect(warnings[0]).toContain("found")
+    // A later crash revives the new conversation, no longer the missing one.
+    fake.rejectResume(undefined)
+    fake.failRuntime(new Error("child died"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    await adapter.resume()
+    expect(fake.opens.at(-1)?.resumeId).toBe("native-2")
+  })
+}
+
+test("codex: reviving a session whose agent crashed before its first turn (its thread never saved) opens a fresh one", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const persisted: string[] = []
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async (nativeId) => { persisted.push(nativeId) } })
+  listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  fake.rejectResume(NEVER_SAVED.codex())
+  await adapter.resume()
+  expect(fake.opens.map((o) => o.resumeId)).toEqual([undefined, "native-1", undefined])
+  expect(persisted).toEqual(["native-1", "native-3"])
+  await adapter.send("hello")
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["hello"])
+})
+
+const OTHER_FAILURES = [
+  { kind: "claude", what: "a setup timeout", error: () => new Error("Claude setup timed out") },
+  { kind: "codex", what: "an auth failure", error: () => new Error("401 Unauthorized: invalid api key") },
+  { kind: "cursor", what: "an ACP invalid-params error about something else", error: () => acpError(-32602, "Invalid params", { message: "cwd must be an absolute path" }) },
+] as const
+
+for (const { kind, what, error } of OTHER_FAILURES) {
+  test(`${kind}: a resume that fails with ${what} does not fall back to a fresh conversation`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const persisted: string[] = []
+    const adapter = makeAdapter(kind, host, {
+      id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-old", persistSessionId: async (nativeId) => { persisted.push(nativeId) },
+    })
+    listen(adapter)
+    fake.rejectResume(error())
+    await expect(adapter.resume()).rejects.toThrow(error().message)
+    expect(fake.opens.map((o) => o.resumeId)).toEqual(["native-old"])
+    expect(persisted).toEqual([])
+  })
+}
+
+test("missingConversation knows each agent's never-saved answer, also as the host or the core wraps it, and nothing else", () => {
+  for (const kind of ["claude", "codex", "cursor"] as const) {
+    const error = NEVER_SAVED[kind]()
+    expect(missingConversation(error)).toBeDefined()
+    // The host after a failed cleanup, and the core when it could not restore the record.
+    expect(missingConversation(new Error(`${error.message}; cleanup failed: busy`, { cause: error }))).toBeDefined()
+    expect(missingConversation(new AggregateError([error, new Error("disk full")], "Session resume failed and the original record could not be restored"))).toBeDefined()
+  }
+  for (const { error } of OTHER_FAILURES) expect(missingConversation(error())).toBeUndefined()
+  expect(missingConversation(acpError(-32603, "Internal error", { message: 'Session "s" not found' }))).toBeUndefined()
+  expect(missingConversation(acpError(-32602, "Invalid params", { message: 'Session "s" not found; retry later' }))).toBeUndefined()
+  expect(missingConversation(acpError(-32602, "Invalid params", null))).toBeUndefined()
+  expect(missingConversation(undefined)).toBeUndefined()
+})
+
+acrossQueue("a failed core session emits session-failed once; a stop emits none", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.failRuntime(new Error("child died"))
+  await flush()
+  expect(events.filter((e) => e.kind === "session-failed")).toHaveLength(1)
+  const fake2 = fakeAgentDriver(kind)
+  const h2 = await harness(kind, fake2)
+  const stopped = makeAdapter(kind, h2.host, { id: "sess-2", sessionName: "s2", workdir: h2.workdir, persistSessionId: async () => {} })
+  const events2 = listen(stopped)
+  await stopped.start()
+  // The agent dying while the stop closes it, and after: neither is a crash.
+  const stopping = stopped.stop()
+  fake2.failRuntime(new Error("child died"))
+  await stopping
+  fake2.failRuntime(new Error("child died"))
+  await flush()
+  expect(events2.filter((e) => e.kind === "session-failed")).toEqual([])
+})
+
+acrossQueue("a core session that fails mid-turn ends the turn first, then emits session-failed once", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.failRuntime(new Error("child died"))
+  await sent
+  await flush()
+  const kinds = events.map((e) => e.kind)
+  expect(kinds.filter((k) => k === "session-failed")).toHaveLength(1)
+  expect(kinds.indexOf("turn-complete")).toBeGreaterThan(-1)
+  expect(kinds.indexOf("turn-complete")).toBeLessThan(kinds.indexOf("session-failed"))
+})
+
+const PAYMENT = "API error (status 402 Payment Required): Grok Build usage balance exhausted"
+/** How the ACP SDK rejects a JSON-RPC error: a generic message, the agent's own words in data. */
+const rpcError = () => Object.assign(new Error("Internal error"), { code: -32603, data: { message: PAYMENT, http_status: 402 } })
+
+test("agentFailure: an ACP error's data.message is the agent's own words; other errors stay as they are", () => {
+  const rpc = rpcError()
+  const described = agentFailure(rpc)
+  expect(described.message).toBe(PAYMENT)
+  expect(described.cause).toBe(rpc)
+  const plain = new Error("boom")
+  expect(agentFailure(plain)).toBe(plain)
+  const same = Object.assign(new Error("Session not found"), { data: { message: "Session not found" } })
+  expect(agentFailure(same)).toBe(same)
+})
+
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: a failed turn's turn-complete carries the agent's own error; a good turn's carries none`, async () => {
+    const fake = fakeAgentDriver(kind)
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    fake.failNextPrompt(rpcError())
+    await adapter.send("hi")
+    await flush()
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([PAYMENT])
+    const failed = events.filter((e) => e.kind === "turn-complete")
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.error?.message).toBe(PAYMENT)
+    expect(adapter.isAlive()).toBe(true)
+    await adapter.send("again")
+    await flush()
+    const completes = events.filter((e) => e.kind === "turn-complete")
+    expect(completes).toHaveLength(2)
+    expect(completes[1]!.error).toBeUndefined()
+  })
+}
+
+acrossGrok("a prompt rejected while it runs fails the turn with the agent's words", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.failPrompt(rpcError())
+  await sent
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([PAYMENT])
+})
+
+test("codex: a recoverable error does not fail the turn nor hide a real failure after it; a non-recoverable one fails it, even when the prompt completes", async () => {
+  const fake = fakeAgentDriver("codex")
+  const { host, workdir } = await harness("codex", fake)
+  const adapter = makeAdapter("codex", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 1/5" }, willRetry: true } } })
+  await flush()
+  fake.completePrompt()
+  await first
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error)).toEqual([undefined])
+  fake.holdNextPrompt()
+  const second = adapter.send("again")
+  await waitUntil(() => events.filter((e) => e.kind === "turn-start").length === 2)
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "stream failed" }, willRetry: false } } })
+  await flush()
+  fake.completePrompt()
+  await second
+  await flush()
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed"])
+  // Retries, then the turn fails for real: the retry shows (once a turn), and the real failure still does.
+  fake.holdNextPrompt()
+  const third = adapter.send("once more")
+  await waitUntil(() => events.filter((e) => e.kind === "turn-start").length === 3)
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 1/5" }, willRetry: true } } })
+  fake.emit({ protocol: "native", value: { method: "error", params: { error: { message: "Reconnecting... 2/5" }, willRetry: true } } })
+  await flush()
+  fake.failPrompt(new Error("stream disconnected before completion"))
+  await third
+  await flush()
+  expect(events.filter((e) => e.kind === "error").map((e) => [e.error?.message, e.recoverable === true])).toEqual([
+    ["Reconnecting... 1/5", true],
+    ["stream failed", false],
+    ["Reconnecting... 1/5", true],
+    ["stream disconnected before completion", false],
+  ])
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed", "stream disconnected before completion"])
+})

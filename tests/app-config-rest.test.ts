@@ -21,7 +21,7 @@ function freshDb() {
   return db
 }
 
-const appConfigEnv = { MUX_PA_NAME: "testpa", MUX_PA_WORKDIR: "", MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
+const appConfigEnv = { MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
 
 const base = (extra: object) => ({
   port: PORT,
@@ -60,11 +60,11 @@ afterEach(async () => {
 
 const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: `http://127.0.0.1:${PORT}`, "content-type": "application/json" })
 
-test("GET /settings/config returns 200 with paName, telegramConfigured boolean, no telegramBotToken", async () => {
+test("GET /settings/config returns 200 with telegramConfigured boolean, no telegramBotToken", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/settings/config`, { headers: auth() })
   expect(res.status).toBe(200)
   const body = await res.json() as any
-  expect(body.paName).toBe("testpa")
+  expect("paName" in body).toBe(false)
   expect(typeof body.telegramConfigured).toBe("boolean")
   expect(body.telegramConfigured).toBe(false)
   expect("telegramBotToken" in body).toBe(false)
@@ -79,18 +79,18 @@ test("PUT /settings/config persists and response echoes redacted config", async 
   const res = await fetch(`http://127.0.0.1:${PORT}/settings/config`, {
     method: "PUT",
     headers: auth(),
-    body: JSON.stringify({ paName: "ana", onboarded: true }),
+    body: JSON.stringify({ webPort: "9000", onboarded: true }),
   })
   expect(res.status).toBe(200)
   const body = await res.json() as any
-  expect(body.paName).toBe("ana")
+  expect(body.webPort).toBe("9000")
   expect(body.onboarded).toBe(true)
   expect("telegramBotToken" in body).toBe(false)
   expect(body.telegramConfigured).toBe(false)
 
   // Also verify via the store directly that the change persisted
   const cfg = store.getAppConfig(appConfigEnv)
-  expect(cfg.paName).toBe("ana")
+  expect(cfg.webPort).toBe("9000")
   expect(cfg.onboarded).toBe(true)
 })
 

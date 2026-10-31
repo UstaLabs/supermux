@@ -44,6 +44,7 @@ export class Registry {
   readonly db: Database
   private reservations = new Set<string>()
   private proxies: ProxyStore
+  private agentsChangedListeners: Array<() => void> = []
 
   constructor(db?: Database) {
     const resolvedDb = db ?? createTestDb()
@@ -58,6 +59,18 @@ export class Registry {
     this.reloadProxies()
   }
 
+  /** Called whenever the Agent list changes: an Agent is created, killed/archived or renamed,
+   *  or the default Agent changes. main.ts turns it into the `agents_changed` client frame. */
+  onAgentsChanged(listener: () => void): void {
+    this.agentsChangedListeners.push(listener)
+  }
+
+  private agentsChanged(): void {
+    for (const l of this.agentsChangedListeners) {
+      try { l() } catch { /* a listener must never break a registry write */ }
+    }
+  }
+
   /**
    * Repair any live session that has no workspace. Called once at broker
    * startup (src/main.ts). Not called from the constructor: a test that builds
@@ -68,7 +81,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean; parent_session_id?: string; workspace_id?: string } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core" | "permissionMode" | "account">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -97,11 +110,17 @@ export class Registry {
       permissionMode: input.permissionMode ?? undefined,
       ...(input.account ? { account: input.account } : {}),
     })
+    // A delegated child is linked to its parent, and hidden in the parent's workspace, in the same
+    // synchronous call that creates its row: it is never listed or announced as a top-level session,
+    // and the preamble built when it starts can name the parent (spec §3).
+    if (input.parent_session_id) this.sessions.setParent(session.id, input.parent_session_id)
+    if (input.workspace_id) this.sessions.setWorkspace(session.id, input.workspace_id)
     // Connected as soon as the shim joins. The claude spawn path registers the
     // row BEFORE the shim exists, so it passes connected:false; the socket
     // layer flips it to true on the shim's first frame.
     this.sessions.setConnectionStatus(session.id, input.connected ?? true)
     this.reservations.delete(input.name)
+    if (session.role === "personal_assistant") this.agentsChanged()
     return session
   }
 
@@ -146,15 +165,18 @@ export class Registry {
   resolveName(name: string): Session | undefined { return this.sessions.getByName(name) }
   fuzzyResolve(query: string): Session | undefined { return this.sessions.fuzzyByName(query) }
   list(): Session[] { return this.sessions.list() }
-  // User-facing enumerations only — excludes hidden internal RPC workers.
+  // User-facing enumerations only — leaves out broker-internal workers and the children of other
+  // sessions (delegate / council: hidden from clients, shown in their parent's subagents, spec §3).
   // Internal/management callers (supervisor, name-uniqueness, resume) MUST use list().
-  listVisible(): Session[] { return this.list().filter(s => !s.internal) }
+  listVisible(): Session[] { return this.list().filter(s => !s.internal && !s.parent_session_id) }
   // Archived sessions are NOT in the in-memory cache that list() returns; they
   // live only in the DB and are resumable via resumeFromArchive. Callers that
   // reason about ALL known sessions (e.g. deciding which agent homes are
   // orphaned) MUST union list() with this — otherwise archived homes look
   // orphaned and get wrongly reclaimed.
   listArchived(): Session[] { return this.sessions.listArchived() as unknown as Session[] }
+  /** The live (active or suspended) sessions whose parent is `id`. */
+  childrenOf(id: string): Session[] { return this.list().filter((s) => s.parent_session_id === id) }
 
   takenNames(): Set<string> {
     const names = this.sessions.takenNames()
@@ -173,8 +195,23 @@ export class Registry {
   unregister(id: string): void {
     const s = this.sessions.getById(id)
     if (!s) return
+    // Clear the flag before archiving: archive evicts the row from the cache, after which
+    // setDefault would be a no-op and the archived row would keep is_default=1.
+    const wasDefault = s.role === "personal_assistant" && s.is_default
+    if (wasDefault) this.sessions.setDefault(id, false)
     this.sessions.archive(id)
     this.chats.removeSessionFromChats(id)
+    // Every kill path ends here (tool, app, Telegram, archive), so the default Agent is handed
+    // over here once instead of in each caller.
+    if (wasDefault) this.promoteDefault(id)
+    if (s.role === "personal_assistant") this.agentsChanged()
+  }
+
+  /** Archived → live (resumeFromArchive's row write). Restoring an Agent changes the Agent list. */
+  resume(id: string, name: string, pid: number): Session | undefined {
+    const resumed = this.sessions.resume(id, name, pid)
+    if (resumed?.role === "personal_assistant") this.agentsChanged()
+    return resumed
   }
 
   rename(id: string, newName: string): void {
@@ -182,6 +219,7 @@ export class Registry {
     if (!s) throw new Error(`no such session: ${id}`)
     if (this.sessions.getByName(newName)) throw new Error(`session name already in use: ${newName}`)
     this.sessions.rename(id, newName)
+    if (s.role === "personal_assistant") this.agentsChanged()
   }
 
   markSelfRenamed(id: string): void {
@@ -234,16 +272,39 @@ export class Registry {
     return this.sessions.list().filter(s => s.role === "personal_assistant" && s.status !== "archived")
   }
 
+  /** Every Agent row, live AND archived (archived rows come from the DB, with their stored
+   *  is_default). For one-off maintenance that must cover restorable Agents too; live callers
+   *  use listPAs(). */
+  listAllAgents(): Session[] {
+    return [...this.listPAs(), ...this.listArchived().filter(s => s.role === "personal_assistant")]
+  }
+
   defaultPA(): Session | undefined {
     const pas = this.listPAs()
     return pas.find(s => s.is_default) ?? pas.slice().sort((a, b) => a.created_at.localeCompare(b.created_at))[0]
   }
 
+  /** Make the oldest Agent (other than [excludeId]) the default, and tell listeners. */
   reassignDefault(excludeId?: string): void {
+    if (this.promoteDefault(excludeId)) this.agentsChanged()
+  }
+
+  /** reassignDefault without the notification (unregister sends its own). False when no Agent is left. */
+  private promoteDefault(excludeId?: string): boolean {
     const candidates = this.listPAs().filter(s => s.id !== excludeId).sort((a, b) => a.created_at.localeCompare(b.created_at))
     const next = candidates[0]
-    if (!next) return
+    if (!next) return false
     for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === next.id)
+    return true
+  }
+
+  /** Make [id] the one default Agent. False (and no change) for an unknown, archived or non-Agent row. */
+  setDefaultAgent(id: string): boolean {
+    const target = this.sessions.getById(id)
+    if (!target || target.role !== "personal_assistant" || target.status === "archived") return false
+    for (const s of this.listPAs()) this.sessions.setDefault(s.id, s.id === id)
+    this.agentsChanged()
+    return true
   }
 
   grantOrchestrate(id: string, value: boolean): void {

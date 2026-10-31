@@ -1,14 +1,17 @@
 import { expect, test } from "bun:test"
 import { AGENT_KINDS } from "../../shared/agents"
+import { SESSION_INBOX_DIR } from "../../shared/paths"
 import {
   askPermissionMode,
   defaultPermissionMode,
   driverSettingsFor,
   isPermissionMode,
+  isUnattendedMode,
   modesFor,
   permissionCatalog,
   permissionsFor,
   resolvePermissionMode,
+  unattendedModesFor,
 } from "./permission-modes"
 
 test("every agent has exactly one default and unique ids", () => {
@@ -69,4 +72,53 @@ test("antigravity modes map to agy flags; bypass is the default and there is no 
   expect(driverSettingsFor("antigravity", "bypass").permissionPrompts).toBe("host")
   expect(() => driverSettingsFor("antigravity", "ask")).toThrow(/unknown permission mode/)
   expect(askPermissionMode("antigravity")).toBe("default")
+})
+
+test("ask-level ACP modes may read the session inbox without a prompt", () => {
+  expect(permissionsFor("grok", "ask")).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  expect(permissionsFor("opencode", "ask")).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  expect(permissionsFor("opencode", "ask-bash")).toMatchObject({ policy: "ask", askKinds: ["execute"], readableRoots: [SESSION_INBOX_DIR] })
+  for (const id of ["ask", "plan", "qa"]) {
+    expect(permissionsFor("cursor", id)).toMatchObject({ policy: "ask", readableRoots: [SESSION_INBOX_DIR] })
+  }
+})
+
+test("every ask-level spec owns its readableRoots array: changing one never reaches another", () => {
+  type Roots = { readableRoots?: string[] }
+  const a = permissionsFor("grok", "ask") as Roots
+  const b = permissionsFor("grok", "ask") as Roots
+  const c = permissionsFor("cursor", "ask") as Roots
+  const d = permissionsFor("opencode", "ask-bash") as Roots
+  expect(a.readableRoots).toEqual([SESSION_INBOX_DIR])
+  expect(new Set([a.readableRoots, b.readableRoots, c.readableRoots, d.readableRoots]).size).toBe(4)
+  a.readableRoots!.push("/elsewhere")
+  for (const other of [b, c, d, permissionsFor("grok", "ask") as Roots]) expect(other.readableRoots).toEqual([SESSION_INBOX_DIR])
+})
+
+test("every catalog mode has the level from the spec's table (§2)", () => {
+  const levels = Object.fromEntries(
+    Object.entries(permissionCatalog()).map(([agent, modes]) => [agent, Object.fromEntries(modes.map((m) => [m.id, m.level]))]),
+  )
+  expect(levels).toEqual({
+    claude: { bypass: "full", "accept-edits": "edit", ask: "ask", plan: "read-only", auto: "edit", "dont-ask": "read-only" },
+    codex: { "full-access": "full", auto: "edit", ask: "ask", "read-only": "read-only" },
+    grok: { "always-approve": "full", ask: "ask" },
+    opencode: { allow: "full", ask: "ask", "ask-bash": "edit", "read-only": "read-only" },
+    cursor: { force: "full", "auto-review": "full", ask: "ask", plan: "read-only", qa: "read-only" },
+    antigravity: { bypass: "full", "accept-edits": "edit", plan: "read-only", default: "ask" },
+  })
+})
+
+test("a delegated child or council member gets only the modes nobody needs to approve", () => {
+  const ids = (agent: Parameters<typeof unattendedModesFor>[0]) => unattendedModesFor(agent).map((m) => m.id)
+  expect(ids("claude")).toEqual(["bypass", "dont-ask"])
+  expect(ids("codex")).toEqual(["full-access", "auto", "read-only"])
+  expect(ids("cursor")).toEqual(["force", "auto-review"])
+  expect(ids("opencode")).toEqual(["allow", "read-only"])
+  expect(ids("grok")).toEqual(["always-approve"])
+  expect(ids("antigravity")).toEqual(["bypass", "plan"])
+  expect(isUnattendedMode("claude", "plan")).toBe(false)
+  expect(isUnattendedMode("cursor", "qa")).toBe(false)
+  expect(isUnattendedMode("claude", "dont-ask")).toBe(true)
+  expect(isUnattendedMode("claude", "nope")).toBe(false)
 })

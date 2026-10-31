@@ -91,6 +91,13 @@ if (process.env.EXPECT_DEFAULT_DENY !== '0') {
 if (process.env.EXPECT_MODEL && flag('--model') !== process.env.EXPECT_MODEL) fail(15, 'model mismatch')
 if (process.env.EXPECT_EFFORT && flag('--effort') !== process.env.EXPECT_EFFORT) fail(16, 'effort mismatch')
 
+// The real CLI (2.1.308) for a --resume with no conversation file: an error result on stdout, exit 1,
+// before it reads stdin. Claude writes that file only with the first message.
+if (resume === 'never-sent') {
+  send({type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resume, errors: [`No conversation found with session ID: ${resume}`]})
+  process.exit(1)
+}
+
 if (process.env.MODE === 'setup-hang') {
   setInterval(() => {}, 1 << 30)
 } else {
@@ -132,6 +139,15 @@ if (process.env.MODE === 'setup-hang') {
     }
     if (m.type === 'control_request' && m.request?.subtype === 'interrupt') {
       if (process.env.MODE === 'interrupt-hang') return
+      if (process.env.MODE === 'interrupt-error-first') {
+        // Real Claude interrupted mid tool call: the turn's error result can come before the interrupt's reply.
+        if (hanging) {
+          send({type: 'result', subtype: 'error_during_execution', is_error: true, session_id: hanging.session, uuid: hanging.uuid, user_message_uuid: hanging.uuid, stop_reason: null, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use'], duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
+          hanging = undefined
+        }
+        send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {}}})
+        return
+      }
       if (process.env.MODE === 'interrupt-fail') {
         send({type: 'control_response', response: {subtype: 'error', request_id: m.request_id, error: 'interrupt failed'}})
         if (hanging) {

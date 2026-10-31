@@ -367,7 +367,7 @@ internal fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, 
     }
 }
 
-/** The status view's section label ("Ready for you", "Working", "Everything else") + count. */
+/** The status view's section label ("Active", "Everything else") + count. */
 @Composable
 internal fun StatusSectionLabel(title: String, count: Int?, accent: Boolean = false) {
     val cs = MaterialTheme.colorScheme

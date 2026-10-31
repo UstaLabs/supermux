@@ -1,6 +1,34 @@
 import { AGENT_KINDS, AgentKind } from "../shared/agents"
-import type { ToolOperation } from "../shared/socket-frames"
+import type { ShimTool, ToolOperation, ToolRoute } from "../shared/socket-frames"
 export type { AgentKind } from "../shared/agents"
+export type { ToolRoute } from "../shared/socket-frames"
+
+/** Claude Code puts the agent's tool_use id in an MCP request's `_meta` under this key (seen in 2.1.308; not a documented contract). */
+export const TOOL_USE_ID_META = "claudecode/toolUseId"
+
+/** The agent-side id of a tool call, when its MCP request carries one (Claude only), so a delegate card can sit on that call. */
+export function toolCallIdOf(meta: unknown): string | undefined {
+  const id = meta && typeof meta === "object" ? (meta as Record<string, unknown>)[TOOL_USE_ID_META] : undefined
+  return typeof id === "string" && id ? id : undefined
+}
+
+/**
+ * Marks a tool that only sends an answer or a message and changes nothing on the machine. Claude in Plan
+ * mode refuses an MCP tool without it even when --allowedTools lists the tool (verified on 2.1.308,
+ * 2026-10-31): a council member or delegated child in Plan could then never report.
+ */
+const SENDS_ONLY = { readOnlyHint: true }
+
+/** A council member to start (council, council_add). */
+const COUNCIL_MEMBERS = {
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
+    required: ["agent", "access"],
+  },
+}
 
 const OUTBOUND_TOOLS = [
   {
@@ -51,13 +79,116 @@ const OUTBOUND_TOOLS = [
 ]
 
 const ORCHESTRATION_TOOLS = [
-  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
-  { name: "kill_session",   description: "Kill a session by name.",                          inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
-  { name: "rename_session", description: "Rename your OWN session (the one you are running in). You may rename only once, so pick a name that stays accurate for the whole session. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session. It runs on the agent's account with the most room left.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
+  { name: "kill_session",   description: "Kill a session by id: its agent is stopped and the session is archived. Its child sessions are killed too.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Session id" } }, required: ["id"] } },
+  { name: "rename_session", description: "Rename your OWN session (the one you are running in). A worker session may rename only once, so pick a name that stays accurate for the whole session; an Agent may rename itself any time. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },
-  { name: "list_sessions",  description: "List all sessions.",                               inputSchema: { type: "object", properties: {} } },
+  { name: "list_sessions",  description: "List every session: id, name, agent, model, workdir, mute, state (working, idle, suspended or crashed), its parent and its children (session ids).", inputSchema: { type: "object", properties: {} } },
+  {
+    name: "list_models",
+    description: "List every agent kind: whether it is ready (installed, and signed in where it needs a sign-in), its access levels " +
+      "(permission modes, each with a level: full, edit, ask or read-only) and its models with their efforts " +
+      "(reasoning levels). Also returns your own agent, model, effort and access. Pass agent to list only that kind.",
+    inputSchema: { type: "object", properties: { agent: { type: "string", enum: AGENT_KINDS } } },
+  },
+  {
+    name: "delegate",
+    description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
+      "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
+      "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. If it goes idle without reporting, supermux reminds it, then tells you. access: one of that agent's " +
+      "ids in the access field (only modes that never wait for a person to approve: nobody sees a hidden session's prompts). checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
+      "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
+      "the task when omitted). It runs on the agent's account with the most room left.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        agent: { type: "string", enum: AGENT_KINDS },
+        model: { type: "string" },
+        effort: { type: "string" },
+        access: { type: "string" },
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+        title: { type: "string" },
+      },
+      required: ["task", "agent", "access", "checkout"],
+    },
+  },
+  {
+    name: "council",
+    description: "Put one question to several agents at once. Each member is a session of its own (hidden from the user's " +
+      "session list) that gets the question and answers with council_report; every answer is forwarded to you " +
+      "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
+      "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
+      "that agent's ids in the access field (only modes that never wait for a person to approve). checkout applies to every member: \"shared\" works in your folder; " +
+      "\"worktree\" gives each member a new git worktree from your current branch. " +
+      "It returns as soon as the council is saved; the members start in the background, so don't wait for them or check " +
+      "on them: their answers arrive in your inbox. " +
+      "The user sees every member start, answer and fail live on the council card: don't update the user as answers " +
+      "arrive. You run the council: replace a member that fails with council_remove and council_add, start rounds with " +
+      "council_round, and when you have what you need, end it with council_end and a verdict, then tell the user the verdict once. " +
+      "Each member runs on its agent's account with the most room left. You are told when a member can't start, crashes, " +
+      "is stopped by the user or killed by someone else, or a turn of it ends in an error.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        members: COUNCIL_MEMBERS,
+        checkout: { type: "string", enum: ["shared", "worktree"] },
+      },
+      required: ["question", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_round",
+    description: "Start the next round of a council you called: each member gets the focus and the other members' reports " +
+      "from the round that just ended, labelled by letter. A member that hasn't answered by then has nothing in that round.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, focus: { type: "string" } }, required: ["council", "focus"] },
+  },
+  {
+    name: "council_add",
+    description: "Add members to a council you called, in its current round, with the next letters (e.g. to replace one that " +
+      "failed). Same member shape and checkout as council. Each gets the question, and after round 1 also the round's focus " +
+      "and the previous round's reports. Returns at once; they start in the background.",
+    inputSchema: {
+      type: "object",
+      properties: { council: { type: "string" }, members: COUNCIL_MEMBERS, checkout: { type: "string", enum: ["shared", "worktree"] } },
+      required: ["council", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_remove",
+    description: "Remove members from a council you called, by letter: their sessions are stopped. Their answers so far stay.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, letters: { type: "array", items: { type: "string" }, minItems: 1 } }, required: ["council", "letters"] },
+  },
+  {
+    name: "council_end",
+    description: "End a council you called once you have what you need: verdict is your conclusion in a few sentences, shown " +
+      "to the user on the council card. Stops the members still running. Then tell the user the verdict.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, verdict: { type: "string" } }, required: ["council", "verdict"] },
+  },
+  {
+    name: "council_report",
+    description: "Report your answer to the council you are a member of, for its current round. You can report more than once.",
+    annotations: SENDS_ONLY,
+    inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+  },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
   { name: "get_active",     description: "Get active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" } }, required: ["chat_id"] } },
+  {
+    name: "preview_avatar",
+    description: "Render an animated avatar (an Agent's sidebar character) without saving it. Pass the avatar JSON as `json` " +
+      "(a string) or `path` (a file). Returns validation errors/warnings and `preview`: a PNG contact sheet of every state " +
+      "(idle, working, waiting, asleep, listening, speaking, hover) — open and LOOK at it, then iterate. Call with no " +
+      "arguments to get `format` (the full spec, read it first) and `example` (a working avatar).",
+    inputSchema: { type: "object", properties: { json: { type: "string" }, path: { type: "string" } }, required: [] },
+  },
+  {
+    name: "set_avatar",
+    description: "Save your own avatar (Agents only). Same input as preview_avatar; it is validated first and refused " +
+      "with the errors if invalid. On success every open app shows the new avatar right away. Returns the preview PNG too.",
+    inputSchema: { type: "object", properties: { json: { type: "string" }, path: { type: "string" } }, required: [] },
+  },
+  { name: "create_agent",   description: "Create a new agent (a long-lived, named session with its own memory). Only agents can call this. provider defaults to 'claude'.", inputSchema: { type: "object", properties: { name: { type: "string" }, provider: { type: "string", enum: AGENT_KINDS }, model: { type: "string" } }, required: ["name"] } },
   { name: "expose_port", description: "Expose a local port to the web via reverse proxy. Returns the public URL. With a wildcard base domain configured (MUX_PROXY_BASE_DOMAIN), the app gets its own subdomain. Otherwise it is served under a sub-path (https://<broker>/p/<slug>/): the proxy strips the prefix, so this works for apps that use relative URLs, but apps that assume the site root (absolute /asset paths, fetch('/api'), root WebSocket, or a framework dev server such as Vite/Next) will not work under a sub-path — use a wildcard base domain (subdomain mode) for those. If domain is omitted a random slug is generated. Set public=true to skip device-pairing auth (anyone with the URL can access).", inputSchema: { type: "object", properties: { port: { type: "number", description: "Local port to expose (1-65535)" }, domain: { type: "string", description: "Optional slug (alphanumeric + hyphens, max 63 chars) used as the subdomain or sub-path segment" }, public: { type: "boolean", description: "When true, the proxy is reachable without pairing (default false)" } }, required: ["port"] } },
   { name: "unexpose_port", description: "Remove a previously exposed proxy by domain name.", inputSchema: { type: "object", properties: { domain: { type: "string", description: "Subdomain to remove" } }, required: ["domain"] } },
   { name: "set_proxy_public", description: "Toggle whether a proxy requires device pairing. public=true means anyone with the URL can access.", inputSchema: { type: "object", properties: { domain: { type: "string", description: "Subdomain to update" }, public: { type: "boolean", description: "true = open access, false = paired devices only" } }, required: ["domain", "public"] } },
@@ -66,7 +197,7 @@ const ORCHESTRATION_TOOLS = [
   { name: "stop_display", description: "Stop a display stream by id and tear down its virtual display/VNC server.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Stream id returned by start_display" } }, required: ["id"] } },
   {
     name: "memory_search",
-    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. Returns ranked sections with file path, heading and a snippet.",
+    description: "Search the shared knowledge base (~/.mux domains + digests) for facts/gotchas. An agent's search also covers its own memory. Returns ranked sections with file path, heading and a snippet.",
     inputSchema: {
       type: "object",
       properties: { query: { type: "string" }, limit: { type: "number" } },
@@ -130,6 +261,22 @@ const ORCHESTRATION_TOOLS = [
       required: ["comment_id", "body"],
     },
   },
+  {
+    name: "message_session",
+    description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
+      "interrupt=true interrupts its current turn; interrupt=false delivers after the current turn ends. " +
+      "Your normal reply already reaches the user: this is only for other sessions.",
+    annotations: SENDS_ONLY,
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "array", items: { type: "string" }, minItems: 1, description: "Session ids" },
+        text: { type: "string" },
+        interrupt: { type: "boolean" },
+      },
+      required: ["to", "text", "interrupt"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [
@@ -162,12 +309,58 @@ type ToolCaller = {
   callOrchestration: (op: ToolOperation) => Promise<ToolCallResult>
 }
 
-export function listTools(rpcOnly = false) {
+/** council_report is only for council members (spec §5): listed for them, refused for anyone else. */
+const MEMBER_ONLY = new Set(["council_report"])
+
+/**
+ * The access levels and efforts each agent takes (src/core/models/agent-choices.ts), from the broker's live catalog.
+ * A shim started by an older broker has none and serves the plain strings.
+ */
+export type ToolAgentChoices = Record<string, { access: Array<{ id: string; level: string; description: string }>; efforts: string[] | null }>
+
+/** The tools that start sessions on an agent: their access and effort get the catalog's values as enums. */
+const STARTS_SESSIONS = new Set(["delegate", "council", "council_add"])
+
+export function listTools(rpcOnly = false, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}) {
   if (rpcOnly) return RPC_TOOLS
-  return ALL
+  const tools = opts.councilMember ? ALL : ALL.filter((t) => !MEMBER_ONLY.has(t.name))
+  const choices = opts.choices
+  if (!choices) return tools
+  return tools.map((t) => (STARTS_SESSIONS.has(t.name) ? { ...t, inputSchema: withChoices(t.inputSchema as Record<string, unknown>, choices) as typeof t.inputSchema } : t))
 }
 
-export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
+/**
+ * access and effort as enums (every agent's values together: they depend on the agent, and a per-agent oneOf is
+ * poorly followed by some models), each described per agent so nothing is guessed. The broker checks the pair.
+ */
+function choiceProperties(choices: ToolAgentChoices): { access: Record<string, unknown>; effort: Record<string, unknown> } {
+  const agents = Object.keys(choices)
+  const accessIds = [...new Set(agents.flatMap((a) => choices[a]!.access.map((m) => m.id)))]
+  const efforts = [...new Set(agents.flatMap((a) => choices[a]!.efforts ?? []))]
+  // An agent whose efforts aren't known yet (no model catalog): no enum, or its valid values would be refused.
+  const unknown = agents.some((a) => choices[a]!.efforts === null)
+  const accessText = agents.map((a) => `${a}: ${choices[a]!.access.map((m) => `${m.id} (${m.level}: ${m.description})`).join("; ")}`).join("\n")
+  const effortText = agents.map((a) => {
+    const e = choices[a]!.efforts
+    return `${a}: ${e === null ? "see list_models" : e.length ? e.join(", ") : "none, leave effort out"}`
+  }).join("\n")
+  return {
+    access: { type: "string", enum: accessIds, description: `The member's access level; the agent's own ids only:\n${accessText}` },
+    effort: efforts.length && !unknown
+      ? { type: "string", enum: efforts, description: `Reasoning effort, optional; the agent's own values only (some depend on the model, see list_models):\n${effortText}` }
+      : { type: "string", description: `Reasoning effort, optional; the agent's own values only:\n${effortText}` },
+  }
+}
+
+function withChoices(schema: Record<string, unknown>, choices: ToolAgentChoices): Record<string, unknown> {
+  const fields = choiceProperties(choices)
+  const patch = (props: Record<string, unknown>) => ({ ...props, access: fields.access, effort: fields.effort })
+  const props = schema.properties as Record<string, unknown>
+  if ("access" in props) return { ...schema, properties: patch(props) }
+  // council / council_add: the fields sit in members' items.
+  const members = props.members as { items: { properties: Record<string, unknown> } } & Record<string, unknown>
+  return { ...schema, properties: { ...props, members: { ...members, items: { ...members.items, properties: patch(members.items.properties) } } } }
+}
 
 /**
  * Which broker handler a tool call goes to, and under which op name (rpc tools map to
@@ -178,6 +371,17 @@ export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined 
   if (rpcOnly) return RPC_NAMES.has(name) ? { kind: "orchestration", op: RPC_OP[name as keyof typeof RPC_OP] } : undefined
   if (!ALL.some(t => t.name === name)) return undefined
   return { kind: OUTBOUND_NAMES.has(name) ? "outbound" : "orchestration", op: name }
+}
+
+/**
+ * The tools the broker serves an external shim that runs as `server`, each with its route: sent in
+ * every register reply, so a shim started by an older build serves (and routes) this build's list.
+ * undefined for mux-channel (it serves no tools) and for a shim that does not say which it is.
+ */
+export function shimTools(server: string | undefined, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}): ShimTool[] | undefined {
+  if (server !== "mux-shim" && server !== "mux-rpc") return undefined
+  const rpcOnly = server === "mux-rpc"
+  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...("annotations" in t && t.annotations ? { annotations: t.annotations } : {}), route: toolRoute(t.name, rpcOnly)! }))
 }
 
 /**
@@ -195,13 +399,15 @@ export function toolResult(name: string, result: ToolCallResult, rpcOnly = false
   return { content: [{ type: "text", text: JSON.stringify(result.value ?? "ok") }] }
 }
 
-export async function callTool(params: { name: string; arguments?: Record<string, unknown> }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
-  const route = toolRoute(params.name, rpcOnly)
+/** `served`: the list the shim serves (the broker's); a tool not on it takes this build's route. */
+export async function callTool(params: { name: string; arguments?: Record<string, unknown>; _meta?: unknown }, shim: ToolCaller, agentKind: AgentKind = AgentKind.Claude, rpcOnly = false, served: ShimTool[] = []): Promise<{ isError?: boolean; content: Array<{ type: "text"; text: string }> }> {
+  const route = served.find(t => t.name === params.name)?.route ?? toolRoute(params.name, rpcOnly)
   if (!route) {
     const text = rpcOnly ? `tool ${params.name} not available on rpc worker` : `tool ${params.name} not available for agent kind ${agentKind}`
     return { isError: true, content: [{ type: "text", text }] }
   }
-  const op = { name: route.op, args: params.arguments ?? {} }
+  const callId = toolCallIdOf(params._meta)
+  const op = { name: route.op, args: params.arguments ?? {}, ...(callId ? { callId } : {}) }
   const result = route.kind === "outbound" ? await shim.callOutbound(op) : await shim.callOrchestration(op)
   return toolResult(params.name, result, rpcOnly)
 }

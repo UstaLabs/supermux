@@ -429,7 +429,9 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
       const model = resolveModel(tOpts.model, modelDefault)
       const base = transcriptionHints(tOpts)
       const offset = (tOpts.fromMs ?? 0) > 0
-      const prompt = offset ? continuationPrompt(base.prompt, tOpts.previousText) : base.prompt
+      const prompt = offset
+        ? continuationPrompt(base.prompt, tOpts.previousText)
+        : tOpts.context ? continuationPrompt(base.prompt, tOpts.context) : base.prompt
       const hints = { ...(base.language ? { language: base.language } : {}), ...(prompt ? { prompt } : {}) }
       log.info("codex_realtime_transcribe", { audioPath, model, language: hints.language ?? "auto", prompt: hints.prompt ?? "", stream: tOpts.stream ?? null })
 

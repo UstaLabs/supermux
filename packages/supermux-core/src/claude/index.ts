@@ -129,6 +129,11 @@ function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { ki
   return [...options.args, ...flags]
 }
 
+/** Claude's startup error for a --resume whose conversation file does not exist (nothing was ever sent). */
+function isMissingConversation(error: unknown): boolean {
+  return error instanceof Error && /No conversation found with session ID/i.test(error.message)
+}
+
 function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper'] {
   if (!keeper || typeof keeper !== 'object' || Array.isArray(keeper)) throw new TypeError('Claude keeper is required')
   if (typeof keeper.stateDirectory !== 'string' || !keeper.stateDirectory) throw new TypeError('Claude keeper.stateDirectory must be a nonempty string')
@@ -161,14 +166,16 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+  /** One launch: `resume` resumes the recorded conversation, else starts it fresh under the same id. */
+  const openOnce = async function (context: Parameters<AgentDriver['open']>[0], resume: boolean): ReturnType<AgentDriver['open']> {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
     let identityConfirmed = false
     let fromMetaOwned = false
     const hostPermissions = options.permissionPrompts === 'host'
-    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
+    /** interrupting: interrupt requests sent but not yet answered; Claude may end the turn (as an error) before it answers. */
+    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean; interrupting: number }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
     let livePermissions = launchPermissions('claude', context.permissions, initialPermissions)
@@ -400,11 +407,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
       cancelPendingPermissions(a.uuid)
       if (a.interrupted || frame.stop_reason === 'cancelled' || frame.stop_reason === 'interrupt') a.completion.resolve({ stopReason: 'cancelled' })
       else if (frame.is_error === true || (typeof frame.subtype === 'string' && frame.subtype.startsWith('error'))) {
+        // Interrupted mid tool call, Claude ends the turn as error_during_execution ([ede_diagnostic] ...), often before the interrupt's reply.
+        if (a.interrupting > 0) { a.completion.resolve({ stopReason: 'cancelled' }); return }
         const message = Array.isArray(frame.errors) ? frame.errors.find((x: unknown) => typeof x === 'string') : undefined
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, !!context.resumeId), context.profile)
+    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, resume), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
     const rpc = await transport({
@@ -494,7 +503,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
           const uuid = (owned as { uuid: string }).uuid
           fromMetaOwned = true
-          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false }
+          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
           active = a
           try { context.onActivity?.({ id: uuid, phase: 'started' }) } catch { /* */ }
         }
@@ -524,7 +533,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
         return
       }
       cancelPendingPermissions(a.uuid)
-      if (active === a) await rpc.request({ subtype: 'interrupt' })
+      if (active !== a) return
+      a.interrupting++
+      try { await rpc.request({ subtype: 'interrupt' }) }
+      finally { a.interrupting-- }
       if (active === a && !fatal) a.interrupted = true
     }
     // A re-attached process still runs what it ran; a fresh one cannot.
@@ -611,7 +623,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         signal.throwIfAborted()
         if (active) throw new Error('Claude prompt already running')
         const converted = input(content)
-        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false }
+        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
         active = a
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
@@ -627,6 +639,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
           try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
         }
       },
+    }
+  }
+  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+    try { return await openOnce(context, !!context.resumeId) } catch (error) {
+      // Claude writes a conversation file only with the first message: a session restarted before it
+      // has nothing to resume ("No conversation found"). Start it fresh under the same id instead.
+      if (!context.resumeId || context.signal.aborted || !isMissingConversation(error)) throw error
+      return await openOnce(context, false)
     }
   } }
 }

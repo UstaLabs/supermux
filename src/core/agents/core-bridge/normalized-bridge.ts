@@ -162,7 +162,12 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       return
     }
     if (kind === "error") {
-      opts.emit({ kind: "error", error: new Error(event.message) })
+      opts.emit({
+        kind: "error",
+        error: new Error(event.message),
+        ...(event.errorType ? { errorType: event.errorType } : {}),
+        ...(event.recoverable ? { recoverable: true } : {}),
+      })
       return
     }
     if (kind === "permission-auto") {

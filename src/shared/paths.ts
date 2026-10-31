@@ -1,10 +1,45 @@
-import { join } from "path"
+import { isAbsolute, join, relative, resolve } from "path"
 import { localEndpoint } from "../core/local-endpoint"
 import { home } from "./home"
 
 export const MUX_HOME = process.env.MUX_HOME ?? join(home(), ".mux")
 
+/** Session inboxes, one JSONL file per session (inbox spec §1). Not INBOX_DIR: that one holds downloaded attachments. */
+export const SESSION_INBOX_DIR = join(MUX_HOME, "session_inboxes")
+
+/** One session's inbox file: `<dir>/<session id>.jsonl`. The store, the preamble and the shell read rules all name it through this. */
+export function inboxFilePath(sessionId: string, dir: string = SESSION_INBOX_DIR): string {
+  return join(dir, `${sessionId}.jsonl`)
+}
+
+/** An agent's working folder: `<mux home>/workspace/<name>`. */
+export function agentWorkdir(name: string, muxHome: string = MUX_HOME): string {
+  return join(muxHome, "workspace", name)
+}
+
+/**
+ * Supermux's own folders, which are not user projects: the mux home itself (the home agent runs
+ * there) and every agent's folder under it. Path-module based, so it holds for Windows paths too.
+ */
+export function isMuxInternalPath(path: string, muxHome: string = MUX_HOME): boolean {
+  const p = resolve(path)
+  if (p === resolve(muxHome)) return true
+  const rel = relative(agentWorkdir("", muxHome), p)
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
+}
+
 export const STATE_DIR = process.env.MUX_STATE_DIR ?? join(MUX_HOME, "state")
+
+/**
+ * A session name as ONE folder name: an agent's home is `<STATE_DIR>/agents/<kind>/<this>`. A `/` or
+ * `\` in the name would nest the home or climb out of the agents folder (into ~/.codex, say), so each
+ * becomes `-`, and "." / ".." get a `_` in front. An ordinary name maps to itself, so existing
+ * sessions' homes don't move.
+ */
+export function homeDirName(name: string): string {
+  const flat = name.replace(/[/\\]/g, "-")
+  return flat === "." || flat === ".." ? `_${flat}` : flat
+}
 
 export const SOCKETS_DIR = process.env.MUX_SOCKETS_DIR ?? join(STATE_DIR, "sockets")
 export const REGISTRY_FILE = join(STATE_DIR, "registry.json")

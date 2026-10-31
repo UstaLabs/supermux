@@ -47,7 +47,7 @@ afterEach(async () => {
 
 const base = `http://127.0.0.1:${PORT}`
 const authed = () => ({ Cookie: `cmux_token=${token}`, Origin: base, "content-type": "application/json" })
-/** The same request as it arrives through the relay (frpc adds X-Forwarded-For). */
+/** The same request as it arrives through the relay (frps adds X-Forwarded-For). */
 const relayed = () => ({ ...authed(), "x-forwarded-for": "203.0.113.9" })
 
 // ── GET /settings/keep-awake ────────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/supermux-core"],
+  "workspaces": ["packages/supermux-core", "packages/frp-client"],
   "scripts": {
     "broker": "bun src/main.ts",
     "shim": "bun src/shim/index.ts",
@@ -25,11 +25,13 @@
     "typecheck:core": "bun run --cwd packages/supermux-core typecheck"
   },
   "dependencies": {
+    "@micdrop/smart-turn": "0.2.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@opencode-ai/sdk": "^1.16.2",
     "@xterm/headless": "^6.0.0",
     "croner": "^10.0.1",
     "grammy": "^1.36.0",
+    "onnxruntime-web": "1.31.1",
     "qrcode-terminal": "^0.12.0",
     "web-push": "^3.6.7",
     "zod": "^3.23.8"

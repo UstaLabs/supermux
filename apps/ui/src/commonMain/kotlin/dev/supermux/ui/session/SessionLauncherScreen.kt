@@ -41,6 +41,8 @@
 package dev.supermux.ui.session
 
 import dev.supermux.chat.parseChatTs
+import dev.supermux.session.isMuxInternalPath
+import dev.supermux.session.withoutMuxInternal
 import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -253,7 +255,7 @@ fun SessionLauncherScreen(
         baseBranch: String?,
         replaceDraftId: String?,
         permissionMode: String?,
-        /** Account id for [agent]; null = its system account (the default). */
+        /** Account id for [agent]; null = Auto (the broker picks the account with the most room left). */
         account: String?,
     ) -> String?,
     /** Snapshot catalog keyed by agent (labels + descriptions + default). */
@@ -352,12 +354,15 @@ fun SessionLauncherScreen(
     var launcherPermissionModes by remember { mutableStateOf(emptyMap<String, String>()) }
     var permissionMode by remember { mutableStateOf<String?>(null) }
     var permissionMenu by remember { mutableStateOf(false) }
-    // The account for this chat: null = the agent's system login. Nothing is remembered — a new
-    // chat always starts on the system account, and switching agent drops the choice.
+    // The account for this chat: null = Auto, the account with the most room left (decision #18).
+    // Nothing is remembered: a new chat starts on Auto, and switching agent drops the choice.
     var account by remember { mutableStateOf<String?>(null) }
     val accounts by actions.accounts.collectAsState(null)
     LaunchedEffect(actions) { actions.ensureAccounts() }
     LaunchedEffect(agent) { account = null }
+    // The choice as it stands: only an account this agent still has; a removed one is Auto again.
+    // The pill's mark and the submit both read this, so they never disagree with the panel.
+    fun chosenAccount(): String? = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var modelMenu by remember { mutableStateOf(false) }
@@ -373,7 +378,10 @@ fun SessionLauncherScreen(
         if (workspaceWorkdir != null) flowOf(emptyList()) else actions.projectCatalog
     }
     val catalogRaw by catalogFlow.collectAsState(emptyList())
-    val catalog = remember(catalogRaw) { orderProjectCatalog(catalogRaw) }
+    // The mux home and the agents' folders are supermux's own, never projects to pick or default
+    // to (GET /projects already leaves them out; the catalog and session recency don't).
+    val muxHome by remember(actions) { actions.muxHome }.collectAsState(null)
+    val catalog = remember(catalogRaw, muxHome) { orderProjectCatalog(withoutMuxInternal(catalogRaw, muxHome)) }
     val catalogPaths = remember(catalog) { catalog.flatMap { p -> p.locations.map { it.path } }.toHashSet() }
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
@@ -425,7 +433,7 @@ fun SessionLauncherScreen(
 
     // ── Is an agent installed? (the "Install an agent" panel) ──
     // Only with [LauncherActions.agentSetup]; without it nothing here gates. Statuses come from the
-    // same call Settings ▸ Agents makes, and the embedded panel reports every list it reloads, so
+    // same call Settings ▸ Providers makes, and the embedded panel reports every list it reloads, so
     // an install that lands swaps the panel back to the composer.
     val agentSetup = actions.agentSetup
     var agentStatuses by remember { mutableStateOf<List<AgentInstallStatus>?>(null) }
@@ -636,8 +644,8 @@ fun SessionLauncherScreen(
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
-    val recentProjectPaths = remember(sessions, lastBySession) {
-        recentWorkdirs(sessionsByRecency(sessions, lastTs))
+    val recentProjectPaths = remember(sessions, lastBySession, muxHome) {
+        recentWorkdirs(sessionsByRecency(sessions, lastTs)).filterNot { isMuxInternalPath(it, muxHome) }
     }
     // The picker tiles' "● 2m": sessions per project and when one last spoke.
     val pickerActivity = remember(sessions, lastBySession) {
@@ -837,6 +845,7 @@ fun SessionLauncherScreen(
             loadVoiceCaps = actions.loadVoiceCaps,
             checkEdit = actions.checkEdit,
             transcribeWarm = actions.transcribeWarm,
+            openDictationStream = actions.openDictationStream,
         )
     }
     val hasProject = !workdir.isNullOrBlank()
@@ -906,11 +915,9 @@ fun SessionLauncherScreen(
             // cancellation is this screen being disposed by the very spawn that succeeded.
             var failed = false
             try {
-                // Only an account this agent still has; a removed one falls back to the system login.
-                val chosenAccount = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
                 val sessionId = onSubmit(
                     wd.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount,
+                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount(),
                 )
                 onClearDraft()
                 if (sessionId != null) onOpenSession?.invoke(sessionId)
@@ -1202,8 +1209,8 @@ fun SessionLauncherScreen(
                                     null
                                 },
                                 pillExtra = {
-                                    // The chat will run on an added account, not the system login.
-                                    if (account != null) {
+                                    // The chat will run on an added account chosen by hand.
+                                    if (!dev.supermux.ui.accounts.isSystemAccountId(chosenAccount())) {
                                         Icon(
                                             Icons.Outlined.AccountCircle,
                                             contentDescription = "On an added account",

@@ -179,6 +179,14 @@ interface MicCapture {
     suspend fun snapshot(): CapturedAudio? = null
 
     /**
+     * The raw audio captured after the first [byteOffset] bytes — 16 kHz mono 16-bit little-endian
+     * PCM, no header — WITHOUT stopping capture: what a live dictation stream sends the broker as it
+     * records (`/transcribe/stream`). Empty when nothing new has arrived. Null when this host cannot
+     * hand out raw PCM (iOS records to a file), which keeps its dictation on the per-pause uploads.
+     */
+    fun pcmSince(byteOffset: Long): ByteArray? = null
+
+    /**
      * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer`,
      * Apple's Speech framework. Used only in the "On this device" dictation mode
      * ([dev.supermux.ui.chat.DictationMode]). Null on a host with no on-device ASR (web, desktop),

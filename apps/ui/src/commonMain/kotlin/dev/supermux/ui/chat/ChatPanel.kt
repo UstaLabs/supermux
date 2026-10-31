@@ -191,6 +191,15 @@ data class ChatState(
     val permissionModes: List<dev.supermux.proto.PermissionModeInfo> = emptyList(),
     /** The session's subagents (running + recently finished), ordered by start. */
     val subagents: List<dev.supermux.proto.Subagent> = emptyList(),
+    /** The councils this session called (spec §5), ordered by creation: one card each in the chat. */
+    val councils: List<dev.supermux.proto.CouncilView> = emptyList(),
+    /** What each council member is doing right now (member session id → "Searching the web…"), live. */
+    val councilActivity: Map<String, String> = emptyMap(),
+    /**
+     * Ids of the sessions this chat's host lists (what the sidebar shows): an inbox message's sender
+     * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
+     */
+    val listedSessions: Set<String> = emptySet(),
 )
 
 /**
@@ -228,6 +237,11 @@ class ChatActions(
         { _, _ -> dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
     val stopSubagent: suspend (subagentId: String) -> dev.supermux.net.SubagentActionResult =
         { dev.supermux.net.SubagentActionResult(ok = false, error = "Not available on this client") },
+    /**
+     * End a session of this chat's host: a council member (the council card's Stop). The same kill
+     * the header's Kill does. Null = this client cannot, and the card shows no Stop.
+     */
+    val endCouncil: ((councilId: String) -> Unit)? = null,
     /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
     val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     /** Start following [accounts] (the first call fetches GET /accounts). */
@@ -272,6 +286,7 @@ fun rememberChatActions(
             setPermissionMode = { mode -> app.setPermissionMode(session.id, mode) },
             messageSubagent = { id, text -> app.messageSubagent(session.id, id, text) },
             stopSubagent = { id -> app.stopSubagent(session.id, id) },
+            endCouncil = { id -> app.endCouncil(id) },
             accounts = app.accounts,
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
@@ -296,8 +311,10 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val lastError by app.lastError.collectAsState()
     val permissionModesMap by app.permissionModes.collectAsState()
     val subagentsMap by app.subagents.collectAsState()
+    val councilsMap by app.councils.collectAsState()
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
+    val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -313,6 +330,9 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         lastError = lastError,
         permissionModes = sessionAgent?.let { permissionModesMap[it] }.orEmpty(),
         subagents = subagentsMap[sessionId].orEmpty(),
+        councils = councilsMap[sessionId].orEmpty(),
+        councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
+        listedSessions = listedSessions,
     )
 }
 
@@ -336,6 +356,7 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
     is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
     is TimelineItem.SubagentCard -> "s:${item.subagent.id}"
+    is TimelineItem.CouncilCard -> "c:${item.council.id}"
 }
 
 /**
@@ -463,8 +484,9 @@ fun ChatPanel(
     val messages = state.messages
     val activity = state.activity
     val subagents = state.subagents
-    val timelineItems = remember(messages, activity, hideTools, subagents, working) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working)
+    val councils = state.councils
+    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
     }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
@@ -528,6 +550,9 @@ fun ChatPanel(
         open = openSubagentCard,
         nameOf = { subagentNames[it] },
     )
+    // An inbox sender's chat opens from its card only when this host lists it.
+    val listedSessions = state.listedSessions
+    val canOpenChat = remember(listedSessions) { { id: String -> id in listedSessions } }
 
     run {
         // One rule on every host (was desktop's): instant jump on the first content for a session, then follow new items
@@ -629,7 +654,7 @@ fun ChatPanel(
     }
 
     // ── Header status line ─────────────────────────────────────────────────────────────────────
-    // Priority: dead (banner) > working > sending > waiting.
+    // Priority: dead (banner) > working > sending > agents working > waiting.
     val statusText: String? = when {
         dead -> null
         working && agent != null -> {
@@ -641,10 +666,11 @@ fun ChatPanel(
             }
         }
         sending -> "sending…"
+        agent != null && agent.agentsRunning > 0 -> agentsWorkingLabel(agent.agentsRunning)
         agent?.waiting == true -> "waiting (${agent.bgOpen} background)"
         else -> null
     }
-    val statusColor = if (agent?.waiting == true && !working && !sending) sem.warning else cs.primary
+    val statusColor = if (agent?.waiting == true && agent.agentsRunning == 0 && !working && !sending) sem.warning else cs.primary
 
     // Proxies are a plain load-on-open; cleared first so the previous session's list can't
     // transiently render filtered-for-the-new-session while the fresh load is in flight.
@@ -895,6 +921,7 @@ fun ChatPanel(
         }
 
         val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
+            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
@@ -929,6 +956,8 @@ fun ChatPanel(
                                 highDetail = highDetail,
                                 onOpenWalkthrough = { onOpenWalkthrough(null) },
                                 subagentUi = subagentUi,
+                                canOpenChat = canOpenChat,
+                                endCouncil = actions.endCouncil,
                             )
                         }
                     }
@@ -947,10 +976,13 @@ fun ChatPanel(
                         }
                     } else if (sending) {
                         item(key = "__sending__") { SendingIndicator(onStop = actions.interrupt) }
+                    } else if (agent != null && agent.agentsRunning > 0) {
+                        item(key = "__agents_working__") { AgentsWorkingIndicator(agent.agentsRunning) }
                     } else if (agent?.waiting == true) {
                         item(key = "__waiting__") { WaitingIndicator(agent.bgOpen) }
                     }
                 }
+            }
             }
         }
 
@@ -1052,6 +1084,13 @@ fun ChatPanel(
                                 .widthIn(max = CONTENT_MAX_WIDTH)
                                 .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
                         ) {
+                            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
+                                CouncilStrips(
+                                    cards = remember(timelineItems) { timelineItems.filterIsInstance<TimelineItem.CouncilCard>() },
+                                    onOpenFile = onOpenFile,
+                                    endCouncil = actions.endCouncil,
+                                )
+                            }
                             RunningStrip(
                                 subagents = subagents,
                                 bgTasks = state.bgTasks,
@@ -1218,6 +1257,22 @@ private fun WaitingIndicator(bgOpen: Int) {
     StatusRow(
         label = "waiting · " + if (bgOpen == 1) "1 background task" else "$bgOpen background tasks",
         color = LocalSemantics.current.warning,
+        stopTag = null,
+        onStop = {},
+    )
+}
+
+private fun agentsWorkingLabel(n: Int) = if (n == 1) "1 agent working" else "$n agents working"
+
+/**
+ * The parent's turn is over but agents it started are still running: the session is working.
+ * No Stop here — each agent stops from its lane in the running strip.
+ */
+@Composable
+private fun AgentsWorkingIndicator(agentsRunning: Int) {
+    StatusRow(
+        label = agentsWorkingLabel(agentsRunning) + "…",
+        color = MaterialTheme.colorScheme.primary,
         stopTag = null,
         onStop = {},
     )

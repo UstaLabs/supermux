@@ -6,7 +6,7 @@ directory. Other sessions run in parallel for other projects and tasks.
 
 ## Topology
 
-- Personal-assistant (PA) sessions are the always-on orchestrators; every other
+- Agents are long-lived, user-named sessions with their own memory; every other
   session is a worker. Your rules above state which one you are.
 - The broker routes the user's inbound messages to the relevant session and
   relays your outbound replies back to their chat client.
@@ -30,8 +30,9 @@ channel the user is on; follow that channel's rules:
 ## Your supermux tools (mux-shim)
 
 The `mux-shim` MCP server gives you orchestration and side-effect tools; their
-descriptions say what each does. Only a personal assistant may orchestrate
-other sessions (`spawn_session`, `kill_session`, `set_active`, …).
+descriptions say what each does. Only agents may use `mute_session`,
+`set_active`, `get_active` and `create_agent`; every other tool is open to
+every session.
 
 ## Shared memory: ~/.mux
 
@@ -45,8 +46,6 @@ A shared, file-based memory home at `~/.mux`, shared by every session:
   file if needed, or use `domains/_inbox.md`). Keep entries concise — facts and
   gotchas, not essays.
 - `conventions.md` — universal project rules. Read it.
-- `soul.md`, `personal/` — the user's identity and preferences. PERSONAL
-  ASSISTANTS ONLY; workers must NOT read or modify these.
 
 Searching: use `memory_search` to find knowledge across domains, and
 `find_sessions` + `read_session` to see what a past session did (rather than

@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -71,12 +71,18 @@ export class Core {
   /** Sessions that hit a limit (or whose account was refused) and switch accounts once their current turn ends. */
   private readonly switchQueue = new Map<string, "limit" | "unavailable">()
   private readonly switching = new Set<string>()
-  /** The continuation after a switch, per reason (one host prompt serves both when given). */
-  private readonly continuePrompts: { limit: string; unavailable: string } | undefined
+  /** Sessions whose limit (or refused-account) switch is running. `switching` also holds token refreshes and context reloads. */
+  private readonly limitSwitching = new Set<string>()
+  /** The continuation after a switch, per reason (one host prompt serves both when given), and what the default adds after background work hit the limit. */
+  private readonly continuePrompts: { limit: string; unavailable: string; background: string } | undefined
   /** Sessions in a turn, whose current turn saw a full window, and whose last turn ended on a limit. */
   private readonly inTurn = new Set<string>()
   private readonly turnLimited = new Set<string>()
   private readonly lastTurnLimited = new Set<string>()
+  /** Sessions whose current turn the agent started on its own (native activity, e.g. a subagent's notification). */
+  private readonly nativeTurn = new Set<string>()
+  /** Sessions whose limit was hit by background work (outside a host turn): the continuation mentions subagents. */
+  private readonly backgroundLimited = new Set<string>()
   /** Sessions whose current turn was refused by the agent's API (account unavailable). */
   private readonly turnRefused = new Set<string>()
   /** Token-account sessions: timer to reopen before the access token expires, and sessions due for it. */
@@ -129,8 +135,8 @@ export class Core {
     if (accounts.continueAfterSwitch !== undefined && typeof accounts.continueAfterSwitch !== "boolean") throw new TypeError("accounts.continueAfterSwitch must be a boolean")
     if (accounts.continuePrompt !== undefined && (typeof accounts.continuePrompt !== "string" || !accounts.continuePrompt.trim())) throw new TypeError("accounts.continuePrompt must be a nonempty string")
     this.continuePrompts = accounts.continueAfterSwitch === false ? undefined
-      : accounts.continuePrompt !== undefined ? { limit: accounts.continuePrompt, unavailable: accounts.continuePrompt }
-      : { limit: DEFAULT_CONTINUE_PROMPT, unavailable: DEFAULT_UNAVAILABLE_CONTINUE_PROMPT }
+      : accounts.continuePrompt !== undefined ? { limit: accounts.continuePrompt, unavailable: accounts.continuePrompt, background: "" }
+      : { limit: DEFAULT_CONTINUE_PROMPT, unavailable: DEFAULT_UNAVAILABLE_CONTINUE_PROMPT, background: BACKGROUND_CONTINUE_SUFFIX }
     const login = accounts.login
     if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
@@ -396,6 +402,21 @@ export class Core {
       const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
       return pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined)
     }),
+    /**
+     * True when a limit (or refused-account) switch is queued or running for the session and another
+     * account is available to move it to: the session carries on there (with the continuation prompt
+     * when its turn hit the limit). Whether a switch is pending is read at the call, so call it when the
+     * turn ends. False for a session on an isolated or Cursor account, or with an authProfile.
+     */
+    willSwitch: (sessionId: string): Promise<boolean> => {
+      const pending = this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId)
+      const record = this.live.get(sessionId)?.snapshot()
+      if (!pending || !record || record.authProfile !== undefined) return Promise.resolve(false)
+      return this.operation(async () => {
+        await this.ready()
+        return (await this.switchTarget(record.agent, record.account))?.next !== undefined
+      })
+    },
     /** Latest rate-limit windows seen for an account (persisted across restarts while unexpired). */
     usage: (id: string): UsageWindow[] | undefined => {
       const windows = this.usage.get(id)
@@ -571,6 +592,8 @@ export class Core {
   /** Usage bookkeeping, the limit switch, its continuation and token refresh reopens. Never throws (it runs as an observer). */
   private observeAccounts(event: CoreEvent): void {
     if (event.type === "message.started") {
+      // A host turn starts running right after the session does: it is not a native one.
+      this.nativeTurn.delete(event.sessionId)
       this.inTurn.add(event.sessionId)
       this.turnLimited.delete(event.sessionId)
       this.turnRefused.delete(event.sessionId)
@@ -585,6 +608,11 @@ export class Core {
       else this.lastTurnLimited.delete(event.sessionId)
       // A turn that went through proves the account works again (e.g. the user picked it by hand).
       if (result.status === "completed" && !refused) this.accountWorks(event.sessionId)
+      // The agent's API refused the turn for its account (an HTTP status on the error).
+      if (result.status === "failed") {
+        const status = accountHttpStatus(result.error)
+        if (status !== undefined) this.accountRefusedTurn(event.sessionId, status, result.error)
+      }
     } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
@@ -606,15 +634,34 @@ export class Core {
       const accountId = record.account ?? systemAccountId(record.agent)
       this.usage.set(accountId, windows)
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
+      // No turn runs, so background work (a subagent) hit the limit: the work it stopped continues after the switch.
+      else if (limited(windows)) { this.lastTurnLimited.add(event.sessionId); this.backgroundLimited.add(event.sessionId) }
       if (limited(windows) && this.autoSwitch()) {
         if (!this.switchQueue.has(event.sessionId)) this.switchQueue.set(event.sessionId, "limit")
         void this.limitSwitch(event.sessionId)
       }
     } else if (event.type === "session.stateChanged") {
+      const id = event.sessionId
+      // Turns the agent starts on its own (background work finished) count like host turns.
+      if (event.state === "running" && !this.inTurn.has(id)) {
+        this.nativeTurn.add(id)
+        this.inTurn.add(id)
+        this.turnLimited.delete(id)
+        this.turnRefused.delete(id)
+      } else if (event.state !== "running" && event.state !== "interrupting") this.endNativeTurn(id)
       if (event.state === "closed" && !this.restoring.has(event.sessionId)) this.forgetTurns(event.sessionId)
       if (this.switchQueue.has(event.sessionId)) void this.limitSwitch(event.sessionId)
       if (this.refreshDue.has(event.sessionId)) void this.refreshSession(event.sessionId)
     }
+  }
+
+  /** Ends the session's native turn, if one runs: a limit or refusal it saw is continued after the switch, like a host turn's. */
+  private endNativeTurn(id: string): void {
+    if (!this.nativeTurn.delete(id)) return
+    this.inTurn.delete(id)
+    const limitedTurn = this.turnLimited.delete(id)
+    if (this.turnRefused.delete(id) || limitedTurn) this.lastTurnLimited.add(id)
+    if (limitedTurn) this.backgroundLimited.add(id)
   }
 
   /** Clears the unavailable mark of the session's account after a turn completed on it. */
@@ -625,15 +672,63 @@ export class Core {
     if (this.usage.clearUnavailable(account)) this.events.emit({ type: "account.available", sessionId: id, agent: record.agent, account })
   }
 
+  /**
+   * A turn the agent's API refused for its account, where the status is about the whole login (the
+   * adapter's `httpAccountErrors`). 402 (out of credits) counts as a full window for BALANCE_RETRY_MS,
+   * unless the account's usage already says full (a host's provider fetch, with the real reset), so the
+   * limit switch moves the session on; 401/403 marks the account unavailable, like a driver's
+   * `account_unavailable` error. The turn has ended: the queued switch runs once the session is idle.
+   */
+  private accountRefusedTurn(id: string, status: 401 | 402 | 403, error: Error): void {
+    const record = this.live.get(id)?.snapshot()
+    if (!record || record.authProfile !== undefined) return
+    if (!adapterFor(record.agent).httpAccountErrors) return
+    const account = record.account ?? systemAccountId(record.agent)
+    if (status === 402) {
+      if (!limited(this.usage.get(account) ?? [])) {
+        this.usage.set(account, [{ name: BALANCE_WINDOW, usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
+      }
+      if (this.autoSwitch()) {
+        if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
+        void this.limitSwitch(id)
+      }
+      return
+    }
+    const detail = (error as { data?: { message?: unknown } | null }).data?.message
+    const reason = typeof detail === "string" && detail.trim() ? detail.trim() : error.message
+    if (this.usage.markUnavailable(account, reason)) {
+      this.events.emit({ type: "account.unavailable", sessionId: id, agent: record.agent, account, reason })
+    }
+    if (this.autoSwitch()) {
+      this.switchQueue.set(id, "unavailable")
+      void this.limitSwitch(id)
+    }
+  }
+
   private forgetTurns(id: string): void {
     this.inTurn.delete(id)
     this.turnLimited.delete(id)
     this.turnRefused.delete(id)
     this.lastTurnLimited.delete(id)
+    this.nativeTurn.delete(id)
+    this.backgroundLimited.delete(id)
     const timer = this.refreshTimers.get(id)
     if (timer) clearTimeout(timer)
     this.refreshTimers.delete(id)
     this.refreshDue.delete(id)
+  }
+
+  /**
+   * Where a limit (or refused-account) switch would move a session on `account` (absent: the system
+   * account): the policy's pick among the agent's other accounts, `next` undefined when none is left.
+   * Undefined when the session's own account is never switched (isolated, Cursor).
+   */
+  private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
+    const from = account ?? systemAccountId(agent)
+    const current = await this.registry.get(from)
+    if (!current || !switchable(current)) return undefined
+    const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
+    return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
   }
 
   /** Runs a queued limit (or unavailable-account) switch once the session's current turn has ended (never mid-turn). */
@@ -643,17 +738,20 @@ export class Core {
     const state = live?.snapshot().state
     if (!live || state === "closing" || state === "closed") { this.switchQueue.delete(id); return }
     if (state === "running" || state === "interrupting") return
+    // The session can be idle before its state event reaches this observer.
+    this.endNativeTurn(id)
     const reason = this.switchQueue.get(id) ?? "limit"
     this.switchQueue.delete(id)
     this.switching.add(id)
+    this.limitSwitching.add(id)
     try {
       const record = live.snapshot()
       const queued = record.pending > 0
-      const from = record.account ?? systemAccountId(record.agent)
-      const current = await this.registry.get(from)
-      if (!current || !switchable(current)) return
-      const candidates = (await this.registry.list(record.agent)).filter(account => account.id !== from)
-      const next = pickAccount(candidates, account => this.usage.get(account), Date.now(), account => this.usage.unavailable(account) !== undefined)
+      // Read before the switch reopens the agent, which stops subagents still running.
+      const background = this.backgroundLimited.delete(id) || live.subagents().some(sub => sub.status === "running")
+      const target = await this.switchTarget(record.agent, record.account)
+      if (!target) return
+      const { from, next } = target
       if (!next) {
         this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
         return
@@ -662,14 +760,18 @@ export class Core {
       // The turn that hit the limit (or was refused) continues once on the new account, unless the host queued input itself.
       if (this.continuePrompts !== undefined && !queued && this.lastTurnLimited.delete(id)) {
         try {
-          await session.send({ content: [{ type: "text", text: this.continuePrompts[reason] }], whenBusy: "reject" })
+          const prompt = this.continuePrompts[reason] + (background && this.continuePrompts.background ? ` ${this.continuePrompts.background}` : "")
+          await session.send({ content: [{ type: "text", text: prompt }], whenBusy: "reject" })
         } catch (error) {
           if (!(error instanceof CoreError && error.code === "session_busy")) throw error
         }
       }
     } catch (error) {
       try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
-    } finally { this.switching.delete(id) }
+    } finally {
+      this.switching.delete(id)
+      this.limitSwitching.delete(id)
+    }
   }
 
   /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
@@ -1481,9 +1583,12 @@ function keepInstructions(current: SessionContext | undefined, next: SessionCont
 }
 
 const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."
+const BACKGROUND_CONTINUE_SUFFIX = "Background subagents may have stopped on the limit or the switch: check them and resume or restart any unfinished work."
 const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn failed because its account was refused (login or subscription problem) and you are now on another account."
 /** A turn whose stop reason names a limit ended because of it. */
 const LIMIT_STOP_REASON = /limit|quota/i
+/** An out-of-credits account (HTTP 402) counts as full this long, unless fresher usage says otherwise first. */
+const BALANCE_RETRY_MS = 60 * 60_000
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000

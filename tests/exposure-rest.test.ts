@@ -22,7 +22,7 @@ function freshDb() {
   return db
 }
 
-const appConfigEnv = { MUX_PA_NAME: "testpa", MUX_PA_WORKDIR: "", MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
+const appConfigEnv = { MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
 
 const base = (extra: object) => ({
   port: PORT,

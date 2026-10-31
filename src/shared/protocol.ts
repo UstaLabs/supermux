@@ -43,23 +43,10 @@ export const OutboundMsg = z.object({
   ]),
 })
 
-export const OrchestrationMsg = z.object({
-  kind: z.literal("orchestration"),
-  call_id: z.string(),
-  op: z.discriminatedUnion("name", [
-    z.object({ name: z.literal("spawn_session"),  args: z.object({ workdir: z.string(), name: z.string().optional() }) }),
-    z.object({ name: z.literal("kill_session"),   args: z.object({ id: z.string() }) }),
-    z.object({ name: z.literal("rename_session"), args: z.object({ id: z.string(), new_name: z.string() }) }),
-    z.object({ name: z.literal("mute_session"),   args: z.object({ id: z.string(), muted: z.boolean() }) }),
-    z.object({ name: z.literal("set_active"),     args: z.object({ chat_id: z.string(), id: z.string() }) }),
-    z.object({ name: z.literal("get_active"),     args: z.object({ chat_id: z.string() }) }),
-  ]),
-})
-
 export const PingMsg = z.object({ kind: z.literal("ping") })
 
 export const ShimToBroker = z.discriminatedUnion("kind", [
-  RegisterMsg, OutboundMsg, OrchestrationMsg, PingMsg,
+  RegisterMsg, OutboundMsg, PingMsg,
 ])
 
 // broker → shim
@@ -93,4 +80,3 @@ export const BrokerToShim = z.discriminatedUnion("kind", [
 export type ShimToBroker = z.infer<typeof ShimToBroker>
 export type BrokerToShim = z.infer<typeof BrokerToShim>
 export type OutboundOp = z.infer<typeof OutboundMsg>["op"]
-export type OrchestrationOp = z.infer<typeof OrchestrationMsg>["op"]

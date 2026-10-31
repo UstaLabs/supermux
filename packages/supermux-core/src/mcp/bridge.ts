@@ -10,7 +10,10 @@
  * `{code: -32000, message: "host unavailable"}`; notifications are dropped. A new host-side server
  * is uninitialized while the agent already initialized, so on every reconnect the bridge replays
  * the agent's original `initialize` (its response is swallowed) and `notifications/initialized`
- * before it forwards anything else.
+ * before it forwards anything else. The new host may list other tools (the host was updated): when
+ * the agent has a list and its server declared `tools.listChanged`, the bridge then lists the new
+ * host's tools itself (that answer is swallowed too) and sends the agent
+ * `notifications/tools/list_changed` if they differ from the last list the agent got.
  *
  * Self-contained on purpose (node:* only): keep it that way.
  */
@@ -49,6 +52,17 @@ let held: Message[] = []
 let initialize: Message | undefined
 let replayId: string | undefined
 let replays = 0
+/** The id (JSON) of the agent's initialize, until its answer arrives. */
+let initializeKey: string | undefined
+/** That answer declared tools.listChanged: the agent listens for notifications/tools/list_changed. */
+let listChanged = false
+/** The agent's tools/list requests in flight (first pages, by JSON id). */
+const listing = new Set<string>()
+/** The tools (JSON) of the last tools/list answer the agent got. */
+let listed: string | undefined
+/** The bridge's own tools/list to a new host. */
+let checkId: string | undefined
+let checks = 0
 let delay = 100
 let stopping = false
 
@@ -65,17 +79,41 @@ function unavailable(message: Message): void {
 function fromAgent(message: Message): void {
   if (state === "connecting" || state === "replaying") { held.push(message); return }
   if (state === "down") { unavailable(message); return }
-  if (message.method === "initialize" && message.id !== undefined && initialize === undefined) initialize = message
+  if (message.method === "initialize" && message.id !== undefined && initialize === undefined) {
+    initialize = message
+    initializeKey = JSON.stringify(message.id)
+  }
+  const cursor = (message.params as { cursor?: unknown } | undefined)?.cursor
+  if (message.method === "tools/list" && message.id !== undefined && message.id !== null && cursor === undefined) listing.add(JSON.stringify(message.id))
   toHost(message)
 }
+
+const toolsOf = (message: Message) => JSON.stringify((message.result as { tools?: unknown } | undefined)?.tools ?? null)
 
 function fromHost(message: Message): void {
   if (state === "replaying" && replayId !== undefined && message.id === replayId && message.method === undefined) {
     replayId = undefined
     if (message.error !== undefined) { log(`replayed initialize failed: ${JSON.stringify(message.error)}`); socket?.destroy(); return }
     toHost({ jsonrpc: "2.0", method: "notifications/initialized" })
+    if (listChanged && listed !== undefined) {
+      checkId = `supermux-bridge-tools-${++checks}`
+      toHost({ jsonrpc: "2.0", id: checkId, method: "tools/list" })
+    }
     open()
     return
+  }
+  if (checkId !== undefined && message.id === checkId && message.method === undefined) {
+    checkId = undefined
+    if (message.error === undefined && toolsOf(message) !== listed) toAgent({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })
+    return
+  }
+  if (message.method === undefined && message.id !== undefined && message.id !== null) {
+    const key = JSON.stringify(message.id)
+    if (key === initializeKey) {
+      initializeKey = undefined
+      listChanged = (message.result as { capabilities?: { tools?: { listChanged?: unknown } } } | undefined)?.capabilities?.tools?.listChanged === true
+    }
+    if (listing.delete(key) && message.error === undefined) listed = toolsOf(message)
   }
   toAgent(message)
 }
@@ -91,6 +129,8 @@ function open(): void {
 function down(): void {
   socket = undefined
   replayId = undefined
+  checkId = undefined
+  listing.clear()
   if (stopping) return
   state = "down"
   const queue = held

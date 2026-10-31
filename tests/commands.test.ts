@@ -38,7 +38,7 @@ beforeEach(() => {
     chat_id: "chat-1",
     fromSession: "ana",  // who's calling the orchestration (n/a for chat-initiated)
     spawnSession: async (workdir, name, agent, model, reasoningLevel, permissionMode) => { spawned.push({ workdir, name, agent, model, reasoningLevel, permissionMode }); return { name: name ?? "n", session_id: "s" } },
-    killSession:  async (name) => { killed.push(name) },
+    killSession:  async (id) => { killed.push(id); r.unregister(id) },
     refreshMenu:  async () => { menuRefreshed++ },
   }
 })
@@ -282,6 +282,19 @@ test("/kill a non-last PA reassigns is_default to the oldest remaining PA", asyn
   const res = await handleSlash({ command: "kill", rest: "ana yes" }, ctx)
   expect(killed).toEqual([anaId])
   expect(r.defaultPA()?.name).toBe("bob")
+})
+
+test("/archive and /resume leave an archived delegated child out", async () => {
+  const kid = r.register({ name: "kid", workdir: "/k", tmux_target: "mux:kid", pid: 3 })
+  r.sessions.setParent(kid.id, anaId)
+  r.unregister(kid.id)
+  r.unregister(zoomId)
+  ctx.resumeFromArchive = async (id) => ({ ok: true, name: r.sessions.getById(id)?.name })
+  const archive = await handleSlash({ command: "archive", rest: "" }, ctx)
+  expect(archive.text).toContain("zoom")
+  expect(archive.text).not.toContain("kid")
+  const resume = await handleSlash({ command: "resume", rest: "kid" }, ctx)
+  expect(resume.text).toBe('No archived session named "kid".')
 })
 
 import { describe } from "bun:test"

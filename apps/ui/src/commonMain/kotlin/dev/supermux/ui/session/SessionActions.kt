@@ -80,6 +80,8 @@ class LauncherActions(
      * the plan's `suspend () -> List`.
      */
     val projectCatalog: Flow<List<ProjectDto>> = flowOf(emptyList()),
+    /** The target host's mux home, which the picker leaves out with its agent folders (null = unknown). */
+    val muxHome: Flow<String?> = flowOf(null),
     /** Register [path] as a location of [projectId] on the target host (409 → Conflict). */
     val addProjectLocation: suspend (projectId: String, path: String) -> ProjectLocationResult =
         { _, _ -> ProjectLocationResult.Failed },
@@ -130,7 +132,7 @@ class LauncherActions(
     val createLocalRepo: suspend (name: String) -> String? = { null },
     val createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
     /**
-     * The target host's agent install/login calls — the very holder Settings ▸ Agents uses. Set, the
+     * The target host's agent install/login calls — the very holder Settings ▸ Providers uses. Set, the
      * launcher shows its "Install an agent" panel when no agent is installed; null never gates.
      */
     val agentSetup: AgentSettingsActions? = null,
@@ -149,6 +151,9 @@ class LauncherActions(
     val checkEdit: (suspend (String, String) -> String?)? = null,
     /** Mic start: open the broker connection a recording's live passes reuse. */
     val transcribeWarm: (suspend (String) -> Unit)? = null,
+    /** Live dictation as a stream (`/transcribe/stream`): the broker hears the pauses and owns the
+     *  text. Used only when the broker says it can (`VoiceCaps.streaming`). */
+    val openDictationStream: dev.supermux.ui.chat.OpenDictationStream? = null,
     /**
      * Spawn + send the first message. Returns the new session id and THROWS the broker's own
      * message on refusal (bad workdir, spawn 4xx) — the launchers show that text inline.
@@ -218,6 +223,7 @@ fun rememberLauncherActions(
             projectCatalog = combine(app.projectCatalogKnown, app.projects) { known, list ->
                 if (known) list else emptyList()
             },
+            muxHome = app.muxHome,
             addProjectLocation = { id, path -> app.addProjectLocation(id, path) },
             projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
@@ -246,6 +252,7 @@ fun rememberLauncherActions(
             loadVoiceCaps = { app.appConfig()?.toVoiceCaps() },
             checkEdit = { text, newWords -> app.transcribeEdit(text, newWords) },
             transcribeWarm = { id -> app.transcribeWarm(id) },
+            openDictationStream = { id, session -> app.openDictationStream(null, id, session) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
@@ -279,6 +286,7 @@ fun rememberLauncherActions(
             // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill),
             // bound to its LIVE HostStore so a connection rebuild rebinds (see FleetStore).
             projectCatalog = fleet.activeProjectCatalog,
+            muxHome = fleet.activeMuxHome,
             addProjectLocation = { id, path ->
                 fleet.activeApp()?.addProjectLocation(id, path) ?: ProjectLocationResult.Failed
             },
@@ -310,6 +318,7 @@ fun rememberLauncherActions(
             loadVoiceCaps = { fleet.voiceConfig(null)?.toVoiceCaps() },
             checkEdit = { text, newWords -> fleet.transcribeEdit(null, text, newWords) },
             transcribeWarm = { id -> fleet.transcribeWarm(null, id) },
+            openDictationStream = { id, session -> fleet.openDictationStream(null, id, session) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace, perm, acct ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,

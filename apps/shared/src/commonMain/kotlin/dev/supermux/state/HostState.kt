@@ -32,6 +32,8 @@ data class HostState(
     val bgTasks: Map<String, List<ServerFrame.BgTask>> = emptyMap(),
     /** Session id → its subagents, ordered by [dev.supermux.proto.Subagent.startedAt]. */
     val subagents: Map<String, List<dev.supermux.proto.Subagent>> = emptyMap(),
+    /** Caller session id → the councils it called, ordered by [dev.supermux.proto.CouncilView.createdAt]. */
+    val councils: Map<String, List<dev.supermux.proto.CouncilView>> = emptyMap(),
     val commands: Map<String, List<SlashCommand>> = emptyMap(),
     val commandsResolved: Map<String, Boolean> = emptyMap(),
     val lastRead: Map<String, String> = emptyMap(),
@@ -58,6 +60,8 @@ data class HostState(
     val closedRequests: Map<String, List<ClosedRequest>> = emptyMap(),
     /** Last `{type:"error", reason}` from the broker (permission mode, request respond, …). */
     val lastError: String? = null,
+    /** The broker's mux home (from the snapshot); null until one arrives or from an older broker. */
+    val muxHome: String? = null,
     /** Catalog of permission modes per agent (from the snapshot). */
     val permissionModes: Map<String, List<dev.supermux.proto.PermissionModeInfo>> = emptyMap(),
     /** Worktree id → bytes, from `worktree_sizes` frames (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -94,4 +98,11 @@ sealed interface ProjectLocationResult {
     /** The path already belongs to [projectId] (HTTP 409). */
     data class Conflict(val projectId: String) : ProjectLocationResult
     data object Failed : ProjectLocationResult
+}
+
+/** [HostState.agentState] with each session's still-running background subagents counted in
+ *  [AgentStatus.agentsRunning], so a session whose agents outlive its turn shows as busy. */
+fun HostState.agentStateWithAgents(): Map<String, AgentStatus> = agentState.mapValues { (id, status) ->
+    val running = subagents[id]?.count { it.running && it.background == true } ?: 0
+    if (running == status.agentsRunning) status else status.copy(agentsRunning = running)
 }

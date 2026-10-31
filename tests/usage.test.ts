@@ -689,6 +689,7 @@ test("fetchGrokUsage maps monthly credits and plan from cli-chat-proxy", async (
   expect(result!.billingPeriodEndIso).toBe("2026-08-01T00:00:00.000Z")
   expect(result!.periodType).toBe("monthly")
   expect(result!.products).toEqual([])
+  expect(result!.creditsKnown).toBe(true)
   expect(seen.some((u) => u.includes("/billing"))).toBe(true)
 })
 
@@ -750,6 +751,7 @@ test("fetchGrokUsage prefers the weekly credits period over the legacy monthly b
   expect(result!.billingPeriodEnd).toBe("2026-09-12T16:28:51.524533+00:00")
   expect(result!.billingPeriodEndIso).toBe(new Date("2026-09-12T16:28:51.524533+00:00").toISOString())
   expect(result!.products).toEqual([{ product: "GrokBuild", percentUsed: 70 }])
+  expect(result!.creditsKnown).toBe(true)
   // The legacy monthly numbers still ride along — the card hides them at limit 0.
   expect(result!.used).toBe(3)
   expect(result!.monthlyLimit).toBe(0)
@@ -795,8 +797,54 @@ test("fetchGrokUsage keeps the monthly period when credits report a monthly wind
   expect(result!.periodType).toBe("monthly")
   // No creditUsagePercent → fall back to the credit-pool ratio.
   expect(result!.percentUsed).toBe(20)
+  expect(result!.creditsKnown).toBe(true)
   expect(result!.billingPeriodEnd).toBe("2026-10-01T00:00:00+00:00")
   expect(result!.prepaidBalance).toBe(500)
+})
+
+// Unified billing reports its quota only in the credits format; without it the legacy zero limit reads 0%.
+test("fetchGrokUsage says the credit usage is unknown when the credits format did not tell it", async () => {
+  const authPath = join(tmpDir, "grok-partial.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": { key: "t", expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+  }))
+  const stub = (credits: () => Promise<Response>) => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url)
+      if (u.includes("format=credits")) return credits()
+      if (u.endsWith("/billing")) return new Response(JSON.stringify({ config: { monthlyLimit: { val: 0 }, used: { val: 3 } } }))
+      return new Response(JSON.stringify({ subscriptionTier: "GrokPro" }))
+    }) as typeof fetch
+  }
+  for (const credits of [
+    () => Promise.reject(new Error("socket hang up")),
+    async () => new Response("unavailable", { status: 503 }),
+    async () => new Response("{not json"),
+    async () => new Response(JSON.stringify({ config: { prepaidBalance: { val: 0 } } })),
+  ]) {
+    stub(credits)
+    const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+    expect(result!.percentUsed).toBe(0)
+    expect(result!.creditsKnown).toBe(false)
+  }
+})
+
+// Without the credits format a legacy account cannot be told from a unified one, so its ratio is not trusted.
+test("fetchGrokUsage leaves the credit usage unknown when the credits call fails, even beside a real monthly limit", async () => {
+  const authPath = join(tmpDir, "grok-legacy-partial.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": { key: "t", expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+  }))
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url)
+    if (u.includes("format=credits")) throw new Error("socket hang up")
+    if (u.endsWith("/billing")) return new Response(JSON.stringify({ config: { monthlyLimit: { val: 150000 }, used: { val: 30000 } } }))
+    return new Response(JSON.stringify({ subscriptionTier: "SuperGrokPro" }))
+  }) as typeof fetch
+  const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+  // The Usage screen still shows the legacy ratio; the account policy does not take it.
+  expect(result!.percentUsed).toBe(20)
+  expect(result!.creditsKnown).toBe(false)
 })
 
 test("fetchGrokUsage returns null when auth missing", async () => {

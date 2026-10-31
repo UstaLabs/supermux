@@ -171,10 +171,12 @@ export class SessionStore {
     session.connected = false
   }
 
+  /** Never reactivates an archived row (resumeFromArchive is the only way back from archive). */
   activate(id: string, pid: number): void {
     const session = this.cache.get(id)
-    if (!session) return
-    this.db.run("UPDATE sessions SET status = 'active' WHERE id = ?", [id])
+    if (!session || session.status === "archived") return
+    const r = this.db.run("UPDATE sessions SET status = 'active' WHERE id = ? AND status != 'archived'", [id])
+    if (r.changes === 0) return
     session.status = "active"
     session.pid = pid
   }
@@ -302,6 +304,18 @@ export class SessionStore {
       [wt.repo_root, wt.base_branch, wt.session_branch, id])
     const session = this.getById(id)
     if (session) { session.repo_root = wt.repo_root; session.base_branch = wt.base_branch; session.session_branch = wt.session_branch }
+  }
+
+  /** Link a session to the session that created it (delegate / council, spec §3). Set once, at creation. */
+  setParent(id: string, parentId: string): void {
+    this.db.run("UPDATE sessions SET parent_session_id = ? WHERE id = ?", [parentId, id])
+    const session = this.cache.get(id)
+    if (session) session.parent_session_id = parentId
+  }
+
+  /** Attach a session to a workspace without adding a view (a delegated child in its parent's workspace, spec §3). */
+  setWorkspace(id: string, workspaceId: string): void {
+    this.db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [workspaceId, id])
   }
 
   setFinishJob(id: string, job: FinishJob | null): void {

@@ -98,13 +98,16 @@ export class Session {
     return [...this.subagentRegistry.values()].map(sub => ({ ...sub }))
   }
 
-  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number } {
+  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number; turnId?: string } {
+    const turnRunning = this.state === "running" || this.state === "interrupting"
     return {
       ...structuredClone(this.record),
       state: this.state,
       pending: this.queue.length,
       paused: this.paused,
       pendingRequests: this.pendingRequests.size,
+      // The running turn, as its events name it: in step with `state`, unlike the events themselves.
+      ...(turnRunning && this.currentTurnId ? { turnId: this.currentTurnId } : {}),
     }
   }
 

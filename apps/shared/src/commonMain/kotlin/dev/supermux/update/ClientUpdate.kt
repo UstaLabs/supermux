@@ -1,12 +1,24 @@
 package dev.supermux.update
 
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.onDownload
+import io.ktor.client.HttpClientConfig
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.io.Buffer
+import kotlinx.io.IOException
+import kotlinx.io.readByteArray
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -17,6 +29,32 @@ const val DEFAULT_VERSIONS_URL = "https://supermux.dev/versions.json"
 /** One-shot GitHub fallback when versions.json is unreachable. */
 const val DEFAULT_GITHUB_LATEST_URL =
     "https://api.github.com/repos/UstaLabs/supermux/releases/latest"
+
+/** One release by tag (`…/tags/v0.16.1`) — where an available update's "What's new" is read. */
+const val DEFAULT_GITHUB_RELEASE_BY_TAG_URL =
+    "https://api.github.com/repos/UstaLabs/supermux/releases/tags/"
+
+/**
+ * Timeouts for the client an updater downloads installers with. An installer is 100+ MB, so the
+ * request gets no overall deadline (a slow link must still finish) — only a stall one. Installing
+ * [HttpTimeout] at all also switches off CIO's built-in 15 s request timeout, which otherwise
+ * killed every download that took longer than that ("Request timeout has expired … unknown ms").
+ */
+fun HttpClientConfig<*>.installerDownloadTimeouts() {
+    install(HttpTimeout) {
+        requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+        connectTimeoutMillis = 15_000
+        socketTimeoutMillis = 60_000
+    }
+}
+
+/** The server answered the installer download with a non-2xx status — not worth a resume. */
+private class DownloadHttpException(status: Int) : IllegalStateException("download HTTP $status")
+
+// Installer download resume tuning (see ClientUpdateChecker.download).
+private const val DOWNLOAD_MAX_RESUMES = 5
+private const val DOWNLOAD_RETRY_DELAY_MS = 1_000L
+private const val DOWNLOAD_BUFFER_BYTES = 64 * 1024
 
 private val json = Json {
     ignoreUnknownKeys = true
@@ -113,7 +151,77 @@ data class ClientUpdateStatus(
     val lastError: String? = null,
     /** False on iOS (App Store / TestFlight only). */
     val canInstall: Boolean = false,
+    /**
+     * "What's new" for [latestVersion]: the release notes' bullets, cleaned by
+     * [parseReleaseHighlights]. Empty when there is no update or the notes could not be read —
+     * the notes are a nicety, so a failed read never fails the check.
+     */
+    val highlights: List<String> = emptyList(),
 )
+
+// ─── Release notes → "What's new" ─────────────────────────────────────────────
+
+/** `by @user in https://…/pull/42` — GitHub's generated-notes byline. */
+private val GENERATED_BYLINE = Regex("""\s+by @[\w.-]+(\[bot])?\s+in\s+https?://\S+$""")
+
+/** `(f1621945)` / `(abc1234, def5678)` — the commit shas a release PR's bullets end on. */
+private val TRAILING_SHAS = Regex("""\s*\((?:[0-9a-f]{7,40}(?:,\s*)?)+\)$""")
+
+/** `feat(chat):` / `fix!:` — a conventional-commit prefix (bold markers already removed). */
+private val COMMIT_PREFIX = Regex("""^([a-z]+)(\([^)]*\))?!?:\s*""")
+
+/** `Release v0.16.1:` — the release PR's own title when the notes are only GitHub's generated list. */
+private val RELEASE_PREFIX = Regex("""^release\s+v?\d+\.\d+\.\d+\S*:?\s*""", RegexOption.IGNORE_CASE)
+
+/** `#101:` — an issue number leading a bullet. */
+private val ISSUE_PREFIX = Regex("""^#\d+:?\s*""")
+
+/** `[text](url)` → `text`. */
+private val MD_LINK = Regex("""\[([^\]]+)]\([^)]*\)""")
+
+/** Commit kinds that say nothing to someone deciding whether to update. */
+private val INTERNAL_KINDS = setOf("chore", "ci", "test", "tests", "build", "docs", "style", "refactor")
+
+/**
+ * The bullets of a release's notes, each cut down to what a user reads: no PR byline, no commit
+ * shas, no `feat(scope):` / `#101:` / `Release v1.2.3:` prefix, no markdown, first letter upper
+ * (unless the first word has its own capitals, like `iOS`).
+ * Internal-only kinds (`chore:`, `ci:`, …) are dropped. Works on both shapes a release body has
+ * had — GitHub's generated `* Title by @x in url` list and the release PR's `- **feat(x):** …`
+ * bullets — in order, without repeats; when both are present only the first list counts.
+ */
+fun parseReleaseHighlights(body: String?): List<String> {
+    if (body.isNullOrBlank()) return emptyList()
+    val out = mutableListOf<String>()
+    for (raw in body.lineSequence()) {
+        val line = raw.trim()
+        // The release job writes the PR's bullets under "What's new" ABOVE GitHub's generated
+        // "What's Changed" list, which only repeats them as PR titles.
+        if (out.isNotEmpty() && line.startsWith("#") && line.contains("what's changed", ignoreCase = true)) break
+        if (!line.startsWith("- ") && !line.startsWith("* ")) continue
+        cleanHighlight(line.substring(2))?.let { if (it !in out) out += it }
+    }
+    return out
+}
+
+private fun cleanHighlight(raw: String): String? {
+    var s = raw.trim()
+        .replace(GENERATED_BYLINE, "")
+        .replace(TRAILING_SHAS, "")
+        .replace(MD_LINK, "$1")
+        .replace("**", "")
+        .replace("`", "")
+        .trim()
+    COMMIT_PREFIX.find(s)?.let { m ->
+        if (m.groupValues[1] in INTERNAL_KINDS) return null
+        s = s.substring(m.range.last + 1)
+    }
+    s = s.replace(RELEASE_PREFIX, "").replace(ISSUE_PREFIX, "").trim().trimEnd('.')
+    if (s.isEmpty()) return null
+    // "the strip…" → "The strip…", but a word that already carries its own capitals (iOS) stays.
+    val firstWord = s.substringBefore(' ')
+    return if (firstWord.any { it.isUpperCase() }) s else s.replaceFirstChar { it.uppercaseChar() }
+}
 
 // ─── Semver-lite (mirrors src/core/update/versions.ts) ────────────────────────
 
@@ -209,6 +317,7 @@ class ClientUpdateChecker(
     private val http: HttpClient,
     private val versionsUrl: String = DEFAULT_VERSIONS_URL,
     private val fallbackUrl: String = DEFAULT_GITHUB_LATEST_URL,
+    private val releaseByTagUrl: String = DEFAULT_GITHUB_RELEASE_BY_TAG_URL,
 ) {
     suspend fun check(
         platform: ClientPlatform,
@@ -236,21 +345,62 @@ class ClientUpdateChecker(
      * Download [url] fully into memory. Installer sizes are modest (APK/deb/msi/dmg).
      *
      * [onProgress] is invoked as bytes stream in: `(bytesReceived, contentLength?)`.
-     * `contentLength` is null when the server omits Content-Length.
+     * `contentLength` is null when the server omits Content-Length; on a resumed transfer both
+     * count the WHOLE file, so progress never runs backwards.
+     *
+     * A connection that drops mid-body (cellular: a 51 MB APK died at 5.3 MB with "Content-Length
+     * mismatch") is resumed with `Range: bytes=N-`, restarted from zero if the server answers 200
+     * instead of 206. Build [http] with [installerDownloadTimeouts] so a slow body is not cut off.
      */
     suspend fun download(
         url: String,
         onProgress: (suspend (bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
     ): ByteArray {
-        val resp = http.get(url) {
-            if (onProgress != null) {
-                onDownload { bytesSentTotal, contentLength ->
-                    onProgress(bytesSentTotal, contentLength)
+        val out = Buffer()
+        var total: Long? = null
+        var attempt = 0
+        while (true) {
+            val offset = out.size
+            try {
+                http.prepareGet(url) {
+                    if (offset > 0) header(HttpHeaders.Range, "bytes=$offset-")
+                }.execute { resp ->
+                    if (!resp.status.isSuccess()) throw DownloadHttpException(resp.status.value)
+                    val length = resp.contentLength()
+                    if (offset > 0 && resp.status != HttpStatusCode.PartialContent) {
+                        // The server ignored the Range: this body is the whole file again.
+                        out.clear()
+                        total = length
+                    } else if (total == null) {
+                        total = length?.let { it + offset }
+                    }
+                    val channel = resp.bodyAsChannel()
+                    val buf = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                    onProgress?.invoke(out.size, total)
+                    while (true) {
+                        val n = channel.readAvailable(buf, 0, buf.size)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        out.write(buf, 0, n)
+                        onProgress?.invoke(out.size, total)
+                    }
                 }
+                val expected = total
+                if (expected == null || out.size == expected) return out.readByteArray()
+                if (out.size > expected) {
+                    error("Content-Length mismatch: expected $expected bytes, but received ${out.size} bytes")
+                }
+                // Short body without an exception: the connection closed cleanly mid-transfer.
+                throw IOException("connection closed at ${out.size} of $expected bytes")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (e is DownloadHttpException) throw e
+                attempt++
+                if (attempt > DOWNLOAD_MAX_RESUMES) throw e
+                delay(DOWNLOAD_RETRY_DELAY_MS * attempt)
             }
         }
-        if (!resp.status.isSuccess()) error("download HTTP ${resp.status.value}")
-        return resp.bodyAsBytes()
     }
 
     private suspend fun checkPrimary(
@@ -281,6 +431,9 @@ class ClientUpdateChecker(
             latestVersionCode = latestCode,
             latestBuild = latestBuild,
         )
+        // The notes live on the release TAG (channel.version), which a client-specific marketing
+        // version (iOS 1.5) is not.
+        val highlights = if (available) releaseHighlights(channel.version) else emptyList()
         return ClientUpdateStatus(
             currentVersion = currentVersion,
             currentVersionCode = currentVersionCode,
@@ -291,7 +444,24 @@ class ClientUpdateChecker(
             downloadUrl = asset?.url?.ifBlank { null },
             sha256 = asset?.sha256?.ifBlank { null },
             canInstall = platform.canSideloadInstall() && !asset?.url.isNullOrBlank(),
+            highlights = highlights,
         )
+    }
+
+    /** The release's "What's new", or nothing — never a reason for the check itself to fail. */
+    private suspend fun releaseHighlights(tag: String): List<String> {
+        if (tag.isBlank()) return emptyList()
+        return try {
+            val resp = http.get(releaseByTagUrl + "v" + tag.removePrefix("v")) {
+                header("Accept", "application/vnd.github+json")
+            }
+            if (!resp.status.isSuccess()) return emptyList()
+            parseReleaseHighlights(json.decodeFromString(GitHubLatest.serializer(), resp.bodyAsText()).body)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     private suspend fun checkFallback(
@@ -323,6 +493,7 @@ class ClientUpdateChecker(
                 ?: "https://github.com/UstaLabs/supermux/releases/tag/v$tag",
             downloadUrl = assetUrl,
             canInstall = platform.canSideloadInstall() && !assetUrl.isNullOrBlank(),
+            highlights = if (available) parseReleaseHighlights(body.body) else emptyList(),
         )
     }
 
@@ -366,6 +537,7 @@ class ClientUpdateChecker(
 private data class GitHubLatest(
     @SerialName("tag_name") val tagName: String? = null,
     @SerialName("html_url") val htmlUrl: String? = null,
+    val body: String? = null,
     val assets: List<GitHubAsset> = emptyList(),
 )
 

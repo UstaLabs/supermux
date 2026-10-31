@@ -25,6 +25,9 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val commandsResolved by fleet.commandsResolved.collectAsState()
     val bgTasks by fleet.bgTasks.collectAsState()
     val subagents by fleet.subagents.collectAsState()
+    val councils by fleet.councils.collectAsState()
+    val sessions by fleet.sessions.collectAsState()
+    val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     // Gate the holder READ on the capability: a host built without a WalkthroughSeam has none.
     val walkthrough = if (LocalPlatform.current.caps.walkthrough) {
         fleet.walkthroughState<WalkthroughState>(sessionId)
@@ -42,6 +45,9 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         walkthroughUnread = walkthrough?.unreadReplies ?: 0,
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
+        councils = councils[sessionId].orEmpty(),
+        councilActivity = councilActivityOf(councils[sessionId].orEmpty(), agentState, activity),
+        listedSessions = listedSessions,
     )
 }
 
@@ -71,6 +77,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 loadVoiceCaps = { fleet.voiceConfig(sessionId)?.toVoiceCaps() },
                 checkEdit = { text, newWords -> fleet.transcribeEdit(sessionId, text, newWords) },
                 transcribeWarm = { id -> fleet.transcribeWarm(sessionId, id) },
+                openDictationStream = { id, session -> fleet.openDictationStream(sessionId, id, session) },
                 gitFetch = { fleet.gitFetch(sessionId) },
                 gitPull = { fleet.gitPull(sessionId) },
                 gitPush = { fleet.gitPush(sessionId) },
@@ -89,6 +96,8 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             setPermissionMode = { fleet.setPermissionMode(sessionId, it) },
             messageSubagent = { id, text -> fleet.messageSubagent(sessionId, id, text) },
             stopSubagent = { id -> fleet.stopSubagent(sessionId, id) },
+            // A council lives on the caller's host: route by the caller.
+            endCouncil = { id -> fleet.appFor(sessionId)?.endCouncil(id) },
             accounts = fleet.appFor(sessionId)?.accounts ?: kotlinx.coroutines.flow.flowOf(null),
             ensureAccounts = { fleet.appFor(sessionId)?.ensureAccounts() },
             setAccount = { id ->

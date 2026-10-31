@@ -9,7 +9,7 @@ export { AccountRegistry, systemAccountId, sameIdentity, REFRESH_MARGIN_MS } fro
 export { RefreshCoordinator } from "./refresh.js"
 export { UsageStore } from "./usage-store.js"
 export { defaultLoginRunner, parseDeviceAuth, parseLoginUrl, stripAnsi, ptyCommand, findCommand, parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, ANTIGRAVITY_CODE_WINDOW_MS, LOGIN_STRIPPED_ENV } from "./login.js"
-export { score, limited, pickAccount, switchable, ACCOUNT_UNAVAILABLE_ERROR } from "./policy.js"
+export { score, limited, pickAccount, switchable, accountHttpStatus, ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW } from "./policy.js"
 export {
   adapterFor, genericAdapter, claudeAdapter, codexAdapter, cursorAdapter, grokAdapter, opencodeAdapter,
   claudeUsage, codexUsage, readClaudeIdentity, readCodexIdentity, claudeIdentityFile,

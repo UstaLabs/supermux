@@ -4,9 +4,9 @@ You are helping a human install and configure **supermux** on their machine. Wor
 
 ## What supermux is (context for you, the assistant)
 
-supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Optional personal-assistant (PA) sessions can be created later as always-on orchestrators.
+supermux is a self-hosted broker that drives coding-agent sessions — Claude Code, Codex, Cursor, and OpenCode — from a phone or laptop over **Telegram** and a **web PWA**. The human runs many agent sessions in parallel; the broker routes chat messages to the right session and relays replies back with push notifications. Optional **Agents** (always-on orchestrator sessions) can be created later.
 
-It runs on Linux (or in a container on any host). Fresh installs start with no personal assistant; nothing author-specific is baked in.
+It runs on Linux (or in a container on any host). Fresh installs start with no Agent; nothing author-specific is baked in.
 
 ---
 
@@ -62,7 +62,7 @@ Open `http://localhost:8787` in a browser. Because this is the first open on a f
    - **Connectivity** — optionally add a Telegram bot token (from **@BotFather**, `/newbot` — no `.env` editing; the channel activates on the **next broker restart**), set a public URL (ready-to-paste Caddy / nginx / Cloudflare Tunnel snippets + a reachability test), and pair more devices.
    - **Done** — spawn your first session.
 
-   Personal assistants are not part of onboarding. They remain available later under **Settings → Personal assistants**.
+   Agents are not part of onboarding. They remain available later under **Settings → Agents**.
 
 **VERIFY:** the wizard completes without errors and you can see the session list in the PWA.
 
@@ -155,12 +155,7 @@ chmod 600 ~/.mux/state/.env
 ```
 The hosted relay gives the broker a stable remote URL while `MUX_WEB_PUBLIC_URL` remains its local origin. Set `MUX_RELAY_DOMAIN=` to opt out, or adjust `MUX_WEB_PUBLIC_URL` when using your own public URL/proxy. The web channel turns on as soon as `MUX_WEB_PORT` + `MUX_WEB_PUBLIC_URL` are both set; no Telegram token is required.
 
-Compiled native releases carry their own verified `frpc`. A source-mode broker needs `frpc` on `PATH`; from the repository on Linux:
-
-```bash
-target=linux-x64; [ "$(uname -m)" = aarch64 ] && target=linux-arm64
-scripts/fetch-frpc.sh "$target" ~/.local/bin/frpc
-```
+The relay tunnel runs inside the broker (`packages/frp-client`); there is no `frpc` to install. It verifies the relay's TLS certificate, reaches it through `http_proxy` when that is set, and `MUX_RELAY_TLS_VERIFY=0` skips the certificate check for a self-hosted relay without a real one.
 
 > **Remote (SSH path):** With `MUX_RELAY_DOMAIN=relay.supermux.dev`, keeping `MUX_WEB_PUBLIC_URL=http://localhost:8787` is correct: `supermux pair` publishes the stable relay URL. If you disable the relay, `MUX_WEB_PUBLIC_URL` must instead be an address your phone/laptop can reach — the box's LAN/VPN address or your own public reverse-proxy URL.
 
@@ -173,6 +168,7 @@ Relevant env vars (all optional, sensible defaults):
 | `MUX_TMUX_SESSION` | `supermux` | tmux session name the broker uses |
 | `MUX_TELEGRAM_BOT_TOKEN` | — | Set to enable the Telegram channel |
 | `MUX_RELAY_DOMAIN` | `relay.supermux.dev` in native setup | Hosted connectivity relay; empty disables it |
+| `MUX_RELAY_TLS_VERIFY` | `1` | `0` skips checking the relay's TLS certificate (a self-hosted frps without a real one) |
 
 **VERIFY:** `cat ~/.mux/state/.env` shows the expected values; permissions are `600`.
 
@@ -224,11 +220,11 @@ Go to the **"You're done when…"** checklist.
 
 ---
 
-## Personal assistants — optional (both paths)
+## Agents — optional (both paths)
 
-Fresh installs do not create a personal assistant. Normal project sessions are the default workflow.
+Fresh installs do not create an Agent. Normal project sessions are the default workflow.
 
-If the human wants an always-on orchestrator, open **Settings → Personal assistants** and create one there. The first PA becomes the default fallback and the broker runs **`/mux:soul`** in that session to set up its optional identity. Revise it later with `/mux:soul`, `~/.mux/soul.md`, or **PA identity** in Settings.
+If the human wants an always-on orchestrator, open **Settings → Agents** and create an Agent there: give it a **name** and pick its **provider** (Claude Code, Codex, Cursor, OpenCode, …). The first Agent becomes the default fallback. Each Agent keeps its own memory file at `~/.mux/agent-memory/<id>.md`, which it builds up as it works — there is no `soul.md` to set up.
 
 ---
 

@@ -20,8 +20,7 @@
 #   3. compile pty-helper for the native POSIX arch (the committed ELF is x64-only;
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
-#   4. fetch + verify the native frpc used by the built-in connectivity relay
-#   4b. stage the pinned zmx bundle (POSIX): the patched daemon, the framed
+#   4. stage the pinned zmx bundle (POSIX): the patched daemon, the framed
 #      broker helper and their manifest, verified against vendor/zmx/upstream.lock.json
 #      and copied into the committed slots under src/core/terminal/zmx/embedded/
 #      so `bun build --compile` embeds them. Without this a compiled release has
@@ -67,7 +66,6 @@ esac
 
 # Restore workspace mutations unconditionally (on success, failure, or signal):
 # the embedded copies live inside $OUT now; the tree goes back to its prior state.
-# frpc uses an explicit backup so this also preserves an uncommitted local stub.
 # Back the mutated files up as FILES, not as git state. `git checkout --` was the
 # old restore for the static manifest and the pty-helper, and it is a poor one:
 # it takes several pathspecs and restores NONE of them if one fails, it discards
@@ -78,12 +76,10 @@ esac
 # working tree. Copies cannot fail that way.
 BACKUP_DIR="$(mktemp -d)"
 mkdir -p "$BACKUP_DIR/zmx"
-cp src/core/relay/frpc-embedded "$BACKUP_DIR/frpc-embedded"
 cp src/channels/web/static-manifest.generated.ts "$BACKUP_DIR/static-manifest.generated.ts"
 cp src/core/terminal/pty-helper "$BACKUP_DIR/pty-helper"
 cp -a src/core/terminal/zmx/embedded/. "$BACKUP_DIR/zmx/"
 cleanup() {
-  cp "$BACKUP_DIR/frpc-embedded" src/core/relay/frpc-embedded 2>/dev/null || true
   cp "$BACKUP_DIR/static-manifest.generated.ts" src/channels/web/static-manifest.generated.ts 2>/dev/null || true
   cp "$BACKUP_DIR/pty-helper" src/core/terminal/pty-helper 2>/dev/null || true
   cp -a "$BACKUP_DIR/zmx/." src/core/terminal/zmx/embedded/ 2>/dev/null || true
@@ -137,10 +133,6 @@ if [ "$TARGET" != "windows-x64" ]; then
   "$CC" -O2 -o src/core/terminal/pty-helper src/core/terminal/pty-helper.c
 fi
 
-# frpc: fetch the native-arch helper and embed it beside the pty helper. The
-# release binary's own checksum therefore covers the relay executable too.
-scripts/fetch-frpc.sh "$TARGET" src/core/relay/frpc-embedded
-
 # zmx: the POSIX workspace-terminal backend, embedded whole. Windows has no zmx
 # (persistent terminals there are sessiond's job), so the slots keep their
 # placeholders and the compiled binary never claims otherwise.
@@ -173,16 +165,20 @@ bun scripts/generate-static-manifest.ts
 
 # Compile. --define statically replaces the build-info env reads; IS_COMPILED is
 # auto-detected at runtime (entry path under /$bunfs/).
+# The dictation stream's speech models run in a Worker, which a compiled binary only
+# carries when its file is a second entrypoint; speech-models.ts finds it at its path
+# under src/ (smoke-binary.sh check 6 proves it loads).
+SPEECH_WORKER=src/core/transcription/stream/speech-models-worker.ts
 if [ "$TARGET" = "windows-x64" ]; then
   # The exe's version info says supermux, not Bun (Windows Firewall prompt, Task Manager).
   . "$ROOT/scripts/lib/windows-exe-meta.sh"
-  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts \
+  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts "$SPEECH_WORKER" \
     --target="$BUN_TARGET" \
     --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
     --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
     --outfile "$OUT"
 else
-  bun build --compile --minify src/cli.ts \
+  bun build --compile --minify src/cli.ts "$SPEECH_WORKER" \
     --target="$BUN_TARGET" \
     --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
     --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \

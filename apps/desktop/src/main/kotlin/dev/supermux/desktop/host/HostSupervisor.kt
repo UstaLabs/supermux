@@ -42,7 +42,7 @@ class HostSupervisor(
     private val savePrefs: (HostingPrefs) -> Unit,
     probe: suspend (port: Int) -> HostProbeResult = { port -> withContext(Dispatchers.IO) { HostProber.probe(port) } },
     internal val osEnv: OsEnv = SystemOsEnv,
-    /** Copies the bundled broker/tmux/frpc/zmx out of the app image (blocking; run on [io]). */
+    /** Copies the bundled broker/tmux/zmx out of the app image (blocking; run on [io]). */
     internal val materialize: () -> HostBinaries.SidecarBinaries = { HostBinaries.resolve(stateDir) },
     /** True in a packaged app (a resources dir): a null broker path then means the copy failed. */
     internal val packaged: () -> Boolean = { HostBinaries.isPackaged() },

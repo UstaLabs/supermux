@@ -57,6 +57,15 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('resuming a conversation that was never sent to starts it fresh under the same id', async () => {
+  // Restarted before its first message: Claude has no conversation file and says "No conversation found".
+  const r = await driver().open(ctx({resumeId: 'never-sent'}))
+  try {
+    expect(r.agentSessionId).toBe('never-sent')
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('resume preserves identity; missing resume never creates a replacement', async () => {
   const r = await driver().open(ctx({resumeId: 'old'}))
   expect(r.agentSessionId).toBe('old')
@@ -78,6 +87,27 @@ test('interrupt cancels the in-flight turn via control_request', async () => {
   try {
     const pending = r.prompt(input('hang'), signal())
     await r.interrupt()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('interrupt whose error result arrives before its reply still cancels the turn', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const pending = r.prompt(input('hang'), signal())
+    pending.catch(() => {})
+    await r.interrupt()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('aborting the prompt signal cancels the turn when the error result comes first', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const controller = new AbortController()
+    const pending = r.prompt(input('hang'), controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort()
     expect(await pending).toEqual({stopReason: 'cancelled'})
   } finally { await r.close({ mode: "shutdown" }) }
 })
@@ -427,6 +457,66 @@ test('a session default mode launches without --permission-mode even when the fa
   try {
     const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
     expect(argv).not.toContain('--permission-mode')
+  } finally {
+    await r.close({ mode: 'shutdown' })
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+test('allowedTools reach the launch as one comma-joined --allowedTools value, rules with parentheses intact; an empty list passes no flag', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const rule = 'Read(//home/u/.mux/session_inboxes/**)'
+  const argvOf = async (name: string, extra: Record<string, unknown>) => {
+    const trace = join(dir, name)
+    const r = await driver({ ENV_TRACE: trace }, extra).open(ctx())
+    try { return (JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }).argv }
+    finally { await r.close({ mode: 'shutdown' }) }
+  }
+  try {
+    const argv = await argvOf('with', { allowedTools: [rule, 'Bash(git log:*)'], disallowedTools: ['WebFetch'] })
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toBe(`${rule},Bash(git log:*)`)
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe('WebFetch')
+    expect(argv).not.toContain('--add-dir')
+    expect(await argvOf('empty', { allowedTools: [] })).not.toContain('--allowedTools')
+    expect(await argvOf('absent', {})).not.toContain('--allowedTools')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+/**
+ * How Claude 2.1.308 splits the values after `--allowedTools` (module helper `qu` in the bundled JS, copied
+ * from the binary): at commas and spaces OUTSIDE parentheses, once per argv value. Inside `( ... )` both stay.
+ */
+function claudeCliSplit(values: string[]): string[] {
+  const out: string[] = []
+  for (const value of values) {
+    if (!value) continue
+    let current = ''
+    let inParens = false
+    for (const ch of value) {
+      if (ch === '(') { inParens = true; current += ch }
+      else if (ch === ')') { inParens = false; current += ch }
+      else if (ch === ',') { if (inParens) current += ch; else { if (current.trim()) out.push(current.trim()); current = '' } }
+      else if (ch === ' ') { if (inParens) current += ch; else if (current.trim()) { out.push(current.trim()); current = '' } }
+      else if (current || ch.trim()) current += ch
+    }
+    if (current.trim()) out.push(current.trim())
+  }
+  return out
+}
+
+test('rules with spaces inside their parentheses (exact Bash commands) survive the launch: Claude splits the one comma-joined value back into exactly them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const file = '/home/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl'
+  const rules = ['Read(//home/u/.mux/session_inboxes/**)', `Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
+  const trace = join(dir, 'trace')
+  const r = await driver({ ENV_TRACE: trace }, { allowedTools: rules }).open(ctx())
+  try {
+    const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
+    const at = argv.indexOf('--allowedTools')
+    expect(argv[at + 1]).toBe(rules.join(','))        // ONE argv value after the flag ...
+    expect(argv[at + 2]?.startsWith('-')).toBe(true)  // ... and a flag right behind it (nothing else is swallowed)
+    expect(claudeCliSplit([argv[at + 1]!])).toEqual(rules)
+    // The splitter is the same for one argv value per rule, so either way of passing them reads back alike.
+    expect(claudeCliSplit(rules)).toEqual(rules)
   } finally {
     await r.close({ mode: 'shutdown' })
     await rm(dir, { recursive: true, force: true })

@@ -9,8 +9,7 @@ import java.nio.file.attribute.PosixFilePermissions
 
 /**
  * Resolves the host helper binaries the desktop-as-host needs — the bundled Bun **broker**, a
- * static **tmux** (Linux/macOS) or **sessiond** (Windows), **frpc** (all platforms) and the
- * **zmx bundle** (Linux/macOS) — for BOTH a dev checkout and a packaged app image, then
+ * static **tmux** (Linux/macOS) or **sessiond** (Windows) and the **zmx bundle** (Linux/macOS) — for BOTH a dev checkout and a packaged app image, then
  * materializes them to a per-user dir on first use (spec §6, D7, D11).
  *
  * ### The broker: one binary, the canonical compile path
@@ -31,18 +30,22 @@ import java.nio.file.attribute.PosixFilePermissions
  * DIRECTORY is handed over explicitly as `MUX_ZMX_BIN_DIR`. Windows stages none of it and keeps
  * sessiond; its broker never looks for a zmx bundle.
  *
- * ### tmux + frpc: bare-name execs off an augmented PATH
- * The broker execs bare `tmux` / `frpc` (see `src/core/session-manager/tmux.ts`,
- * `src/core/relay/frp-provider.ts`). So rather than teach the broker new paths, the desktop
- * materializes the bundled `tmux`/`frpc` into ONE bin dir and prepends it to the spawned broker's
- * `PATH` ([prependPath]); the broker then finds them with no change. Windows ships the broker,
- * sessiond, and frpc; `MUX_SESSIOND_PATH` points the broker at the materialized sessiond executable.
+ * ### tmux: a bare-name exec off an augmented PATH
+ * The broker execs bare `tmux` (see `src/core/session-manager/tmux.ts`). So rather than teach the
+ * broker a new path, the desktop materializes the bundled `tmux` into ONE bin dir and prepends it to
+ * the spawned broker's `PATH` ([prependPath]); the broker then finds it with no change. Windows ships
+ * the broker and sessiond; `MUX_SESSIOND_PATH` points the broker at the materialized sessiond executable.
+ *
+ * ### No frpc
+ * The relay tunnel runs inside the broker (`@supermux/frp-client`). Earlier builds shipped and
+ * materialized an `frpc`, which Windows Defender quarantines as `PUA:Win32/FRProxy`; [resolve]
+ * deletes such a leftover copy ([STALE_HELPERS]).
  *
  * ### Dev vs packaged
  * Packaged apps expose their resources via Compose Desktop's `compose.application.resources.dir`
  * system property (jpackage passes `-Dcompose.application.resources.dir=<image>/resources`); that
  * dir is the merged `appResourcesRootDir` `common/ <os>/ <os>-<arch>/` subtree, so a lookup is
- * just `<resourcesDir>/<fileName>`. In a dev checkout the property is absent → tmux/frpc resolve
+ * just `<resourcesDir>/<fileName>`. In a dev checkout the property is absent → tmux resolves
  * off `$PATH` and the broker path is null (the supervisor then runs `bun <repo>/src/main.ts`).
  *
  * ### Materialization (mirrors `src/core/runtime-assets.ts`)
@@ -76,16 +79,18 @@ object HostBinaries {
 
     private const val STAMP_SUFFIX = ".stamp"
 
+    /** Helpers earlier builds materialized into [BIN_SUBDIR] and nothing runs any more. */
+    val STALE_HELPERS = listOf("frpc", "frpc.exe")
+
     enum class Os { LINUX, MAC, WINDOWS, OTHER }
 
-    enum class Binary { Broker, Sessiond, Tmux, Frpc, Zmx, ZmxHelper, ZmxManifest }
+    enum class Binary { Broker, Sessiond, Tmux, Zmx, ZmxHelper, ZmxManifest }
 
     /** The materialized host binaries the supervisor runs. Nulls = not bundled / not found. */
     data class SidecarBinaries(
         val brokerPath: Path?, // packaged: the bundled broker exec; dev: null (→ bun src/main.ts)
         val binDir: Path?,     // the dir to prepend to the broker's PATH (holds platform helpers), or null
         val sessiondPath: Path?, // Windows session runtime helper
-        val frpcPath: Path?,   // resolved frpc (feeds the broker's relay provider via PATH)
         val tmuxPath: Path?,   // resolved tmux (Linux/macOS)
         // The verified workspace-terminal bundle's root (→ MUX_ZMX_BIN_DIR), or null when this
         // platform/build has none. Never on PATH — see the class doc.
@@ -108,7 +113,6 @@ object HostBinaries {
     fun fileName(binary: Binary, os: Os): String = when (binary) {
         Binary.Broker -> "supermux-broker" + exeSuffix(os)
         Binary.Sessiond -> "mux-sessiond" + exeSuffix(os)
-        Binary.Frpc -> "frpc" + exeSuffix(os)
         Binary.Tmux -> "tmux" // Linux/macOS only; never suffixed
         // Staged FLAT by scripts/stage-desktop-binaries.sh (the app resources dir is a merge of
         // common/<os>/<os>-<arch>, so a nested tree there is not worth the risk); the bundle's
@@ -121,11 +125,11 @@ object HostBinaries {
     /** Whether [os]'s shipped app image carries [binary]. */
     fun isBundled(binary: Binary, os: Os): Boolean = when (os) {
         Os.LINUX, Os.MAC ->
-            binary == Binary.Broker || binary == Binary.Tmux || binary == Binary.Frpc ||
+            binary == Binary.Broker || binary == Binary.Tmux ||
                 binary == Binary.Zmx || binary == Binary.ZmxHelper || binary == Binary.ZmxManifest
         // No zmx on Windows: persistent terminals there are sessiond's, and a zmx bundle in the
         // MSI would be a second backend claiming the same workspaces.
-        Os.WINDOWS -> binary == Binary.Broker || binary == Binary.Sessiond || binary == Binary.Frpc
+        Os.WINDOWS -> binary == Binary.Broker || binary == Binary.Sessiond
         Os.OTHER -> false
     }
 
@@ -137,7 +141,7 @@ object HostBinaries {
 
     fun isPackaged(): Boolean = resourcesDir() != null
 
-    /** `<binDir><sep><existing PATH>` so bundled tmux/frpc win over any system copies. */
+    /** `<binDir><sep><existing PATH>` so the bundled tmux wins over any system copy. */
     fun prependPath(binDir: Path, existing: String? = System.getenv("PATH")): String =
         if (existing.isNullOrEmpty()) binDir.toString() else binDir.toString() + File.pathSeparator + existing
 
@@ -145,7 +149,7 @@ object HostBinaries {
 
     /**
      * Resolve the host binaries for this run. Packaged ⇒ materialize each shipped binary into one
-     * per-user bin dir; dev ⇒ broker is null (repo+bun) and tmux/frpc come off `$PATH`. Never
+     * per-user bin dir; dev ⇒ broker is null (repo+bun) and tmux comes off `$PATH`. Never
      * throws — a slot the packager did not fill (or a copy failure) resolves to null.
      */
     fun resolve(
@@ -164,12 +168,15 @@ object HostBinaries {
                 brokerPath = null,
                 binDir = null,
                 sessiondPath = if (isBundled(Binary.Sessiond, os)) onPath(fileName(Binary.Sessiond, os)) else null,
-                frpcPath = if (isBundled(Binary.Frpc, os)) onPath("frpc") else null,
                 tmuxPath = if (isBundled(Binary.Tmux, os)) onPath("tmux") else null,
                 zmxDir = null,
             )
         }
         val binDir = stateDir.resolve(BIN_SUBDIR)
+        for (name in STALE_HELPERS) {
+            runCatching { Files.deleteIfExists(binDir.resolve(name)) }
+            runCatching { Files.deleteIfExists(binDir.resolve(name + STAMP_SUFFIX)) }
+        }
         fun mat(b: Binary): Path? {
             if (!isBundled(b, os)) return null
             val src = resourcesDir.resolve(fileName(b, os))
@@ -178,17 +185,15 @@ object HostBinaries {
         }
         val broker = mat(Binary.Broker)
         val sessiond = mat(Binary.Sessiond)
-        val frpc = mat(Binary.Frpc)
         val tmux = mat(Binary.Tmux)
         val zmx = materializeZmxBundle(stateDir, os, resourcesDir)
         // Every run, not just after a fresh copy: an install from before this fix heals too.
-        quarantineClearArgv(os, stateDir, listOfNotNull(broker, sessiond, frpc, tmux, zmx))
+        quarantineClearArgv(os, stateDir, listOfNotNull(broker, sessiond, tmux, zmx))
             ?.let { argv -> runCatching { clearQuarantine(argv) } }
         return SidecarBinaries(
             brokerPath = broker,
-            binDir = if (broker != null || sessiond != null || frpc != null || tmux != null) binDir else null,
+            binDir = if (broker != null || sessiond != null || tmux != null) binDir else null,
             sessiondPath = sessiond,
-            frpcPath = frpc,
             tmuxPath = tmux,
             zmxDir = zmx,
         )

@@ -82,7 +82,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -112,9 +111,15 @@ import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
 import kotlin.time.Clock
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.gestures.animateScrollBy
+import dev.supermux.chat.parseChatTs
+import androidx.compose.runtime.mutableLongStateOf
+import kotlinx.coroutines.delay
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
@@ -257,6 +262,12 @@ fun SessionListScreen(
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
+    /** Archived Agents (the store's archive list, Agents only, newest first) for the Archived fold. */
+    archivedAgents: List<dev.supermux.net.ArchivedDto> = emptyList(),
+    /** Create / rename / archive / make default / change character; null hides those entries. */
+    agentsActions: AgentsActions? = null,
+    /** Agent session id → its avatar (rememberAgentAvatars); an Agent without one draws the default. */
+    agentAvatars: Map<String, AvatarRig> = emptyMap(),
     initialGroupByProject: Boolean = true,
     onGroupByProjectChange: (Boolean) -> Unit = {},
     // ── Mount shape ──
@@ -332,8 +343,19 @@ fun SessionListScreen(
         ?: home
 
     // A host filter narrows the catalog too — an empty project of a filtered-out host is noise.
-    val visibleProjects = remember(projects, multiHost, hostFilter) {
-        if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
+    // An Agent's home is not a project: a catalog entry whose every location is inside the
+    // Agents' home root (the parent of any Agent's workdir, e.g. ~/.mux/workspace/) never shows.
+    val agentHomeRoots = remember(sessions) {
+        sessions.filter { it.role == "personal_assistant" }
+            .mapNotNull { s -> s.workdir.trimEnd('/').substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let { "$it/" } }
+            .toSet()
+    }
+    val visibleProjects = remember(projects, multiHost, hostFilter, agentHomeRoots) {
+        val byHost = if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
+        byHost.filterNot { ref ->
+            val locs = ref.project.locations
+            locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> (loc.path.trimEnd('/') + "/").startsWith(root) } }
+        }
     }
     val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
@@ -402,6 +424,7 @@ fun SessionListScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var organizeProjectsOpen by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
+    var agentDialog by remember { mutableStateOf<AgentDialog?>(null) }
     var renameWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
@@ -741,10 +764,10 @@ fun SessionListScreen(
                         for (child in model.children) {
                             WorkspaceChildRow(
                                 name = names[child.sessionId] ?: child.sessionId,
-                                working = agentTyped[child.sessionId]?.working == true,
+                                working = agentTyped[child.sessionId]?.busy == true,
                                 unread = sessionListShowsUnread(
                                     active = child.sessionId == activeId,
-                                    working = agentTyped[child.sessionId]?.working == true,
+                                    working = agentTyped[child.sessionId]?.busy == true,
                                     lastMessageTs = lastBySession[child.sessionId]?.ts,
                                     lastReadAt = lastRead[child.sessionId],
                                 ),
@@ -775,7 +798,7 @@ fun SessionListScreen(
     // unread counts and the offscreen unread pills.
     fun sessionUnread(sid: String) = sessionListShowsUnread(
         active = sid == activeId,
-        working = agentState[sid]?.working == true,
+        working = agentState[sid]?.busy == true,
         lastMessageTs = lastBySession[sid]?.ts,
         lastReadAt = lastRead[sid],
     )
@@ -793,6 +816,64 @@ fun SessionListScreen(
         } else item(key = key) { content() }
     }
 
+    // Agents are never suspended, so "asleep" means quiet (agentDozing). No polling: each Agent's
+    // moment of dozing off is known (last message + AGENT_DOZE_AFTER_MS), so the clock only moves
+    // when the next one comes due; a new message reschedules it.
+    var agentClock by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
+    val nextAgentDoze = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
+        .mapNotNull { w -> (w.primarySessionId ?: w.chatSessionIds().firstOrNull())?.let { parseChatTs(lastBySession[it]?.ts) } }
+        .map { it + AGENT_DOZE_AFTER_MS }
+        .filter { it > agentClock }
+        .minOrNull()
+    LaunchedEffect(nextAgentDoze) {
+        val at = nextAgentDoze ?: return@LaunchedEffect
+        delay((at - Clock.System.now().toEpochMilliseconds()).coerceAtLeast(0))
+        agentClock = Clock.System.now().toEpochMilliseconds()
+    }
+    fun agentEntry(w: WorkspaceDto): AgentEntry {
+        val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+        val s = sid?.let { sessionById[it] }
+        val working = sid != null && agentTyped[sid]?.busy == true
+        return AgentEntry(
+            id = w.id,
+            name = s?.name?.takeIf { it.isNotBlank() } ?: w.name,
+            working = working,
+            unread = !working && workspaceUnread(w),
+            active = if (openWorkspaceByWorkspaceId) w.id == activeId else sid != null && sid == activeId,
+            online = s?.status == null || s.status == "active",
+            muted = s?.mute == true,
+            preview = sid?.let { lastBySession[it] },
+            dozing = !working && !workspaceUnread(w) && agentDozing(sid?.let { lastBySession[it]?.ts }, agentClock),
+            rig = sid?.let { agentAvatars[it] },
+            sessionId = sid,
+        )
+    }
+    fun openAgent(w: WorkspaceDto) {
+        if (openWorkspaceByWorkspaceId) onOpen(w.id)
+        else (w.primarySessionId ?: w.chatSessionIds().firstOrNull())?.let(onOpen)
+    }
+    fun agentContextEntries(w: WorkspaceDto): List<RowContextMenuEntry> {
+        val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+        val s = sid?.let { sessionById[it] }
+        val muted = s?.mute == true
+        val name = s?.name?.takeIf { it.isNotBlank() } ?: w.name
+        val a = agentsActions
+        return buildList {
+            if (a != null && sid != null) {
+                add(RowContextMenuEntry("Rename…") { agentDialog = AgentDialog.Rename(sid, name) })
+                add(RowContextMenuEntry("Change character…") { agentDialog = AgentDialog.Character(sid, name) })
+                if (s?.isDefault != true) {
+                    add(RowContextMenuEntry("Make default") { listScope.launch { a.setDefault(sid) } })
+                }
+            }
+            if (sid != null) add(RowContextMenuEntry(if (muted) "Unmute" else "Mute") { onMute(sid, !muted) })
+            if (workspaceUnread(w)) {
+                add(RowContextMenuEntry("Mark as read") { actions.markRead(batchMarkReadSessionIds(listOf(w), setOf(w.id))) })
+            }
+            if (a != null && sid != null) add(RowContextMenuEntry("Archive…") { agentDialog = AgentDialog.Archive(sid, name) })
+        }
+    }
+
     fun LazyListScope.workspaceBody() {
         if (groups.isEmpty() && archivedWorkspaces.isEmpty() && mode == SessionListMode.Workspaces) {
             item(key = "empty_hint") {
@@ -807,27 +888,11 @@ fun SessionListScreen(
         }
         val pas = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
         if (!groupByProject) {
-            if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
-                itemsIndexed(pas, key = { _, w -> "flat:pa:${w.id}" }) { index, w ->
-                    WorkspaceEntry(
-                        w = w, scopeKey = null, grouped = false,
-                        first = index == 0, last = index == pas.lastIndex,
-                        draggable = false,
-                        // Android's flat list tagged every row including the PAs; desktop's
-                        // sidebar tagged only the rows below the PA block.
-                        showProjectTag = mode == SessionListMode.Fleet,
-                    )
-                }
-            }
             val rest = applyWorkspaceWorkingOrder(wsFlatRows, wsWorkingOrders[WORKSPACE_FLAT_SCOPE])
             if (rest.isNotEmpty()) {
                 // Desktop's sidebar labels the non-PA block, and only when PAs are also listed —
                 // a lone "IN PROGRESS" header over the whole flat list is noise. Android's flat
                 // list never drew one, so it does not gain one here.
-                if (pas.isNotEmpty() && mode == SessionListMode.Workspaces) {
-                    item(key = "flat:h:in_progress") { SectionLabel("IN PROGRESS") }
-                }
                     itemsIndexed(rest, key = { _, w -> "ws:${w.id}" }) { index, w ->
                     WorkspaceEntry(
                         w = w, scopeKey = WORKSPACE_FLAT_SCOPE, grouped = false,
@@ -879,14 +944,12 @@ fun SessionListScreen(
                 val label = g.projectRef()?.project?.name ?: g.label.trimEnd('/').substringAfterLast('/')
                 g.workspaces.map { it to label }
             }
+            // One "Active" section for working and unread alike, in list order: a session that
+            // finishes (working -> unread) stays put instead of hopping between two sections.
             fun isWorking(w: WorkspaceDto) = workspaceActivity(w, agentTyped) == WorkspaceActivity.WORKING
-            val sections = listOf(
-                Triple("Ready for you", false, all.filter { (w, _) -> !isWorking(w) && workspaceUnread(w) }),
-                Triple("Working", true, all.filter { (w, _) -> isWorking(w) }),
-            )
-            for ((title, accent, rows) in sections) {
-                if (rows.isEmpty()) continue
-                item(key = "inbox:h:$title") { StatusSectionLabel(title, rows.size, accent) }
+            val rows = all.filter { (w, _) -> isWorking(w) || workspaceUnread(w) }
+            if (rows.isNotEmpty()) {
+                item(key = "inbox:h:active") { StatusSectionLabel("Active", rows.size, accent = true) }
                 itemsIndexed(rows, key = { _, r -> "ws:${r.first.id}" }) { index, (w, label) ->
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
@@ -899,6 +962,7 @@ fun SessionListScreen(
             item(key = "inbox:h:rest") { StatusSectionLabel("Everything else", null) }
         }
         groups.forEach { g ->
+            if (g.key == PA_GROUP_KEY) return@forEach
             val isCollapsed = collapsedPaths.contains(g.key)
             val canDrag = g.key != PA_GROUP_KEY
             val ordered = applyWorkspaceWorkingOrder(
@@ -1006,14 +1070,14 @@ fun SessionListScreen(
             // messages must not reshuffle.
             val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
             if (pas.isNotEmpty()) {
-                item(key = "flat:pa_hdr") { SectionLabel("PERSONAL ASSISTANTS") }
+                item(key = "flat:pa_hdr") { SectionLabel("AGENTS") }
                 items(pas, key = { "flat:pa:${it.id}" }) { s ->
                     SessionRow(
                         s = s,
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1049,7 +1113,7 @@ fun SessionListScreen(
                                 active = s.id == activeId,
                                 preview = lastBySession[s.id],
                                 lastReadAt = lastRead[s.id],
-                                working = agentState[s.id]?.working == true,
+                                working = agentState[s.id]?.busy == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1077,7 +1141,7 @@ fun SessionListScreen(
                                 active = s.id == activeId,
                                 preview = lastBySession[s.id],
                                 lastReadAt = lastRead[s.id],
-                                working = agentState[s.id]?.working == true,
+                                working = agentState[s.id]?.busy == true,
                                 bgOpen = agentState[s.id]?.bgOpen ?: 0,
                                 runningAgents = runningAgents[s.id] ?: 0,
                                 host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1142,7 +1206,7 @@ fun SessionListScreen(
                         active = isActive,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1167,7 +1231,7 @@ fun SessionListScreen(
                             active = isActive,
                             preview = lastBySession[s.id],
                             lastReadAt = lastRead[s.id],
-                            working = agentState[s.id]?.working == true,
+                            working = agentState[s.id]?.busy == true,
                             bgOpen = agentState[s.id]?.bgOpen ?: 0,
                             runningAgents = runningAgents[s.id] ?: 0,
                             host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1422,7 +1486,7 @@ fun SessionListScreen(
                         active = s.id == activeId,
                         preview = lastBySession[s.id],
                         lastReadAt = lastRead[s.id],
-                        working = agentState[s.id]?.working == true,
+                        working = agentState[s.id]?.busy == true,
                         bgOpen = agentState[s.id]?.bgOpen ?: 0,
                         runningAgents = runningAgents[s.id] ?: 0,
                         host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
@@ -1478,6 +1542,27 @@ fun SessionListScreen(
             Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
         }
     }
+    // Agents are always on, so they get their own zone at the very top — above the new-session
+    // card and the Workspaces header, outside the scrolling list on wide hosts so they never
+    // scroll away. They are not a project and never get a project header.
+    val agentWorkspaces = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
+    val agentsZone: @Composable () -> Unit = {
+        // With Agent actions the zone always shows: its "+" creates the first Agent and its
+        // Archived fold brings one back even when none is live.
+        // Hidden while selecting, so that bar sits at the top of the list. (Search instead scrolls
+        // the zone out of view — see openedSearchFrom — so no row is re-placed under it.)
+        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
+            AgentsBlock(
+                agents = agentWorkspaces.map(::agentEntry),
+                onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
+                contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
+                onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
+                archiveActions = agentsActions,
+                archived = archivedAgents,
+                avatars = agentAvatars,
+            )
+        }
+    }
     val newSessionCard: @Composable () -> Unit = {
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
     }
@@ -1507,10 +1592,10 @@ fun SessionListScreen(
             )
         } else AnimatedContent(
             targetState = searchOpen,
-            // The field slides in from the icon's side and the header back from the other.
+            // A plain crossfade: the list itself glides the header to the top (or back) at the same
+            // time, so a sideways slide on top of that read as two motions fighting.
             transitionSpec = {
-                (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { w -> if (targetState) w / 8 else -w / 8 }) togetherWith
-                    fadeOut(tween(90)) using SizeTransform(clip = false)
+                fadeIn(tween(200, delayMillis = 60)) togetherWith fadeOut(tween(120)) using SizeTransform(clip = false)
             },
             label = "sidebar_search",
         ) { open ->
@@ -1567,12 +1652,24 @@ fun SessionListScreen(
         if (scrollingChrome) {
             if (chrome) item(key = "chrome:logo") { logoBar() }
             item(key = "chrome:new_session") { newSessionCard() }
+            // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
+            item(key = "chrome:agents") { agentsZone() }
+            stickyHeader(key = "chrome:section") {
+                Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
+            }
+        } else {
+            // Wide hosts: the Agents scroll with the list, and the Workspaces header pins once
+            // they have scrolled away (search, select and the menu stay reachable).
+            item(key = "chrome:agents") { agentsZone() }
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
         }
         if (searching) searchBody() else body()
+        // While search is open the field stays at the top whatever the results: a viewport-tall
+        // tail keeps the list scrollable that far even when the matches are few (or none).
+        if (searchOpen) item(key = "search:keep-top") { Spacer(Modifier.fillParentMaxHeight()) }
     }
 
     // Run the list's own DSL through a key recorder: item index of every unread row, including rows
@@ -1580,11 +1677,39 @@ fun SessionListScreen(
     val listKeys = LazyKeyRecorder().apply { content() }.keys
     val unreadRows = listKeys
         .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // Opening search brings its field to the top: the list scrolls until the (sticky) section
+    // header pins, the Agents scrolling out of view above it; closing returns to where it was.
+    // Scrolling, not hiding the Agents: removing ~250 dp above the rows re-placed every row
+    // through animateItem() and they slid off ("drifting away").
+    // How far the list glided up for the open search (px), so closing glides back the same way.
+    var searchGlide by remember { mutableStateOf(0f) }
+    LaunchedEffect(searchOpen) {
+        val glide = tween<Float>(320, easing = FastOutSlowInEasing)
+        if (searchOpen) {
+            val header = listKeys.indexOf("chrome:section")
+            if (header > 0 && listState.firstVisibleItemIndex < header) {
+                // Just after the field has taken focus: its bring-into-view scroll would otherwise
+                // land after ours and push the first group under the pinned header.
+                delay(60)
+                val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "chrome:section" }
+                if (info != null) {
+                    // One smooth glide up by the header's distance from the top (the header itself
+                    // crossfades into the field meanwhile).
+                    searchGlide = listState.animateScrollBy(info.offset.toFloat(), glide)
+                } else {
+                    listState.animateScrollToItem(header)
+                }
+            }
+        } else if (searchGlide != 0f) {
+            listState.animateScrollBy(-searchGlide, glide)
+            searchGlide = 0f
+        }
+    }
     // A new query reads from the top: the field, then its best matches right under it.
     LaunchedEffect(searchQ) {
         searchCursor = 0
         if (!searchOpen) return@LaunchedEffect
-        val header = if (scrollingChrome) listKeys.indexOf("chrome:section").coerceAtLeast(0) else 0
+        val header = listKeys.indexOf("chrome:section").coerceAtLeast(0)
         if (listState.firstVisibleItemIndex > header) listState.scrollToItem(header)
     }
     // The ↑/↓ cursor stays on screen: a row it lands on outside the viewport is scrolled to.
@@ -1642,7 +1767,6 @@ fun SessionListScreen(
             if (chrome) logoBar()
             newSessionCard()
             aboveList()
-            sectionHeader()
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
@@ -1671,6 +1795,15 @@ fun SessionListScreen(
 
 
     // ── Dialogs ───────────────────────────────────────────────────────────────────────────────
+    agentsActions?.let { a ->
+        when (val d = agentDialog) {
+            AgentDialog.Create -> CreateAgentDialog(actions = a, onDismiss = { agentDialog = null }, onCreated = { agentDialog = null })
+            is AgentDialog.Rename -> RenameAgentDialog(d.id, d.name, a.rename, onDismiss = { agentDialog = null })
+            is AgentDialog.Character -> ChangeCharacterDialog(d.id, d.name, agentAvatars[d.id], a.setAvatar, onDismiss = { agentDialog = null })
+            is AgentDialog.Archive -> ArchiveAgentDialog(d.id, d.name, a.kill, onDismiss = { agentDialog = null })
+            null -> {}
+        }
+    }
     if (batchArchiveOpen) {
         val ids = batchArchiveIds(visibleWorkspaces, selectedWorkspaceIds, paWorkspaceIds)
         val skippedPa = selectedWorkspaceIds.count { it in paWorkspaceIds }
@@ -1680,8 +1813,8 @@ fun SessionListScreen(
             text = {
                 Text(
                     buildString {
-                        append("This archives the selected workspaces and ends their agents. Worktrees are kept. This can't be undone.")
-                        if (skippedPa > 0) append("\n\nPersonal assistants are skipped.")
+                        append("This archives the selected workspaces and stops their sessions. Worktrees are kept. This can't be undone.")
+                        if (skippedPa > 0) append("\n\nAgents are skipped.")
                     },
                 )
             },
@@ -1743,7 +1876,7 @@ fun SessionListScreen(
             title = { Text("Archive workspace?") },
             text = {
                 Column {
-                    Text("This archives \"${target.name}\" and ends its agents. This can't be undone.")
+                    Text("This archives \"${target.name}\" and stops its sessions. This can't be undone.")
                     WorktreeCleanupSection(
                         workdirs, sessionIds.toSet(), { wd -> actions.worktreeForWorkspaceWorkdir(target.id, wd) },
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
@@ -2165,15 +2298,18 @@ private fun OverflowNav(
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
+        // Compact like the header's other buttons (search, select, grouping); thumb-sized on touch,
+        // matching the Agents "+" so the two stay in one column.
+        val touch = !LocalPointerAvailable.current
         IconButton(
             onClick = { onExpandedChange(true) },
-            modifier = Modifier.testTag("list_overflow"),
+            modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("list_overflow"),
         ) {
             Icon(
                 imageVector = Icons.Filled.MoreVert,
                 contentDescription = "Actions",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(if (touch) 19.dp else 16.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
@@ -2306,3 +2442,11 @@ private fun collapsedGroupOfHeader(key: String): String? =
 
 private val UNREAD_SESSION_KEY_PREFIXES =
     listOf("flat:pa:", "flat:", "task:", "group:pa:", "group:settled:", "f:draft:")
+
+/** Which sidebar Agent dialog is open (ids are the Agent's session id). */
+private sealed interface AgentDialog {
+    data object Create : AgentDialog
+    data class Rename(val id: String, val name: String) : AgentDialog
+    data class Character(val id: String, val name: String) : AgentDialog
+    data class Archive(val id: String, val name: String) : AgentDialog
+}

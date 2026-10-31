@@ -29,6 +29,16 @@ export interface Message {
   error?: boolean
   /** Set on the user's line to a subagent ("↪ to <subagent>: <text>"): which subagent it went to. */
   subagent_id?: string
+  /** Set on an inbox message delivered to this session: the sending session's id. */
+  from_session_id?: string
+  /** The sender's display name when it sent the message (kept in the inbox file): a session's name, "supermux", or a council's name. */
+  from_session_name?: string
+  /** The sending session's agent kind, when the sender is a session. */
+  from_agent?: string
+  /** A council's forwarded report in the caller's log (spec §5.1): which council, round and member letter. */
+  council_id?: string
+  council_round?: number
+  council_letter?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -57,8 +67,8 @@ export class MessageStore {
 
   append(sessionId: string, entry: Message): void {
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -74,6 +84,12 @@ export class MessageStore {
       entry.reactions ? JSON.stringify(entry.reactions) : null,
       entry.error ? 1 : 0,
       entry.subagent_id ?? null,
+      entry.from_session_id ?? null,
+      entry.from_session_name ?? null,
+      entry.from_agent ?? null,
+      entry.council_id ?? null,
+      entry.council_round ?? null,
+      entry.council_letter ?? null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -105,6 +121,18 @@ export class MessageStore {
       ) ORDER BY ts ASC, _rowid ASC
     `).all(sessionId, limit) as any[]
     return rows.map(rowToMessage)
+  }
+
+  /** The session's newest assistant reply text: not an error, not blank (a delegated child's last message, spec §3). */
+  lastReply(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT text FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { text: string } | null
+    return row?.text
   }
 
   update(sessionId: string, entry_id: string, patch: { text?: string; edited_at?: string }): boolean {
@@ -184,6 +212,26 @@ export class MessageStore {
     return rows.map((r) => r.session_id)
   }
 
+  /** ISO timestamp of the newest reply lastReply() would return, if any. */
+  lastReplyAt(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT ts FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
+  /** ISO timestamp of the newest message the user sent the session (web, telegram), if any. */
+  lastUserInbound(sessionId: string): string | undefined {
+    const row = this.db.prepare(
+      "SELECT ts FROM messages WHERE session_id = ? AND direction = 'inbound' AND channel IN ('web', 'telegram') ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
   /** ISO timestamp of the newest message in a session, or null if it has none. */
   newestTs(sessionId: string): string | null {
     const row = this.db.prepare(
@@ -208,5 +256,11 @@ function rowToMessage(row: any): Message {
     reactions: row.reactions ? JSON.parse(row.reactions) : undefined,
     error: row.error ? true : undefined,
     subagent_id: row.subagent_id ?? undefined,
+    from_session_id: row.from_session_id ?? undefined,
+    from_session_name: row.from_session_name ?? undefined,
+    from_agent: row.from_agent ?? undefined,
+    council_id: row.council_id ?? undefined,
+    council_round: row.council_round ?? undefined,
+    council_letter: row.council_letter ?? undefined,
   }
 }

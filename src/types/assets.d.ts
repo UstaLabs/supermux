@@ -15,11 +15,6 @@ declare module "*/terminal/pty-helper" {
   export default path
 }
 
-declare module "*/relay/frpc-embedded" {
-  const path: string
-  export default path
-}
-
 // The zmx bundle's three committed slots (the patched daemon, the framed broker
 // helper, and their manifest), filled by scripts/build-binary.sh before the
 // compile and restored after it. All three are extension-LESS on purpose: the
@@ -68,6 +63,8 @@ declare module "*.mjs" { const path: string; export default path }
 // The native editor's grammar tables (assets/editor-syntax/tables/<digest>/*.sesz, fetched by
 // name by the syntax module; served as application/octet-stream).
 declare module "*.sesz" { const path: string; export default path }
+// The dictation stream's speech models (src/core/transcription/stream/models/).
+declare module "*.onnx" { const path: string; export default path }
 
 // The wasm bundle's composeResources emit platform fonts and misc text/xml
 // resources alongside the app's static assets.

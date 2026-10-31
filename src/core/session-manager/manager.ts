@@ -1,4 +1,6 @@
 import { RuntimeRegistry, type SessionRuntime } from "./runtime"
+import { readFileSync } from "fs"
+import { AVATAR_EXAMPLE, AVATAR_FORMAT_DOC, avatarRev, checkAvatar, writeAvatar, writeAvatarPreview } from "../agents/avatar"
 import { deliverInbound, type InboundDeliveryResult } from "./inbound-delivery"
 import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
@@ -13,24 +15,27 @@ import { clampSessionReasoningLevel } from "../models/session-agent-settings"
 import { supportedReasoningLevels } from "../models/reasoning-levels"
 import { supportsFastMode } from "../models/fast-mode"
 import type { ModelInfo } from "../models/discovery"
+import { listModels, type AgentReadiness, type ModelGate } from "../models/list-models"
 import { claudeSessionHome } from "../agents/claude/core-host"
 import { ensureUnique, resolveSelfRename } from "./naming"
 import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { isPermissionMode } from "../agents/permission-modes"
+import { isPermissionMode, isUnattendedMode, resolvePermissionMode, unattendedModesFor } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
+import { checkSessionRename, createAgentFromTool, type CreateAgentDeps } from "./create-agent"
 
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
 import { INBOX_DIR } from "../../shared/paths"
 import type { RegisterReply, OpResult } from "./socket-server"
 import type { RegisterFrame, OutboundFrame, OrchestrationFrame, ToolOperation } from "../../shared/socket-frames"
+import { shimTools } from "../../shim/tools"
 import type { Channel, OutboundAction } from "../../channels/channel"
 import type { FileStore } from "../files/store"
 import type { Db } from "../storage/db"
@@ -50,12 +55,15 @@ import { computeWorkdirDiff } from "../editor/workdir-diff"
 import type { ReviewStore } from "../review/store"
 import type { WalkthroughStore } from "../walkthrough/store"
 import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthrough/author"
+import { letterAt } from "../council/letters"
+import { agentChoices, effortError, type AgentChoices } from "../models/agent-choices"
 
 const log = makeLogger("session-manager")
 
-const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 /** How long a settled orchestration call's result is shared with identical calls. */
 export const ORCH_DEDUP_MS = 10_000
+/** Why the session tools refuse a draft (a launcher chat nothing has been sent in): its id is temporary too. */
+const DRAFT_HAS_NO_AGENT = "a draft has no agent until its first message is sent"
 
 /**
  * Narrow ports into the rest of the broker. Injected ONCE at construction —
@@ -69,6 +77,10 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
+  /** `let inboxDelivery` in main.ts is assigned after construction — deref lazily, never capture. */
+  getInbox?: () => {
+    send(from: { name: string; id: string }, to: string[], text: string, busy: "queue" | "interrupt"): { ids: Record<string, string> }
+  } | undefined
   /** Collaborators of the deliver() funnel. */
   inbound: {
     /** Fired after a successful hand-off (incl. an idempotent re-send) so the
@@ -79,6 +91,8 @@ export type SessionManagerPorts = {
      *  system-generated turns). The broker records it as the session's reply
      *  destination — the agent never names one. */
     onTarget?: (sessionId: string, chat_id?: string) => void
+    /** Fired when a turn's input is handed to the adapter (not for a deduped retry or a missing adapter). */
+    onAccepted?: (sessionId: string, meta: any, how: { steered: boolean }) => void
   }
   /** Claude's persistent-terminal runtime (tmux window addressing). */
   backend: {
@@ -100,22 +114,38 @@ export type SessionManagerPorts = {
 
     /** gitStatusService.sync over the current visible-session set. */
     syncGitStatus(): void
+    /** Forget the chat the session last answered (replyTargets). */
+    forgetReplyTarget(sessionId: string): void
+    /** main.ts archiveWorkspaceIfEmpty: retire a workspace once nothing live is left in it. */
+    retireWorkspaceIfEmpty(workspaceId: string): void
+  }
+  /** Delegated children (spec §3): main.ts's DelegatedChildren hears a child's archive. */
+  children: {
+    archived(session: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void
+  }
+  /** Council membership (spec §5): a member gets council_report, and list_sessions shows its council. */
+  councils: {
+    isMember(sessionId: string): boolean
+    membership(sessionId: string): { councilId: string; letter: string } | undefined
   }
   /** Display streams: teardown on kill AND the start/stop/get orchestration ops. */
   displays: Pick<DisplayManager, "killAllForSession" | "start" | "get" | "stop">
   agentState: Pick<AgentStateStore, "applyEvent" | "clear" | "get">
   bgTasks: Pick<BackgroundTaskStore, "clear">
   commands: Pick<CommandRegistry, "remove" | "refresh">
-  /** Model/effort switching (applyConfig): the model cache lives in main.ts. */
+  /** Model cache, agent detection and model gates (applyConfig, list_models); they live in main.ts. */
   config: {
     lookupModels(agent: AgentKind): ModelInfo[]
+    /** Install and sign-in state of every agent kind (the data behind GET /agents/status). */
+    agentStatuses(): AgentReadiness[]
+    /** Per-model gates where the agent reports them (Codex usage); [] for the others. */
+    modelGates(agent: AgentKind): ModelGate[]
   }
   /** Register/attach-path collaborators. */
   register: {
     interruptClaudePane(sessionId: string): Promise<void>
     notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void>
     ensureClaudeTailer(sessionUuid: string, name: string, workdir: string, seekToEnd?: boolean): void
-    maybeAutoSendSoulSetup(sessionId: string): Promise<void>
   }
   /** Outbound delivery (shim reply/react/edit ops). */
   outbound: {
@@ -130,8 +160,9 @@ export type SessionManagerPorts = {
     /** Boot-time constant: telegram token/getFile when telegram is configured. */
     telegramApi: DownloadableApi | undefined
   }
-  /** Orchestration-op collaborators that stay in main.ts (spawn moves in with PR 3). */
+  /** Orchestration-op collaborators that stay in main.ts. */
   orchestration: {
+    /** spawn_session: the app's create path (workspace and frames included). */
     spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind }): Promise<SpawnResult>
     refreshTelegramMenu(): Promise<void>
     wsDto(id: string): WorkspaceDto | undefined
@@ -140,6 +171,20 @@ export type SessionManagerPorts = {
     proxyLiveness: { getStatus(domain: string): ProxyStatus; refresh(): Promise<void> }
     /** Broker-authored chat card (walkthrough ready, etc.). */
     postBrokerInbound(sessionId: string, text: string): void
+    /** The one Agent create path's deps (create_agent tool). */
+    createAgentDeps(): CreateAgentDeps
+    /** set_avatar saved a new avatar for this Agent: tell the clients. */
+    agentAvatarChanged?(agentId: string): void
+    /** delegate (spec §3): start a child session for parentId and hand it the task. */
+    delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
+    /** council (spec §5): start the members and send them the question. */
+    council(args: { callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree"; callId?: string }): Promise<{ council: string; name: string; note?: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>
+    councilRound(args: { callerId: string; council: string; focus: string }): Promise<{ round: number }>
+    /** council_add / council_remove / council_end (design 2026-10-31 §2): the caller runs its council. */
+    councilAdd(args: { callerId: string; council: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree" }): Promise<{ added: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>
+    councilRemove(args: { callerId: string; council: string; letters: string[] }): Promise<{ removed: string[] }>
+    councilEnd(args: { callerId: string; council: string; verdict: string }): Promise<{ ended: true }>
+    councilReport(args: { memberId: string; text: string }): Promise<{ id: string }>
   }
   stores: {
     fileStore: FileStore
@@ -197,19 +242,36 @@ export class SessionManager {
   private readonly orchInflight = new Map<string, Promise<OpResult>>()
   /** resumeAtBoot's cap per session (env MUX_BOOT_RESUME_TIMEOUT_MS; tests set it directly). */
   bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
+  /** resumeAtBoot's resumes until they settle (a timed-out one keeps running without an adapter). */
+  private readonly bootResumes = new Map<string, Promise<void>>()
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
     this.ports = ports
   }
 
+  /** True while resumeAtBoot's resume of this session has not settled: it owns the session, so
+   *  nothing else may start a second runtime for it (the supervisor skips it). */
+  bootResumeInFlight(sessionId: string): boolean {
+    return this.bootResumes.has(sessionId)
+  }
+
   adapterFor(sessionId: string): AgentAdapter | undefined {
     return this.runtimes.get(sessionId)?.adapter
   }
 
+  /** list_sessions' state (spec §4): suspended, crashed, working or idle. */
+  private sessionState(s: Session): "working" | "idle" | "suspended" | "crashed" {
+    if (s.status === "suspended") return "suspended"
+    const phase = this.ports.agentState.get(s.id).phase
+    const adapter = this.adapterFor(s.id)
+    if (phase === "dead" || (adapter instanceof CoreAdapter && !adapter.isAlive())) return "crashed"
+    return phase === "thinking" || phase === "running" ? "working" : "idle"
+  }
+
   /**
    * THE one inbound door: adapter.send() for every agent (all run through supermux-core). Every
-   * broker-side sender (channels, curator, soul-setup, agent-rpc, reviews) must call this.
+   * broker-side sender (channels, curator, agent-rpc, reviews) must call this.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
     // Record where this session is talking, for the reply that comes back. This
@@ -220,6 +282,7 @@ export class SessionManager {
       getAdapter: (id) => this.runtimes.get(id)?.adapter,
       seen: this.recentInbound,
       onDelivered: (id) => this.ports.inbound.onDelivered?.(id),
+      onAccepted: (id, m, how) => this.ports.inbound.onAccepted?.(id, m, how),
     }, sessionId, text, meta)
   }
 
@@ -293,9 +356,30 @@ export class SessionManager {
     this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter })
   }
 
+  /**
+   * Kill a session: stop its agent and close its terminals, displays and proxies. Every kill path
+   * ends here (the app's kill and archive, workspace archive, Finish, /kill, the curator,
+   * kill_session), so this is where killing a parent kills its children (spec §4): each child, its
+   * own children first, is killed and archived before the session itself is touched. The session
+   * itself is archived by the caller, as before.
+   */
   async kill(id: string): Promise<void> {
+    await this.killTree(id, new Set())
+  }
+
+  private async killTree(id: string, seen: Set<string>): Promise<void> {
+    // A parent link is set once, at creation, to a session that already exists, so the tree has
+    // no cycles; `seen` keeps a hand-edited database from looping forever anyway.
+    seen.add(id)
     const s = this.registry.get(id)
     if (!s) return
+
+    for (const child of this.registry.childrenOf(s.id)) {
+      if (seen.has(child.id)) continue
+      await this.killTree(child.id, seen)
+      this.unregister(child.id, { cascade: true })
+      this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: child.id })
+    }
 
     // A draft is a cached session row with no process, no tmux window, and no
     // proxies. Deleting it must DISCARD (hard-delete) the row — never archive it
@@ -319,33 +403,15 @@ export class SessionManager {
       }
     }
 
-    if (s.agent === "claude" && s.core) {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Claude) await runtime.adapter.stop()
-    } else if (s.agent === "claude") {
+    if (s.agent === AgentKind.Claude && !s.core) {
       const wid = await this.ports.backend.runtimeTargetIdOf(s)
       if (wid) await this.ports.backend.kill(wid)
       else log.warn("kill_session_no_runtime_target", { name: displayName })
-    } else if (s.agent === "codex") {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Codex) {
-        if (runtime.handle) runtime.handle.kill()
-        else await runtime.adapter.stop()
-      }
-    } else if (s.agent === AgentKind.Cursor) {
-      // No persistent process or tmux pane to kill.
-    } else if (s.agent === "opencode") {
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.OpenCode) await runtime.adapter.stop()
-    } else if (s.agent === AgentKind.Grok) {
-      // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
-      // Must finish before deleting the runtime / archiving / reclaiming the worktree.
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Grok) await runtime.adapter.stop()
-    } else if (s.agent === AgentKind.Antigravity) {
-      // The agy child is owned by the adapter, so stop() is the kill.
-      const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Antigravity) await runtime.adapter.stop()
+    } else {
+      // Every other session (Cursor and Codex included) runs through a core adapter that owns its
+      // agent process, so stop() is the kill. It must finish before the runtime is dropped, the
+      // session archived or its worktree reclaimed.
+      await this.runtimes.get(s.id)?.adapter.stop()
     }
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -357,10 +423,11 @@ export class SessionManager {
     // can be shared (Continue-in-new-conversation) and can hold git-ignored work.
   }
 
-  unregister(id: string): void {
+  unregister(id: string, how: { cascade?: boolean; endedBy?: "parent" | "client" } = {}): void {
     const s = this.registry.get(id)
     this.registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
     if (s) this.deleteRuntime(s.id)
+    this.ports.cleanup.forgetReplyTarget(id)
     this.ports.commands.remove(id)
     this.ports.agentState.clear(id)  // drop any lingering working/dead state for the now-archived session
     this.ports.bgTasks.clear(id)      // archived sessions cannot be "waiting"
@@ -369,6 +436,29 @@ export class SessionManager {
     // survive. Truly orphaned dirs (no registry entry) are reclaimed by the
     // startup orphan-GC instead.
     this.ports.cleanup.syncGitStatus()  // release fs-watch for the now-archived session
+    if (s?.parent_session_id) this.ports.children.archived(s, how)
+  }
+
+  /**
+   * The app's kill (DELETE /sessions/:id), also used by kill_session and /kill (spec §4): kill (its
+   * children included, see kill()), archive, refresh the Telegram menu, tell the clients, and retire
+   * the session's workspace once nothing live is left in it. A workspace with a terminal, editor or
+   * display view survives: closing the last chat does not close the workspace.
+   * `how.endedBy` is who ended a delegated child: you ("client") or its parent.
+   */
+  async killAndArchive(id: string, how: { endedBy?: "parent" | "client" } = {}): Promise<void> {
+    const s = this.registry.get(id)
+    if (!s) throw new Error("session not found")
+    // SessionRecord carries no workspace_id (the column exists, the type does not): read it
+    // straight from the row before the session goes.
+    const workspaceId = (this.registry.db
+      .query("SELECT workspace_id FROM sessions WHERE id = ?")
+      .get(s.id) as { workspace_id?: string | null } | null)?.workspace_id
+    await this.kill(s.id)
+    this.unregister(s.id, how)
+    await this.ports.orchestration.refreshTelegramMenu()
+    this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: s.id })
+    if (workspaceId) this.ports.cleanup.retireWorkspaceIfEmpty(workspaceId)
   }
 
   async handleRegister(msg: RegisterFrame & { session_id: string }): Promise<RegisterReply> {
@@ -383,6 +473,11 @@ export class SessionManager {
     const existing = this.registry.get(sessionUuid)
     if (existing) {
       log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid, core: existing.core })
+      // The shim serves this broker's tool list, not its own build's: after a restart or an update
+      // it tells the agent when the list changed (src/shim/index.ts).
+      const councilMember = this.ports.councils.isMember(sessionUuid)
+      const tools = shimTools(msg.server, { councilMember, choices: agentChoices((kind) => this.ports.config.lookupModels(kind)) })
+      const reply: RegisterReply = { name: existing.name, session_id: sessionUuid, ...(councilMember ? { council_member: true } : {}), ...(tools ? { tools } : {}) }
       if (existing.core) {
         if (agentSessionId && !existing.agent_session_id) {
           this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
@@ -390,7 +485,7 @@ export class SessionManager {
         if (existing.status === "suspended" && typeof msg.pid === "number") {
           this.registry.sessions.activate(sessionUuid, msg.pid)
         }
-        return { name: existing.name, session_id: sessionUuid }
+        return reply
       }
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
@@ -399,10 +494,7 @@ export class SessionManager {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
       void this.ports.commands.refresh(existing.name)
-      if (existing.role === "personal_assistant" && existing.is_default) {
-        setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-      }
-      return { name: existing.name, session_id: sessionUuid }
+      return reply
     }
 
     // No row → nothing to attach to. The spawn path creates every legitimate
@@ -556,29 +648,26 @@ export class SessionManager {
   private async runOrchestration(fromSession: string, op: ToolOperation): Promise<OpResult> {
     // Permission check — fromSession is UUID
     const s = this.registry.get(fromSession)  // Look up by UUID
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
+    // The ops listed here are open to every session. Any other op needs can_orchestrate, which
+    // personal assistants have: today that leaves mute_session, set_active and get_active (spec §4).
+    // A new tool meant for every session must be added here.
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment", "message_session", "list_models", "spawn_session", "kill_session", "list_sessions", "delegate", "council", "council_round", "council_add", "council_remove", "council_end", "council_report", "preview_avatar", "set_avatar"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
     try {
     switch (op.name) {
       case "spawn_session":  {
+        if (!s) return { ok: false, error: "unknown session" }
         try {
           const requestedAgent = op.args.agent
           if (requestedAgent != null && !isAgentKind(requestedAgent)) {
             return { ok: false, error: `unknown agent kind: ${String(requestedAgent)}` }
           }
           const agent = requestedAgent ?? undefined
+          // The app's create path (main.ts createSessionWithWorkspace): the workspace, its frame,
+          // the full session_added and the Telegram menu all happen there.
           const r = await this.ports.orchestration.spawnSession({ workdir: stringArg(op.args, "workdir"), requestedName: optionalStringArg(op.args, "name"), agent })
-          await this.ports.orchestration.refreshTelegramMenu()
-          // Notify web clients so the session list updates immediately.
-          const entry = this.registry.get(r.session_id)
-          if (entry) {
-            this.ports.getWebChannel()?.broadcastToAll({
-              type: "session_added",
-              session: { id: entry.id, name: entry.name, workdir: entry.workdir, mute: !!entry.mute, connected: true, agent: entry.agent, model: entry.model, repo_root: entry.repo_root || undefined, session_branch: entry.session_branch || undefined, finish_job: entry.finish_job, user_status: entry.user_status, sort_order: entry.sort_order, draft_payload: entry.draft_payload },
-            })
-          }
           // Auto-bind the requesting chat to the new session if the
           // caller included a chat_id.  Claude sessions register
           // asynchronously via socket, so poll until the session
@@ -602,15 +691,28 @@ export class SessionManager {
           return { ok: false, error: String(err?.message ?? err) }
         }
       }
-      case "kill_session": {
-        const name = stringArg(op.args, "name")
-        const killed = this.registry.resolveName(name)
-        if (killed) {
-          await this.kill(killed.id)
-          this.unregister(killed.id)
-          await this.ports.orchestration.refreshTelegramMenu()
-          this.ports.getWebChannel()?.broadcastToAll({ type: "session_removed", id: killed.id })
+      case "message_session": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const inbox = this.ports.getInbox?.()
+        if (!inbox) return { ok: false, error: "inbox is not ready" }
+        const to = op.args.to
+        if (!Array.isArray(to) || to.length === 0 || to.some((x) => typeof x !== "string" || x.length === 0)) {
+          return { ok: false, error: "to must be a non-empty array of session ids" }
         }
+        if (typeof op.args.interrupt !== "boolean") return { ok: false, error: "interrupt must be true or false" }
+        const drafts = (to as string[]).filter((id) => { const r = this.registry.get(id); return !!r && isDraftSession(r) })
+        if (drafts.length) return { ok: false, error: `draft session id: ${drafts.join(", ")} (${DRAFT_HAS_NO_AGENT})` }
+        const text = stringArg(op.args, "text")
+        return { ok: true, value: inbox.send({ name: s.name, id: s.id }, to as string[], text, op.args.interrupt ? "interrupt" : "queue") }
+      }
+      case "kill_session": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const id = stringArg(op.args, "id")
+        const target = this.registry.sessions.getById(id)
+        if (!target) return { ok: false, error: `unknown session id: ${id}` }
+        if (target.status === "archived") return { ok: false, error: `session ${id} is already archived` }
+        if (isDraftSession(target)) return { ok: false, error: `session ${id} is a draft (${DRAFT_HAS_NO_AGENT})` }
+        await this.killAndArchive(id, target.parent_session_id === s.id ? { endedBy: "parent" } : {})
         return { ok: true, value: "killed" }
       }
       case "rename_session": {
@@ -618,12 +720,19 @@ export class SessionManager {
         // so no `old` is needed and any session — including can_orchestrate=false
         // workers — can name itself.
         if (!s) return { ok: false, error: "unknown session" }
-        const res = resolveSelfRename(stringArg(op.args, "name"), s.name, this.registry.list().map((x) => x.name), !!s.self_renamed)
+        const isAgent = s.role === "personal_assistant"
+        // A worker names itself once; an Agent is long-lived and may rename itself any time,
+        // under the same name rules as renaming it from the app (checkSessionRename).
+        const res = resolveSelfRename(stringArg(op.args, "name"), s.name, this.registry.list().map((x) => x.name), !isAgent && !!s.self_renamed)
         if (!res.ok) return { ok: false, error: res.error }
+        if (isAgent && res.name !== s.name) {
+          const check = checkSessionRename(s, res.name, () => new Set(this.registry.list().map((x) => x.name)))
+          if (!check.ok) return { ok: false, error: check.error }
+        }
         const oldName = s.name
         if (res.name !== oldName) {
           this.registry.rename(s.id, res.name)
-          this.registry.markSelfRenamed(s.id)
+          if (!isAgent) this.registry.markSelfRenamed(s.id)
           await this.ports.orchestration.refreshTelegramMenu()
           this.ports.getWebChannel()?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: res.name })
           // Spec §9.5: the workspace name follows its primary session, and an
@@ -648,14 +757,168 @@ export class SessionManager {
         this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: muted.id, mute: mutedValue })
         return { ok: true, value: "ok" }
       }
-      case "list_sessions":  { return { ok: true, value: this.registry.listVisible().map((s: any) => ({ name: s.name, workdir: s.workdir, mute: s.mute })) } }
+      case "list_sessions": {
+        if (!s) return { ok: false, error: "unknown session" }
+        // Children included (spec §4): this is the agents' list, not a client one.
+        const sessions = this.registry.list().filter((x) => !x.internal && !isDraftSession(x))
+        return {
+          ok: true,
+          value: sessions.map((x) => {
+            const m = this.ports.councils.membership(x.id)
+            return {
+              id: x.id,
+              name: x.name,
+              agent: x.agent,
+              model: x.model ?? null,
+              workdir: x.workdir,
+              mute: x.mute,
+              state: this.sessionState(x),
+              ...(x.parent_session_id ? { parent: x.parent_session_id } : {}),
+              ...(m ? { council: { id: m.councilId, letter: m.letter } } : {}),
+              children: sessions.filter((c) => c.parent_session_id === x.id).map((c) => c.id),
+            }
+          }),
+        }
+      }
+      case "list_models": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const agent = op.args.agent
+        if (agent !== undefined && !isAgentKind(agent)) return { ok: false, error: `unknown agent kind: ${String(agent)}` }
+        return {
+          ok: true,
+          value: listModels({
+            you: { agent: s.agent, model: s.model ?? null, effort: this.ports.resume.sessionEffort(s) ?? null, access: resolvePermissionMode(s.agent, s.permissionMode) },
+            agent,
+            statuses: this.ports.config.agentStatuses(),
+            lookupModels: (kind) => this.ports.config.lookupModels(kind),
+            modelGates: (kind) => this.ports.config.modelGates(kind),
+          }),
+        }
+      }
+      case "delegate": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const agent = op.args.agent
+        if (!isAgentKind(agent)) return { ok: false, error: `unknown agent kind: ${String(agent)}` }
+        const access = stringArg(op.args, "access")
+        if (!isUnattendedMode(agent, access)) return { ok: false, error: `access must be one of ${unattendedModesFor(agent).map((m) => m.id).join(", ")} for ${agent} (a hidden session can't wait for a person to approve)` }
+        const badEffort = effortError(agentChoices((kind) => this.ports.config.lookupModels(kind)), agent, optionalStringArg(op.args, "effort"))
+        if (badEffort) return { ok: false, error: badEffort }
+        const checkout = op.args.checkout
+        if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
+        const task = stringArg(op.args, "task")
+        if (!task.trim()) return { ok: false, error: "task must not be empty" }
+        try {
+          return {
+            ok: true,
+            value: await this.ports.orchestration.delegate({
+              parentId: s.id, task, agent, model: optionalStringArg(op.args, "model"), effort: optionalStringArg(op.args, "effort"),
+              access, checkout, title: optionalStringArg(op.args, "title"), callId: op.callId,
+            }),
+          }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const question = stringArg(op.args, "question")
+        if (!question.trim()) return { ok: false, error: "question must not be empty" }
+        const members = councilMembersArg(op.args.members, agentChoices((kind) => this.ports.config.lookupModels(kind)))
+        if ("error" in members) return { ok: false, error: members.error }
+        const checkout = op.args.checkout
+        if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
+        try {
+          return { ok: true, value: await this.ports.orchestration.council({ callerId: s.id, question, members: members.list, checkout, callId: op.callId }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_add": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const members = councilMembersArg(op.args.members, agentChoices((kind) => this.ports.config.lookupModels(kind)))
+        if ("error" in members) return { ok: false, error: members.error }
+        const checkout = op.args.checkout
+        if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilAdd({ callerId: s.id, council: stringArg(op.args, "council"), members: members.list, checkout }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_remove": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const letters = op.args.letters
+        if (!Array.isArray(letters) || letters.length === 0 || letters.some((l) => typeof l !== "string")) return { ok: false, error: "letters must be a non-empty array of member letters" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilRemove({ callerId: s.id, council: stringArg(op.args, "council"), letters: letters as string[] }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_end": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const verdict = stringArg(op.args, "verdict")
+        if (!verdict.trim()) return { ok: false, error: "verdict must not be empty" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilEnd({ callerId: s.id, council: stringArg(op.args, "council"), verdict }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_round": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const council = stringArg(op.args, "council")
+        const focus = stringArg(op.args, "focus")
+        if (!focus.trim()) return { ok: false, error: "focus must not be empty" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilRound({ callerId: s.id, council, focus }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
+      case "council_report": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const text = stringArg(op.args, "text")
+        if (!text.trim()) return { ok: false, error: "text must not be empty" }
+        try {
+          return { ok: true, value: await this.ports.orchestration.councilReport({ memberId: s.id, text }) }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      }
       case "set_active":     { const t = this.registry.resolveName(stringArg(op.args, "name")); if (!t) return { ok: false, error: "no such session" }; this.registry.setActive(stringArg(op.args, "chat_id"), t.id); return { ok: true, value: "ok" } }
       case "get_active":     { return { ok: true, value: this.registry.getActive(stringArg(op.args, "chat_id")) } }
+      // can_orchestrate is checked above; createAgentFromTool additionally requires the Agent role.
+      case "create_agent":   { return await createAgentFromTool(s, op.args, this.ports.orchestration.createAgentDeps()) }
+      case "preview_avatar":
+      case "set_avatar": {
+        const json = optionalStringArg(op.args, "json")
+        const path = optionalStringArg(op.args, "path")
+        if (!json && !path) {
+          if (op.name === "set_avatar") return { ok: false, error: "pass the avatar as json or path" }
+          return { ok: true, value: { format: AVATAR_FORMAT_DOC, example: AVATAR_EXAMPLE } }
+        }
+        let input: string
+        try { input = json ?? readFileSync(path!, "utf8") } catch (e) { return { ok: false, error: `can't read ${path}: ${e instanceof Error ? e.message : String(e)}` } }
+        const check = checkAvatar(input)
+        if (op.name === "set_avatar") {
+          if (s?.role !== "personal_assistant") return { ok: false, error: "only Agents have an avatar; use preview_avatar to design one" }
+          if (!check.ok) return { ok: false, error: `avatar not saved — fix these:\n${check.errors.join("\n")}` }
+          writeAvatar(s.id, check.text!)
+          this.ports.orchestration.agentAvatarChanged?.(s.id)
+        }
+        const preview = check.spec ? writeAvatarPreview(check.spec, s?.id ?? "preview") : undefined
+        return { ok: true, value: {
+          ...(op.name === "set_avatar" ? { saved: true } : { valid: check.ok }),
+          errors: check.errors, warnings: check.warnings, preview, format: AVATAR_FORMAT_DOC,
+        } }
+      }
       case "memory_search": {
         const q = stringArg(op.args, "query")
         const limit = typeof op.args?.limit === "number" ? op.args.limit : 10
-        const includePersonal = s?.role === "personal_assistant"
-        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal, limit }) }
+        // An Agent also searches its own memory (never another Agent's); a worker sees neither personal/ nor agent memory.
+        const isAgent = s?.role === "personal_assistant"
+        return { ok: true, value: this.ports.stores.searchStore.searchKnowledge(q, { includePersonal: isAgent, agentId: isAgent ? s!.id : undefined, limit }) }
       }
       case "find_sessions": {
         const q = stringArg(op.args, "query")
@@ -1363,6 +1626,25 @@ export class SessionManager {
   }
 
   /** Archived → live. */
+  /**
+   * A live session whose workspace is still archived is invisible: the sidebar lists sessions
+   * through their workspaces. Restoring a session on its own (resumeFromArchive — the Agents ▸
+   * Archived fold, a tool) used to leave it like that; this brings the workspace back too and
+   * announces it. True when it did.
+   */
+  reviveArchivedWorkspaceOf(sessionId: string): boolean {
+    const row = this.registry.db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(sessionId) as { workspace_id?: string | null } | null
+    const wsId = row?.workspace_id
+    if (!wsId) return false
+    const ws = this.registry.workspaces.getById(wsId)
+    if (!ws || ws.status !== "archived") return false
+    this.registry.workspaces.unarchive(wsId)
+    const dto = this.ports.orchestration.wsDto(wsId)
+    if (dto) this.ports.getWebChannel()?.broadcastToAll({ type: "workspace_added", workspace: dto })
+    log.info("workspace_revived_with_session", { session_id: sessionId, workspace_id: wsId })
+    return true
+  }
+
   async resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name?: string; error?: string }> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     const session = this.registry.sessions.getById(sessionId) // bypasses archived filter in registry.get()
@@ -1406,28 +1688,38 @@ export class SessionManager {
         return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
       }
 
-      const resumed = this.registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+      const resumed = this.registry.resume(sessionId, name, resumedRuntimePid ?? process.pid)
       if (resumedRuntimeTargetId) this.registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
 
       // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
       const live = resumed ?? this.registry.sessions.getById(sessionId) ?? session
-      this.ports.getWebChannel()?.broadcastToAll({
-        type: "session_added",
-        session: {
-          id: sessionId,
-          name: live.name,
-          workdir: live.workdir,
-          agent: live.agent,
-          status: "active",
-          repo_root: live.repo_root || undefined,
-          session_branch: live.session_branch || undefined,
-          finish_job: live.finish_job,
-          user_status: live.user_status,
-          sort_order: live.sort_order,
-          draft_payload: live.draft_payload,
-        },
-      })
+      // A delegated child is restored hidden (spec §3).
+      if (!live.parent_session_id) {
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "session_added",
+          session: {
+            id: sessionId,
+            name: live.name,
+            workdir: live.workdir,
+            agent: live.agent,
+            status: "active",
+            repo_root: live.repo_root || undefined,
+            session_branch: live.session_branch || undefined,
+            finish_job: live.finish_job,
+            user_status: live.user_status,
+            sort_order: live.sort_order,
+            draft_payload: live.draft_payload,
+            // Same as main.ts sessionAddedPayload: a restored Agent must arrive as an Agent, not a worker.
+            role: live.role,
+            isDefault: live.is_default,
+            // Its character comes back with it (clients fetch GET /agents/<id>/avatar on this hash).
+            avatar: live.role === "personal_assistant" ? avatarRev(sessionId) : undefined,
+          },
+        })
+      }
 
+      // Its workspace comes back with it, or the restored session has nowhere to show.
+      if (!live.parent_session_id) this.reviveArchivedWorkspaceOf(sessionId)
       await this.ports.orchestration.refreshTelegramMenu()
       return { ok: true, name }
     } catch (err: any) {
@@ -1452,7 +1744,8 @@ export class SessionManager {
       if (s.status === "suspended") continue
       // A draft has no conversation yet; its agent starts when it is first sent.
       if (s.user_status === "draft") continue
-      const work = this.resumeOneAtBoot(s)
+      const work = this.resumeOneAtBoot(s).finally(() => { this.bootResumes.delete(s.id) })
+      this.bootResumes.set(s.id, work)
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = await Promise.race([
         work.then(() => false),
@@ -1614,4 +1907,21 @@ function optionalProviderArg(args: Record<string, unknown>, key: string): Provid
   const value = optionalStringArg(args, key)
   if (value === undefined || value === "linux-xvfb" || value === "macos-screen" || value === "scrcpy") return value
   throw new Error(`${key} must be a known display provider`)
+}
+
+/** council / council_add: the members to start, each checked like the old inline loop (letters follow the order). */
+function councilMembersArg(raw: unknown, choices: AgentChoices): { list: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) return { error: "members must be a non-empty array" }
+  const list: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> = []
+  for (const [i, m] of raw.entries()) {
+    const who = `member ${letterAt(i)}`
+    const entry = (m && typeof m === "object" ? m : {}) as Record<string, unknown>
+    if (!isAgentKind(entry.agent)) return { error: `${who}: unknown agent kind: ${String(entry.agent)}` }
+    const access = typeof entry.access === "string" ? entry.access : ""
+    if (!isUnattendedMode(entry.agent, access)) return { error: `${who}: access must be one of ${unattendedModesFor(entry.agent).map((x) => x.id).join(", ")} for ${entry.agent} (a hidden session can't wait for a person to approve)` }
+    const badEffort = effortError(choices, entry.agent, optionalStringArg(entry, "effort"))
+    if (badEffort) return { error: `${who}: ${badEffort}` }
+    list.push({ agent: entry.agent, model: optionalStringArg(entry, "model"), effort: optionalStringArg(entry, "effort"), access })
+  }
+  return { list }
 }

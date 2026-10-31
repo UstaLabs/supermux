@@ -8,7 +8,7 @@ import { createCore } from "../src/core.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
-import { appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
+import { acpPermissionDecision, isSendsOnlyMuxTool, appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR } from "./helpers.js"
 
@@ -268,6 +268,34 @@ test("ACP auto-approve answers allow with no permission-request; ask surfaces; r
   } finally { await ro.close({ mode: "shutdown" }) }
 })
 
+test("ACP ask with readableRoots: the driver hands the tool call's locations to the policy, so a read inside the root is answered without asking the host", async () => {
+  const fixture = fileURLToPath(new URL("./fixtures/acp-agent.mjs", import.meta.url))
+  const root = "/home/u/.mux/session_inboxes"
+  const run = async (permissions: PermissionsSpec, prompt: string) => {
+    const updates: unknown[] = []
+    let asked = 0
+    const runtime = await acp({
+      id: "fixture", command: process.execPath, args: [fixture], inheritEnv: true, mcpServers: [],
+      setupTimeoutMs: 3000, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+      cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, captureStderr: false, keeper: keeperDir(),
+      permissions: permissions as Extract<PermissionsSpec, { kind: "acp" }>,
+    }).open({
+      sessionId: "a", cwd: process.cwd(), signal: new AbortController().signal,
+      onUpdate: u => updates.push(u), onExit() {},
+      requestPermission: async () => { asked++; return { outcome: { outcome: "selected", optionId: "allow" } } },
+      requestAnswers: async () => ({ outcome: "cancelled" as const }),
+    })
+    try {
+      await runtime.prompt([{ type: "text", text: prompt }], new AbortController().signal)
+    } finally { await runtime.close({ mode: "shutdown" }) }
+    return { asked, auto: updates.some(u => (u as { value?: { method?: string } }).value?.method === "permission-auto") }
+  }
+  const ask: PermissionsSpec = { kind: "acp", policy: "ask", nativeMode: null, readableRoots: [root] }
+  expect(await run(ask, `permission-read-at:${root}/s1.jsonl`)).toEqual({ asked: 0, auto: true })
+  expect(await run(ask, `permission-read-at:${root}/s1.jsonl|/etc/passwd`)).toEqual({ asked: 1, auto: false })
+  expect(await run({ kind: "acp", policy: "ask", nativeMode: null }, `permission-read-at:${root}/s1.jsonl`)).toEqual({ asked: 1, auto: false })
+})
+
 test("ACP set_mode and set_config_option paths", async () => {
   const fixture = fileURLToPath(new URL("./fixtures/acp-agent.mjs", import.meta.url))
   const dir = await mkdtemp(join(tmpdir(), "acp-mode-"))
@@ -325,4 +353,110 @@ test("launchPermissions: a session's own spec of the driver's kind is validated 
   expect(launchPermissions("claude", { kind: "codex", approvalPolicy: "never", sandbox: "read-only" }, factory)).toBe(factory)
   expect(launchPermissions("claude", { kind: "claude", permissionMode: "plan" }, factory)).toEqual({ kind: "claude", permissionMode: "plan" })
   expect(() => launchPermissions("claude", { kind: "claude", permissionMode: "nope" } as unknown as PermissionsSpec, factory)).toThrow("Claude permissionMode is required")
+})
+
+test("acp ask: a read inside readableRoots is auto-allowed; anything else is still asked", () => {
+  const spec = { kind: "acp" as const, policy: "ask" as const, nativeMode: null, readableRoots: ["/home/u/.mux/session_inboxes"] }
+  const options = [{ optionId: "a", kind: "allow_once" }, { optionId: "r", kind: "reject_once" }]
+  expect(acpPermissionDecision(spec, "read", options, ["/home/u/.mux/session_inboxes/s1.jsonl"])).toEqual({ auto: true, optionId: "a" })
+  expect(acpPermissionDecision(spec, "search", options, ["/home/u/.mux/session_inboxes"])).toEqual({ auto: true, optionId: "a" })
+  expect(acpPermissionDecision(spec, "read", options, ["/home/u/.mux/session_inboxes/../secrets"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(spec, "read", options, ["/home/u/.mux/session_inboxes-evil/x"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(spec, "read", options, ["/home/u/.mux/session_inboxes/s1.jsonl", "/etc/passwd"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(spec, "edit", options, ["/home/u/.mux/session_inboxes/s1.jsonl"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(spec, "read", options, [])).toEqual({ auto: false })
+  expect(acpPermissionDecision({ ...spec, readableRoots: undefined }, "read", options, ["/home/u/.mux/session_inboxes/s1.jsonl"])).toEqual({ auto: false })
+})
+
+test("validatePermissionsSpec keeps absolute readableRoots and refuses relative ones", () => {
+  expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: ["/a"] }))
+    .toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: ["/a"] })
+  expect(() => validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: ["rel"] }))
+    .toThrow("ACP readableRoots")
+})
+
+const ROOT = "/home/u/.mux/session_inboxes"
+const ONCE = [{ optionId: "a", kind: "allow_once" }, { optionId: "r", kind: "reject_once" }]
+const acpSpec = (over: Partial<Extract<PermissionsSpec, { kind: "acp" }>> = {}): Extract<PermissionsSpec, { kind: "acp" }> =>
+  ({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [ROOT], ...over })
+
+test("acp readableRoots answers allow_once when the agent offers it, else the first allow option", () => {
+  const always = { optionId: "always", kind: "allow_always" }
+  const once = { optionId: "once", kind: "allow_once" }
+  const reject = { optionId: "no", kind: "reject_once" }
+  const path = [`${ROOT}/s1.jsonl`]
+  // allow_always listed first: still the one-shot grant, so the agent cannot remember "always" for more than the root.
+  expect(acpPermissionDecision(acpSpec(), "read", [always, once, reject], path)).toEqual({ auto: true, optionId: "once" })
+  expect(acpPermissionDecision(acpSpec(), "read", [once, always, reject], path)).toEqual({ auto: true, optionId: "once" })
+  // Only an "always" option on offer: it is the first allow option, so it is used.
+  expect(acpPermissionDecision(acpSpec(), "read", [reject, always], path)).toEqual({ auto: true, optionId: "always" })
+})
+
+test("acp readableRoots: a relative location never matches, whatever it would resolve to", () => {
+  const spec = acpSpec({ readableRoots: [process.cwd()] })
+  for (const path of ["package.json", "./package.json", "a/b.txt", "../x", "", "."]) {
+    expect(acpPermissionDecision(spec, "read", ONCE, [path])).toEqual({ auto: false })
+  }
+  expect(acpPermissionDecision(spec, "read", ONCE, [join(process.cwd(), "package.json"), "package.json"])).toEqual({ auto: false })
+  // The same root does allow an absolute path inside it.
+  expect(acpPermissionDecision(spec, "read", ONCE, [join(process.cwd(), "package.json")])).toEqual({ auto: true, optionId: "a" })
+})
+
+test("acp readableRoots: nothing is auto-allowed when the agent offers no allow option", () => {
+  const path = [`${ROOT}/s1.jsonl`]
+  expect(acpPermissionDecision(acpSpec(), "read", [{ optionId: "r", kind: "reject_once" }], path)).toEqual({ auto: false })
+  expect(acpPermissionDecision(acpSpec(), "read", [], path)).toEqual({ auto: false })
+})
+
+test("acp readableRoots together with askKinds: roots open only reads and searches inside them", () => {
+  const inside = [`${ROOT}/s1.jsonl`]
+  const askRead = acpSpec({ askKinds: ["read"] })
+  expect(acpPermissionDecision(askRead, "read", ONCE, inside)).toEqual({ auto: true, optionId: "a" })
+  expect(acpPermissionDecision(askRead, "read", ONCE, ["/etc/passwd"])).toEqual({ auto: false })
+  expect(acpPermissionDecision(askRead, "read", ONCE, [])).toEqual({ auto: false })
+  // A listed kind that is not read/search stays asked, inside the root or not.
+  const askExecute = acpSpec({ askKinds: ["execute"] })
+  expect(acpPermissionDecision(askExecute, "execute", ONCE, inside)).toEqual({ auto: false })
+  expect(acpPermissionDecision(askExecute, "edit", ONCE, inside)).toEqual({ auto: true, optionId: "a" }) // as before: only execute is asked
+})
+
+test("acp readableRoots on auto-approve and read-only specs changes nothing", () => {
+  const inside = [`${ROOT}/s1.jsonl`]
+  const kinds = ["read", "search", "edit", "execute", "delete", "move", "fetch", "other", undefined]
+  for (const policy of ["auto-approve", "read-only"] as const) {
+    const plain = acpSpec({ policy, readableRoots: undefined })
+    const rooted = acpSpec({ policy })
+    for (const kind of kinds) {
+      for (const paths of [[], inside, ["/etc/passwd"]]) {
+        expect(acpPermissionDecision(rooted, kind, ONCE, paths)).toEqual(acpPermissionDecision(plain, kind, ONCE, paths))
+      }
+    }
+  }
+  // In particular a read-only session still refuses to edit inside a root, and an auto-approve one still allows outside it.
+  expect(acpPermissionDecision(acpSpec({ policy: "read-only" }), "edit", ONCE, inside)).toEqual({ auto: true, optionId: "r", message: "read-only session" })
+  expect(acpPermissionDecision(acpSpec({ policy: "auto-approve" }), "edit", ONCE, ["/etc/passwd"])).toEqual({ auto: true, optionId: "a" })
+})
+
+test("validatePermissionsSpec refuses readableRoots that is not an array of absolute path strings", () => {
+  const spec = (readableRoots: unknown) => () => validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots })
+  for (const bad of ["/a", { 0: "/a" }, 1, null, true]) expect(spec(bad)).toThrow("ACP readableRoots")
+  for (const bad of [[1], [null], [{}], [["/a"]], [""], ["rel/dir"], ["/a", "rel"]]) expect(spec(bad)).toThrow("ACP readableRoots")
+  expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [] }))
+    .toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [] })
+  expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] }))
+    .toEqual({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] })
+})
+
+test("supermux's send-only tools are approved under every ACP policy, as Grok and Cursor name them", () => {
+  const options = [{ optionId: "always", kind: "allow_always" }, { optionId: "once", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }]
+  for (const title of ["mux-shim__council_report", "mux-shim-council_report: council_report", "mux-shim__message_session", "mux-shim-message_session: message_session"]) {
+    expect(isSendsOnlyMuxTool(title)).toBe(true)
+    for (const policy of ["ask", "read-only"] as const) {
+      expect(acpPermissionDecision({ kind: "acp", policy, nativeMode: null }, "other", options, [], title)).toEqual({ auto: true, optionId: "once" })
+    }
+  }
+  for (const title of ["mux-shim__rename_session", "mux-shim__council_reporter", "other__council_report", "council_report", undefined]) {
+    expect(isSendsOnlyMuxTool(title)).toBe(false)
+  }
+  expect(acpPermissionDecision({ kind: "acp", policy: "ask", nativeMode: null }, "other", options, [], "mux-shim__rename_session")).toEqual({ auto: false })
 })

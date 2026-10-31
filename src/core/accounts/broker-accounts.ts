@@ -8,6 +8,7 @@
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { AccountRegistry, UsageStore, systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
+import { pickAccount, switchable } from "../../../packages/supermux-core/src/accounts/policy.js"
 import type { Account, AccountsOptions, LoginHandle, LoginState } from "../../../packages/supermux-core/src/accounts/index.js"
 import type { Core } from "../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../shared/paths"
@@ -42,6 +43,11 @@ export function isAccountAgent(agent: unknown): agent is AccountAgent {
 export function isSystemAccount(id: string | undefined | null): boolean {
   return !id || id.endsWith(":system")
 }
+
+/** A new session's account choice that means "the one with the most room left" (decision #18); so does no account at all. */
+export const AUTO_ACCOUNT = "auto"
+/** Auto waits at most this long for stale usage before it picks with what it has. */
+export const AUTO_USAGE_WAIT_MS = 3000
 
 type Shared = { registry: AccountRegistry; usage: UsageStore }
 let shared: Shared | undefined
@@ -106,6 +112,8 @@ export type AccountView = {
   usage: UsageWindowView[]
   /** The agent's API refused this account (401/403) and no turn has completed on it since. A label, never a block. */
   unavailable?: { reason: string; since: string }
+  /** The account "Auto" would start a new session of this agent on now (decision #18). */
+  auto?: boolean
 }
 
 export function displayLabel(account: Pick<Account, "id" | "method" | "label" | "identity">): string {
@@ -174,9 +182,13 @@ export function toApiError(err: unknown): AccountsApiError {
  * CODEX_HOME is its own (MCP config, instructions and its thread history live there). Until the
  * session config moves to `-c` overrides, Codex logins become `token` accounts instead.
  */
+export function sessionAccountSupported(agent: string, account: Pick<Account, "method"> | undefined): boolean {
+  return !(agent === "codex" && account?.method === "subscription")
+}
+
 export function assertSessionAccountSupported(agent: string, account: Pick<Account, "id" | "method"> | undefined): void {
-  if (agent === "codex" && account?.method === "subscription") {
-    throw new AccountsApiError(400, `Codex subscription account ${account.id} cannot run broker sessions yet; sign in again as a token account`, "account_unsupported")
+  if (!sessionAccountSupported(agent, account)) {
+    throw new AccountsApiError(400, `Codex subscription account ${account!.id} cannot run broker sessions yet; sign in again as a token account`, "account_unsupported")
   }
 }
 
@@ -191,6 +203,8 @@ export type BrokerAccountsDeps = {
   broadcast(frame: Record<string, unknown>): void
   /** An account was added, removed or relabeled (e.g. to retry model discovery with it). */
   onChanged?(): void
+  /** Fetches the agent's usage where stale (Auto picks by it); bounded by the caller. */
+  refreshUsage?(agent: AccountAgent): Promise<void>
   now?: () => number
 }
 
@@ -200,8 +214,12 @@ type LoginEntry = { agent: string; handle: LoginHandle; state: AccountLoginState
 export class BrokerAccounts {
   private readonly labels = new Map<string, string>()
   private readonly logins = new Map<string, LoginEntry>()
+  private refreshUsage?: (agent: AccountAgent) => Promise<void>
+  private usageWaitMs = AUTO_USAGE_WAIT_MS
 
-  constructor(private readonly deps: BrokerAccountsDeps) {}
+  constructor(private readonly deps: BrokerAccountsDeps) {
+    this.refreshUsage = deps.refreshUsage
+  }
 
   /** Display label for a session's account (sync; refreshed on every change). */
   label(id: string | undefined | null): string {
@@ -223,7 +241,13 @@ export class BrokerAccounts {
     if (agent !== undefined && !isAccountAgent(agent)) throw new AccountsApiError(400, `unknown agent: ${agent}`, "unknown_agent")
     await this.deps.usage.load()
     const accounts = await this.deps.registry.list(agent)
-    return accounts.map((a) => toAccountView(a, this.deps.usage))
+    // The account Auto would start a new chat on now, per agent (the composer shows it).
+    const picks = new Set<string>()
+    for (const kind of new Set(accounts.map((a) => a.agent))) {
+      const picked = this.choose(kind, accounts.filter((a) => a.agent === kind))
+      if (picked) picks.add(picked.id)
+    }
+    return accounts.map((a) => ({ ...toAccountView(a, this.deps.usage), ...(picks.has(a.id) ? { auto: true } : {}) }))
   }
 
   async get(id: string): Promise<Account | undefined> {
@@ -342,6 +366,48 @@ export class BrokerAccounts {
     if (account.agent !== agent) throw new AccountsApiError(400, `Account ${id} belongs to agent ${account.agent}, not ${agent}`, "invalid_input")
     assertSessionAccountSupported(agent, account)
     return id
+  }
+
+  /** Tests (and late wiring): how Auto fetches stale usage, and how long it waits for it. */
+  setUsageRefresher(refresh: (agent: AccountAgent) => Promise<void>, waitMs: number = AUTO_USAGE_WAIT_MS): void {
+    this.refreshUsage = refresh
+    this.usageWaitMs = waitMs
+  }
+
+  /**
+   * "Auto" (decision #18): the account a new session of `agent` starts on, the one with the most room
+   * left by the auto-switch's own policy (full or unavailable accounts skipped; accounts without usage
+   * data after those with it, the system login first). When there is a choice, stale usage is fetched
+   * first, for at most AUTO_USAGE_WAIT_MS. Undefined: the system account.
+   */
+  async autoAccount(agent: AccountAgent): Promise<string | undefined> {
+    try {
+      await this.deps.usage.load()
+      const accounts = await this.deps.registry.list(agent)
+      // The system login is the only account Auto could pick (it never picks isolated or Cursor ones): no wait.
+      if (accounts.filter((a) => switchable(a) && sessionAccountSupported(agent, a)).length < 2) return undefined
+      if (this.refreshUsage) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          this.refreshUsage(agent).catch((err) => log.warn("auto_account_usage_failed", { agent, err: String(err) })),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, this.usageWaitMs) }),
+        ])
+        clearTimeout(timer)
+      }
+      const picked = this.choose(agent, accounts)
+      return picked && !isSystemAccount(picked.id) ? picked.id : undefined
+    } catch (err) {
+      // Auto never blocks a new session: without a pick it starts on the system login, as before Auto.
+      log.warn("auto_account_pick_failed", { agent, err: String(err) })
+      return undefined
+    }
+  }
+
+  /** The policy's pick among `accounts` (all of `agent`'s, listed), skipping those a broker session cannot run on. */
+  private choose(agent: string, accounts: readonly Account[]): Account | undefined {
+    const candidates = accounts.filter((account) => sessionAccountSupported(agent, account))
+    const now = this.deps.now?.() ?? Date.now()
+    return pickAccount(candidates, (id) => this.deps.usage.get(id), now, (id) => this.deps.usage.unavailable(id) !== undefined)
   }
 
   /** Tells every client to reload the account list (e.g. an account was marked unavailable or cleared). */

@@ -24,9 +24,9 @@ class ContractTest {
             "request_open", "request_closed", "error",
             "worktree_sizes", "worktrees_removed", "agent_models_changed", "host_requirements", "keep_awake", "telemetry",
             "subagent_update", "subagents_cleared", "activity_append_subagent", "activity_append_subagent_message",
-            "request_open_subagent", "message_append_subagent",
+            "request_open_subagent", "message_append_subagent", "council_update",
             "fs_dir", "fs_gone", "fs_err",
-            "accounts_changed", "account_login_state", "accounts_settings", "session_state_account",
+            "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -55,6 +55,12 @@ class ContractTest {
                 is ServerFrame.BgTasks -> {}
                 is ServerFrame.SubagentUpdate -> assertEquals("collab-9f21", frame.subagent.parentCallId)
                 is ServerFrame.SubagentsCleared -> {}
+                is ServerFrame.CouncilUpdate -> {
+                    assertEquals("toolu_council_1", frame.council.callId)
+                    assertEquals(listOf("reported", "working", "failed"), frame.council.members.map { it.status })
+                    assertEquals("background noise", frame.council.rounds[1].focus)
+                    assertEquals("2026-10-30T12:36:00.000Z", frame.council.rounds[0].completedAt)
+                }
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.FsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
@@ -74,6 +80,8 @@ class ContractTest {
                 is ServerFrame.ProjectsChanged -> {}
                 ServerFrame.AgentModelsChanged -> {}
                 ServerFrame.AccountsChanged -> {}
+                ServerFrame.AgentsChanged -> {}
+                is ServerFrame.AgentAvatarChanged -> {}
                 is ServerFrame.AccountLoginState -> {}
                 is ServerFrame.AccountsSettings -> {}
                 is ServerFrame.HostRequirementsChanged -> {}

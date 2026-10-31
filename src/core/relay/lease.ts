@@ -12,7 +12,7 @@ function mac(payload: string, secret: string): string {
   return createHmac("sha256", secret).update(payload).digest("base64url")
 }
 
-/** Lease = "<hostId>.<expiresAt>.<hmac>". Opaque to frpc; verified by the plugin. */
+/** Lease = "<hostId>.<expiresAt>.<hmac>". Opaque to the frp client; verified by the plugin. */
 export function mintLease({ hostId, secret, ttlMs, now = Date.now() }: MintLeaseArgs): string {
   const payload = `${hostId}.${now + ttlMs}`
   return `${payload}.${mac(payload, secret)}`

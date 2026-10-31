@@ -161,7 +161,7 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateBannerHost
+import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
@@ -337,6 +337,16 @@ fun SupermuxApp(
     }
     // The app owning a given session; falls back to the active host's (single-host / unknown id).
     val appFor: (String) -> HostStore? = { id -> fleet.appFor(id) ?: hostApp }
+    // Archived Agents come from the store's archive list (refreshed whenever sessions change),
+    // never fetched by the sidebar itself: its rows come and go as the list scrolls.
+    val archivedAgents = remember(archivedSessions) {
+        archivedSessions.filter { it.role == "personal_assistant" }.sortedByDescending { it.killed_at }
+    }
+    val agentAvatars = dev.supermux.ui.session.rememberAgentAvatars(
+        sessions,
+        apiFor = { id -> appFor(id)?.api },
+        extra = remember(archivedAgents) { archivedAgents.mapNotNull { a -> a.avatar?.let { a.id to it } }.toMap() },
+    )
 
     var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
@@ -723,7 +733,11 @@ fun SupermuxApp(
                     else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
                 ),
         ) {
-            AppUpdateBannerHost(onOpenPage = { ui.openAppUpdate() }, modifier = Modifier.fillMaxSize()) {
+            // One update check per launch, here rather than in the sidebar's card: on a phone the
+            // sidebar comes and goes with every chat, and each return would be another poll.
+            val appUpdater = LocalPlatform.current.updates
+            LaunchedEffect(appUpdater) { appUpdater.check() }
+            Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
@@ -742,7 +756,7 @@ fun SupermuxApp(
                         }
                     }
 
-                    // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honour it.
+                    // Settings dirty-section close (SettingsHub); Esc / NavDisplay onBack honour it.
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
@@ -750,6 +764,9 @@ fun SupermuxApp(
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
                         { standalone, listState ->
                             SessionListScreen(
+                                agentAvatars = agentAvatars,
+                                archivedAgents = archivedAgents,
+                                agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
@@ -848,6 +865,10 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
+                                        // The update card sits on the footer rail, not across the
+                                        // top of the app; it draws nothing until a newer release
+                                        // is found.
+                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
@@ -998,7 +1019,6 @@ fun SupermuxApp(
                                 EscapeBox(
                                     tag = when (route.section) {
                                         SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
                                         else -> "settings_overlay"
                                     },
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
@@ -1246,7 +1266,7 @@ private fun ShellHome(
         sessions.filter { s ->
             dev.supermux.session.sessionListShowsUnread(
                 active = false,
-                working = agentState[s.id]?.working == true,
+                working = agentState[s.id]?.busy == true,
                 lastMessageTs = lastBySession[s.id]?.ts,
                 lastReadAt = lastRead[s.id],
             )

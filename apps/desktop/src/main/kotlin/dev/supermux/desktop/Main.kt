@@ -288,7 +288,7 @@ private val desktopBindTts: (
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
-//   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
+//   SM_SETTINGS=1                 — open the Settings hub on Providers (File ▸ "Settings…"'s SAME
 //                                  ui.openSettings()) on start, loading real app.agentStatuses()
 //                                  (GET /agents/status, read-only) from the active host          [main]
 //   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
@@ -304,10 +304,6 @@ private val desktopBindTts: (
 //   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
 //                                  on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
-//   SM_ASSISTANT=1                — open the Settings hub on Assistant via ui.openSettings(Assistant)
-//                                  on start, loading real app.assistantLoad() + curatorSettings()
-//                                  (GET /settings/config, /settings/soul, /settings/curator,
-//                                  read-only). Never saves or runs curator. Off by default.      [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
 //                                  /settings/config, /config/voice-glossary, read-only). Never
@@ -975,7 +971,6 @@ fun main() {
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
                         MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
-                        MainMenuEntry.Action("Personal Assistants…") { ui.openPersonalAssistants() },
                         MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
@@ -1722,8 +1717,8 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Agents)
-                            println("[settings] opened the Settings hub (Agents)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers)
+                            println("[settings] opened the Settings hub (Providers)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
@@ -1807,25 +1802,6 @@ fun main() {
                                     "mode=${st?.mode ?: "-"} state=${st?.state ?: "-"} " +
                                     "commit=${st?.commit?.take(8) ?: "-"} " +
                                     "lastChecked=${st?.lastChecked ?: "-"}",
-                            )
-                        }
-                    }
-
-                    // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
-                    // opens Assistant (Identity: soul). Read-only — never saves.
-                    val assistantHook = System.getenv("SM_ASSISTANT") == "1"
-                    if (assistantHook) {
-                        LaunchedEffect(app) {
-                            delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Assistant)
-                            println("[assistant] opened the Settings hub (Assistant)")
-                            val pair = app.assistantLoad()
-                            val curator = app.curatorSettings()
-                            println(
-                                "[assistant] paName=${pair?.first ?: "(load failed)"} " +
-                                    "soulChars=${pair?.second?.length ?: "null"} " +
-                                    "curatorEnabled=${curator?.config?.enabled ?: "(load failed)"} " +
-                                    "nextRun=${curator?.nextRun ?: "—"}",
                             )
                         }
                     }

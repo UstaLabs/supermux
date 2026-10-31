@@ -60,6 +60,8 @@ export type SessionRecord = {
   user_status: UserStatus
   sort_order: number
   draft_payload?: DraftPayload
+  /** The session that created this one (delegate / council); undefined for a top-level session. */
+  parent_session_id?: string
 }
 
 export type TmuxRef = {
@@ -101,6 +103,7 @@ export type SessionRow = {
   user_status?: string
   sort_order?: number
   draft_payload?: string | null
+  parent_session_id?: string | null
 }
 
 export type Session = SessionRecord & {
@@ -149,6 +152,7 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     user_status: (row.user_status as UserStatus) ?? "in_progress",
     sort_order: row.sort_order ?? 0,
     draft_payload: row.draft_payload ? JSON.parse(row.draft_payload) : undefined,
+    parent_session_id: row.parent_session_id ?? undefined,
   }
 }
 

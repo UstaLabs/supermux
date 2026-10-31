@@ -274,7 +274,7 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         waitForIdle()
         onNodeWithTag("settings_row_voice").assertIsDisplayed()
 
@@ -285,7 +285,7 @@ class SupermuxAppNavTest {
         // The CAUSE, not just the symptom: the route was never rewritten. `settingsSection` reads
         // the live `Route.Settings` off the stack, so anything other than the section it was
         // opened with means the compact push reported itself back and the entry was re-keyed.
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertEquals(SettingsSection.Providers, ui.settingsSection)
     }
 
     /**
@@ -293,7 +293,7 @@ class SupermuxAppNavTest {
      * phone, not on the index with `ShellUiState.lspSettingsOpen` claiming otherwise.
      *
      * The hub seeds its compact push stack from `section` for exactly this, treating the
-     * `Route.Settings` default ([SettingsSection.Agents]) as "just Settings" and anything else as a
+     * `Route.Settings` default ([SettingsSection.Providers]) as "just Settings" and anything else as a
      * destination. That seeding is only safe because the settings entry has a stable content key;
      * while the route WAS the key, a rewrite would have re-seeded and reopened the section under
      * the user.
@@ -360,15 +360,15 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         waitForIdle()
         onNodeWithTag("settings_hub_rail").assertIsDisplayed()
-        onNodeWithText("body:" + SettingsSection.Agents.name + ":0").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Providers.name + ":0").assertIsDisplayed()
 
         onNodeWithTag("probe").performClick()
         onNodeWithTag("probe").performClick()
         waitForIdle()
-        onNodeWithText("body:" + SettingsSection.Agents.name + ":2").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Providers.name + ":2").assertIsDisplayed()
 
         onNodeWithTag("settings_section_devices").performClick()
         waitForIdle()

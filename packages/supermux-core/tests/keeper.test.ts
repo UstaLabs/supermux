@@ -703,3 +703,21 @@ test('signal SIGINT reaches the agent; ndjson frames pass through', async () => 
   expect(rest.map(f => ({ type: f.type, frame: JSON.parse(f.line) }))).toEqual([{ type: 'frame', frame: { event: 'bye' } }])
   expect(await keeperAgentRunning(stateDirectory, sessionId)).toBe(false)
 })
+
+test('an agent that cannot start fails the connect with its spawn error, not a bare socket error', async () => {
+  const stateDirectory = await dir()
+  const missing = join(stateDirectory, 'no-such-agent')
+  const started = Date.now()
+  const err = await connectKeeper({
+    stateDirectory,
+    sessionId: 'unstartable',
+    spec: { command: missing, args: [], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, frameShape: 'jsonrpc', captureStderr: false },
+    limits: limits(),
+    cursor: 0,
+  }).then(() => undefined, (e: Error) => e)
+  live.push({ dir: stateDirectory, sessionId: 'unstartable' })
+  expect(err?.message).toStartWith('The agent did not start: ')
+  expect(err?.message).toContain('ENOENT')
+  // Known as soon as the keeper goes, not after connectTimeoutMs.
+  expect(Date.now() - started).toBeLessThan(limits().connectTimeoutMs)
+})

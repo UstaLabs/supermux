@@ -25,7 +25,7 @@ Fields with `?` may be absent.
 - `user-question` `{ requestId, blocking, questions }`: the agent asks the user; each question `{ id, prompt, header?, multiSelect, allowFreeText, options: [{ id, label, description? }] }`. Pending (answer it) when `blocking`.
 - `permission-request` `{ requestId, toolCall, options, detail? }`: approve a tool call; `toolCall` `{ callId, tool, title, input?, category? }`, each option `{ id, kind, label }` with `kind` `allow_once`, `allow_always`, `reject_once` or `reject_always`; `detail` `{ command?, cwd?, blockedPath? }`.
 - `request-resolved` `{ requestId, outcome, answer? }`: a request ended, `answered` or `cancelled` (the type also lists `expired`; nothing emits it today); `answer` is what was chosen.
-- `permission-auto` `{ toolCall, optionId }`: a request the session's ACP policy answered itself (`auto-approve`, `read-only`, or `ask` with `askKinds` for the kinds not listed), so no `permission-request` was raised.
+- `permission-auto` `{ toolCall, optionId }`: a request the session's ACP policy answered itself (`auto-approve`, `read-only`, `ask` with `askKinds` for the kinds not listed, or a `read`/`search` inside the spec's `readableRoots`), so no `permission-request` was raised.
 - `permissions-update` `{ spec, applied }`: the permissions changed, applied `now` or from the `next-turn`.
 - `commands-update` `{ commands }`: the agent's slash commands, each `{ name, description? }`.
 - `mode-update` `{ modeId?, model? }`: the agent's mode or model changed.

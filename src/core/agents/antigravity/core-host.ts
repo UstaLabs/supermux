@@ -11,6 +11,7 @@ import { sessionPlugins } from "../../plugins"
 import { muxShimContextServer } from "../mux-shim-server"
 import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 const log = makeLogger("agents/antigravity/core-host")
@@ -88,7 +89,8 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       const opts: AntigravityOptions = {
         id: "antigravity",
         command: resolveCommand(["agy"], process.env, process.platform) ?? "agy",
-        args: [],
+        // agy has no read-only flag: --add-dir makes the inbox folder part of its workspace (edits there too, in accept-edits mode).
+        args: ["--add-dir", SESSION_INBOX_DIR],
         env: registration.env,
         inheritEnv: true,
         permissions: settings.initial,
@@ -115,7 +117,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "antigravity", sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "antigravity", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("antigravity", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("antigravity", extra.sessionId, extra.sessionName)],
         },

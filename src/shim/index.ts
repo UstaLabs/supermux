@@ -4,9 +4,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
-import { connectShim } from "./socket-client"
-import { listTools, callTool } from "./tools"
+import { connectShim, type ShimRegistration } from "./socket-client"
+import { callTool, shimTools } from "./tools"
 import type { AgentKind } from "./tools"
+import type { ShimTool } from "../shared/socket-frames"
 import { SOCKETS_DIR, socketPathForSession } from "../shared/paths"
 import { randomBytes } from "crypto"
 import { makeLogger } from "../shared/log"
@@ -24,11 +25,27 @@ const AGENT_KIND: AgentKind =
 const CHANNEL_ONLY = process.env.MUX_CHANNEL_ONLY === "1"
 const RPC_ONLY = process.env.MUX_RPC_ONLY === "1"
 
+const SERVER = RPC_ONLY ? "mux-rpc" : (CHANNEL_ONLY ? "mux-channel" : "mux-shim")
+
+/**
+ * The tools to serve: ZERO for the channel-only instance (the tools instance is the sole provider);
+ * else the broker's list from its register reply, or this build's own from a broker that predates it.
+ */
+function servedTools(registration: ShimRegistration): ShimTool[] {
+  if (CHANNEL_ONLY) return []
+  return registration.tools ?? shimTools(SERVER, { councilMember: registration.councilMember }) ?? []
+}
+
+/** What the agent sees of a list: the MCP definitions, not the routes. */
+const definitions = (tools: ShimTool[]) => tools.map(({ route: _, ...tool }) => tool)
+
 async function main() {
-  const mcp = new Server(
-    { name: RPC_ONLY ? "mux-rpc" : (CHANNEL_ONLY ? "mux-channel" : "mux-shim"), version: "0.0.1" },
-    { capabilities: { tools: {} } },
-  )
+  // listChanged: the agent re-lists when a broker restart or update brings another tool list (an
+  // agent like Claude Code only listens for the notification from a server that declares it).
+  const mcp = new Server({ name: SERVER, version: "0.0.1" }, { capabilities: { tools: { listChanged: true } } })
+  let tools: ShimTool[] = []
+  /** The agent has a list (it listed at least once), so it must hear about a change. */
+  let listed = false
 
   const shim = await connectShim({
     socketsDir: SOCKETS_DIR,
@@ -39,15 +56,25 @@ async function main() {
     requestedName: process.env.MUX_DISPLAY_NAME,
     displayName: process.env.MUX_DISPLAY_NAME,
     agentSessionId: CLAUDE_SESSION_ID,
+    server: SERVER,
+    onReregistered: (registration) => {
+      const next = servedTools(registration)
+      const changed = JSON.stringify(definitions(next)) !== JSON.stringify(definitions(tools))
+      tools = next
+      if (!changed) return
+      log.info("tools_changed", { count: tools.length, notify: listed })
+      if (listed) mcp.sendToolListChanged().catch(err => log.warn("tools_list_changed_failed", { err: String(err) }))
+    },
   })
+  tools = servedTools(shim)
 
-  log.info("registered", { name: shim.assignedName, agent_kind: AGENT_KIND })
+  log.info("registered", { name: shim.assignedName, agent_kind: AGENT_KIND, tools: tools.length, from_broker: shim.tools !== undefined })
 
   mcp.setRequestHandler(ListToolsRequestSchema, () => {
-    // Channel-only instance advertises ZERO tools (the tools instance is the sole provider).
-    return { tools: CHANNEL_ONLY ? [] : listTools(RPC_ONLY) }
+    listed = true
+    return { tools: definitions(tools) }
   })
-  mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY))
+  mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY, tools))
 
   await mcp.connect(new StdioServerTransport())
 }

@@ -5,45 +5,26 @@ import { join } from "path"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./mux-core"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
 
-test("ensureMuxCoreSkills writes manifests and the mux:soul skill", () => {
+test("ensureMuxCoreSkills writes manifests and removes the retired soul and new-personal-agent skills", () => {
   const root = mkdtempSync(join(tmpdir(), "mux-core-sync-"))
   try {
     const pluginDir = join(root, "mux-core")
-    const changed = ensureMuxCoreSkills({ pluginDir })
-
-    expect(changed).toBe(true)
+    mkdirSync(join(pluginDir, "skills", "soul"), { recursive: true })
+    writeFileSync(join(pluginDir, "skills", "soul", "SKILL.md"), "old")
+    mkdirSync(join(pluginDir, "skills", "new-personal-agent"), { recursive: true })
+    writeFileSync(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"), "old")
+    expect(ensureMuxCoreSkills({ pluginDir })).toBe(true)
     expect(existsSync(join(pluginDir, ".claude-plugin", "plugin.json"))).toBe(true)
     expect(existsSync(join(pluginDir, ".codex-plugin", "plugin.json"))).toBe(true)
     expect(existsSync(join(pluginDir, ".cursor-plugin", "plugin.json"))).toBe(true)
     expect(existsSync(join(pluginDir, ".opencode", "plugins", "mux.js"))).toBe(true)
-
     const muxJs = readFileSync(join(pluginDir, ".opencode", "plugins", "mux.js"), "utf8")
     expect(muxJs).toContain("skills.paths")
     expect(muxJs).not.toContain("bootstrap")
-
-    const skill = readFileSync(join(pluginDir, "skills", "soul", "SKILL.md"), "utf8")
-    expect(skill).toContain("name: soul")
-    expect(skill).toContain("PA-only")
-    expect(skill).toContain("~/.mux/soul.md")
-    expect(skill).toContain("soul-setup.json")
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test("ensureMuxCoreSkills writes the mux:new-personal-agent skill", () => {
-  const root = mkdtempSync(join(tmpdir(), "mux-core-new-pa-"))
-  try {
-    const pluginDir = join(root, "mux-core")
-    ensureMuxCoreSkills({ pluginDir })
-
-    const skill = readFileSync(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"), "utf8")
-    expect(skill).toContain("name: new-personal-agent")
-    expect(skill).toContain("PA-only")
-    expect(skill).toContain("spawn_session")
-    expect(skill).toContain("~/.mux/workspace/<name>")
-    expect(skill).toContain("focus.md")
-    expect(skill).toContain("soul.md")
+    expect(existsSync(join(pluginDir, "skills"))).toBe(true)
+    expect(existsSync(join(pluginDir, "skills", "soul"))).toBe(false)
+    expect(existsSync(join(pluginDir, "skills", "new-personal-agent"))).toBe(false)
+    expect(ensureMuxCoreSkills({ pluginDir })).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -59,8 +40,6 @@ test("ensureMuxCoreSkills preserves unrelated mux-core skills", () => {
     ensureMuxCoreSkills({ pluginDir })
 
     expect(readFileSync(join(pluginDir, "skills", "browser", "SKILL.md"), "utf8")).toBe("browser skill")
-    expect(existsSync(join(pluginDir, "skills", "soul", "SKILL.md"))).toBe(true)
-    expect(existsSync(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"))).toBe(true)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -98,7 +77,7 @@ test("ensureMuxCoreSkills removes the retired hook machinery and reply-conventio
 })
 
 // ── ensureMuxCoreRegistered: the fix — mux-core must be ENABLED in plugins.json,
-//    else a fresh install spawns sessions with zero plugins (no /mux:soul). ─────
+//    else a fresh install spawns sessions with zero plugins (no mux skills). ─────
 
 test("ensureMuxCoreRegistered adds mux-core (enabled, all scopes) to a fresh registry", () => {
   const root = mkdtempSync(join(tmpdir(), "mux-core-reg-"))

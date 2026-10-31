@@ -24,8 +24,7 @@ function freshRegistry(): Registry {
 }
 
 const supervisorStub = {
-  ensurePersonalAssistants: async () => {},
-  bootstrapPA: async () => {},
+  superviseAgents: async () => {},
   reconcile: async () => {},
   stop: () => {},
 }

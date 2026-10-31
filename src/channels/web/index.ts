@@ -1,12 +1,14 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
+import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
 import { home } from "../../shared/home"
+import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
 import { tmpdir } from "os"
-import { join, sep } from "path"
+import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
@@ -90,12 +92,12 @@ const RATE_LIMIT_MAX = 16
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 
-// Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
+// Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
 // brute-forcer mint a fresh rate-limit bucket per guess just by varying one header.
 //
-// Loopback is the default trust set because that is where frpc/nginx forward from. It does
+// Loopback is the default trust set because that is where the relay tunnel/nginx forward from. It does
 // mean a LOCAL process can still spoof the header — which is acceptable: anything running
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
@@ -111,7 +113,7 @@ const rateLimitBucket = new WeakMap<Request, string>()
 
 // Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
 // loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
-// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// The relay tunnel and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
 // never counts as local.
 const directLoopback = new WeakMap<Request, boolean>()
 /** The /ws heartbeat; a socket with no pong for 60 s is closed. */
@@ -227,7 +229,7 @@ function newTerminalViewerId(): string {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void } }
 
 export interface SessionSnapshot {
   id?: string
@@ -242,6 +244,8 @@ export interface SessionSnapshot {
   capabilities?: import("../../core/agents/capabilities").SessionCapabilities
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
+  /** An Agent's avatar content hash (FORMAT.md); fetch GET /agents/<id>/avatar when it changes. */
+  avatar?: string
   model?: string
   permissionMode?: string
   session_branch?: string
@@ -258,6 +262,10 @@ export interface ArchivedSessionSnapshot {
   model?: string
   killed_at?: string
   repo_root?: string
+  /** "personal_assistant" for an archived Agent (the sidebar's Agents ▸ Archived fold). */
+  role?: "personal_assistant" | "worker"
+  /** An archived Agent's avatar content hash (GET /agents/<id>/avatar). */
+  avatar?: string
 }
 
 /** Accounts over HTTP (GET/POST /accounts, /accounts/login…, POST /sessions/:id/account,
@@ -279,7 +287,7 @@ export interface WebChannelOpts {
   port: number
   devicesFile: string
   /** Peers allowed to declare the real client via X-Forwarded-For / CF-Connecting-IP.
-   *  Defaults to loopback (where frpc/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
+   *  Defaults to loopback (where the relay tunnel/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
   trustedProxyPeers?: string[]
   publicUrl: string
   staticDir?: string
@@ -291,6 +299,10 @@ export interface WebChannelOpts {
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
+  /** The councils a session called (snapshot `councils`; live `council_update`). */
+  getSessionCouncils?: (id: string) => unknown[]
+  /** POST /councils/:id/end: the user's Stop council (design 2026-10-31 §3). */
+  endCouncil?: (councilId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
   messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
   stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
@@ -399,7 +411,23 @@ export interface WebChannelOpts {
   dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
-  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
+  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean; streaming?: boolean }
+  /**
+   * A streamed dictation (`/transcribe/stream`): the app sends raw 16 kHz mono s16le audio as
+   * binary frames while it records, plus `{type:"edit"|"stop"|"cancel"}` JSON; the broker hears
+   * the pauses and sends `{type:"text"|"final"|"done"|"error"}` back through [send], and calls
+   * [close] when it is finished with the socket.
+   */
+  openDictationStream?: (input: {
+    dictationId: string
+    sessionId?: string
+    send: (event: object) => void
+    close: () => void
+  }) => {
+    audio: (bytes: Uint8Array) => void
+    control: (msg: { type?: unknown; text?: unknown; seq?: unknown }) => void
+    closed: () => void
+  }
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
    * iterable of audio chunks (streamed NDJSON: play first while later synth).
@@ -425,9 +453,13 @@ export interface WebChannelOpts {
     start: (input: { text: string; engine?: string; lang?: string }) => { id: string } | { error: string; status: 400 | 503 }
     open: (id: string) => ReadableStream<Uint8Array> | null
   }
-  spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
+  /** The one Agent create path. Refusals throw with `status` + `code` (name_invalid, name_taken, agent_not_installed, provider_invalid). */
+  createAgent?: (args: { name: string; provider?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   listPAs?: () => SessionSnapshot[]
-  updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
+  /** An Agent's avatar file changed: tell the clients (agent_avatar_changed). */
+  agentAvatarChanged?: (id: string) => void
+  /** [key] is an Agent id (new clients) or name (old clients). */
+  updatePA?: (key: string, patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string }) => Promise<{ ok: boolean; error?: string; status?: number; code?: string }>
   proxyBaseDomain?: string
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
@@ -501,8 +533,6 @@ export interface WebChannelOpts {
     method: "auto" | "code"
   }>
   finishOpenCodeOAuth?: (providerId: string, method: number, code: string) => Promise<void>
-  getSoul?: () => Promise<string> | string
-  setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
   getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
@@ -528,14 +558,17 @@ export interface WebChannelOpts {
   getRelayUrl?: () => string | undefined
 }
 
+/** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
+export const WEB_CAPABILITIES: ChannelCapabilities = {
+  multiplexesSessions: false,
+  supportsReactions: false,
+  supportsEdit: false,
+  supportsAttachments: true,
+}
+
 export class WebChannel implements Channel {
   readonly name = "web"
-  readonly capabilities: ChannelCapabilities = {
-    multiplexesSessions: false,
-    supportsReactions: false,
-    supportsEdit: false,
-    supportsAttachments: true,
-  }
+  readonly capabilities = WEB_CAPABILITIES
 
   private server?: ReturnType<typeof Bun.serve>
   private heartbeatTimer?: NodeJS.Timeout
@@ -710,6 +743,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsOpen(ws); return }
           if (ws.data.display) { this.onDisplayWsOpen(ws); return }
+          if (ws.data.dictation) { this.onDictationWsOpen(ws); return }
           if (ws.data.terminal) {
             void this.onTerminalWsOpen(ws)
             return
@@ -724,6 +758,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsMessage(ws, msg); return }
           if (ws.data.display) { this.onDisplayWsMessage(ws, msg); return }
+          if (ws.data.dictation) { this.onDictationWsMessage(ws, msg); return }
           if (ws.data.terminal) {
             this.onTerminalWsMessage(ws, msg)
             return
@@ -738,6 +773,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsClose(ws); return }
           if (ws.data.display) { this.onDisplayWsClose(ws); return }
+          if (ws.data.dictation) { this.onDictationWsClose(ws); return }
           if (ws.data.terminal) {
             this.onTerminalWsClose(ws)
             return
@@ -985,6 +1021,23 @@ export class WebChannel implements Channel {
           terminalRevision: revisionChoice.ok ? revisionChoice.revision : 2,
           terminalRevisionError: revisionError,
         } as WSData,
+      })
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
+      return new Response("upgrade failed", { status: 500 })
+    }
+    if (url.pathname === "/transcribe/stream") {
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
+      if (!this.opts.openDictationStream) return new Response("not configured", { status: 503 })
+      const dictationId = (url.searchParams.get("dictationId") ?? "").trim()
+      if (!dictationId || dictationId.length > 100) return new Response("dictationId required", { status: 400 })
+      const sessionId = url.searchParams.get("session")?.trim() || undefined
+      const upgraded = server.upgrade(req, {
+        data: { deviceName: dev.name, openedAt: Date.now(), dictation: { id: dictationId, ...(sessionId ? { sessionId } : {}) } } as WSData,
       })
       if (upgraded) {
         this.recordFeature(featureForUpgrade(url.pathname), dev.token)
@@ -1351,6 +1404,41 @@ export class WebChannel implements Channel {
       ws.data.terminalViewerId)
   }
 
+  // A streamed dictation: binary frames are mic audio, text frames are JSON control messages.
+  private onDictationWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
+    const d = ws.data.dictation!
+    try {
+      ws.data._dictation = this.opts.openDictationStream!({
+        dictationId: d.id,
+        ...(d.sessionId ? { sessionId: d.sessionId } : {}),
+        send: (event) => { try { ws.send(JSON.stringify(event)) } catch { /* socket gone */ } },
+        close: () => { try { ws.close() } catch { /* already closed */ } },
+      })
+    } catch (err: any) {
+      log.warn("dictation_stream_open_failed", { dictationId: d.id, err: err?.message ?? String(err) })
+      try { ws.send(JSON.stringify({ type: "error", message: "dictation stream unavailable", fatal: true })) } catch { /* gone */ }
+      ws.close(1011, "dictation stream unavailable")
+    }
+  }
+
+  private onDictationWsMessage(ws: import("bun").ServerWebSocket<WSData>, msg: string | Buffer): void {
+    const h = ws.data._dictation
+    if (!h) return
+    if (typeof msg === "string") {
+      let m: unknown
+      try { m = JSON.parse(msg) } catch { return }
+      if (m && typeof m === "object") h.control(m as { type?: unknown; text?: unknown; seq?: unknown })
+      return
+    }
+    h.audio(new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength))
+  }
+
+  private onDictationWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    const h = ws.data._dictation
+    ws.data._dictation = undefined
+    h?.closed()
+  }
+
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     const id = ws.data.displayStreamId!
     const port = this.opts.getDisplayPort?.(id)
@@ -1485,6 +1573,7 @@ export class WebChannel implements Channel {
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
       const subagents: Record<string, unknown[]> = {}
+      const councils: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -1512,6 +1601,7 @@ export class WebChannel implements Channel {
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         // Small and needed by the session list (running badges), so never trimmed.
         subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        councils[sessionKey] = this.opts.getSessionCouncils?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
           partialExtras.push(sessionKey)
@@ -1542,7 +1632,7 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
@@ -1901,7 +1991,7 @@ export class WebChannel implements Channel {
   /** `/settings/config` plus the live voice capabilities, which are probed, not stored. */
   private withVoiceCaps(cfg: Record<string, unknown>): Record<string, unknown> {
     const caps = this.opts.voiceCaps?.()
-    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials } : cfg
+    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials, voiceStreaming: caps.streaming === true && this.opts.openDictationStream !== undefined } : cfg
   }
 
   private json(body: unknown, status = 200): Response {
@@ -2773,17 +2863,9 @@ export class WebChannel implements Channel {
       return this.json(await this.opts.validateExposure())
     }
 
-    // ── Settings: soul (identity) ───────────────────────────────────────────
-    if (method === "GET" && path === "/settings/soul") {
-      if (!this.opts.getSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await this.opts.getSoul()
-      return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
-    }
-    if (method === "PUT" && path === "/settings/soul") {
-      if (!this.opts.setSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await req.text()
-      await this.opts.setSoul(content)
-      return this.json({ ok: true })
+    // ── Settings: soul (retired, spec §6) ───────────────────────────────────
+    if (path === "/settings/soul") {
+      return this.json({ error: "soul.md is retired: each agent has its own memory in ~/.mux/agent-memory/<id>.md" }, 410)
     }
     // ── Settings: web editor (LSP servers, etc.) ─────────────────────────────
     if (method === "GET" && path === "/settings/editor") {
@@ -2821,6 +2903,25 @@ export class WebChannel implements Channel {
       return this.json(catalog)
     }
 
+    // An Agent's avatar JSON (core/agents/avatar). 404 when it has none (the client draws its default).
+    const avatarMatch = method === "GET" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    // PUT: set an Agent's avatar from a client (the sidebar's "Change character…").
+    const avatarPut = method === "PUT" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    if (avatarPut) {
+      const id = avatarPut[1]!
+      const agent = this.opts.getSessionsSnapshot?.().find((s) => s.id === id)
+      if (!agent || agent.role !== "personal_assistant") return this.json({ error: "not an agent" }, 404)
+      const check = checkAvatar(await req.text())
+      if (!check.ok) return this.json({ error: "invalid avatar", errors: check.errors }, 400)
+      writeAvatar(id, check.text!)
+      this.opts.agentAvatarChanged?.(id)
+      return this.json({ ok: true })
+    }
+    if (avatarMatch) {
+      const text = readAvatar(avatarMatch[1]!)
+      if (text == null || !checkAvatar(text).ok) return this.json({ error: "no avatar" }, 404)
+      return new Response(text, { headers: { "content-type": "application/json", "cache-control": "no-cache" } })
+    }
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -3306,6 +3407,14 @@ export class WebChannel implements Channel {
         return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
       }
     }
+    {
+      const end = method === "POST" ? path.match(/^\/councils\/([^/]+)\/end$/) : null
+      if (end) {
+        if (!this.opts.endCouncil) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.endCouncil(decodeURIComponent(end[1]!))
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
+    }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/interrupt$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.interruptSession) return this.json({ error: "not configured" }, 503)
@@ -3567,6 +3676,8 @@ export class WebChannel implements Channel {
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
       const projects = uniqueKnownWorkdirs([...active, ...archived], home())
         .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        // The mux home and agent folders are supermux's own, not projects to pick.
+        .filter((p) => !isMuxInternalPath(p))
         .map((p) => ({ path: p }))
       return this.json({ projects })
     }
@@ -3958,6 +4069,8 @@ export class WebChannel implements Channel {
         await this.opts.renameSession(id, newName)
         return this.json({ ok: true })
       } catch (err: any) {
+        // An Agent name refusal (CreateAgentError: name_invalid / name_taken) keeps its status and code.
+        if (err?.code && typeof err?.status === "number") return this.json({ error: err.message, code: err.code }, err.status)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
@@ -4294,54 +4407,53 @@ export class WebChannel implements Channel {
       }
     }
 
-    // ── PA CRUD routes ──────────────────────────────────────────────────────
-    if (method === "POST" && path === "/api/pas") {
+    // ── Agent CRUD (/api/pas kept for old clients; /api/agents is the new name) ──
+    const agentsBase = path === "/api/agents" || path.startsWith("/api/agents/") ? "/api/agents"
+      : path === "/api/pas" || path.startsWith("/api/pas/") ? "/api/pas" : undefined
+    if (agentsBase && method === "POST" && path === agentsBase) {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const name = body.name as string | undefined
-      if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
-      if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
-      const agent = body.agent as AgentKind | undefined
-      if (agent != null && !isAgentKind(agent)) {
-        return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
-      }
-      const workdir = join(home(), ".mux", "workspace", name.trim())
-      try {
-        mkdirSync(workdir, { recursive: true })
-      } catch (err: any) {
-        return this.json({ error: err?.message ?? String(err) }, 500)
-      }
-      const focusText = body.focusText as string | undefined
-      if (focusText != null) {
-        try { writeFileSync(join(workdir, "focus.md"), focusText, "utf8") } catch {}
+      if (!this.opts.createAgent) return this.json({ error: "not configured" }, 503)
+      // `provider` is the new key; `agent` stays for old clients.
+      const provider = (body.provider ?? body.agent) as AgentKind | undefined
+      if (provider != null && !isAgentKind(provider)) {
+        return this.json({ code: "provider_invalid", error: `unknown provider: ${String(provider)}` }, 400)
       }
       try {
-        const result = await this.opts.spawnPA({
-          name: name.trim(),
-          workdir,
-          agent,
+        const r = await this.opts.createAgent({
+          name: typeof body.name === "string" ? body.name : "",
+          provider,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
         })
-        return this.json(result)
+        // The avatar picked in the create dialog's gallery (FORMAT.md). Invalid → the Agent keeps
+        // the generated default; creating it never fails over its look.
+        if (body.avatar != null) {
+          const check = checkAvatar(body.avatar)
+          if (check.ok) { writeAvatar(r.id, check.text!); this.opts.agentAvatarChanged?.(r.id) }
+        }
+        return this.json({ id: r.id, name: r.name, workdir: r.workdir, agent: r.provider, provider: r.provider, model: body.model, reasoningLevel: body.reasoningLevel })
       } catch (err: any) {
         const status = typeof err?.status === "number" ? err.status : 500
         return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
-    if (method === "GET" && path === "/api/pas") {
+    if (agentsBase && method === "GET" && path === agentsBase) {
       const pas = this.opts.listPAs?.() ?? this.opts.getSessionsSnapshot?.().filter((s) => s.role === "personal_assistant") ?? []
-      return this.json({ pas })
+      return this.json({ pas, agents: pas })
     }
-    if (method === "PATCH" && path.match(/^\/api\/pas\/[^/]+$/)) {
-      const name = decodeURIComponent(path.slice("/api/pas/".length))
+    if (agentsBase && method === "PATCH" && path.startsWith(`${agentsBase}/`) && path.length > agentsBase.length + 1 && !path.slice(agentsBase.length + 1).includes("/")) {
+      // The segment is an Agent id (new clients) or name (old clients); updateAgent resolves both.
+      const key = decodeURIComponent(path.slice(agentsBase.length + 1))
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const patch: { model?: string; reasoningLevel?: string } = {}
+      const patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string } = {}
       if (typeof body.model === "string") patch.model = body.model
       if (typeof body.reasoningLevel === "string") patch.reasoningLevel = body.reasoningLevel
+      if (body.isDefault === true) patch.isDefault = true
+      if (typeof body.name === "string") patch.name = body.name
       if (!this.opts.updatePA) return this.json({ error: "not configured" }, 503)
       try {
-        const result = await this.opts.updatePA(name, patch)
-        if (!result.ok) return this.json({ error: result.error ?? "update failed" }, 400)
+        const result = await this.opts.updatePA(key, patch)
+        if (!result.ok) return this.json({ ...(result.code ? { code: result.code } : {}), error: result.error ?? "update failed" }, result.status ?? 400)
         return this.json({ ok: true })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)

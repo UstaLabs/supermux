@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { initMux, seedSoulName } from "../src/core/memory/init"
+import { initMux } from "../src/core/memory/init"
 import { buildMemoryInjection } from "../src/core/memory/injector"
 import { rebuildIndex } from "../src/core/memory/rebuild"
 import { buildDomainIndex, buildAgentsMd } from "../src/core/memory/index-builder"
@@ -21,7 +21,7 @@ test("initMux creates directory structure", () => {
   const root = initMux(tmp)
   expect(root).toBe(tmp)
   expect(existsSync(join(tmp, "agents.md"))).toBe(true)
-  expect(existsSync(join(tmp, "soul.md"))).toBe(true)
+  expect(existsSync(join(tmp, "soul.md"))).toBe(false)
   expect(existsSync(join(tmp, "conventions.md"))).toBe(true)
   expect(existsSync(join(tmp, "personal", "identity.md"))).toBe(true)
   expect(existsSync(join(tmp, "personal", "preferences.md"))).toBe(true)
@@ -31,45 +31,19 @@ test("initMux creates directory structure", () => {
 
 test("initMux is idempotent — does not overwrite existing files", () => {
   initMux(tmp)
-  writeFileSync(join(tmp, "soul.md"), "# Custom Soul")
+  writeFileSync(join(tmp, "conventions.md"), "# Custom conventions")
   initMux(tmp)
-  expect(readFileSync(join(tmp, "soul.md"), "utf8")).toBe("# Custom Soul")
+  expect(readFileSync(join(tmp, "conventions.md"), "utf8")).toBe("# Custom conventions")
 })
 
-test("initMux does NOT clobber a custom file written before it ran (the onboarding soul bug)", () => {
-  // Repro: the onboarding soul editor (setSoul) writes a custom soul.md into a
-  // mux home that isn't initialized yet (no agents.md). initMux later (at PA
-  // spawn) must seed only the MISSING files, never overwrite the custom soul.
-  writeFileSync(join(tmp, "soul.md"), "# waifuu\nYou are a custom persona. MARKER42.")
+test("initMux does NOT clobber a custom file written before it ran", () => {
+  // A custom file can land in a mux home that isn't initialized yet (no agents.md);
+  // initMux must seed only the MISSING files, never overwrite it.
+  writeFileSync(join(tmp, "conventions.md"), "# mine\nMARKER42.")
   expect(existsSync(join(tmp, "agents.md"))).toBe(false)
   initMux(tmp)
-  expect(readFileSync(join(tmp, "soul.md"), "utf8")).toContain("MARKER42")
+  expect(readFileSync(join(tmp, "conventions.md"), "utf8")).toContain("MARKER42")
   expect(existsSync(join(tmp, "agents.md"))).toBe(true)
-})
-
-test("seedSoulName personalizes a pristine default soul.md with the PA name", () => {
-  initMux(tmp)
-  seedSoulName("chewy", tmp)
-  const soul = readFileSync(join(tmp, "soul.md"), "utf8")
-  expect(soul).toContain("# chewy")
-  expect(soul).toContain("You are chewy, the user's personal AI assistant")
-  // keeps the rest of the template
-  expect(soul).toContain("## Communication Style")
-})
-
-test("seedSoulName never clobbers a customized soul.md", () => {
-  initMux(tmp)
-  writeFileSync(join(tmp, "soul.md"), "# My Own Soul\nYou are whatever I say.")
-  seedSoulName("chewy", tmp)
-  expect(readFileSync(join(tmp, "soul.md"), "utf8")).toBe("# My Own Soul\nYou are whatever I say.")
-})
-
-test("seedSoulName is idempotent (second call is a no-op once seeded)", () => {
-  initMux(tmp)
-  seedSoulName("chewy", tmp)
-  const after1 = readFileSync(join(tmp, "soul.md"), "utf8")
-  seedSoulName("chewy", tmp) // seeded soul no longer matches the template → untouched
-  expect(readFileSync(join(tmp, "soul.md"), "utf8")).toBe(after1)
 })
 
 test("agents.md contains domain index placeholder when no domains", () => {

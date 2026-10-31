@@ -300,6 +300,7 @@ class FleetStore(
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
+    val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> = mergedMap { it.councils }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
@@ -434,6 +435,13 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.accountLogins ?: emptyFlow() }
 
+    /** `agents_changed` frames, and reconnects, of the ACTIVE host: its Agent list is stale. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAgentsChanged: Flow<Unit> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.agentsReload ?: emptyFlow() }
+
     /**
      * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
      * known (an old broker, or before the first snapshot).
@@ -454,6 +462,14 @@ class FleetStore(
                 } ?: flowOf(emptyList())
             }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
+
+    /** The ACTIVE host's mux home, bound like [activeProjectCatalog]. Null until its snapshot. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMuxHome: StateFlow<String?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.muxHome ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
     /**
      * Record ids of the connected hosts whose broker has sent a project catalog (an empty one
@@ -1339,6 +1355,15 @@ class FleetStore(
     }
     suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
+    /** Live dictation stream to the host a dictation would go to. THROWS when there is none or it fails. */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) {
+        val app = (sessionId?.let(::appFor) ?: activeApp()) ?: error("no host for this dictation")
+        app.openDictationStream(sessionId, dictationId, session)
+    }
     /** The probed voice capabilities of the host a dictation would go to. */
     suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
         (sessionId?.let(::appFor) ?: activeApp())?.appConfig()
@@ -1462,7 +1487,6 @@ class FleetStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         activeApp()?.spawn(workdir, name, agent, model, permissionMode)
     }
-    fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
     /**
      * Restart the active host's broker; true when the POST was accepted (cluster E3).
@@ -1578,12 +1602,18 @@ class FleetStore(
         reasoningLevel: String? = null,
     ): CuratorSettingsResponse? = activeApp()?.saveCurator(enabled, hour, minute, agent, model, reasoningLevel)
     suspend fun runCuratorNow(): Boolean = activeApp()?.runCuratorNow() == true
-    suspend fun assistantLoad(): Pair<String, String>? = activeApp()?.assistantLoad()
-    suspend fun assistantSave(paName: String, soul: String): String? = activeApp()?.assistantSave(paName, soul)
-    suspend fun personalAssistants(): List<PADto> = activeApp()?.personalAssistants().orEmpty()
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        activeApp()?.createPersonalAssistant(name, agent, focus) == true
-    suspend fun killPersonalAssistant(id: String) { (appFor(id) ?: activeApp())?.killPersonalAssistant(id) }
+    suspend fun listAgents(): AccountResult<List<PADto>> =
+        activeApp()?.listAgents() ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun createAgent(name: String, provider: String, model: String?, avatar: String? = null, effort: String? = null): AccountResult<Unit> =
+        activeApp()?.createAgent(name, provider, model, avatar, effort) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setAgentAvatar(id: String, json: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setAgentAvatar(id, json) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun killAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.killAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setDefaultAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.renameAgent(id, name) ?: AccountResult.Failed(null, null, "No host is connected.")
     /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
     suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)

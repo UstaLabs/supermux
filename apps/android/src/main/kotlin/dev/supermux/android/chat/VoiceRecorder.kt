@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 class VoiceRecorder : PcmRecorder {
     private var record: AudioRecord? = null
     private var reader: Thread? = null
-    private val buffer = ByteArrayOutputStream()
+    private val buffer = PcmBuffer()
     private val capturing = AtomicBoolean(false)
     private val _level = MutableStateFlow(0f)
     override val level: StateFlow<Float> get() = _level
@@ -73,6 +73,11 @@ class VoiceRecorder : PcmRecorder {
         return if (pcm.isEmpty()) null else wavFromPcm16(pcm, SAMPLE_RATE)
     }
 
+    override fun pcmSince(byteOffset: Long): ByteArray? {
+        if (!capturing.get()) return null
+        return buffer.copyFrom(byteOffset)
+    }
+
     override fun cancel() {
         record?.let { halt(it) }
         synchronized(buffer) { buffer.reset() }
@@ -86,6 +91,14 @@ class VoiceRecorder : PcmRecorder {
         r.release()
         record = null
         _level.value = 0f
+    }
+
+    /** The capture buffer, readable from an offset without copying everything before it — a live
+     *  dictation stream asks for the newest ~100 ms ten times a second, for minutes. */
+    private class PcmBuffer : ByteArrayOutputStream() {
+        @Synchronized
+        fun copyFrom(offset: Long): ByteArray =
+            if (offset >= count) ByteArray(0) else buf.copyOfRange(offset.coerceAtLeast(0).toInt(), count)
     }
 
     private companion object {

@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
+import { agentChoices } from "../models/agent-choices"
+import { agents } from "../agents/registry"
 import { join } from "path"
 import { openDb, runMigrations, type Db } from "../storage/db"
 import { Registry } from "./registry"
@@ -6,6 +8,7 @@ import { SessionManager, type SessionManagerPorts } from "./manager"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import { fakePorts, type PortSeams } from "../../../tests/helpers/session-manager-ports"
+import { shimTools } from "../../shim/tools"
 
 function manager(seams: PortSeams = {}): SessionManager {
   const db = openDb(":memory:")
@@ -31,6 +34,62 @@ describe("SessionManager resume frames", () => {
     const r = await m.resumeFromArchive("nope")
     expect(r.ok).toBe(false)
     expect(r.error).toContain("not archived")
+  })
+
+  test("restoring an archived Agent announces it as an Agent and fires agents_changed", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const frames: object[] = []
+    const m = new SessionManager(registry, fakePorts(db, { frames }))
+    const changed: string[] = []
+    registry.onAgentsChanged(() => changed.push("agents_changed"))
+    const ana = registry.registerPA({ name: "ana", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    registry.unregister(ana.id)
+    changed.length = 0
+    const spy = spyOn(agents.cursor, "resume").mockResolvedValue({ adapter: { fake: true } } as any)
+    try {
+      const r = await m.resumeFromArchive(ana.id)
+      expect(r.ok).toBe(true)
+    } finally { spy.mockRestore() }
+    const added = frames.find((f: any) => f.type === "session_added") as any
+    expect(added.session.role).toBe("personal_assistant")
+    expect(added.session.isDefault).toBe(false)
+    expect("avatar" in added.session).toBe(true) // the hash, or undefined when it has none
+    expect(changed).toEqual(["agents_changed"])
+  })
+
+  test("restoring an archived session brings its archived workspace back, so it is visible", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const frames: object[] = []
+    const m = new SessionManager(registry, fakePorts(db, { frames }))
+    const ana = registry.registerPA({ name: "ana", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    const ws = registry.workspaces.create({ name: "ana", workdir: "/tmp" })
+    db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, ana.id])
+    registry.unregister(ana.id)
+    registry.workspaces.archive(ws.id)
+    const spy = spyOn(agents.cursor, "resume").mockResolvedValue({ adapter: { fake: true } } as any)
+    try {
+      expect((await m.resumeFromArchive(ana.id)).ok).toBe(true)
+    } finally { spy.mockRestore() }
+    expect(registry.workspaces.getById(ws.id)!.status).toBe("active")
+    // A live session whose workspace is already live: nothing to do.
+    expect(m.reviveArchivedWorkspaceOf(ana.id)).toBe(false)
+  })
+
+  test("a live Agent left behind an archived workspace is repaired", () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const registry = new Registry(db)
+    const m = new SessionManager(registry, fakePorts(db, {}))
+    const kahya = registry.registerPA({ name: "kahya", agent: "cursor" as any, workdir: "/tmp", pid: 1, agent_home: "/tmp/h" })
+    const ws = registry.workspaces.create({ name: "kahya", workdir: "/tmp" })
+    db.run("UPDATE sessions SET workspace_id = ? WHERE id = ?", [ws.id, kahya.id])
+    registry.workspaces.archive(ws.id)
+    expect(m.reviveArchivedWorkspaceOf(kahya.id)).toBe(true)
+    expect(registry.workspaces.getById(ws.id)!.status).toBe("active")
   })
 })
 
@@ -842,6 +901,36 @@ describe("onRegister already-known Core Claude row", () => {
   })
 })
 
+describe("register reply: the tools the external shim serves", () => {
+  function registerAs(server: string | undefined, opts: { core?: boolean; member?: boolean } = {}) {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const ports = fakePorts(db)
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w", workdir: "/tmp", pid: 0, agent: "codex", core: opts.core ?? true })
+    ports.councils.isMember = (id: string) => opts.member === true && id === s.id
+    return m.handleRegister({ session_id: s.id, workdir: "/tmp", pid: 1, ...(server ? { server } : {}) } as never)
+  }
+
+  test("mux-shim gets this broker's list, council_report only for a council member", async () => {
+    expect((await registerAs("mux-shim")).tools).toEqual(shimTools("mux-shim", { choices: agentChoices(() => []) }))
+    const member = await registerAs("mux-shim", { member: true })
+    expect(member.council_member).toBe(true)
+    expect(member.tools).toEqual(shimTools("mux-shim", { councilMember: true, choices: agentChoices(() => []) }))
+    expect(member.tools!.map((t) => t.name)).toContain("council_report")
+  })
+
+  test("mux-rpc gets resolve/reject; the same holds for a non-core row", async () => {
+    expect((await registerAs("mux-rpc")).tools).toEqual(shimTools("mux-rpc"))
+    expect((await registerAs("mux-shim", { core: false })).tools).toEqual(shimTools("mux-shim", { choices: agentChoices(() => []) }))
+  })
+
+  test("mux-channel, and a shim that does not say which server it is, get no tools key", async () => {
+    expect(await registerAs("mux-channel")).not.toHaveProperty("tools")
+    expect(await registerAs(undefined)).not.toHaveProperty("tools")
+  })
+})
+
 describe("SessionManager.kill worktree", () => {
   // Worktree cleanup is explicit (user-confirmed) only. A clean worktree with no
   // commits used to be auto-removed on kill — which also deleted it from under a
@@ -871,5 +960,138 @@ describe("SessionManager.kill worktree", () => {
 
     expect(existsSync(wt)).toBe(true)
     expect(String(git(repo, ["branch", "--list", "mux/test-1"]))).toContain("mux/test-1")
+  })
+})
+
+describe("kill: one stop for every core agent, and the children first", () => {
+  const stopper = (id: string, kind: string, log: string[]) =>
+    ({ kind, sessionName: id, workdir: "/tmp", async stop() { log.push(id) } }) as never
+
+  test("a Cursor session's adapter is stopped (it used to be skipped, leaving cursor-agent running)", async () => {
+    const m = manager()
+    const stopped: string[] = []
+    m.registry.register({ id: "cu", name: "cu", workdir: "/tmp", pid: 0, agent: "cursor" })
+    m.registerCursorRuntime("cu", stopper("cu", "cursor", stopped))
+    await m.kill("cu")
+    expect(stopped).toEqual(["cu"])
+    expect(m.adapterFor("cu")).toBeUndefined()
+  })
+
+  test("a Codex session registered by the spawn path (a handle with no kill()) is stopped through its adapter", async () => {
+    const m = manager()
+    const stopped: string[] = []
+    m.registry.register({ id: "cx3", name: "cx3", workdir: "/tmp", pid: 0, agent: "codex" })
+    // codex/session.ts registers { onExit } as the handle; kill() used to call handle.kill() and throw.
+    m.registerCodexRuntime("cx3", "cx3", stopper("cx3", "codex", stopped), { onExit: () => {} } as never)
+    await m.kill("cx3")
+    expect(stopped).toEqual(["cx3"])
+  })
+
+  test("children and their children are killed and archived first; the session itself is left to the caller", async () => {
+    const frames: object[] = []
+    const m = manager({ frames })
+    const stopped: string[] = []
+    for (const [id, agent] of [["p", "codex"], ["c1", "codex"], ["c2", "grok"], ["g1", "cursor"], ["other", "codex"]] as const) {
+      m.registry.register({ id, name: id, workdir: "/tmp", pid: 0, agent })
+    }
+    m.registry.sessions.setParent("c1", "p")
+    m.registry.sessions.setParent("c2", "p")
+    m.registry.sessions.setParent("g1", "c1")
+    m.registerCodexRuntime("p", "p", stopper("p", "codex", stopped))
+    m.registerCodexRuntime("c1", "c1", stopper("c1", "codex", stopped))
+    m.registerGrokRuntime("c2", stopper("c2", "grok", stopped))
+    m.registerCursorRuntime("g1", stopper("g1", "cursor", stopped))
+    m.registerCodexRuntime("other", "other", stopper("other", "codex", stopped))
+    await m.kill("p")
+    expect(stopped).toEqual(["g1", "c1", "c2", "p"])
+    for (const id of ["g1", "c1", "c2"]) expect(m.registry.sessions.getById(id)?.status).toBe("archived")
+    expect(m.registry.get("p")).toBeDefined()
+    expect(m.registry.get("other")).toBeDefined()
+    expect(frames.filter((f: any) => f.type === "session_removed").map((f: any) => f.id)).toEqual(["g1", "c1", "c2"])
+  })
+
+  test("a child that fails to stop stops the kill: the parent keeps running and the error reaches the caller", async () => {
+    const m = manager()
+    const stopped: string[] = []
+    m.registry.register({ id: "p", name: "p", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "c", name: "c", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.sessions.setParent("c", "p")
+    m.registerCodexRuntime("p", "p", stopper("p", "codex", stopped))
+    m.registerCodexRuntime("c", "c", { kind: "codex", sessionName: "c", workdir: "/tmp", async stop() { throw new Error("stop failed") } } as never)
+    await expect(m.kill("p")).rejects.toThrow("stop failed")
+    expect(stopped).toEqual([])
+    expect(m.adapterFor("p")).toBeDefined()
+    expect(m.registry.get("c")).toBeDefined()
+  })
+
+  test("a parent-link cycle in a hand-edited database ends, and every agent in it is stopped", async () => {
+    const frames: object[] = []
+    const m = manager({ frames })
+    const stopped: string[] = []
+    m.registry.register({ id: "a", name: "a", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "b", name: "b", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.sessions.setParent("a", "b")
+    m.registry.sessions.setParent("b", "a")
+    m.registerCodexRuntime("a", "a", stopper("a", "codex", stopped))
+    m.registerCodexRuntime("b", "b", stopper("b", "codex", stopped))
+    await m.kill("a")
+    expect(stopped).toEqual(["b", "a"])
+    expect(m.registry.get("b")).toBeUndefined()
+    // The session itself is still left to the caller, as for any other kill.
+    expect(m.registry.get("a")).toBeDefined()
+    expect(frames.filter((f: any) => f.type === "session_removed").map((f: any) => f.id)).toEqual(["b"])
+  })
+})
+
+describe("unregister", () => {
+  test("forgets the session's reply target", () => {
+    const forgotten: string[] = []
+    const m = manager({ forgotten })
+    m.registry.register({ id: "s", name: "s", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.unregister("s")
+    expect(forgotten).toEqual(["s"])
+    expect(m.registry.sessions.getById("s")?.status).toBe("archived")
+  })
+})
+
+describe("killAndArchive (the app's kill, kill_session and /kill)", () => {
+  test("kills and archives the session and its children, tells the clients, and retires its workspace", async () => {
+    const frames: object[] = [], forgotten: string[] = [], retired: string[] = []
+    const m = manager({ frames, forgotten, retired })
+    const ws = m.registry.workspaces.create({ name: "w", workdir: "/tmp" })
+    m.registry.register({ id: "p", name: "p", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "c", name: "c", workdir: "/tmp", pid: 0, agent: "cursor" })
+    m.registry.sessions.setParent("c", "p")
+    m.registry.db.run("UPDATE sessions SET workspace_id = ? WHERE id IN ('p', 'c')", [ws.id])
+    await m.killAndArchive("p")
+    expect(m.registry.sessions.getById("p")?.status).toBe("archived")
+    expect(m.registry.sessions.getById("c")?.status).toBe("archived")
+    expect(forgotten).toEqual(["c", "p"])
+    expect(retired).toEqual([ws.id])
+    expect(frames.filter((f: any) => f.type === "session_removed").map((f: any) => f.id)).toEqual(["c", "p"])
+  })
+
+  test("an unknown session throws, which the app's DELETE turns into an error", async () => {
+    await expect(manager().killAndArchive("nope")).rejects.toThrow("session not found")
+  })
+})
+
+describe("a child's archive is reported, with who ended it", () => {
+  test("killAndArchive reports the child with its endedBy; the cascade reports grandchildren as cascade", async () => {
+    const archivedChildren: Array<{ id: string; cascade?: boolean; endedBy?: "parent" | "client" }> = []
+    const m = manager({ archivedChildren })
+    m.registry.register({ id: "p", name: "p", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.registry.register({ id: "c", name: "c", workdir: "/tmp", pid: 0, agent: "codex", parent_session_id: "p" })
+    m.registry.register({ id: "g", name: "g", workdir: "/tmp", pid: 0, agent: "codex", parent_session_id: "c" })
+    await m.killAndArchive("c", { endedBy: "client" })
+    expect(archivedChildren).toEqual([{ id: "g", cascade: true }, { id: "c", endedBy: "client" }])
+  })
+
+  test("a session with no parent is not reported", async () => {
+    const archivedChildren: Array<{ id: string }> = []
+    const m = manager({ archivedChildren })
+    m.registry.register({ id: "top", name: "top", workdir: "/tmp", pid: 0, agent: "codex" })
+    await m.killAndArchive("top")
+    expect(archivedChildren).toEqual([])
   })
 })

@@ -33,6 +33,10 @@ data class SessionInfo(
     val permissionMode: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
+    /** The default Agent (where messages without a target land). */
+    val isDefault: Boolean? = null,
+    /** An Agent's avatar content hash; fetch GET /agents/<id>/avatar when it changes. Null = none. */
+    val avatar: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
     val session_branch: String? = null,
     /** At-a-glance worktree-vs-base (or branch-vs-remote) divergence; null when not a git repo. */
@@ -99,6 +103,18 @@ data class LogEntry(
      * text): which subagent it went to. Absent on every other entry and on an older broker.
      */
     val subagent_id: String? = null,
+    /** An inbox message (channel "inbox"): the sending session's id, or "supermux", or a council's id. */
+    val from_session_id: String? = null,
+    /** The sender's display name when it was delivered (a session's name, "supermux", a council's name). */
+    val from_session_name: String? = null,
+    /** The sending session's agent kind ("claude", "codex", …), when the sender is a session. */
+    val from_agent: String? = null,
+    /** A council's forwarded report: which council, round and member letter. */
+    val council_id: String? = null,
+    val council_round: Int? = null,
+    val council_letter: String? = null,
+    /** The agent's turn ended in this error (the broker's error reply). */
+    val error: Boolean = false,
 )
 
 @Serializable
@@ -234,6 +250,68 @@ data class Subagent(
     val label: String get() = description?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: id.take(8)
 }
 
+/**
+ * A council as its caller sees it (broker `CouncilView`, spec 2026-10-28 §5): snapshot `councils`
+ * (caller session id → its councils) and the `council_update` frame, which carries the FULL view
+ * (upsert by [id]). [members]' statuses are for the current [round]; [rounds] hold every report.
+ */
+@Serializable
+data class CouncilView(
+    val id: String,
+    val name: String = "",
+    val question: String = "",
+    val round: Int = 1,
+    /** The current round's focus (round 1 has none). */
+    val focus: String? = null,
+    /** "open" or "ended" (its caller's council_end, the user's Stop council, or no member left). */
+    val status: String = "open",
+    /** Who ended it: "caller", "user" or "empty". */
+    val endedBy: String? = null,
+    /** The caller's conclusion, given when it ended the council. */
+    val verdict: String? = null,
+    /** ISO-8601. */
+    val endedAt: String? = null,
+    /** The caller's `council` tool call that opened it, when the agent reported one. */
+    val callId: String? = null,
+    /** ISO-8601. */
+    val createdAt: String = "",
+    val members: List<CouncilMember> = emptyList(),
+    val rounds: List<CouncilRound> = emptyList(),
+)
+
+@Serializable
+data class CouncilMember(
+    val letter: String,
+    /** The member's session id. */
+    val session: String,
+    val name: String = "",
+    /** Agent kind ("claude", "codex", …). */
+    val agent: String = "",
+    val model: String? = null,
+    /** How the caller sees it: its model's name, else the agent's ("GPT-6", "Grok"). */
+    val label: String = "",
+    /** In the current round: reported | failed | crashed | killed | working. */
+    val status: String = "working",
+)
+
+@Serializable
+data class CouncilRound(
+    val round: Int,
+    val focus: String? = null,
+    val startedAt: String = "",
+    val completedAt: String? = null,
+    val reports: List<CouncilReport> = emptyList(),
+)
+
+@Serializable
+data class CouncilReport(
+    val id: String,
+    val letter: String,
+    val seq: Int = 0,
+    val text: String = "",
+    val at: String = "",
+)
+
 @Serializable
 data class AgentStatus(
     val phase: String,               // legacy alias (idle|thinking|running|stalled)
@@ -245,7 +323,11 @@ data class AgentStatus(
     val workingSince: Long? = null,
     val waiting: Boolean = false,    // idle but background tasks still open
     val bgOpen: Int = 0,             // open background-task count
-)
+    val agentsRunning: Int = 0,      // background subagents still running — filled in by HostStore, not sent
+) {
+    /** Shown as working: the agent's own turn, or subagents it started that are still running. */
+    val busy: Boolean get() = working || agentsRunning > 0
+}
 
 @Serializable
 data class SendArgs(val text: String = "", val attachments: List<String>? = null)
@@ -384,6 +466,8 @@ sealed interface ServerFrame {
         val bgTasks: Map<String, List<BgTask>> = emptyMap(),
         /** Session id → its subagents (running + recent finished). Empty from an older broker. */
         val subagents: Map<String, List<Subagent>> = emptyMap(),
+        /** Caller session id → the councils it called. Empty from an older broker. */
+        val councils: Map<String, List<CouncilView>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -406,6 +490,11 @@ sealed interface ServerFrame {
         val onboarded: Boolean = false,
         /** Persistent project catalog. Empty from a broker older than persistent projects. */
         val projects: List<ProjectDto> = emptyList(),
+        /**
+         * The broker's mux home (`MUX_HOME`, in the host's own path form) — see
+         * `isMuxInternalPath`. Null from an older broker.
+         */
+        val muxHome: String? = null,
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
         val requests: Map<String, List<PromptRequest>> = emptyMap(),
@@ -553,6 +642,17 @@ sealed interface ServerFrame {
     @Serializable @SerialName("accounts_changed")
     data object AccountsChanged : ServerFrame
 
+    /**
+     * The Agent list changed (created, killed/archived, made default, renamed). No payload — a
+     * client showing the Agents screen reloads GET /api/pas.
+     */
+    @Serializable @SerialName("agents_changed")
+    data object AgentsChanged : ServerFrame
+
+    /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
+    @Serializable @SerialName("agent_avatar_changed")
+    data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame
+
     /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
     @Serializable @SerialName("account_login_state")
     data class AccountLoginState(
@@ -633,6 +733,10 @@ sealed interface ServerFrame {
     /** The session's subagent list was dropped (session archived/killed). */
     @Serializable @SerialName("subagents_cleared")
     data class SubagentsCleared(val session: String) : ServerFrame
+
+    /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
+    @Serializable @SerialName("council_update")
+    data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
