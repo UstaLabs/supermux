@@ -102,9 +102,11 @@ const ORCHESTRATION_TOOLS = [
       "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
       "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
       "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
-      "\"worktree\" gives each member a new git worktree from your current branch, and starts no member if one can't be made. " +
-      "Each member runs on its agent's account with the most room left. You are told when a member crashes, is killed " +
-      "by someone else, or a turn of it ends in an error.",
+      "\"worktree\" gives each member a new git worktree from your current branch. " +
+      "It returns as soon as the council is saved; the members start in the background, so don't wait for them or check " +
+      "on them: their answers arrive in your inbox. " +
+      "Each member runs on its agent's account with the most room left. You are told when a member can't start, crashes, " +
+      "is stopped by the user or killed by someone else, or a turn of it ends in an error.",
     inputSchema: {
       type: "object",
       properties: {

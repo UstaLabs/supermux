@@ -34,21 +34,43 @@ function setup(over: { busy?: (id: string) => boolean } = {}) {
   return { registry, store, council, sent, notices, changes, replies, caller, c, a, b }
 }
 
-test("opened sends each member only the question, from the council", () => {
+test("opened shows the saved council on the caller's card and sends nothing", () => {
   const t = setup()
   t.council.opened(t.c.id)
+  expect(t.sent).toEqual([])
+  expect(t.changes.at(-1)?.view.members.map((m) => [m.letter, m.status])).toEqual([["A", "working"], ["B", "working"]])
+})
+
+test("a member that started gets only the question, from the council", () => {
+  const t = setup()
+  t.council.memberStarted(t.a.id)
+  t.council.memberStarted(t.b.id)
   expect(t.sent).toEqual([
     { from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." },
     { from: `council-1:${t.c.id}`, to: t.b.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." },
   ])
-  expect(t.changes.at(-1)?.view.members.map((m) => [m.letter, m.status])).toEqual([["A", "working"], ["B", "working"]])
 })
 
-test("opened sends the question only to live members: a message would restore an archived one", () => {
+test("a member stopped while it was starting gets no question: a message would restore it", () => {
   const t = setup()
   t.registry.unregister(t.b.id)
+  t.council.memberStarted(t.b.id)
+  expect(t.sent).toEqual([])
+})
+
+test("a member still starting (no session yet) shows as working", () => {
+  const t = setup()
+  t.store.addMember(t.c.id, "m-new", "C")
   t.council.opened(t.c.id)
-  expect(t.sent).toEqual([{ from: `council-1:${t.c.id}`, to: t.a.id, text: "Refresh tokens?\n\nAnswer with council_report({ text })." }])
+  expect(t.changes.at(-1)?.view.members.find((m) => m.letter === "C")?.status).toBe("working")
+})
+
+test("a member that couldn't start is failed and a live caller hears why", () => {
+  const t = setup()
+  t.store.addMember(t.c.id, "m-new", "C")
+  t.council.memberStartFailed("m-new", "opencode exited at once")
+  expect(t.notices).toEqual([{ to: t.caller.id, text: "council-1 · C couldn't start:\nopencode exited at once" }])
+  expect(t.changes.at(-1)?.view.members.find((m) => m.letter === "C")?.status).toBe("failed")
 })
 
 test("a report is recorded and forwarded to the caller at once, with the member's name and the council tag", () => {
@@ -102,6 +124,9 @@ test("a crash or a kill sets the member's status and tells a live caller; not fo
   expect(t.changes.at(-1)!.view.members.find((m) => m.letter === "A")?.status).toBe("crashed")
   t.notices.length = 0
   t.council.memberArchived(t.registry.get(t.b.id)!, { endedBy: "client" })
+  expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] was stopped by the user.\nIt sent no message.` }])
+  t.notices.length = 0
+  t.council.memberArchived(t.registry.get(t.b.id)!, {})
   expect(t.notices).toEqual([{ to: t.caller.id, text: `council-1 · B [council-1 B:${t.b.id}] was killed.\nIt sent no message.` }])
   t.notices.length = 0
   t.council.memberArchived(t.registry.get(t.b.id)!, { endedBy: "parent" })
