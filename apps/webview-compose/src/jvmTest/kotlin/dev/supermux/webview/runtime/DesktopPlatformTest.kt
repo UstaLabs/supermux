@@ -7,15 +7,12 @@ import dev.supermux.webview.engine.WebEngineResult
 import dev.supermux.webview.engine.linux.LinuxWebEngineFactory
 import dev.supermux.webview.engine.mac.MacWebEngineFactory
 import dev.supermux.webview.engine.windows.WindowsWebEngineFactory
-import dev.supermux.webview.testing.MacEngineTesting
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 
-/** Which engine and pool each desktop gets (D12), and the test driver's window copies. */
+/** Which engine and pool each desktop gets (D12). The test driver's window copies are tested with it, in the testing module. */
 class DesktopPlatformTest {
     private val config = EngineConfig(WebProfile.Default)
 
@@ -44,13 +41,5 @@ class DesktopPlatformTest {
     @Test fun macOs14AndLaterGetTheMacEngine() {
         assertIs<MacWebEngineFactory>(desktopEngineFactory("Mac OS X", "14.0"))
         assertIs<MacWebEngineFactory>(desktopEngineFactory("Mac OS X", "26.6.2"))
-    }
-
-    @Test fun aWindowCopyCarriesItsSizeFirst() {
-        val copied = MacEngineTesting.copiedOf(byteArrayOf(0, 0, 0, 2, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 8))
-        assertEquals(2, copied!!.width)
-        assertEquals(1, copied.height)
-        assertContentEquals(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8), copied.rgba)
-        assertNull(MacEngineTesting.copiedOf(byteArrayOf(0, 0, 0, 2, 0, 0, 0, 2, 1, 2, 3, 4)), "too short for 2 x 2")
     }
 }

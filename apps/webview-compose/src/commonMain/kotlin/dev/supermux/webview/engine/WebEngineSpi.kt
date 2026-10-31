@@ -2,7 +2,7 @@ package dev.supermux.webview.engine
 
 /**
  * Marks the engine SPI: what an engine implements and what the runtime drives it with. That is [WebEngine],
- * [EngineEvent], [EngineConfig], [PageSetup], [EngineClient], [EmbeddingMode], [WebEngineResult],
+ * [EngineEvent], [EngineConfig], [PageSetup], [EngineClient], [EmbeddingMode], [WebEngineResult], [EngineEventQueue],
  * [WebEngineFactory.create] and the `WebEngineFactory { … }` builder, the page side of the bridge
  * ([dev.supermux.webview.bridge.BridgeShim], [dev.supermux.webview.bridge.WebBridge.READY_PREFIX] and
  * [dev.supermux.webview.bridge.WebBridge.READY_MAX_CHARS]) and the overlay cut-outs

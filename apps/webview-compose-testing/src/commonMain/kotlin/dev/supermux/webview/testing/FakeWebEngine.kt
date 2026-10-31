@@ -23,8 +23,6 @@ import androidx.compose.ui.unit.IntSize
 import dev.supermux.webview.UnavailableReason
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebProfile
-import dev.supermux.webview.bridge.BridgeCodec
-import dev.supermux.webview.bridge.BridgeMessage
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -34,7 +32,6 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
-import dev.supermux.webview.originOf as urlOrigin
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -277,7 +274,7 @@ public class FakeWebEngine(
         val content = current ?: return false
         val document = nonce ?: return false
         if (released) return false
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(BridgeMessage.Event(name, data), from = document)), document)
+        emit(EngineEvent.PageMessage(originOf(content), FakePageWire.event(name, data, from = document)), document)
         return true
     }
 
@@ -330,11 +327,10 @@ public class FakeWebEngine(
             return
         }
         // As the shim does: a $hello needs no address, and anything else for another document is dropped.
-        val envelope = BridgeCodec.decodeEnvelope(json)
-        val message = envelope?.message
-        val hello = message is BridgeMessage.Event && message.name == "\$hello"
+        val message = FakePageWire.read(json)
+        val hello = message?.event == "\$hello"
         val document = nonce
-        if (document != null && !hello && envelope?.to != document) {
+        if (document != null && !hello && message?.to != document) {
             record("post-misaddressed:", json)
             return
         }
@@ -345,9 +341,9 @@ public class FakeWebEngine(
             // As the shim does: a new connection hears again of a provider an earlier one, or nobody, heard of.
             announce(content)
             if (behavior.pageState != null) tellSaveProvider(content)
-        } else if (message is BridgeMessage.Call && message.method == "\$saveState") {
-            val reply = BridgeMessage.Reply(message.id, behavior.pageState ?: JsonNull)
-            emit(EngineEvent.PageMessage(targetOrigin, BridgeCodec.encode(reply, from = document)), document)
+        } else if (message != null && message.call == "\$saveState") {
+            val id = message.callId ?: return
+            emit(EngineEvent.PageMessage(targetOrigin, FakePageWire.reply(id, behavior.pageState ?: JsonNull, from = document)), document)
         }
     }
 
@@ -586,14 +582,14 @@ public class FakeWebEngine(
 
     /** The shim's `$ready`: its nonce in `d.nonce`, and, like everything the page sends, in `from`. */
     private fun announce(content: WebContent) {
-        val ready = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(ready, from = nonce)), nonce)
+        val ready = FakePageWire.event("\$ready", buildJsonObject { put("nonce", nonce) }, from = nonce)
+        emit(EngineEvent.PageMessage(originOf(content), ready), nonce)
     }
 
     /** The shim's word that the page has a save provider, which [FakeEngineBehavior.pageState] says it has. */
     private fun tellSaveProvider(content: WebContent) {
-        val provider = BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))
-        emit(EngineEvent.PageMessage(originOf(content), BridgeCodec.encode(provider, from = nonce)), nonce)
+        val provider = FakePageWire.event("\$saveStateProvider", JsonPrimitive(true), from = nonce)
+        emit(EngineEvent.PageMessage(originOf(content), provider), nonce)
     }
 
     private fun urlOf(content: WebContent): String = when (content) {
@@ -603,7 +599,7 @@ public class FakeWebEngine(
     }
 
     private fun originOf(content: WebContent): String = when (content) {
-        is WebContent.Url -> urlOrigin(content.url)
+        is WebContent.Url -> fakePageOrigin(content.url)
         is WebContent.Html -> content.origin.origin
         is WebContent.Bundle -> content.origin.origin
     }

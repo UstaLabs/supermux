@@ -74,6 +74,8 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(libs.coroutines.test)
+                // The fake engine, from the testing module (which depends on this one's main artifact).
+                implementation(project(":webview-compose-testing"))
             }
         }
         // The compiler takes opt-ins only from a compilation's own source set (jvmTest, wasmJsTest, …), never from the

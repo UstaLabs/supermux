@@ -7,9 +7,10 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-// webview-sample: the standalone sample and perf lab for :webview-compose. It depends on :webview-compose and on
-// NOTHING else of supermux, like :terminal-sample: if the library can only be used from inside this repository, this
-// module stops building. The desktop runs the library's fake engine until a desktop engine is built; the browser
+// webview-sample: the standalone sample and perf lab for :webview-compose. It depends on :webview-compose, its testing
+// module :webview-compose-testing (the fake engine, the macOS checks' driver) and NOTHING else of supermux, like
+// :terminal-sample: if the library can only be used from inside this repository, this module stops building. Like any
+// other module, it sees the library's public API and, opted in, its engine SPI: nothing internal. The desktop runs the library's fake engine until a desktop engine is built; the browser
 // (wasmJs) runs the real web engine, an iframe per live page; Android runs the system WebView (or the fake engine, to
 // compare); iOS runs the real WKWebView engine, and with `-engine-checks` the engine's conformance checks. Each engine
 // plan adds its platform's target and engine.
@@ -75,6 +76,8 @@ kotlin {
         }
         commonMain.dependencies {
             implementation(project(":webview-compose"))
+            // The fake engine (the perf lab's desktop and Android runs), and MacEngineTesting for the macOS checks.
+            implementation(project(":webview-compose-testing"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.ui)

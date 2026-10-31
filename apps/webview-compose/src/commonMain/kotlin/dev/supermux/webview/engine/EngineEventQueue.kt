@@ -41,20 +41,17 @@ import kotlinx.coroutines.flow.flow
  *   - When the last subscriber leaves, what it left unheard is cut down the same way, its first paint dropped too: that
  *     was the paint of the place its view gave up.
  *
+ * Part of the engine SPI: every engine of the library buffers its events here, and an engine of another module (the
+ * testing module's fake, say) keeps the contract by doing the same.
+ *
  * @param floodLimit how many page messages and console lines may wait for a subscriber that fell behind.
  * @param maxChars how many characters of them may wait for it: as many as the bridge takes in one burst.
  */
-internal class EngineEventQueue(
+@WebEngineSpi
+public class EngineEventQueue(
     private val floodLimit: Int = 256,
     private val maxChars: Int = 1 shl 20,
 ) {
-    /**
-     * The queue no longer overflows, and has no one to tell: a parked page's messages are dropped as they come, and it
-     * stays adoptable. [onOverflow] is never called. Engines drop the argument.
-     */
-    @Deprecated("A parked page's messages are dropped as they come: nothing overflows, and the page stays adoptable. Drop the argument.")
-    constructor(@Suppress("UNUSED_PARAMETER") onOverflow: (() -> Unit)?) : this()
-
     /** A queued event; [chars] is what a page message or console line counts against [maxChars]. */
     private class Entry(val epoch: Int, var event: EngineEvent, val document: Any?, var chars: Int)
 
@@ -69,14 +66,14 @@ internal class EngineEventQueue(
     private var subscribers = 0
 
     /** The epoch events are offered in now. */
-    var epoch: Int = 0
+    public var epoch: Int = 0
         private set
 
     /**
      * Page messages and console output dropped: under a flood, while a subscriber is attached, and everything but the
      * latest `$ready` while none is.
      */
-    var dropped: Long = 0
+    public var dropped: Long = 0
         private set
 
     /**
@@ -84,7 +81,7 @@ internal class EngineEventQueue(
      * starts a [reset], focus changes. A load, reload or restore keeps the focus the view's page has; a reset
      * ([WebEngine.reset]) must pass [reset], so the last lease's focus reaches no later subscriber.
      */
-    fun advance(reset: Boolean = false): Int {
+    public fun advance(reset: Boolean = false): Int {
         epoch++
         val kept = entries.filter { it.event == EngineEvent.Crashed || (!reset && it.event is EngineEvent.FocusChanged) }
         entries.clear()
@@ -95,7 +92,7 @@ internal class EngineEventQueue(
     }
 
     /** Queues [event] in the current epoch. [document] identifies the document a page message came from. */
-    fun offer(event: EngineEvent, document: Any? = null) {
+    public fun offer(event: EngineEvent, document: Any? = null) {
         if (subscribers == 0) {
             if (!keepUnheard(event, document)) return
         } else {
@@ -112,7 +109,7 @@ internal class EngineEventQueue(
     }
 
     /** The next event to deliver, or null when none is queued. */
-    fun poll(): EngineEvent? {
+    public fun poll(): EngineEvent? {
         while (true) {
             val entry = entries.removeFirstOrNull() ?: return null
             if (isMessage(entry.event)) {
@@ -124,7 +121,7 @@ internal class EngineEventQueue(
     }
 
     /** What [poll] gives, as a flow, for the engine's one subscriber at a time. */
-    val events: Flow<EngineEvent> = flow {
+    public val events: Flow<EngineEvent> = flow {
         subscribers++
         try {
             while (true) {
