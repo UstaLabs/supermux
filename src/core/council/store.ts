@@ -4,13 +4,20 @@ import type { Db } from "../storage/db"
 
 export type MemberRoundStatus = "reported" | "crashed" | "killed" | "failed"
 
+/** Who ended a council (design 2026-10-31 §3): its caller (council_end), the user (Stop council), or no member was left. */
+export type CouncilEndedBy = "caller" | "user" | "empty"
+
 export type CouncilRecord = {
   id: string
   name: string
   callerSessionId: string
   question: string
   currentRound: number
-  status: "open"
+  status: "open" | "ended"
+  endedBy?: CouncilEndedBy
+  /** The caller's conclusion, given with council_end. */
+  verdict?: string
+  endedAt?: string
   callId?: string
   createdAt: string
 }
@@ -18,7 +25,10 @@ export type CouncilMember = { councilId: string; sessionId: string; letter: stri
 export type CouncilRound = { round: number; focus?: string; startedAt: string; completedAt?: string }
 export type CouncilReport = { id: string; councilId: string; round: number; memberSessionId: string; letter: string; seq: number; text: string; at: string }
 
-type CouncilRow = { id: string; name: string; caller_session_id: string; question: string; current_round: number; status: string; call_id: string | null; created_at: string }
+type CouncilRow = {
+  id: string; name: string; caller_session_id: string; question: string; current_round: number; status: string
+  ended_by: string | null; verdict: string | null; ended_at: string | null; call_id: string | null; created_at: string
+}
 
 const toRecord = (r: CouncilRow): CouncilRecord => ({
   id: r.id,
@@ -26,7 +36,10 @@ const toRecord = (r: CouncilRow): CouncilRecord => ({
   callerSessionId: r.caller_session_id,
   question: r.question,
   currentRound: r.current_round,
-  status: "open",
+  status: r.status === "ended" ? "ended" : "open",
+  ...(r.ended_by ? { endedBy: r.ended_by as CouncilEndedBy } : {}),
+  ...(r.verdict !== null ? { verdict: r.verdict } : {}),
+  ...(r.ended_at ? { endedAt: r.ended_at } : {}),
   ...(r.call_id ? { callId: r.call_id } : {}),
   createdAt: r.created_at,
 })
@@ -58,6 +71,14 @@ export class CouncilStore {
 
   byCaller(callerSessionId: string): CouncilRecord[] {
     return (this.db.query("SELECT * FROM councils WHERE caller_session_id = ? ORDER BY created_at, rowid").all(callerSessionId) as CouncilRow[]).map(toRecord)
+  }
+
+  /** Ends an open council; false when it was ended already (the first end stands). */
+  end(councilId: string, by: CouncilEndedBy, verdict?: string, now: Date = new Date()): boolean {
+    return this.db.run(
+      "UPDATE councils SET status = 'ended', ended_by = ?, verdict = ?, ended_at = ? WHERE id = ? AND status = 'open'",
+      [by, verdict ?? null, now.toISOString(), councilId],
+    ).changes > 0
   }
 
   /** Recorded before the member starts: its preamble and its tool list read it (spec §5). */
@@ -132,6 +153,11 @@ export class CouncilStore {
       "DELETE FROM council_member_status WHERE council_id = ? AND round = ? AND member_session_id = ? AND status = ?",
       [councilId, round, memberSessionId, status],
     ).changes > 0
+  }
+
+  /** The member had `status` in some round of the council. */
+  hadStatus(councilId: string, memberSessionId: string, status: MemberRoundStatus): boolean {
+    return !!this.db.query("SELECT 1 FROM council_member_status WHERE council_id = ? AND member_session_id = ? AND status = ? LIMIT 1").get(councilId, memberSessionId, status)
   }
 
   statuses(councilId: string, round: number): Map<string, MemberRoundStatus> {

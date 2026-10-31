@@ -65,7 +65,7 @@ class CouncilCardShots {
                     SupermuxTheme(appearance = if (dark) AppearanceMode.DARK else AppearanceMode.LIGHT) {
                         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).padding(16.dp), contentAlignment = Alignment.TopCenter) {
                             CompositionLocalProvider(LocalCouncilActivity provides live) {
-                                CouncilCard(TimelineItem.CouncilCard(council, failures = mapOf("D" to "API error (status 402 Payment Required)")), killSession = {})
+                                CouncilCard(TimelineItem.CouncilCard(council, failures = mapOf("D" to "API error (status 402 Payment Required)")), endCouncil = {})
                             }
                         }
                     }

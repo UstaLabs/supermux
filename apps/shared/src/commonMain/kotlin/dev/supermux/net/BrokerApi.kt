@@ -2011,6 +2011,13 @@ class BrokerApi(
         })
     }
 
+    /** POST /councils/<id>/end — the user's Stop council: ends it and stops its members. Non-2xx throws. */
+    suspend fun endCouncil(id: String) {
+        ensureMutationSuccess(http.post("$httpBase/councils/$id/end") {
+            authHeader()
+        })
+    }
+
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
     suspend fun reorderSessions(orderedIds: List<String>) {
         http.patch("$httpBase/sessions/reorder") {

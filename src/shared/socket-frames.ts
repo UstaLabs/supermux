@@ -4,7 +4,7 @@ export type ToolOperation = { name: string; args: Record<string, unknown>; callI
 export type ToolRoute = { kind: "outbound" | "orchestration"; op: string }
 
 /** A tool as the broker serves it to the external shim: its MCP definition and its route. */
-export type ShimTool = { name: string; description: string; inputSchema: Record<string, unknown>; route: ToolRoute }
+export type ShimTool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean }; route: ToolRoute }
 
 export type RegisterFrame = {
   kind: "register"
@@ -69,7 +69,13 @@ function parseShimTools(value: unknown): ShimTool[] {
     const route = objectValue(tool.route)
     if (route.kind !== "outbound" && route.kind !== "orchestration") throw new Error(`${at}.route.kind must be outbound or orchestration`)
     if (typeof route.op !== "string") throw new Error(`${at}.route.op must be a string`)
-    return { name: field("name"), description: field("description"), inputSchema: inputSchema as Record<string, unknown>, route: { kind: route.kind, op: route.op } }
+    const annotations = tool.annotations && typeof tool.annotations === "object" && !Array.isArray(tool.annotations)
+      ? tool.annotations as { readOnlyHint?: unknown } : undefined
+    return {
+      name: field("name"), description: field("description"), inputSchema: inputSchema as Record<string, unknown>,
+      ...(typeof annotations?.readOnlyHint === "boolean" ? { annotations: { readOnlyHint: annotations.readOnlyHint } } : {}),
+      route: { kind: route.kind, op: route.op },
+    }
   })
 }
 

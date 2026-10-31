@@ -301,6 +301,8 @@ export interface WebChannelOpts {
   getSessionSubagents?: (id: string) => unknown[]
   /** The councils a session called (snapshot `councils`; live `council_update`). */
   getSessionCouncils?: (id: string) => unknown[]
+  /** POST /councils/:id/end: the user's Stop council (design 2026-10-31 §3). */
+  endCouncil?: (councilId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
   messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
   stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
@@ -3402,6 +3404,14 @@ export class WebChannel implements Channel {
         }
         if (!this.opts.stopSubagent) return this.json({ error: "not configured" }, 503)
         const result = await this.opts.stopSubagent(id, subagentId)
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
+    }
+    {
+      const end = method === "POST" ? path.match(/^\/councils\/([^/]+)\/end$/) : null
+      if (end) {
+        if (!this.opts.endCouncil) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.endCouncil(decodeURIComponent(end[1]!))
         return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
       }
     }

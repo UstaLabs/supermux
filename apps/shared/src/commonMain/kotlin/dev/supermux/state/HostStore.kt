@@ -934,6 +934,11 @@ class HostStore(
         }
     }
 
+    /** Stop council: the broker ends the council and stops its members (a `council_update` follows). */
+    fun endCouncil(id: String) {
+        stateScope.launch { runApi("endCouncil") { api.endCouncil(id) } }
+    }
+
     // ── Git ops + proxies (M4c; mirrors AppViewModel.gitFetch/gitPush/gitPull/gitPublish:566-569
     //    + proxies:871) ───────────────────────────────────────────────────────────────────────
     // Android exposes these as fire-and-forget calls taking an `onResult` callback
