@@ -6,11 +6,10 @@ handle. A small pool of live engines is shared among them, and a view without an
 or a placeholder.
 
 It is built for each platform's own engine: Android `WebView`, `WKWebView` on iOS and macOS, WebView2 on Windows, WPE
-WebKit on Linux, and an `<iframe>` on the web. **The web's, Android's, iOS's, macOS's and Linux's engines exist** ([The
-web engine](#the-web-engine), [Android](#android), [iOS](#ios), [macOS](#macos), [Linux](#linux)); Windows's isn't
-built yet, and Windows reports `Unavailable(NotImplemented)`. Everything around the engines is built and tested against
-the library's fake engine on every platform: the pool, activation, snapshots, page memory, overlays, the page bridge
-and the engine contract.
+WebKit on Linux, and an `<iframe>` on the web. **Every one of them exists** ([The web engine](#the-web-engine),
+[Android](#android), [iOS](#ios), [macOS](#macos), [Linux](#linux), [Windows](#windows)). Everything around the engines
+is built and tested against the library's fake engine on every platform: the pool, activation, snapshots, page memory,
+overlays, the page bridge and the engine contract.
 
 It depends on Compose and kotlinx (coroutines, serialization) only, nothing else of supermux. It targets Android, iOS
 (arm64 and simulator arm64), the desktop JVM and wasmJs. It isn't published yet; depend on the project, as
@@ -31,7 +30,7 @@ built.
 | macOS | `WKWebView` under the Compose canvas, over JNI | `:webview-compose:jvmTest`, now **1062** tests, among them the macOS engine's 97: driven through a fake of its glue (epochs, the handoff, the motion cover and its true size, an embed growing live, the slot at the backing scale, reset, release, a crash, server redirects, the bundle's scheme), its surface in Compose UI tests, and, with the real glue and real WebKit in the test process (no window), its ABI, its JSON, its hit test's region, the threads it attaches, its own logic (epoch stamps, questions answered once, scheme tasks) and server redirects against a loopback server. The engine's **46 checks** in the desktop sample's window on a MacBook Air M1 (macOS 26.6.2, 2×, 60 Hz): the 31 shared with iOS, 7 of the Mac's own (presses around marked overlays, a menu closed by the page, ⌘A and ⌘Z, focus, VoiceOver's reach, memory pressure, wheel routing), 5 for the review's findings (the window's height changed and zoomed, an embed growing, a press over a clickable, a page half out of its scroller over another, an app's UI zoom) and 3 for motion, each judging where the page's content is in the window: `CHECKS DONE passed=46 failed=0` on the final tree, under a load average of 445–469; in the run before it (23–139), 43 of 46, and the 3 that failed there (two handoffs where Compose presented its frame late, ⌘ keys while another app was in front) 3 of 3 right after. Motion, the page's marker out of place or light strips in the slot, without the cover → with it: pane 3 and 6 of 95 copies → 0 of 122, window 0 and 12 of 97 → 0 of 97 (the run before: 15 and 24 of 100 → 0 of 181, 0 and 28 of 172 → 0 of 174); a list scroll, which the cover leaves live, 0 of 181 in both; the window's backing in none. A growing embed: its marker in place and its presses taken in every frame (154, and 255 the run before), never covered. A release build shrunk by ProGuard with the library's rules, and the app Compose packages: 5 of 5 checks each ([macOS](#macos)). Before the review's fixes: the handoff, five rounds in a row: 420 frames judged, 0 differ from the page; first paint from a warm engine p50 90.1 ms (after the commit 39.9 ms), the bridge round trip p50 0.2 ms, a snapshot at 2× (640 × 960) p50 3.0 ms; the perf lab over 200 messages, web views against still images: Reading 1–3 vs 1–5 dropped, Scroll 1–5 vs 1–3 dropped, peak live 4 of 8; load average 3–18 at the runs | the manual checklist ([macOS](#macos)): trackpad momentum and pinch, Turkish and Japanese IME, ⌘C/⌘V, VoiceOver reading the page, hover and the cursor under overlays, full screen and a screen of another scale, a real live resize, menus and dialogs by hand; a ProMotion display; an Intel Mac (the x86_64 slice is built, never run); Compose's own release tasks, whose ProGuard runner fails on this Gradle |
 | Linux | WPE WebKit 2.54.2 (`LinuxWebEngine`), its frames drawn by Compose | `:webview-compose:jvmTest`: **162 Linux tests**: the engine on a fake native view (leases, documents, the bridge, local content, the surface's frames and input, the handoff from the cover, reset, parked pages, the page's requests, navigation asked at the response, hung pages, a recycled engine's frames, `<select>` menus, the clipboard), the runtime's checks, profiles and archive extractor. The glue's own **7 C tests** (`native/linux/test.sh`). The engine's **51 conformance checks**, in the sample app with real WebKit pages, on the runtime this module builds (190.6 MB, 57.9 MB zstd), in Ubuntu 24.04 with no WPE of its own, **with WebKit's page sandbox on** (`SANDBOX=on`): 51 of 51, among them pages in bubblewrap's PID namespace, an iframe answered before the main document it raced, a hung page ended, the last lease's frame never shown, Ctrl shortcuts and the clipboard both ways, a `<select>` by mouse and keys, a login across a restart, and a second process of the app refused its profile. With the sandbox on outside any container, on Ubuntu 26.04 with NVIDIA's GTX 1660 (`linux-sandbox-check.sh`): the page paints from bubblewrap's sandbox (before, the first view aborted the JVM). The draw lab, six 1600×1200 spinners in software: 49.1 → 42.9 ms of UI-thread CPU per frame. The sample on WPE engines, 200 web views in a LazyColumn: the scroll test 1891 frames, p50 15.8 ms, p99 16.1 ms, 1 dropped; the reading test 2426 frames, p50 15.8 ms, p99 16.1 ms, 2 dropped. The feasibility test's numbers: 1080p copy p95 3.48 ms, bridge round trip p50 0.22 ms, 141.7 MB per view. GPU gate, WebKit and the upload on an AMD GPU (Mesa), in a container, **accepted as measured** (not a ship blocker): a full-frame 1080p animation 20.5 fps, copy + upload p95 10.4 ms (the bar is 4), a warm spare's first paint 127 ms (the bar is 100) ([Linux](#linux)) | Compose drawing on a GPU (a real desktop session); the GPU gate on a desktop's GPU; IME composition; a colour picker; Tab leaving the page; arm64; Wayland without XWayland; the sandbox outside a container with a D-Bus session bus (`desktop` has no `xdg-dbus-proxy`: its check hid the session) |
 | Android | system WebView (`AndroidWebEngine`), a native view under the Compose canvas | The engine's pure rules, among `jvmTest`'s common tests. **58 instrumented tests** on the user's Galaxy Z Fold7 (Android 16, WebView 156.0.8078.47), over adb (`webview-compose/device-checks/android-instrumented.sh`), the whole suite in one run at `bf4fd43b6`, the engine's last Android change: WebView's startup and features, the Activity's life, local content and the network, the document gate (nothing of an earlier document heard, the callbacks WebView makes at once heard from the commit), the bridge, the page's requests and their safe defaults, reset and ephemeral wipes, saved state, dark pages, console without the shim, snapshots (the page's own draw, never the app's UI over it, a page half off screen, blank draws, their cost), covers against the screen, parking and replay, the handoff from the cover (every frame around its lift), a dead and a hung renderer, nested scrolling, focus, the keyboard's inset, back. The sample on the phone (`webview-sample/device-checks/android-sample.sh`): the perf lab's Reading and Scroll tests over 200 web views ([Android](#android)) | the instrumented suite and the perf lab's Scroll test on the tree as it is now (on 2026-10-30 the phone stayed locked); the manual checklist, with the user and not answered yet: dialogs, the file picker, Turkish and Japanese typing, menus and dialogs over a page, back, links out, `<select>`, dark mode, folding and rotating, DeX or XREAL; TalkBack; an emulator, another phone, a tablet; Android below 16, a WebView older than 156 (the keyboard's older path), or one lacking a feature the engine needs; a renderer killed by the OS, and the OS's own `onTrimMemory`; first paint and the bridge's round trip, timed; a release build |
-| Windows | not built; feasibility test only | `jvmTest` checks that the desktop's factory says so on Windows (`DesktopPlatformTest`). The feasibility test, [`webview-wintest`](../webview-wintest), on a Windows 11 26H2 x64 VM with **no GPU** (software rendering), WebView2 156.0.4314.56, 2026-10-30: **frames** (WebView2 in visual hosting, captured with Windows.Graphics.Capture, drawn by Compose), because everything it does works there (capture from the first paint, no frames while idle, no blank frame; clicks within 0.35 CSS px; `<select>` and context menus placed right; 10 of 10 cursors; resize; all 10 keyboard-focus hand-off checks between AWT and the page, with `MoveFocus` deferred after a window re-activation), a page change reaches Compose in p95 7.2 ms, and its misses are throughput measured on software rendering (35 captured frames a second, 1080p copy + upload p95 27.6 ms against a 4 ms bar), which move to a GPU gate | the engine itself (it reports `Unavailable(NotImplemented)`); a real GPU (frame rate, copy + upload, how fine the dirty regions are); IME composition (the VM couldn't install the Japanese IME); HiDPI; Windows on ARM64 |
+| Windows | WebView2 156.0.4314.58 in visual hosting (`WindowsWebEngine`), its root visual captured off screen with Windows.Graphics.Capture and drawn by Compose, over JNI | `:webview-compose:jvmTest`, now **1290** tests, among them **144 Windows tests** (the engine on a fake native page: leases, epochs, documents, the bridge with its secret and held messages, local content on `https://*.invalid`, the policy answered on the glue's thread, the page's requests, reset with history and grants, hung pages, parking and `replayState`, save and restore, the surface's frames, placement, pointer, cursor, focus and accelerators, the handoff and what a frame shows) and the frame store's (no frame written into a block a recording still draws, nor into one without room for it). The glue's **13 C++ tests** (83 checks, `glue_test.exe`). The engine's **82 conformance checks** in the sample on a Windows 11 26H2 x64 VM with **no GPU** (WARP), WebView2 156.0.4314.58: 81 of 81 three runs in a row, then 82 of 82 on the final tree (one check added for the review's autoplay finding); the 43 shared with Linux and 39 of Windows' own: the focus hand-off both ways and by Tab, an app shortcut before the page, a demo that can't take the keyboard, `<select>` and date popups placed right after a window's height change, an app's UI zoom, cursors, the context menu's editing items, a patched `postMessage`, the Japanese IME composing in the page and in Compose with its candidates under the input, autoplay as the engine's config says, and kept when another engine of its profile goes, a hung page's renderer ended, an engine made right after the last one's release in under 3 s, a second process of the app sharing its profiles and never an ephemeral store. A release build shrunk by ProGuard with the library's rules, and the packaged app (jpackage): 7 of 7 checks each; without the keep rule the engine is refused, the rule named. The DLL's cache: hash-named, replaced when tampered with, two instances at once. The ARM64 DLL cross-compiled (32 natives, as x64's). On the VM: a warm first paint p50 71 ms, the bridge p50 0.4–0.5 ms, 23 MB a view (the budget stays 8 + 3), a press to the page's `pointerdown` p50 26 ms (the engine's part 5 ms) and 94 ms to the screen; the perf lab over 200 messages, web views against images: Scroll 20–22 % of frames dropped against 27 %, Reading 33 % against 28 % (software rendering drops a quarter with images too). GPU (GTX 1660 SUPER, the GPU gate on the engine's three-copy chain): 1080p copy + upload p95 5.6–6.6 ms (2.3–2.6 ms at window size), frames delivered 88–97 %, a 1080p animation drawn at 44–52 fps, a press drawn in p50 50.5 ms ([Windows](#windows)) | §10's 60 fps and 4 ms at 1080p full frame (the GPU gate's numbers: known limits on that card, every WebView2 frame arriving whole); the perf lab and the measures on a GPU (the GPU domain waits for the user's go-ahead); a HiDPI screen (the VMs run at 100 %); a machine whose display runs on another GPU than skiko's (built for, not run); Windows on ARM64 (the DLL is built, never run); touch and pen beyond mouse emulation; drag and drop into pages (off); a screen reader; `ComposePanel` in a Swing window; zero-copy (not attempted) |
 
 All of it ran on 2026-10-29 and 30 on an Apple M1 Mac (macOS 26.6), JDK 17, Xcode 26.5, and the Android row's device
 runs on the phone. The test counts are from one run of every suite on 2026-10-30, with the review's fixes and their
@@ -54,9 +53,8 @@ fun AgentDemo(message: Message) {
 }
 ```
 
-On Android, iOS and macOS (14 and later), on Linux with its WPE runtime ([Linux](#linux)), and in a browser, this shows
-the demo, live once it is on screen and has stopped moving. On Windows it shows the placeholder for now: once the view
-tries to go live, `state.phase` is `Unavailable(NotImplemented)`.
+On Android, iOS and macOS (14 and later), on Linux with its WPE runtime ([Linux](#linux)), on Windows with the WebView2
+Runtime ([Windows](#windows)), and in a browser, this shows the demo, live once it is on screen and has stopped moving.
 
 - **`WebContent`** is what to show: `Url(url, headers)` for http(s) pages, `Html(html)` for in-memory HTML on an origin
   of its own (agent demos), and `Bundle(origin, resources, entry)` for a set of files served on an origin (plugins).
@@ -465,8 +463,11 @@ The rest is the engines' part, set by the design and the engine contract:
 The web engine's share is described [below](#the-web-engine). The iOS engine does all of it, and its conformance checks
 test the bridge's parts with real pages ([iOS](#ios)). The Android engine does all of it but the isolated world: its
 shim's channel is in the page's world, and each document's reply proxy reaches that document only ([Android](#android));
-its instrumented tests check the bridge's parts on the phone. For Windows, whose engine doesn't exist yet, these are
-goals.
+its instrumented tests check the bridge's parts on the phone. The Windows engine does all of it but the isolated world,
+which WebView2 doesn't give a document's scripts: its shim's channel is taken before any page script runs, every
+message carries its document's secret and token, checked in the glue before the app hears it, and the receiver checks
+the origin it captured when the document was created; its conformance checks test the bridge's parts with real pages,
+a page that patches `postMessage` among them ([Windows](#windows)).
 
 ## The runtime
 
@@ -1191,6 +1192,99 @@ dialogs need no cut-outs.
   - `native/linux/test.sh <WPE prefix>`: the glue's own tests, in the build image.
   - On a Linux desktop with the runtime in place: `./gradlew :webview-sample:run -Dwebview.sample.engine=wpe`.
 
+## Windows
+
+The Windows engine is Microsoft Edge WebView2 in visual hosting: each page renders into a Composition visual that
+nothing shows on screen, Windows.Graphics.Capture copies what changed into memory, and Compose draws it like any other
+image. Overlays, clipping, scrims and the pool work as they do on Linux. Input goes to the page through WebView2
+(`SendMouseInput`), the keyboard by moving Win32 focus into it (`MoveFocus`), and WebView2's own popups (a select's
+list, a date picker, the context menu) are its own windows, placed by it.
+
+**Requirements:** Windows 10 1809 or later with Windows.Graphics.Capture, and the WebView2 Runtime 120 or later
+(Windows 11 has it; on Windows 10, the Evergreen installer: https://go.microsoft.com/fwlink/p/?LinkId=2124703).
+Without either, the factory says `Unavailable` with the reason (`NotImplemented` or `NoWebView2Runtime`, with the
+version found), and `WebView` falls back as on every platform. x64; ARM64 is built, not yet run.
+
+**Nothing to install with the app:** the glue (`webview_windows.dll`, 527 KB, the WebView2 loader and the C runtime
+linked in, system DLLs only besides) is in the library's jar, for x64 and ARM64; at first use it is copied to
+`%LOCALAPPDATA%\dev.supermux.webview\cache\<version>\<sha256>\`, checked against its hash, and loaded. A copy there that
+changed is replaced, not trusted, and apps started at once share one copy.
+
+**A release build shrunk with ProGuard** needs the library's rules (`webview-compose-desktop.pro`, as for macOS):
+without them the engine says `Unavailable(NativeLibraryFailed)` and names the rule.
+
+**Profiles:** one user data folder per app, `%LOCALAPPDATA%\dev.supermux.webview\webview2\<app>` (the app is
+`-Ddev.supermux.webview.app`, else the packaged launcher's name, else the main class with a hash of where its code
+lives: Linux's rule). `Default` is WebView2's default profile, `Named(id)` a profile of its own, `Ephemeral` an
+InPrivate profile per engine, wiped at each reset. Two processes of the same app share the folder and see the same
+`Default` and `Named` data (WebView2 serves both from one browser process); their ephemeral engines never share a
+store. An InPrivate profile leaves a folder of 1 to 3 MB (its scaffolding; its data stays in memory), one per
+ephemeral slot, and the slots are few.
+
+**Differences from the other engines:**
+- `restoreState()` brings back the page and its scroll, not its back list (WebView2 has no session state to save).
+- Dark mode is per engine (`prefers-color-scheme` emulated per page).
+- Hidden pages are throttled by Chromium and asked to use less memory; memory pressure (Windows' low-memory
+  notification) asks every page not on screen. Desktop Windows has no signal that a process may be cached, so nothing
+  calls the pool's `onBackgroundTrim()`; an app may, for a long minimize.
+- A page can't take the keyboard by itself: only a press, a Tab into it, or `requestFocus()` moves it there.
+- Browser shortcuts are off (no F5, Ctrl+R, Ctrl+P, zoom keys); F12 and Ctrl+Shift+I open DevTools when `inspectable`.
+  An app's own shortcuts (`onPreviewKeyEvent` around the `WebView`) reach the app first.
+- The context menu keeps editing items only.
+- Downloads are refused, and the client told; new windows are the client's to open.
+- History a page makes without the user's activation (a `pushState` from a timer, or from the app's `evaluate()`; a
+  link the app clicks by script) is skipped by Back, as in Chrome and Edge: `canGoBack` doesn't count it, and
+  `goBack()` passes over it. The user's own clicks make history as everywhere.
+- `mediaPlaybackRequiresGesture = false` is the profile's autoplay site setting on WebView2 (it asks nothing for a
+  `play()` with no gesture): allowed for each origin the engine shows, and back to the default once the last engine of
+  the process that allowed it is released. So engines of one profile on one origin share it, whatever their own
+  setting, and so do the app's other processes; an app that is killed leaves it allowed in a persistent profile
+  (`Default`, `Named`) until an engine that allows that origin is next released.
+- SmartScreen (Microsoft's URL reputation check) is off: WebView2 sent every page's URL to Microsoft at its navigation,
+  the app's own `https://*.invalid` content too, and a check still on its way when a page closed held WebView2's browser
+  process 6 s from exiting, so the next engine, which needs a new browser once the last is going, waited for it.
+
+**Frames, and what they cost:** WebView2 hands over every frame whole, so a page that animates costs a whole copy per
+frame whatever changed: on a GTX 1660 SUPER, about 2.5 ms for a window-sized view and 6 ms at 1080p, mostly off the UI
+thread. A page that doesn't change costs nothing. A 1080p animation draws at 44–52 fps there, under §10's 60.
+
+**Measured:** without a GPU on the VM (WARP, software rendering; WebView2 156.0.4314.58), and on a GTX 1660 SUPER (the
+GPU gate, on the engine's chain; 156.0.4314.56):
+
+| Measure | Spec §10 | No GPU (WARP) | GTX 1660 SUPER |
+|---|---|---|---|
+| a warm spare's first paint, p50 | ≤ 100 ms | 71 ms (p95 81–97 ms) | not run |
+| a new engine's first paint, p50 | — | 218–228 ms | not run |
+| the bridge's round trip, p50 | ≤ 2 ms | 0.4–0.5 ms | not run |
+| memory a view (private bytes; working set) | ≤ 150 MB keeps 8 + 3 | 23 MB (51–55 MB), and about 70 MB for the browser, GPU and utility processes: 8 live and 3 spares | — |
+| a press: to the page's `pointerdown`; on screen | — | 26 ms (the engine's part 5 ms); 94 ms | about 23 ms; 50.5 ms |
+| 1080p copy + upload, p95 | 4 ms | — | 5.6–6.6 ms (2.3–2.6 ms at window size) |
+| frames delivered; a 1080p animation | 60 fps | — | 88–97 %; 44–52 fps |
+| frames dropped over 200 messages, web views against images | no more | Scroll 20–22 % against 27 %; Reading 33 % against 28 % | not run |
+
+Without a GPU a quarter of the frames miss with images too; the Reading test's 5 points more with web views are pages
+starting, painting and being snapshotted on that machine's UI thread. A press there spends 19.6 ms getting from the OS
+to AWT (the JVM's input path) and 68.8 ms from the page's `pointerdown` to the screen (Chromium's frame, DWM, the
+capture and Compose's frame, all in software); the engine's own part, from Compose to the page, is 5.2 ms.
+
+**Not run:** §10's 60 fps and 4 ms at 1080p full frame (the GPU gate's numbers above: known limits on that card, every
+WebView2 frame arriving whole); the perf lab and these measures on a GPU (the GPU domain waits for the user's
+go-ahead); a HiDPI screen (the VMs run at 100 %); a machine whose display runs on another GPU than skiko's (built for,
+not run); Windows on ARM64 (the DLL is built, never run); touch and pen beyond mouse emulation; drag and drop into
+pages (off); a screen reader; `ComposePanel` in a Swing window; zero-copy (not attempted).
+
+**Running it,** from `apps/` on the dev box (the VM is `supermux-windows`, on `desktop`):
+- `webview-compose/native/windows/winvm.sh build` builds the glue on the VM, runs its own tests (`glue_test.exe`) and
+  fetches the DLL (`build arm64`: ARM64's); `winvm.sh gradle …` runs Gradle in Docker on `desktop`, with the DLLs
+  fetched.
+- `webview-sample/device-checks/windows-engine-checks.sh`: the glue built, the sample staged on the VM, and the
+  conformance checks on its desktop (`SKIP_BUILD=1` and `SKIP_STAGE=1` reuse the last ones).
+- `webview-sample/device-checks/windows-release-check.sh shrunk|unkept|packaged|cache`: the release build.
+- `winvm.sh lab`: the perf lab, unattended, with screenshots (`-Dwebview.sample.labImages=true` on the images);
+  `winvm.sh lab "-Dwebview.sample.lab=memory,firstpaint,bridge,press"`: the measures above.
+- On Windows itself, with the DLL in `webview-compose/build/native/windows-x64/`:
+  `./gradlew :webview-sample:run -Dwebview.sample.engine=webview2`.
+
 ## Android
 
 The system WebView, one per engine, in an `AndroidView` under the Compose canvas (spec §7). Compose draws over the
@@ -1359,6 +1453,10 @@ webview-compose/runtime/linux/runtime.sh image && webview-compose/runtime/linux/
 webview-sample/device-checks/linux-engine-checks.sh     # from the dev box: the Linux engine's conformance checks, on desktop (SANDBOX=on)
 webview-sample/device-checks/linux-sandbox-check.sh     # from the dev box: the Linux engine with its sandbox on, outside any container
 webview-compose/native/linux/test.sh <WPE prefix>       # in the runtime's build image: the Linux glue's own tests
+webview-compose/native/windows/winvm.sh build [arm64]   # from the dev box: the Windows glue built on the VM, its tests run, the DLL fetched
+webview-compose/native/windows/winvm.sh gradle TASK...  # from the dev box: Gradle in Docker on desktop, with the fetched DLLs
+webview-sample/device-checks/windows-engine-checks.sh   # from the dev box: the Windows engine's conformance checks, on the VM
+webview-sample/device-checks/windows-release-check.sh shrunk   # the same in a release build (also unkept, packaged, cache)
 webview-compose/device-checks/android-instrumented.sh   # from the dev box: the Android engine's tests, on the phone
 webview-sample/device-checks/android-sample.sh scroll   # from the dev box: the sample on the phone, and a perf-lab run
 ```
@@ -1370,10 +1468,24 @@ runs past 10 minutes, or a sample one past 15, fails instead of hanging.
 On a Mac, `jvmTest` also builds the macOS glue (it needs the Xcode command-line tools) and runs the tests that load it;
 elsewhere the jar has no glue, those tests are skipped, and the macOS engine reports `Unavailable`.
 
+The Windows glue is built on the VM (`winvm.sh build`: MSVC Build Tools 17.14, Windows SDK 10.0.26100, the WebView2
+SDK), which fetches it into `webview-compose/build/native/windows-<arch>/`; the jar carries what is there. Without it
+the Windows engine reports `Unavailable(NativeLibraryFailed)`, and `jvmTest` runs the engine on a fake page either way.
+
 ## Not built yet
 
-- The engine for Windows, with its memory-pressure hook. Until it exists, Windows reports `Unavailable`. Browsers have
-  no memory-pressure signal to hook.
+- On Windows:
+  - A HiDPI screen: the checks ran at 100 % only.
+  - Windows on ARM64: the DLL is built, never run.
+  - Pen pressure and touch (`SendPointerInput`): mouse emulation only.
+  - Drag and drop into pages: off.
+  - Accessibility: WebView2's UI Automation tree isn't bridged to Compose's, so screen readers see no page.
+  - A `ComposePanel` inside a Swing frame.
+  - Zero-copy into skiko's Direct3D: each frame is copied GPU → staging → memory → skiko's texture.
+  - The perf lab and the measures on a GPU, and a machine whose display runs on another GPU than skiko's.
+  - The follow-ups in the review notes, each with what would start it: the UI thread's copy off it, damage of the
+    engine's own, the press's parts, an exclusive data folder per process.
+- A memory-pressure hook in a browser: browsers have no signal for it.
 - On Android:
   - The bridge's channel in one of WebView's isolated worlds (`JS_INJECTION_IN_FRAME_AND_WORLD`): the shim and its
     channel share the page's world, and the reply proxies keep each message to its document.
