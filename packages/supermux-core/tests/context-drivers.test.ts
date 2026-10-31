@@ -378,6 +378,12 @@ test("opencode: a host's own OPENCODE_CONFIG is carried into the session file", 
   expect(config).toEqual({ instructions: ["/host.md", join(context.directory, "instructions.md")], model: "x/y" })
 })
 
+test("opencode: its file watcher is off (a full inotify pool hangs it), unless the host sets it", async () => {
+  expect((await launch("opencode")).env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER).toBe("true")
+  const { env } = await launch("opencode", { env: { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "false" } })
+  expect(env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER).toBe("false")
+})
+
 test("generic acp: mcpServers only (unverified); collisions with driver servers are drops", async () => {
   const f = contextFixture()
   const { params } = await launch("acp", { sessionContext: f.launch({ instructions: undefined, skills: [], plugins: [] }) })
