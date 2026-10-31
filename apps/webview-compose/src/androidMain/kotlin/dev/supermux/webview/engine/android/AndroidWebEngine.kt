@@ -192,8 +192,12 @@ internal class AndroidWebEngine(
     /** The density the WebView was built for: it keeps its first Activity's window and display. */
     private val builtDensityDpi = activity.resources.configuration.densityDpi
 
-    /** What the Surface hosts. It outlives the WebViews in it: every reset builds a fresh one ([reset]). */
-    private val container = FrameLayout(context)
+    /**
+     * What the Surface hosts. It outlives the WebViews in it: every reset builds a fresh one ([reset]). Its nested
+     * scrolling is on: Compose's AndroidView hands the WebView's nested scrolls and flings to the list around it only
+     * when the view it hosts has it on, and drops them otherwise (`AndroidViewHolder.isNestedScrollingEnabled`).
+     */
+    private val container = FrameLayout(context).apply { isNestedScrollingEnabled = true }
     internal var webView: EngineWebView = newWebView()
         private set
 

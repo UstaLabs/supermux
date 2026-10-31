@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.android
 
 import android.os.SystemClock
+import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -36,14 +37,6 @@ class EngineInputTest {
         event.recycle()
     }
 
-    private fun swipe(x: Float, fromY: Float, toY: Float) {
-        val start = SystemClock.uptimeMillis()
-        touch(MotionEvent.ACTION_DOWN, start, start, x, fromY)
-        val steps = 20
-        for (i in 1..steps) touch(MotionEvent.ACTION_MOVE, start, start + i * 16L, x, fromY + (toY - fromY) * i / steps)
-        touch(MotionEvent.ACTION_UP, start, start + (steps + 1) * 16L, x, toY)
-    }
-
     private fun tap(x: Float, y: Float) {
         val start = SystemClock.uptimeMillis()
         touch(MotionEvent.ACTION_DOWN, start, start, x, y)
@@ -57,7 +50,14 @@ class EngineInputTest {
         Triple(at[0] + webView.width / 2f, at[1].toFloat(), webView.height)
     }
 
-    @Test fun aDragOverAPageThatCantScrollScrollsTheListAroundIt() {
+    /**
+     * A drag over a page that can't scroll moves the list with the finger, through nested scrolling: as far as the
+     * finger went, and never back. Once the WebView kept the gesture, the page took the list moving it under the finger
+     * for the finger moving, and handed that back too: for a steady 24 px a move, the list went 17, 33, -22, 122, -255,
+     * 542, -1388 px, until the page left the screen; then, steadied, 64 px a move, as WebView reported it scaled
+     * (on the phone, 2026-10-31).
+     */
+    @Test fun aDragOverAPageThatCantScrollMovesTheListWithTheFinger() {
         val list = LazyListState()
         val harness = EngineHarness.open(surface = { engine ->
             LazyColumn(Modifier.fillMaxSize(), state = list) {
@@ -70,10 +70,28 @@ class EngineInputTest {
             runBlocking {
                 harness.loadAndPaint(TestPages.solid("#00ff00"))
                 val (x, top, height) = harness.onScreen()
-                swipe(x, top + height * 0.8f, top + height * 0.2f)
-                delay(500)
-                val moved = withContext(Dispatchers.Main) { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0 }
-                assertTrue(moved, "the list scrolled under the drag")
+                val density = harness.activity.resources.displayMetrics.density
+                // The items above the first visible one (120 dp, then the page's 300 dp), and the offset into it.
+                suspend fun scrolled(): Float = withContext(Dispatchers.Main) {
+                    val above = listOf(0f, 120f, 420f).getOrElse(list.firstVisibleItemIndex) { 420f } * density
+                    above + list.firstVisibleItemScrollOffset
+                }
+                val from = top + height * 0.8f
+                val dragged = height * 0.6f
+                val start = SystemClock.uptimeMillis()
+                touch(MotionEvent.ACTION_DOWN, start, start, x, from)
+                val trail = mutableListOf(scrolled())
+                for (i in 1..20) {
+                    touch(MotionEvent.ACTION_MOVE, start, start + i * 16L, x, from - dragged * i / 20)
+                    trail += scrolled()
+                }
+                delay(200)
+                val held = scrolled()
+                touch(MotionEvent.ACTION_UP, start, start + 21 * 16L, x, from - dragged)
+                val back = trail.zipWithNext { before, after -> before - after }.max()
+                Log.i(TAG, "a drag of $dragged px over a page that can't scroll: the list went $held px, $back px back at most")
+                assertTrue(back <= 2f, "the list went back $back px under a steady drag: $trail")
+                assertTrue(held in dragged * 0.75f..dragged * 1.05f, "the list went $held px under a drag of $dragged px: $trail")
             }
         } finally {
             harness.close()
@@ -90,7 +108,8 @@ class EngineInputTest {
 
     /**
      * A flick inside a page that scrolls itself (an inner scroller, its body fixed) is the page's: the scroller moves,
-     * the list around it doesn't (review item 10). Before, any flick the page's root couldn't take flung the list.
+     * the list around it doesn't (review item 10). On the phone the list took the gesture from the page at its second
+     * move, as Compose does over a view that doesn't ask it not to, and flung itself: 6,200 px.
      */
     @Test fun aFlickInsideAPageThatScrollsItselfLeavesTheListAlone() {
         val list = LazyListState()

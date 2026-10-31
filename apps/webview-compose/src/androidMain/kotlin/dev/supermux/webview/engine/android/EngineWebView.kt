@@ -14,14 +14,19 @@ import androidx.core.view.NestedScrollingChildHelper
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * The engine's WebView.
  * - It reports keyboard focus, which Compose never sees over a native view.
- * - It is a [NestedScrollingChild3], which WebView isn't (spec §7). WebView scrolls the page on its own compositor and
- *   reports the part of a drag the page couldn't take through [overScrollBy]: that part goes to the scrolling parents
- *   (Compose's, through AndroidView) while the finger is down. So does the gesture's fling, if its drag reached them:
- *   a flick the page took itself (an inner scroller, a carousel, a canvas) stays the page's.
+ * - It is a [NestedScrollingChild3], which WebView isn't (spec §7), and it keeps the gesture: it asks its parents not
+ *   to intercept it, or Compose's list would take a drag past its touch slop from the page. WebView scrolls the page on
+ *   its own compositor and reports the part of a drag the page couldn't take through [overScrollBy]: that part goes to
+ *   the scrolling parents (Compose's, through AndroidView) while the finger is down. So does the gesture's fling, if
+ *   its drag reached them: a flick the page took itself (an inner scroller, a carousel, a canvas) stays the page's.
+ * - The page gets the touch as if the view were still where it was when the finger went down. As the parents scroll
+ *   the view under the finger, the page would take that for the finger moving, and hand it back to them: on the phone,
+ *   the list shook under a steady drag, further each move.
  * - It takes its IME inset from [imeBottom], which the Surface sets from Compose's insets: WebView 139+ then shrinks its
  *   visual viewport by the part of the page the keyboard covers, whatever the views above it did with the insets.
  */
@@ -40,6 +45,13 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
     private var dragReachedParent = false
     private val minFling = ViewConfiguration.get(context).scaledMinimumFlingVelocity
     private val maxFling = ViewConfiguration.get(context).scaledMaximumFlingVelocity
+
+    /** Where the view was in its window when the finger went down, and where it is now. */
+    private val downAt = IntArray(2)
+    private val nowAt = IntArray(2)
+
+    /** What the page couldn't take of this gesture's drag, in px, and the parents weren't handed yet: a fraction. */
+    private var overscrolled = 0f
 
     init {
         nested = NestedScrollingChildHelper(this).also { it.isNestedScrollingEnabled = true }
@@ -72,12 +84,26 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touching = true
             dragReachedParent = false
+            overscrolled = 0f
             velocity?.recycle()
             velocity = VelocityTracker.obtain()
-            startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)
+            getLocationInWindow(downAt)
+            // The gesture stays the page's: what it can't take reaches the parents through nested scrolling.
+            if (startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)) {
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
         }
-        velocity?.addMovement(event)
-        val handled = super.onTouchEvent(event)
+        if (!touching) return super.onTouchEvent(event)
+        // The touch where it would be had the view stayed where it was at the down.
+        getLocationInWindow(nowAt)
+        val steady = MotionEvent.obtain(event)
+        steady.offsetLocation((nowAt[0] - downAt[0]).toFloat(), (nowAt[1] - downAt[1]).toFloat())
+        val handled = try {
+            velocity?.addMovement(steady)
+            super.onTouchEvent(steady)
+        } finally {
+            steady.recycle()
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_UP -> {
                 velocity?.let { tracker ->
@@ -116,9 +142,16 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
         isTouchEvent: Boolean,
     ): Boolean {
         if (touching && deltaY != 0 && hasNestedScrollingParent(ViewCompat.TYPE_TOUCH)) {
+            // WebView reports it multiplied by its scale, the density times the page's zoom: over a page that can't
+            // scroll, each 24.6 px move came as 64 or 65 px on the phone (WebView 156, 2.625 px a dp), and the list ran
+            // ahead of the finger. The parents get it in the finger's px, the fraction carried to the next.
+            @Suppress("DEPRECATION")
+            overscrolled += deltaY / scale
+            val dy = overscrolled.roundToInt()
+            overscrolled -= dy
             consumed[0] = 0
             consumed[1] = 0
-            dispatchNestedScroll(0, 0, 0, deltaY, null, ViewCompat.TYPE_TOUCH, consumed)
+            if (dy != 0) dispatchNestedScroll(0, 0, 0, dy, null, ViewCompat.TYPE_TOUCH, consumed)
             if (consumed[1] != 0) {
                 dragReachedParent = true
                 return false
