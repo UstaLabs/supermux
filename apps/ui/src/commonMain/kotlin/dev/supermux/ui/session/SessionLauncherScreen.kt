@@ -41,6 +41,8 @@
 package dev.supermux.ui.session
 
 import dev.supermux.chat.parseChatTs
+import dev.supermux.session.isMuxInternalPath
+import dev.supermux.session.withoutMuxInternal
 import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -376,7 +378,10 @@ fun SessionLauncherScreen(
         if (workspaceWorkdir != null) flowOf(emptyList()) else actions.projectCatalog
     }
     val catalogRaw by catalogFlow.collectAsState(emptyList())
-    val catalog = remember(catalogRaw) { orderProjectCatalog(catalogRaw) }
+    // The mux home and the agents' folders are supermux's own, never projects to pick or default
+    // to (GET /projects already leaves them out; the catalog and session recency don't).
+    val muxHome by remember(actions) { actions.muxHome }.collectAsState(null)
+    val catalog = remember(catalogRaw, muxHome) { orderProjectCatalog(withoutMuxInternal(catalogRaw, muxHome)) }
     val catalogPaths = remember(catalog) { catalog.flatMap { p -> p.locations.map { it.path } }.toHashSet() }
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
@@ -639,8 +644,8 @@ fun SessionLauncherScreen(
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
-    val recentProjectPaths = remember(sessions, lastBySession) {
-        recentWorkdirs(sessionsByRecency(sessions, lastTs))
+    val recentProjectPaths = remember(sessions, lastBySession, muxHome) {
+        recentWorkdirs(sessionsByRecency(sessions, lastTs)).filterNot { isMuxInternalPath(it, muxHome) }
     }
     // The picker tiles' "● 2m": sessions per project and when one last spoke.
     val pickerActivity = remember(sessions, lastBySession) {

@@ -80,6 +80,8 @@ class LauncherActions(
      * the plan's `suspend () -> List`.
      */
     val projectCatalog: Flow<List<ProjectDto>> = flowOf(emptyList()),
+    /** The target host's mux home, which the picker leaves out with its agent folders (null = unknown). */
+    val muxHome: Flow<String?> = flowOf(null),
     /** Register [path] as a location of [projectId] on the target host (409 → Conflict). */
     val addProjectLocation: suspend (projectId: String, path: String) -> ProjectLocationResult =
         { _, _ -> ProjectLocationResult.Failed },
@@ -218,6 +220,7 @@ fun rememberLauncherActions(
             projectCatalog = combine(app.projectCatalogKnown, app.projects) { known, list ->
                 if (known) list else emptyList()
             },
+            muxHome = app.muxHome,
             addProjectLocation = { id, path -> app.addProjectLocation(id, path) },
             projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
@@ -279,6 +282,7 @@ fun rememberLauncherActions(
             // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill),
             // bound to its LIVE HostStore so a connection rebuild rebinds (see FleetStore).
             projectCatalog = fleet.activeProjectCatalog,
+            muxHome = fleet.activeMuxHome,
             addProjectLocation = { id, path ->
                 fleet.activeApp()?.addProjectLocation(id, path) ?: ProjectLocationResult.Failed
             },
