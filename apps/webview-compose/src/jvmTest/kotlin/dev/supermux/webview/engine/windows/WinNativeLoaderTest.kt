@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WinNativeLoaderTest {
@@ -77,5 +78,15 @@ class WinNativeLoaderTest {
     @Test fun anArchitectureWithNoGlueIsSaidSo() {
         val error = assertFailsWith<WinGlueException> { loader(arch = null).load() }
         assertContains(error.message.orEmpty(), "no Windows glue")
+    }
+
+    /** The jar carries a folder per architecture (Task 32): the JVM's os.arch picks it, both of its names for each. */
+    @Test fun eachArchitectureGetsItsOwnFolder() {
+        assertEquals("x64", WinNativeLoader.archOf("amd64"))
+        assertEquals("x64", WinNativeLoader.archOf("x86_64"))
+        assertEquals("arm64", WinNativeLoader.archOf("aarch64"))
+        assertEquals("arm64", WinNativeLoader.archOf("arm64"))
+        assertEquals("arm64", WinNativeLoader.archOf("AArch64"))
+        assertNull(WinNativeLoader.archOf("x86"))
     }
 }
