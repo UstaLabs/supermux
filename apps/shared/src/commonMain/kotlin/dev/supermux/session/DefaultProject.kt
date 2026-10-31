@@ -108,3 +108,13 @@ fun formatAgoShort(nowMs: Long, thenMs: Long): String {
         else -> "${sec / (86_400L * 7)}w"
     }
 }
+
+/**
+ * Supermux's own folders, which the project picker leaves out: the mux home (`~/.mux`, where the
+ * home agent runs) and every agent's folder under `~/.mux/workspace/`. They are still reachable by
+ * typing the path.
+ */
+fun isMuxInternalProject(path: String): Boolean {
+    val p = path.replace('\\', '/').trimEnd('/')
+    return p.endsWith("/.mux") || p.contains("/.mux/workspace/")
+}

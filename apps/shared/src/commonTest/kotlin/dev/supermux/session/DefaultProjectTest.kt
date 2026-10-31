@@ -118,4 +118,14 @@ class DefaultProjectTest {
             sessionsByRecency(listOf(a, b, c)) { ts[it.id] ?: "" },
         )
     }
+
+    @Test fun isMuxInternalProject_hides_mux_home_and_agent_folders_only() {
+        assertEquals(true, isMuxInternalProject("/home/a/.mux"))
+        assertEquals(true, isMuxInternalProject("/home/a/.mux/"))
+        assertEquals(true, isMuxInternalProject("/home/a/.mux/workspace/Kahya"))
+        assertEquals(true, isMuxInternalProject("C:\\Users\\a\\.mux\\workspace\\Fox"))
+        assertEquals(false, isMuxInternalProject("/home/a/.mux/state/projects/local/telpa"))
+        assertEquals(false, isMuxInternalProject("/home/a/code/supermux"))
+        assertEquals(false, isMuxInternalProject("/home/a/my.mux"))
+    }
 }
