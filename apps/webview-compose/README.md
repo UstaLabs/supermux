@@ -109,6 +109,13 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   there are never more than `maxLive + maxIdle` engines. The exception is an engine whose eviction or reset overran
   its time bound: it is released once that call returns. A spare is created ahead of need only when the pool has none
   of that kind and got none back in the last 10 s, as at cold start; otherwise recycling supplies them.
+- **Profiles and media settings split the pool.** An engine is made for one profile and one
+  `mediaPlaybackRequiresGesture` (neither can change once it is made), and serves only views of that pair, as a parked
+  page does. The budget is one for all, but the spares are not: a spare serves only its own pair, and an engine given
+  back to a full spare room replaces another pair's spare only once that one has sat unused for 10 s. So every distinct
+  `WebProfile.Named`, or media setting, an app shows at once splits the pool and its 3 spares, and its views build
+  engines where they would have reused one. `Html` content (`Ephemeral` unless the settings say otherwise) and the rest
+  (`Default`) already make two pairs: keep the others in use at once few.
 - **Never lost, never shared.** Every engine the pool creates ends up leased, a spare, parked or released, whatever
   throws or is cancelled; one whose call hangs past its bound is never reused, and is released once that call returns. An engine
   serves one view at a time, and a state reaches only the engine of the view that shows it. An engine changes hands

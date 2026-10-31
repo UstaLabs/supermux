@@ -4,7 +4,17 @@ import androidx.compose.runtime.Immutable
 
 public enum class DarkMode { Auto, Light, Dark }
 
-/** Where cookies and storage live. */
+/**
+ * Where cookies and storage live.
+ *
+ * Each profile in use splits the engine pool. An engine is made for one profile (and one
+ * [WebSettings.mediaPlaybackRequiresGesture]), which it can't change, and serves only views of it, as a parked page
+ * does. The pool's budget ([dev.supermux.webview.runtime.RuntimeConfig.maxLive]) is one for all, but its spares
+ * ([dev.supermux.webview.runtime.RuntimeConfig.maxIdle], 3 by default) are not: a spare serves only its own profile and
+ * media setting. So every distinct [Named] profile an app shows at once splits the pool and its 3 spares, and its views
+ * build engines where they would have reused one: keep the profiles in use at once few. [WebContent.Html]'s default
+ * profile ([Ephemeral]) and the other contents' ([Default]) already make two.
+ */
 @Immutable
 public sealed interface WebProfile {
     public data object Default : WebProfile
@@ -44,8 +54,18 @@ public class WebSettings(
     public val darkMode: DarkMode = DarkMode.Auto,
     public val transparentBackground: Boolean = false,
     public val userAgentSuffix: String? = null,
-    /** Null means the content's default: [WebProfile.Ephemeral] for [WebContent.Html], [WebProfile.Default] otherwise. */
+    /**
+     * Null means the content's default: [WebProfile.Ephemeral] for [WebContent.Html], [WebProfile.Default] otherwise.
+     * Each profile in use splits the engine pool and its spares ([WebProfile]).
+     */
     public val profile: WebProfile? = null,
+    /**
+     * Whether a page's media needs the user's gesture to play. Engines take it when they are made (WebKit's media
+     * playback policy), so, as a profile does ([WebProfile]), each value in use splits the engine pool and its spares:
+     * views that differ in it never share an engine. On Windows, false is the profile's autoplay site setting in WebView2,
+     * for each origin the engine shows, so engines of one profile on one origin share it, whatever their own setting
+     * (the README's Windows section).
+     */
     public val mediaPlaybackRequiresGesture: Boolean = true,
     /**
      * Origins whose documents get the bridge, besides the content's own local origin. Each is an origin as browsers
