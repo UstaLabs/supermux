@@ -2,6 +2,8 @@
 # (winvm.sh ui): the DLL extracted to its hash-named folder and re-hashed (D19), replaced when tampered with, two
 # instances of the app at once, and the ephemeral slots' locks (V3). javaw on C:\wvc\<Lib> as run-sample.ps1 starts it.
 # Prints "CACHE <n> PASS|FAIL <detail>" for each step, then "CACHE DONE failed=<count>".
+# For the helper's own VM only: it ends every run of the helper (any -Dwvc.run=, not this run's alone) and the sample's
+# WebView2 processes, and removes tester's glue cache under %LOCALAPPDATA%, outside C:\wvc.
 param([string]$Lib = 'lib-release', [string]$App = 'wvc-sample')
 $ErrorActionPreference = 'Stop'
 $root = 'C:\wvc'
