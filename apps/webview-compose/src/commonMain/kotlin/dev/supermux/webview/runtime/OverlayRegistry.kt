@@ -13,10 +13,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
  * The Compose overlays and scrims drawn over the web views of one window right now, in window pixels (spec §6).
- * `Modifier.webViewOverlay` and `Modifier.webViewScrim` keep them current. A live page that sits above Compose cuts
- * [shapes] out of itself and dims under [scrims] ([computeCutouts]).
+ * `Modifier.webViewOverlay` and `Modifier.webViewScrim` keep them current: apps read it, and only those modifiers write
+ * to it. A live page that sits above Compose cuts [shapes] out of itself and dims under [scrims] (the runtime computes
+ * each page's cut-outs from them, [computeCutouts]).
  * - Each window has its own: [ProvideWebViewOverlays] gives one to a window's content. Without it, the runtime's
- *   ([WebViewRuntime.overlays]) serves.
+ *   ([WebViewRuntime.overlays]) serves. Apps make none themselves.
  * - Both are snapshot state, so a reader (a `snapshotFlow`, a composition) hears of every change.
  * - A read is one state read. Each change publishes new lists that never change, so readers copy and lock nothing,
  *   and may keep what they read.
@@ -26,7 +27,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
  * Main thread only.
  */
 @Stable
-public class OverlayRegistry {
+public class OverlayRegistry internal constructor() {
     private val overlayEntries = mutableStateOf(Entries<OverlayShape>(), referentialEqualityPolicy())
     private val scrimEntries = mutableStateOf(Entries<ScrimShape>(), referentialEqualityPolicy())
 
@@ -37,10 +38,10 @@ public class OverlayRegistry {
     public val scrims: List<ScrimShape> get() = scrimEntries.value.values
 
     /** Registers [shape] for [key], in place of what [key] had; null forgets [key]. Keys are compared with `==`. */
-    public fun setOverlay(key: Any, shape: OverlayShape?): Unit = update(overlayEntries, key, shape)
+    internal fun setOverlay(key: Any, shape: OverlayShape?): Unit = update(overlayEntries, key, shape)
 
     /** Registers [scrim] for [key], in place of what [key] had; null forgets [key]. Keys are compared with `==`. */
-    public fun setScrim(key: Any, scrim: ScrimShape?): Unit = update(scrimEntries, key, scrim)
+    internal fun setScrim(key: Any, scrim: ScrimShape?): Unit = update(scrimEntries, key, scrim)
 
     private fun <T : Any> update(state: MutableState<Entries<T>>, key: Any, value: T?) {
         // A writer doesn't come to depend on what it writes, wherever it runs.

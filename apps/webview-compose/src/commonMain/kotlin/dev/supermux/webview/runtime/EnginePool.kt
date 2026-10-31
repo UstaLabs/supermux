@@ -106,10 +106,11 @@ internal sealed interface AcquireResult {
  * Main thread only. Holders' evictions, resets and creations run in [scope], bounded in time; tearing the scope
  * down cancels them. The mutex only orders suspended operations: nothing suspends while holding it.
  *
- * Apps read it ([liveCount], [idleCount], [parkedCount], [budget], [maxLive]) and control it through the runtime:
- * memory pressure and errors go through [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and
- * [WebViewRuntime.onError], which also halve the snapshot cache and forward the pool's errors, a cached process's light
- * trims through [WebViewRuntime.onBackgroundTrim] ([trim]), and the budget is [RuntimeConfig.maxLive].
+ * Apps read it ([liveCount], [idleCount], [parkedCount], [budget], [maxLive]) and control it through the runtime, which
+ * makes it: its constructor and every control are internal. Memory pressure and errors go through
+ * [WebViewRuntime.onMemoryPressure], [WebViewRuntime.onMemoryRecovered] and [WebViewRuntime.onError], which also halve
+ * the snapshot cache and forward the pool's errors, a cached process's light trims through
+ * [WebViewRuntime.onBackgroundTrim] ([trim]), and the budget is [RuntimeConfig.maxLive].
  *
  * @param scope where the pool's own work runs. The runtime passes its scope.
  * @param clock milliseconds, for [prewarm]'s quiet period, the age of spares and how long pages have been parked.
@@ -127,7 +128,7 @@ internal sealed interface AcquireResult {
  *   then it is reclaimed, as a view needing its slot would reclaim it. 10 minutes, as long as a hidden view keeps its
  *   engine ([RuntimeConfig.hiddenReleaseMillis], which the runtime passes).
  */
-public class EnginePool(
+public class EnginePool internal constructor(
     private val factory: WebEngineFactory,
     maxLive: Int,
     maxIdle: Int,
@@ -438,7 +439,7 @@ public class EnginePool(
      * - Only while the budget has room for the spare to be leased, and not during a memory-pressure window.
      * - The new spare is released if one for [config] came back while it was being created.
      */
-    public suspend fun prewarm(config: EngineConfig) {
+    internal suspend fun prewarm(config: EngineConfig) {
         val start = mutex.withLock {
             dropUnusableSpares()
             dropUnusableParked()

@@ -1023,14 +1023,11 @@ public final class dev/supermux/webview/engine/WebSurfaceHints {
 
 public final class dev/supermux/webview/runtime/EnginePool {
 	public static final field $stable I
-	public fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;IILkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;JJJJJJJ)V
-	public synthetic fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;IILkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;JJJJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getBudget ()I
 	public final fun getIdleCount ()I
 	public final fun getLiveCount ()I
 	public final fun getMaxLive ()I
 	public final fun getParkedCount ()I
-	public final fun prewarm (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class dev/supermux/webview/runtime/OverlayCutouts {
@@ -1059,17 +1056,10 @@ public final class dev/supermux/webview/runtime/OverlayCutouts$Companion {
 	public final fun getHidden ()Ldev/supermux/webview/runtime/OverlayCutouts;
 }
 
-public final class dev/supermux/webview/runtime/OverlayGeometryKt {
-	public static final fun computeCutouts (Landroidx/compose/ui/geometry/Rect;Landroidx/compose/ui/geometry/Rect;Ljava/util/Collection;Ljava/util/List;)Ldev/supermux/webview/runtime/OverlayCutouts;
-}
-
 public final class dev/supermux/webview/runtime/OverlayRegistry {
 	public static final field $stable I
-	public fun <init> ()V
 	public final fun getScrims ()Ljava/util/List;
 	public final fun getShapes ()Ljava/util/List;
-	public final fun setOverlay (Ljava/lang/Object;Ldev/supermux/webview/runtime/OverlayShape;)V
-	public final fun setScrim (Ljava/lang/Object;Ldev/supermux/webview/runtime/ScrimShape;)V
 }
 
 public final class dev/supermux/webview/runtime/OverlayRegistryKt {
@@ -1092,43 +1082,14 @@ public final class dev/supermux/webview/runtime/OverlayShape {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class dev/supermux/webview/runtime/PageKey {
-	public static final field $stable I
-	public fun <init> (Ldev/supermux/webview/WebProfile;Ljava/lang/String;)V
-	public final fun component1 ()Ldev/supermux/webview/WebProfile;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ldev/supermux/webview/WebProfile;Ljava/lang/String;)Ldev/supermux/webview/runtime/PageKey;
-	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/PageKey;Ldev/supermux/webview/WebProfile;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/runtime/PageKey;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getContentKey ()Ljava/lang/String;
-	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class dev/supermux/webview/runtime/PageMemory {
-	public static final field $stable I
-	public synthetic fun <init> (Ldev/supermux/webview/runtime/SnapshotKey;Landroidx/compose/ui/unit/DpSize;[BLdev/supermux/webview/runtime/SavedPageState;ZLdev/supermux/webview/runtime/SizeReport;ZLkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getContentSize-rqqXlrw ()Landroidx/compose/ui/unit/DpSize;
-	public final fun getEngineState ()[B
-	public final fun getGrowsWithViewport ()Z
-	public final fun getLastSizeReport ()Ldev/supermux/webview/runtime/SizeReport;
-	public final fun getPageSavesState ()Z
-	public final fun getPageState ()Ldev/supermux/webview/runtime/SavedPageState;
-	public final fun getSnapshotKey ()Ldev/supermux/webview/runtime/SnapshotKey;
-}
-
 public final class dev/supermux/webview/runtime/PageMemoryStore {
 	public static final field $stable I
-	public fun <init> (IJ)V
-	public synthetic fun <init> (IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun clear ()V
-	public final fun forget (Ljava/lang/String;)V
 	public final fun getCount ()I
+	public final fun getHits ()J
 	public final fun getMaxBytes ()J
+	public final fun getMaxEntries ()I
+	public final fun getMisses ()J
 	public final fun getSizeBytes ()J
-	public final fun recall (Ldev/supermux/webview/runtime/PageKey;)Ldev/supermux/webview/runtime/PageMemory;
-	public final fun remember (Ldev/supermux/webview/runtime/PageKey;Ldev/supermux/webview/runtime/PageMemory;)V
 }
 
 public final class dev/supermux/webview/runtime/PlatformKt {
@@ -1163,20 +1124,6 @@ public final class dev/supermux/webview/runtime/RuntimeConfig$Companion {
 	public final fun platformDefault ()Ldev/supermux/webview/runtime/RuntimeConfig;
 }
 
-public final class dev/supermux/webview/runtime/SavedPageState {
-	public static final field $stable I
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/runtime/SavedPageState;
-	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SavedPageState;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/runtime/SavedPageState;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getJson ()Ljava/lang/String;
-	public final fun getOrigin ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
 public final class dev/supermux/webview/runtime/ScrimShape {
 	public static final field $stable I
 	public synthetic fun <init> (Landroidx/compose/ui/geometry/Rect;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -1191,62 +1138,17 @@ public final class dev/supermux/webview/runtime/ScrimShape {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class dev/supermux/webview/runtime/SizeReport {
-	public static final field $stable I
-	public fun <init> (FLjava/lang/Float;)V
-	public final fun component1 ()F
-	public final fun component2 ()Ljava/lang/Float;
-	public final fun copy (FLjava/lang/Float;)Ldev/supermux/webview/runtime/SizeReport;
-	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SizeReport;FLjava/lang/Float;ILjava/lang/Object;)Ldev/supermux/webview/runtime/SizeReport;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getHeight ()F
-	public final fun getViewportHeight ()Ljava/lang/Float;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
 public final class dev/supermux/webview/runtime/SnapshotCache {
 	public static final field $stable I
-	public final fun clear ()V
-	public final fun contains (Ldev/supermux/webview/runtime/SnapshotKey;)Z
-	public final fun forget (Ljava/lang/String;)V
 	public final fun getCount ()I
 	public final fun getDecodedBytes ()J
 	public final fun getDecodedCount ()I
 	public final fun getDecodedMaxBytes ()J
+	public final fun getEvictions ()J
+	public final fun getHits ()J
 	public final fun getMaxBytes ()J
+	public final fun getMisses ()J
 	public final fun getSizeBytes ()J
-	public final fun put (Ldev/supermux/webview/runtime/SnapshotKey;[BLandroidx/compose/ui/graphics/ImageBitmap;)Z
-	public static synthetic fun put$default (Ldev/supermux/webview/runtime/SnapshotCache;Ldev/supermux/webview/runtime/SnapshotKey;[BLandroidx/compose/ui/graphics/ImageBitmap;ILjava/lang/Object;)Z
-	public final fun remove (Ldev/supermux/webview/runtime/SnapshotKey;)V
-	public final fun request (Ldev/supermux/webview/runtime/SnapshotKey;Lkotlin/jvm/functions/Function2;)Landroidx/compose/ui/graphics/ImageBitmap;
-	public static synthetic fun request$default (Ldev/supermux/webview/runtime/SnapshotCache;Ldev/supermux/webview/runtime/SnapshotKey;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Landroidx/compose/ui/graphics/ImageBitmap;
-	public final fun trimTo (J)V
-}
-
-public final class dev/supermux/webview/runtime/SnapshotKey {
-	public static final field $stable I
-	public fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFF)V
-	public synthetic fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFFILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ldev/supermux/webview/WebProfile;
-	public final fun component3 ()I
-	public final fun component4 ()I
-	public final fun component5 ()Z
-	public final fun component6 ()F
-	public final fun component7 ()F
-	public final fun copy (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFF)Ldev/supermux/webview/runtime/SnapshotKey;
-	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SnapshotKey;Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFFILjava/lang/Object;)Ldev/supermux/webview/runtime/SnapshotKey;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getContentKey ()Ljava/lang/String;
-	public final fun getDark ()Z
-	public final fun getDensity ()F
-	public final fun getHeight ()I
-	public final fun getPixelsPerDp ()F
-	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
-	public final fun getWidth ()I
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/supermux/webview/runtime/WebViewRuntime {

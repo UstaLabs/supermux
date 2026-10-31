@@ -457,6 +457,43 @@ class SnapshotCacheTest {
         assertTrue(key(1) in cache, "stored")
         assertEquals(0, cache.decodedCount)
     }
+
+    // --- The read-only statistics apps and the perf lab read ---
+
+    /** A request answered decoded at once is a hit; one that had to start a decode is a miss, once however many ask. */
+    @Test fun hitsAndMissesCountRequestsByWhetherTheyHadToDecode() = runTest {
+        val codec = FakeCodec().apply { gate = CompletableDeferred() }
+        val cache = cache(10_000, codec = codec)
+        cache.put(key(1), bytes(), image())
+        cache.put(key(2), bytes())
+        assertNotNull(cache.request(key(1)))
+        assertEquals(1L to 0L, cache.hits to cache.misses, "decoded with its put")
+        assertNull(cache.request(key(2), Waiter().call))
+        assertNull(cache.request(key(2), Waiter().call))
+        assertNull(cache.request(key(2)))
+        assertEquals(1L to 1L, cache.hits to cache.misses, "one decode, joined by the later requests")
+        codec.gate?.complete(Unit)
+        runCurrent()
+        assertNotNull(cache.request(key(2)))
+        assertNull(cache.request(key(3)), "nothing stored")
+        assertEquals(2L to 1L, cache.hits to cache.misses, "decoded now; what isn't stored is neither")
+    }
+
+    /** What the budget made the cache let go counts, memory pressure's halving too; a replaced or removed one doesn't. */
+    @Test fun evictionsCountWhatTheBudgetLetGo() = runTest {
+        val cache = cache(1_200)
+        repeat(3) { cache.put(key(it), bytes()) }
+        cache.put(key(0), bytes())
+        cache.remove(key(1))
+        assertEquals(0L, cache.evictions, "replaced and removed")
+        repeat(2) { cache.put(key(10 + it), bytes()) }
+        assertEquals(1L, cache.evictions, "the least recently used, for room")
+        cache.onMemoryPressure()
+        assertEquals(400, cache.sizeBytes, "within half of the 1,200 bytes it stored")
+        assertEquals(3L, cache.evictions, "two more, under pressure")
+        cache.clear()
+        assertEquals(3L, cache.evictions, "a clear forgets; it lets nothing go for room")
+    }
 }
 
 /** A [width]×[height] bitmap with no pixels: the cache only reads its size and [config]. Needs no Skia, so it runs anywhere. */

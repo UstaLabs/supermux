@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
  * of, fewer than [density] when it was kept smaller (three pixels a dp at most, the pixel cap, an engine's own draw
  * stepped down), so its cover is drawn at its true size.
  */
-public data class SnapshotKey(
+internal data class SnapshotKey(
     val contentKey: String,
     val profile: WebProfile,
     val width: Int,
@@ -35,6 +35,11 @@ public data class SnapshotKey(
  *   snapshots are kept decoded.
  * - [request] gives a decoded snapshot at once, or starts its decode, off the main thread, once however many views
  *   ask, and tells each of them when it is done.
+ *
+ * Apps read it, for monitoring ([count], [sizeBytes], [decodedCount], [decodedBytes], [hits], [misses], [evictions]),
+ * and never write to it: the runtime does, as views take and show snapshots. To forget snapshots, call
+ * [WebViewRuntime.clear] (a logout: it also forgets page memory and the pages parked or live in views) or
+ * [WebViewRuntime.forget].
  */
 public class SnapshotCache internal constructor(
     /** The budget for stored snapshots, in encoded bytes. */
@@ -81,6 +86,22 @@ public class SnapshotCache internal constructor(
     /** How many snapshots are kept decoded. */
     public val decodedCount: Int get() = ready.size
 
+    /** How many times a view (or a prefetch) asked for a snapshot and got it decoded at once, ready to draw. */
+    public var hits: Long = 0
+        private set
+
+    /** How many times a view (or a prefetch) asked for a stored snapshot that wasn't decoded, and its decode started. */
+    public var misses: Long = 0
+        private set
+
+    /**
+     * How many stored snapshots the cache let go to stay within its budget, least recently used first: the ones memory
+     * pressure took among them. A view of such a page shows its placeholder until the page is live again. Snapshots
+     * replaced by newer ones of their page, or forgotten ([WebViewRuntime.clear], [WebViewRuntime.forget]), don't count.
+     */
+    public var evictions: Long = 0
+        private set
+
     /**
      * A lower budget for stored snapshots while memory is short, or null. Setting it evicts down to it at once, and the
      * cache keeps within it, as within [maxBytes], until it is null again. It never raises the budget above [maxBytes].
@@ -108,7 +129,7 @@ public class SnapshotCache internal constructor(
     internal operator fun get(key: SnapshotKey): ByteArray? = use(key)?.bytes
 
     /** Whether a snapshot is stored under [key]. */
-    public operator fun contains(key: SnapshotKey): Boolean = key in entries
+    internal operator fun contains(key: SnapshotKey): Boolean = key in entries
 
     /** Marks the snapshot stored under [key] used, as a view showing it does. False if there is none. */
     internal fun touch(key: SnapshotKey): Boolean = use(key) != null
@@ -119,7 +140,7 @@ public class SnapshotCache internal constructor(
      * if it stored them. A snapshot bigger than the whole cache, or than what memory pressure leaves of it, isn't kept,
      * and what is stored, under [key] too, stays.
      */
-    public fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null): Boolean {
+    internal fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null): Boolean {
         val entry = Entry(bytes)
         if (entry.cost > budget) return false
         val waiting = decodes.remove(key)?.let { superseded ->
@@ -146,12 +167,13 @@ public class SnapshotCache internal constructor(
      * (one for every view that asks), and [onDecoded], if given, gets the image once it is done, on the main thread,
      * whether or not the cache keeps it; nothing at all if the snapshot goes meanwhile or doesn't decode. Without
      * [onDecoded] it is a prefetch: it starts a decode only if the cache would keep what it gives. Either way the
-     * snapshot counts as used.
+     * snapshot counts as used. A decoded one at once is one of [hits]; a decode started, one of [misses].
      */
-    public fun request(key: SnapshotKey, onDecoded: ((SnapshotKey, ImageBitmap) -> Unit)? = null): ImageBitmap? {
+    internal fun request(key: SnapshotKey, onDecoded: ((SnapshotKey, ImageBitmap) -> Unit)? = null): ImageBitmap? {
         val entry = use(key) ?: return null
         ready.remove(key)?.let { kept ->
             ready[key] = kept
+            hits++
             return kept.image
         }
         val running = decodes[key]
@@ -160,6 +182,7 @@ public class SnapshotCache internal constructor(
             return null
         }
         if (onDecoded == null && decodedBudget <= 0) return null
+        misses++
         val decode = Decode()
         decodes[key] = decode
         // Undispatched: a codec that doesn't suspend has decoded by the time launch returns.
@@ -226,19 +249,19 @@ public class SnapshotCache internal constructor(
     }
 
     /** Removes the snapshot stored under [key], decoded too; a decode of it under way gives nothing. */
-    public fun remove(key: SnapshotKey) {
+    internal fun remove(key: SnapshotKey) {
         entries.remove(key)?.let { sizeBytes -= it.cost }
         dropDecoded(key)
         decodes.remove(key)?.job?.cancel()
     }
 
     /** Removes every snapshot of the content of [contentKey], in every profile, size, theme and density. */
-    public fun forget(contentKey: String) {
+    internal fun forget(contentKey: String) {
         entries.keys.filter { it.contentKey == contentKey }.forEach(::remove)
     }
 
-    /** Removes every snapshot. */
-    public fun clear() {
+    /** Removes every snapshot. Only [WebViewRuntime.clear] does, with everything else a logout forgets. */
+    internal fun clear() {
         entries.clear()
         sizeBytes = 0
         ready.clear()
@@ -247,9 +270,15 @@ public class SnapshotCache internal constructor(
         decodes.clear()
     }
 
-    /** Evicts least-recently-used stored snapshots, and their decoded copies, until at most [limit] bytes remain. */
-    public fun trimTo(limit: Long) {
-        while (sizeBytes > limit) remove(entries.keys.firstOrNull() ?: return)
+    /**
+     * Evicts least-recently-used stored snapshots, and their decoded copies, until at most [limit] bytes remain. Each
+     * is one of [evictions].
+     */
+    internal fun trimTo(limit: Long) {
+        while (sizeBytes > limit) {
+            remove(entries.keys.firstOrNull() ?: return)
+            evictions++
+        }
     }
 
     /** Evicts least-recently-used decoded snapshots until they hold at most [limit] pixel bytes; they stay stored. */

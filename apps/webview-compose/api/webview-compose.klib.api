@@ -822,8 +822,6 @@ final class dev.supermux.webview.engine/WebSurfaceHints { // dev.supermux.webvie
 }
 
 final class dev.supermux.webview.runtime/EnginePool { // dev.supermux.webview.runtime/EnginePool|null[0]
-    constructor <init>(dev.supermux.webview.engine/WebEngineFactory, kotlin/Int, kotlin/Int, kotlinx.coroutines/CoroutineScope, kotlin/Function0<kotlin/Long> = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...) // dev.supermux.webview.runtime/EnginePool.<init>|<init>(dev.supermux.webview.engine.WebEngineFactory;kotlin.Int;kotlin.Int;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.Long>;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Long){}[0]
-
     final val budget // dev.supermux.webview.runtime/EnginePool.budget|{}budget[0]
         final fun <get-budget>(): kotlin/Int // dev.supermux.webview.runtime/EnginePool.budget.<get-budget>|<get-budget>(){}[0]
     final val idleCount // dev.supermux.webview.runtime/EnginePool.idleCount|{}idleCount[0]
@@ -835,8 +833,6 @@ final class dev.supermux.webview.runtime/EnginePool { // dev.supermux.webview.ru
 
     final var maxLive // dev.supermux.webview.runtime/EnginePool.maxLive|{}maxLive[0]
         final fun <get-maxLive>(): kotlin/Int // dev.supermux.webview.runtime/EnginePool.maxLive.<get-maxLive>|<get-maxLive>(){}[0]
-
-    final suspend fun prewarm(dev.supermux.webview.engine/EngineConfig) // dev.supermux.webview.runtime/EnginePool.prewarm|prewarm(dev.supermux.webview.engine.EngineConfig){}[0]
 }
 
 final class dev.supermux.webview.runtime/OverlayCutouts { // dev.supermux.webview.runtime/OverlayCutouts|null[0]
@@ -871,15 +867,10 @@ final class dev.supermux.webview.runtime/OverlayCutouts { // dev.supermux.webvie
 }
 
 final class dev.supermux.webview.runtime/OverlayRegistry { // dev.supermux.webview.runtime/OverlayRegistry|null[0]
-    constructor <init>() // dev.supermux.webview.runtime/OverlayRegistry.<init>|<init>(){}[0]
-
     final val scrims // dev.supermux.webview.runtime/OverlayRegistry.scrims|{}scrims[0]
         final fun <get-scrims>(): kotlin.collections/List<dev.supermux.webview.runtime/ScrimShape> // dev.supermux.webview.runtime/OverlayRegistry.scrims.<get-scrims>|<get-scrims>(){}[0]
     final val shapes // dev.supermux.webview.runtime/OverlayRegistry.shapes|{}shapes[0]
         final fun <get-shapes>(): kotlin.collections/List<dev.supermux.webview.runtime/OverlayShape> // dev.supermux.webview.runtime/OverlayRegistry.shapes.<get-shapes>|<get-shapes>(){}[0]
-
-    final fun setOverlay(kotlin/Any, dev.supermux.webview.runtime/OverlayShape?) // dev.supermux.webview.runtime/OverlayRegistry.setOverlay|setOverlay(kotlin.Any;dev.supermux.webview.runtime.OverlayShape?){}[0]
-    final fun setScrim(kotlin/Any, dev.supermux.webview.runtime/ScrimShape?) // dev.supermux.webview.runtime/OverlayRegistry.setScrim|setScrim(kotlin.Any;dev.supermux.webview.runtime.ScrimShape?){}[0]
 }
 
 final class dev.supermux.webview.runtime/OverlayShape { // dev.supermux.webview.runtime/OverlayShape|null[0]
@@ -898,55 +889,20 @@ final class dev.supermux.webview.runtime/OverlayShape { // dev.supermux.webview.
     final fun toString(): kotlin/String // dev.supermux.webview.runtime/OverlayShape.toString|toString(){}[0]
 }
 
-final class dev.supermux.webview.runtime/PageKey { // dev.supermux.webview.runtime/PageKey|null[0]
-    constructor <init>(dev.supermux.webview/WebProfile, kotlin/String) // dev.supermux.webview.runtime/PageKey.<init>|<init>(dev.supermux.webview.WebProfile;kotlin.String){}[0]
-
-    final val contentKey // dev.supermux.webview.runtime/PageKey.contentKey|{}contentKey[0]
-        final fun <get-contentKey>(): kotlin/String // dev.supermux.webview.runtime/PageKey.contentKey.<get-contentKey>|<get-contentKey>(){}[0]
-    final val profile // dev.supermux.webview.runtime/PageKey.profile|{}profile[0]
-        final fun <get-profile>(): dev.supermux.webview/WebProfile // dev.supermux.webview.runtime/PageKey.profile.<get-profile>|<get-profile>(){}[0]
-
-    final fun component1(): dev.supermux.webview/WebProfile // dev.supermux.webview.runtime/PageKey.component1|component1(){}[0]
-    final fun component2(): kotlin/String // dev.supermux.webview.runtime/PageKey.component2|component2(){}[0]
-    final fun copy(dev.supermux.webview/WebProfile = ..., kotlin/String = ...): dev.supermux.webview.runtime/PageKey // dev.supermux.webview.runtime/PageKey.copy|copy(dev.supermux.webview.WebProfile;kotlin.String){}[0]
-    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.runtime/PageKey.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // dev.supermux.webview.runtime/PageKey.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // dev.supermux.webview.runtime/PageKey.toString|toString(){}[0]
-}
-
-final class dev.supermux.webview.runtime/PageMemory { // dev.supermux.webview.runtime/PageMemory|null[0]
-    constructor <init>(dev.supermux.webview.runtime/SnapshotKey?, androidx.compose.ui.unit/DpSize?, kotlin/ByteArray?, dev.supermux.webview.runtime/SavedPageState?, kotlin/Boolean, dev.supermux.webview.runtime/SizeReport?, kotlin/Boolean) // dev.supermux.webview.runtime/PageMemory.<init>|<init>(dev.supermux.webview.runtime.SnapshotKey?;androidx.compose.ui.unit.DpSize?;kotlin.ByteArray?;dev.supermux.webview.runtime.SavedPageState?;kotlin.Boolean;dev.supermux.webview.runtime.SizeReport?;kotlin.Boolean){}[0]
-
-    final val contentSize // dev.supermux.webview.runtime/PageMemory.contentSize|{}contentSize[0]
-        final fun <get-contentSize>(): androidx.compose.ui.unit/DpSize? // dev.supermux.webview.runtime/PageMemory.contentSize.<get-contentSize>|<get-contentSize>(){}[0]
-    final val engineState // dev.supermux.webview.runtime/PageMemory.engineState|{}engineState[0]
-        final fun <get-engineState>(): kotlin/ByteArray? // dev.supermux.webview.runtime/PageMemory.engineState.<get-engineState>|<get-engineState>(){}[0]
-    final val growsWithViewport // dev.supermux.webview.runtime/PageMemory.growsWithViewport|{}growsWithViewport[0]
-        final fun <get-growsWithViewport>(): kotlin/Boolean // dev.supermux.webview.runtime/PageMemory.growsWithViewport.<get-growsWithViewport>|<get-growsWithViewport>(){}[0]
-    final val lastSizeReport // dev.supermux.webview.runtime/PageMemory.lastSizeReport|{}lastSizeReport[0]
-        final fun <get-lastSizeReport>(): dev.supermux.webview.runtime/SizeReport? // dev.supermux.webview.runtime/PageMemory.lastSizeReport.<get-lastSizeReport>|<get-lastSizeReport>(){}[0]
-    final val pageSavesState // dev.supermux.webview.runtime/PageMemory.pageSavesState|{}pageSavesState[0]
-        final fun <get-pageSavesState>(): kotlin/Boolean // dev.supermux.webview.runtime/PageMemory.pageSavesState.<get-pageSavesState>|<get-pageSavesState>(){}[0]
-    final val pageState // dev.supermux.webview.runtime/PageMemory.pageState|{}pageState[0]
-        final fun <get-pageState>(): dev.supermux.webview.runtime/SavedPageState? // dev.supermux.webview.runtime/PageMemory.pageState.<get-pageState>|<get-pageState>(){}[0]
-    final val snapshotKey // dev.supermux.webview.runtime/PageMemory.snapshotKey|{}snapshotKey[0]
-        final fun <get-snapshotKey>(): dev.supermux.webview.runtime/SnapshotKey? // dev.supermux.webview.runtime/PageMemory.snapshotKey.<get-snapshotKey>|<get-snapshotKey>(){}[0]
-}
-
 final class dev.supermux.webview.runtime/PageMemoryStore { // dev.supermux.webview.runtime/PageMemoryStore|null[0]
-    constructor <init>(kotlin/Int, kotlin/Long = ...) // dev.supermux.webview.runtime/PageMemoryStore.<init>|<init>(kotlin.Int;kotlin.Long){}[0]
-
     final val count // dev.supermux.webview.runtime/PageMemoryStore.count|{}count[0]
         final fun <get-count>(): kotlin/Int // dev.supermux.webview.runtime/PageMemoryStore.count.<get-count>|<get-count>(){}[0]
     final val maxBytes // dev.supermux.webview.runtime/PageMemoryStore.maxBytes|{}maxBytes[0]
         final fun <get-maxBytes>(): kotlin/Long // dev.supermux.webview.runtime/PageMemoryStore.maxBytes.<get-maxBytes>|<get-maxBytes>(){}[0]
+    final val maxEntries // dev.supermux.webview.runtime/PageMemoryStore.maxEntries|{}maxEntries[0]
+        final fun <get-maxEntries>(): kotlin/Int // dev.supermux.webview.runtime/PageMemoryStore.maxEntries.<get-maxEntries>|<get-maxEntries>(){}[0]
     final val sizeBytes // dev.supermux.webview.runtime/PageMemoryStore.sizeBytes|{}sizeBytes[0]
         final fun <get-sizeBytes>(): kotlin/Long // dev.supermux.webview.runtime/PageMemoryStore.sizeBytes.<get-sizeBytes>|<get-sizeBytes>(){}[0]
 
-    final fun clear() // dev.supermux.webview.runtime/PageMemoryStore.clear|clear(){}[0]
-    final fun forget(kotlin/String) // dev.supermux.webview.runtime/PageMemoryStore.forget|forget(kotlin.String){}[0]
-    final fun recall(dev.supermux.webview.runtime/PageKey): dev.supermux.webview.runtime/PageMemory? // dev.supermux.webview.runtime/PageMemoryStore.recall|recall(dev.supermux.webview.runtime.PageKey){}[0]
-    final fun remember(dev.supermux.webview.runtime/PageKey, dev.supermux.webview.runtime/PageMemory) // dev.supermux.webview.runtime/PageMemoryStore.remember|remember(dev.supermux.webview.runtime.PageKey;dev.supermux.webview.runtime.PageMemory){}[0]
+    final var hits // dev.supermux.webview.runtime/PageMemoryStore.hits|{}hits[0]
+        final fun <get-hits>(): kotlin/Long // dev.supermux.webview.runtime/PageMemoryStore.hits.<get-hits>|<get-hits>(){}[0]
+    final var misses // dev.supermux.webview.runtime/PageMemoryStore.misses|{}misses[0]
+        final fun <get-misses>(): kotlin/Long // dev.supermux.webview.runtime/PageMemoryStore.misses.<get-misses>|<get-misses>(){}[0]
 }
 
 final class dev.supermux.webview.runtime/RuntimeConfig { // dev.supermux.webview.runtime/RuntimeConfig|null[0]
@@ -981,22 +937,6 @@ final class dev.supermux.webview.runtime/RuntimeConfig { // dev.supermux.webview
     }
 }
 
-final class dev.supermux.webview.runtime/SavedPageState { // dev.supermux.webview.runtime/SavedPageState|null[0]
-    constructor <init>(kotlin/String, kotlin/String) // dev.supermux.webview.runtime/SavedPageState.<init>|<init>(kotlin.String;kotlin.String){}[0]
-
-    final val json // dev.supermux.webview.runtime/SavedPageState.json|{}json[0]
-        final fun <get-json>(): kotlin/String // dev.supermux.webview.runtime/SavedPageState.json.<get-json>|<get-json>(){}[0]
-    final val origin // dev.supermux.webview.runtime/SavedPageState.origin|{}origin[0]
-        final fun <get-origin>(): kotlin/String // dev.supermux.webview.runtime/SavedPageState.origin.<get-origin>|<get-origin>(){}[0]
-
-    final fun component1(): kotlin/String // dev.supermux.webview.runtime/SavedPageState.component1|component1(){}[0]
-    final fun component2(): kotlin/String // dev.supermux.webview.runtime/SavedPageState.component2|component2(){}[0]
-    final fun copy(kotlin/String = ..., kotlin/String = ...): dev.supermux.webview.runtime/SavedPageState // dev.supermux.webview.runtime/SavedPageState.copy|copy(kotlin.String;kotlin.String){}[0]
-    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.runtime/SavedPageState.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // dev.supermux.webview.runtime/SavedPageState.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // dev.supermux.webview.runtime/SavedPageState.toString|toString(){}[0]
-}
-
 final class dev.supermux.webview.runtime/ScrimShape { // dev.supermux.webview.runtime/ScrimShape|null[0]
     constructor <init>(androidx.compose.ui.geometry/Rect, androidx.compose.ui.graphics/Color) // dev.supermux.webview.runtime/ScrimShape.<init>|<init>(androidx.compose.ui.geometry.Rect;androidx.compose.ui.graphics.Color){}[0]
 
@@ -1013,22 +953,6 @@ final class dev.supermux.webview.runtime/ScrimShape { // dev.supermux.webview.ru
     final fun toString(): kotlin/String // dev.supermux.webview.runtime/ScrimShape.toString|toString(){}[0]
 }
 
-final class dev.supermux.webview.runtime/SizeReport { // dev.supermux.webview.runtime/SizeReport|null[0]
-    constructor <init>(kotlin/Float, kotlin/Float?) // dev.supermux.webview.runtime/SizeReport.<init>|<init>(kotlin.Float;kotlin.Float?){}[0]
-
-    final val height // dev.supermux.webview.runtime/SizeReport.height|{}height[0]
-        final fun <get-height>(): kotlin/Float // dev.supermux.webview.runtime/SizeReport.height.<get-height>|<get-height>(){}[0]
-    final val viewportHeight // dev.supermux.webview.runtime/SizeReport.viewportHeight|{}viewportHeight[0]
-        final fun <get-viewportHeight>(): kotlin/Float? // dev.supermux.webview.runtime/SizeReport.viewportHeight.<get-viewportHeight>|<get-viewportHeight>(){}[0]
-
-    final fun component1(): kotlin/Float // dev.supermux.webview.runtime/SizeReport.component1|component1(){}[0]
-    final fun component2(): kotlin/Float? // dev.supermux.webview.runtime/SizeReport.component2|component2(){}[0]
-    final fun copy(kotlin/Float = ..., kotlin/Float? = ...): dev.supermux.webview.runtime/SizeReport // dev.supermux.webview.runtime/SizeReport.copy|copy(kotlin.Float;kotlin.Float?){}[0]
-    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.runtime/SizeReport.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // dev.supermux.webview.runtime/SizeReport.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // dev.supermux.webview.runtime/SizeReport.toString|toString(){}[0]
-}
-
 final class dev.supermux.webview.runtime/SnapshotCache { // dev.supermux.webview.runtime/SnapshotCache|null[0]
     final val count // dev.supermux.webview.runtime/SnapshotCache.count|{}count[0]
         final fun <get-count>(): kotlin/Int // dev.supermux.webview.runtime/SnapshotCache.count.<get-count>|<get-count>(){}[0]
@@ -1041,47 +965,14 @@ final class dev.supermux.webview.runtime/SnapshotCache { // dev.supermux.webview
 
     final var decodedBytes // dev.supermux.webview.runtime/SnapshotCache.decodedBytes|{}decodedBytes[0]
         final fun <get-decodedBytes>(): kotlin/Long // dev.supermux.webview.runtime/SnapshotCache.decodedBytes.<get-decodedBytes>|<get-decodedBytes>(){}[0]
+    final var evictions // dev.supermux.webview.runtime/SnapshotCache.evictions|{}evictions[0]
+        final fun <get-evictions>(): kotlin/Long // dev.supermux.webview.runtime/SnapshotCache.evictions.<get-evictions>|<get-evictions>(){}[0]
+    final var hits // dev.supermux.webview.runtime/SnapshotCache.hits|{}hits[0]
+        final fun <get-hits>(): kotlin/Long // dev.supermux.webview.runtime/SnapshotCache.hits.<get-hits>|<get-hits>(){}[0]
+    final var misses // dev.supermux.webview.runtime/SnapshotCache.misses|{}misses[0]
+        final fun <get-misses>(): kotlin/Long // dev.supermux.webview.runtime/SnapshotCache.misses.<get-misses>|<get-misses>(){}[0]
     final var sizeBytes // dev.supermux.webview.runtime/SnapshotCache.sizeBytes|{}sizeBytes[0]
         final fun <get-sizeBytes>(): kotlin/Long // dev.supermux.webview.runtime/SnapshotCache.sizeBytes.<get-sizeBytes>|<get-sizeBytes>(){}[0]
-
-    final fun clear() // dev.supermux.webview.runtime/SnapshotCache.clear|clear(){}[0]
-    final fun contains(dev.supermux.webview.runtime/SnapshotKey): kotlin/Boolean // dev.supermux.webview.runtime/SnapshotCache.contains|contains(dev.supermux.webview.runtime.SnapshotKey){}[0]
-    final fun forget(kotlin/String) // dev.supermux.webview.runtime/SnapshotCache.forget|forget(kotlin.String){}[0]
-    final fun put(dev.supermux.webview.runtime/SnapshotKey, kotlin/ByteArray, androidx.compose.ui.graphics/ImageBitmap? = ...): kotlin/Boolean // dev.supermux.webview.runtime/SnapshotCache.put|put(dev.supermux.webview.runtime.SnapshotKey;kotlin.ByteArray;androidx.compose.ui.graphics.ImageBitmap?){}[0]
-    final fun remove(dev.supermux.webview.runtime/SnapshotKey) // dev.supermux.webview.runtime/SnapshotCache.remove|remove(dev.supermux.webview.runtime.SnapshotKey){}[0]
-    final fun request(dev.supermux.webview.runtime/SnapshotKey, kotlin/Function2<dev.supermux.webview.runtime/SnapshotKey, androidx.compose.ui.graphics/ImageBitmap, kotlin/Unit>? = ...): androidx.compose.ui.graphics/ImageBitmap? // dev.supermux.webview.runtime/SnapshotCache.request|request(dev.supermux.webview.runtime.SnapshotKey;kotlin.Function2<dev.supermux.webview.runtime.SnapshotKey,androidx.compose.ui.graphics.ImageBitmap,kotlin.Unit>?){}[0]
-    final fun trimTo(kotlin/Long) // dev.supermux.webview.runtime/SnapshotCache.trimTo|trimTo(kotlin.Long){}[0]
-}
-
-final class dev.supermux.webview.runtime/SnapshotKey { // dev.supermux.webview.runtime/SnapshotKey|null[0]
-    constructor <init>(kotlin/String, dev.supermux.webview/WebProfile, kotlin/Int, kotlin/Int, kotlin/Boolean, kotlin/Float, kotlin/Float = ...) // dev.supermux.webview.runtime/SnapshotKey.<init>|<init>(kotlin.String;dev.supermux.webview.WebProfile;kotlin.Int;kotlin.Int;kotlin.Boolean;kotlin.Float;kotlin.Float){}[0]
-
-    final val contentKey // dev.supermux.webview.runtime/SnapshotKey.contentKey|{}contentKey[0]
-        final fun <get-contentKey>(): kotlin/String // dev.supermux.webview.runtime/SnapshotKey.contentKey.<get-contentKey>|<get-contentKey>(){}[0]
-    final val dark // dev.supermux.webview.runtime/SnapshotKey.dark|{}dark[0]
-        final fun <get-dark>(): kotlin/Boolean // dev.supermux.webview.runtime/SnapshotKey.dark.<get-dark>|<get-dark>(){}[0]
-    final val density // dev.supermux.webview.runtime/SnapshotKey.density|{}density[0]
-        final fun <get-density>(): kotlin/Float // dev.supermux.webview.runtime/SnapshotKey.density.<get-density>|<get-density>(){}[0]
-    final val height // dev.supermux.webview.runtime/SnapshotKey.height|{}height[0]
-        final fun <get-height>(): kotlin/Int // dev.supermux.webview.runtime/SnapshotKey.height.<get-height>|<get-height>(){}[0]
-    final val pixelsPerDp // dev.supermux.webview.runtime/SnapshotKey.pixelsPerDp|{}pixelsPerDp[0]
-        final fun <get-pixelsPerDp>(): kotlin/Float // dev.supermux.webview.runtime/SnapshotKey.pixelsPerDp.<get-pixelsPerDp>|<get-pixelsPerDp>(){}[0]
-    final val profile // dev.supermux.webview.runtime/SnapshotKey.profile|{}profile[0]
-        final fun <get-profile>(): dev.supermux.webview/WebProfile // dev.supermux.webview.runtime/SnapshotKey.profile.<get-profile>|<get-profile>(){}[0]
-    final val width // dev.supermux.webview.runtime/SnapshotKey.width|{}width[0]
-        final fun <get-width>(): kotlin/Int // dev.supermux.webview.runtime/SnapshotKey.width.<get-width>|<get-width>(){}[0]
-
-    final fun component1(): kotlin/String // dev.supermux.webview.runtime/SnapshotKey.component1|component1(){}[0]
-    final fun component2(): dev.supermux.webview/WebProfile // dev.supermux.webview.runtime/SnapshotKey.component2|component2(){}[0]
-    final fun component3(): kotlin/Int // dev.supermux.webview.runtime/SnapshotKey.component3|component3(){}[0]
-    final fun component4(): kotlin/Int // dev.supermux.webview.runtime/SnapshotKey.component4|component4(){}[0]
-    final fun component5(): kotlin/Boolean // dev.supermux.webview.runtime/SnapshotKey.component5|component5(){}[0]
-    final fun component6(): kotlin/Float // dev.supermux.webview.runtime/SnapshotKey.component6|component6(){}[0]
-    final fun component7(): kotlin/Float // dev.supermux.webview.runtime/SnapshotKey.component7|component7(){}[0]
-    final fun copy(kotlin/String = ..., dev.supermux.webview/WebProfile = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Boolean = ..., kotlin/Float = ..., kotlin/Float = ...): dev.supermux.webview.runtime/SnapshotKey // dev.supermux.webview.runtime/SnapshotKey.copy|copy(kotlin.String;dev.supermux.webview.WebProfile;kotlin.Int;kotlin.Int;kotlin.Boolean;kotlin.Float;kotlin.Float){}[0]
-    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.runtime/SnapshotKey.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // dev.supermux.webview.runtime/SnapshotKey.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // dev.supermux.webview.runtime/SnapshotKey.toString|toString(){}[0]
 }
 
 final class dev.supermux.webview.runtime/WebViewRuntime { // dev.supermux.webview.runtime/WebViewRuntime|null[0]
@@ -1559,16 +1450,11 @@ final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_EnginePool_S
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayCutouts$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayCutouts$stableprop|#static{}dev_supermux_webview_runtime_OverlayCutouts$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayRegistry$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayRegistry$stableprop|#static{}dev_supermux_webview_runtime_OverlayRegistry$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayShape$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayShape$stableprop|#static{}dev_supermux_webview_runtime_OverlayShape$stableprop[0]
-final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageKey$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageKey$stableprop|#static{}dev_supermux_webview_runtime_PageKey$stableprop[0]
-final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemory$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemory$stableprop|#static{}dev_supermux_webview_runtime_PageMemory$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemoryStore$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemoryStore$stableprop|#static{}dev_supermux_webview_runtime_PageMemoryStore$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_PendingSaves_Save$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PendingSaves_Save$stableprop|#static{}dev_supermux_webview_runtime_PendingSaves_Save$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_RuntimeConfig$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_RuntimeConfig$stableprop|#static{}dev_supermux_webview_runtime_RuntimeConfig$stableprop[0]
-final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_SavedPageState$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SavedPageState$stableprop|#static{}dev_supermux_webview_runtime_SavedPageState$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop|#static{}dev_supermux_webview_runtime_ScrimShape$stableprop[0]
-final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_SizeReport$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SizeReport$stableprop|#static{}dev_supermux_webview_runtime_SizeReport$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop|#static{}dev_supermux_webview_runtime_SnapshotCache$stableprop[0]
-final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotKey$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotKey$stableprop|#static{}dev_supermux_webview_runtime_SnapshotKey$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop|#static{}dev_supermux_webview_runtime_WebViewRuntime$stableprop[0]
 final val dev.supermux.webview.testing/dev_supermux_webview_testing_FakeEngineBehavior$stableprop // dev.supermux.webview.testing/dev_supermux_webview_testing_FakeEngineBehavior$stableprop|#static{}dev_supermux_webview_testing_FakeEngineBehavior$stableprop[0]
 final val dev.supermux.webview.testing/dev_supermux_webview_testing_FakeWebEngine$stableprop // dev.supermux.webview.testing/dev_supermux_webview_testing_FakeWebEngine$stableprop|#static{}dev_supermux_webview_testing_FakeWebEngine$stableprop[0]
@@ -1673,7 +1559,6 @@ final fun dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResul
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter|dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/ProvideWebViewOverlays(kotlin/Function2<androidx.compose.runtime/Composer, kotlin/Int, kotlin/Unit>, androidx.compose.runtime/Composer?, kotlin/Int) // dev.supermux.webview.runtime/ProvideWebViewOverlays|ProvideWebViewOverlays(kotlin.Function2<androidx.compose.runtime.Composer,kotlin.Int,kotlin.Unit>;androidx.compose.runtime.Composer?;kotlin.Int){}[0]
 final fun dev.supermux.webview.runtime/ProvideWebViewRuntime(dev.supermux.webview.runtime/WebViewRuntime, kotlin/Function2<androidx.compose.runtime/Composer, kotlin/Int, kotlin/Unit>, androidx.compose.runtime/Composer?, kotlin/Int) // dev.supermux.webview.runtime/ProvideWebViewRuntime|ProvideWebViewRuntime(dev.supermux.webview.runtime.WebViewRuntime;kotlin.Function2<androidx.compose.runtime.Composer,kotlin.Int,kotlin.Unit>;androidx.compose.runtime.Composer?;kotlin.Int){}[0]
-final fun dev.supermux.webview.runtime/computeCutouts(androidx.compose.ui.geometry/Rect, androidx.compose.ui.geometry/Rect, kotlin.collections/Collection<dev.supermux.webview.runtime/OverlayShape>, kotlin.collections/List<dev.supermux.webview.runtime/ScrimShape>): dev.supermux.webview.runtime/OverlayCutouts // dev.supermux.webview.runtime/computeCutouts|computeCutouts(androidx.compose.ui.geometry.Rect;androidx.compose.ui.geometry.Rect;kotlin.collections.Collection<dev.supermux.webview.runtime.OverlayShape>;kotlin.collections.List<dev.supermux.webview.runtime.ScrimShape>){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter|dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Granted$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Granted$stableprop_getter|dev_supermux_webview_runtime_AcquireResult_Granted$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Unavailable$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Unavailable$stableprop_getter|dev_supermux_webview_runtime_AcquireResult_Unavailable$stableprop_getter(){}[0]
@@ -1685,16 +1570,11 @@ final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_EnginePool_S
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayCutouts$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayCutouts$stableprop_getter|dev_supermux_webview_runtime_OverlayCutouts$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayRegistry$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayRegistry$stableprop_getter|dev_supermux_webview_runtime_OverlayRegistry$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayShape$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_OverlayShape$stableprop_getter|dev_supermux_webview_runtime_OverlayShape$stableprop_getter(){}[0]
-final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageKey$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageKey$stableprop_getter|dev_supermux_webview_runtime_PageKey$stableprop_getter(){}[0]
-final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemory$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemory$stableprop_getter|dev_supermux_webview_runtime_PageMemory$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemoryStore$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PageMemoryStore$stableprop_getter|dev_supermux_webview_runtime_PageMemoryStore$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_PendingSaves_Save$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_PendingSaves_Save$stableprop_getter|dev_supermux_webview_runtime_PendingSaves_Save$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_RuntimeConfig$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_RuntimeConfig$stableprop_getter|dev_supermux_webview_runtime_RuntimeConfig$stableprop_getter(){}[0]
-final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_SavedPageState$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SavedPageState$stableprop_getter|dev_supermux_webview_runtime_SavedPageState$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop_getter|dev_supermux_webview_runtime_ScrimShape$stableprop_getter(){}[0]
-final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_SizeReport$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SizeReport$stableprop_getter|dev_supermux_webview_runtime_SizeReport$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop_getter|dev_supermux_webview_runtime_SnapshotCache$stableprop_getter(){}[0]
-final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotKey$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotKey$stableprop_getter|dev_supermux_webview_runtime_SnapshotKey$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop_getter|dev_supermux_webview_runtime_WebViewRuntime$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/platformWebEngineFactory(): dev.supermux.webview.engine/WebEngineFactory // dev.supermux.webview.runtime/platformWebEngineFactory|platformWebEngineFactory(){}[0]
 final fun dev.supermux.webview.testing/dev_supermux_webview_testing_FakeEngineBehavior$stableprop_getter(): kotlin/Int // dev.supermux.webview.testing/dev_supermux_webview_testing_FakeEngineBehavior$stableprop_getter|dev_supermux_webview_testing_FakeEngineBehavior$stableprop_getter(){}[0]

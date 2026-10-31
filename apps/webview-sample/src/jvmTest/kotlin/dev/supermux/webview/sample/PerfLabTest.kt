@@ -9,9 +9,6 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
-import dev.supermux.webview.WebContent
-import dev.supermux.webview.WebProfile
-import dev.supermux.webview.runtime.PageKey
 import dev.supermux.webview.runtime.RuntimeConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,14 +34,13 @@ class PerfLabTest {
     /** A phone's sizes (spec §4). */
     private val phone = RuntimeConfig(maxLive = 4, maxIdle = 3, snapshotCacheBytes = 32L shl 20)
 
-    /** How many of [lab]'s pages page memory has a snapshot of, and how many of those snapshots the cache still has. */
-    private fun ComposeUiTest.picturesKept(lab: PerfLabState): Pair<Int, Int> = runOnUiThread {
-        fun pageOf(content: WebContent) =
-            PageKey(if (content is WebContent.Html) WebProfile.Ephemeral else WebProfile.Default, content.key)
-        val seen = (0 until lab.views).mapNotNull { i ->
-            lab.runtime.pages.recall(pageOf(lab.demo(i).content))?.snapshotKey
-        }
-        seen.size to seen.count { it in lab.runtime.snapshots }
+    /**
+     * How many pictures of [lab]'s pages the snapshot cache holds, and how many it let go to stay within its budget,
+     * from its read-only statistics. The runtime keeps one picture a page (a newer one replaces the page's last), so with
+     * none let go the first is the number of pages the run saw with a picture.
+     */
+    private fun ComposeUiTest.picturesKept(lab: PerfLabState): Pair<Int, Long> = runOnUiThread {
+        lab.runtime.snapshots.count to lab.runtime.snapshots.evictions
     }
 
     @Test fun readingALazyListOfTwoHundredDemosKeepsEveryBudget() = runComposeUiTest(testTimeout = 10.minutes) {
@@ -67,10 +63,10 @@ class PerfLabTest {
         assertTrue(guard.peakParked > 0, "no message that scrolled away parked its page")
         assertTrue(report.peakEngines <= tight.maxLive + tight.maxIdle)
         // Sharp snapshots, Task 2: stored encoded, a picture of every page the run saw is still there.
-        val (seen, kept) = picturesKept(lab)
-        println("perf-lab-test: pictures kept $kept of $seen pages seen")
-        assertTrue(seen >= lab.views / 4, "only $seen of ${lab.views} pages were snapshotted")
-        assertEquals(seen, kept, "the cache let go of ${seen - kept} of the $seen pages seen")
+        val (kept, letGo) = picturesKept(lab)
+        println("perf-lab-test: pictures kept $kept, let go for room $letGo")
+        assertTrue(kept >= lab.views / 4, "only $kept of ${lab.views} pages were snapshotted")
+        assertEquals(0L, letGo, "the cache let go of $letGo pictures of the pages seen")
         // Nothing lost: once the list rests, every engine is live, parked or a spare.
         waitUntil("every engine live, parked or a spare", WAIT_MILLIS) {
             ui { lab.sample().let { it.engines == it.live + it.parked + it.spares } }
@@ -109,10 +105,10 @@ class PerfLabTest {
         setContent { SampleTheme { PerfLab(lab) } }
         drive(lab, LabRun.Reading, Guard(lab, coverLimits()))
         val report = assertNotNull(lab.lastReport)
-        val (seen, kept) = picturesKept(lab)
-        println("perf-lab-test: ${report.summary()}; pictures kept $kept of $seen pages seen")
-        assertTrue(seen >= 30, "only $seen of 60 pages were snapshotted")
-        assertEquals(seen, kept, "the cache let go of ${seen - kept} of the $seen pages seen")
+        val (kept, letGo) = picturesKept(lab)
+        println("perf-lab-test: ${report.summary()}; pictures kept $kept, let go for room $letGo")
+        assertTrue(kept >= 30, "only $kept of 60 pages were snapshotted")
+        assertEquals(0L, letGo, "the cache let go of $letGo pictures of the pages seen")
         assertClean(test)
     }
 

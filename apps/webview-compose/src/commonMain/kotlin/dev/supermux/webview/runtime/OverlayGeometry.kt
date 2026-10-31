@@ -149,7 +149,7 @@ private class PageLocalWriter(size: Int) {
  * Worst case, n overlays cost O(n²), and a group of k overlapping ones that has to be cut as rects O(k²), in time and
  * in holes. A window shows a handful of overlays, so a frame's recomputation stays in microseconds.
  */
-public fun computeCutouts(
+internal fun computeCutouts(
     pageBounds: Rect,
     visibleBounds: Rect,
     overlays: Collection<OverlayShape>,

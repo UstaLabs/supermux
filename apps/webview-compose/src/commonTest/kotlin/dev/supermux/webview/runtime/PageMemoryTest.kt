@@ -190,4 +190,27 @@ class PageMemoryTest {
         assertNotNull(store.recall(p("a")))
         assertNotNull(store.recall(p("c")))
     }
+
+    /** A view's lookup is a hit or a miss; a save that peeks to merge into what is remembered is neither. */
+    @Test fun hitsAndMissesCountRecallsNotPeeks() {
+        val store = PageMemoryStore(maxEntries = 4)
+        assertNull(store.recall(p("a")))
+        store.remember(p("a"), memory(1))
+        assertNotNull(store.recall(p("a")))
+        assertNotNull(store.recall(p("a")))
+        assertNotNull(store.peek(p("a")))
+        assertNull(store.peek(p("b")))
+        assertEquals(2L to 1L, store.hits to store.misses)
+    }
+
+    /** A peek leaves recency to the remember that follows it, as a save's merge does. */
+    @Test fun aPeekLeavesRecencyAlone() {
+        val store = PageMemoryStore(maxEntries = 2)
+        store.remember(p("a"), memory(1))
+        store.remember(p("b"), memory(2))
+        assertNotNull(store.peek(p("a")))
+        store.remember(p("c"), memory(3))
+        assertNull(store.peek(p("a")), "still the least recently used, so forgotten")
+        assertNotNull(store.peek(p("b")))
+    }
 }

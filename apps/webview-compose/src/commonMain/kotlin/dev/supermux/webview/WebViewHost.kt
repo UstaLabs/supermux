@@ -1600,7 +1600,7 @@ internal class WebViewHost(
             val taken = if (painted) keptSnapshotOf(engine, lease) else null
             val engineState = engineCall { engine.saveState() }
             if (forgotten(lease)) return
-            val previous = runtime.pages.recall(page)
+            val previous = runtime.pages.peek(page)
             var key = previous?.snapshotKey
             if (taken != null) {
                 val image = taken.kept.image
@@ -1937,7 +1937,7 @@ private class ParkedView(
             if (stuck) call.cancel()
             val engineState = if (stuck || call.isCancelled) null else call.await()
             if (!forgotten() && (pageState != null || engineState != null)) {
-                val previous = runtime.pages.recall(key)
+                val previous = runtime.pages.peek(key)
                 runtime.pages.remember(
                     key,
                     PageMemory(

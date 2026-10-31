@@ -15,13 +15,13 @@ import kotlin.coroutines.resume
 /**
  * Android's engines (spec §7): the system WebView, built for the Activity that shows web views (never the application
  * context), once WebView has started up, and two frames after it was asked for, so building one never freezes the frame
- * that shows its view's cover. The runtime's default on Android ([dev.supermux.webview.runtime.platformWebEngineFactory]);
- * build one yourself only to wrap it, to count engines, say.
+ * that shows its view's cover. The runtime's default on Android: apps reach it as
+ * [dev.supermux.webview.runtime.platformWebEngineFactory], to wrap it (to count engines, say).
  * - No WebView, or one that can't start: `Unavailable(NoWebViewProvider)`.
  * - A WebView without the features the engine needs (see `Features`): `Unavailable(NoWebViewProvider)` with the list.
  * - No Activity has shown a web view yet, or anything else: `Unavailable(CreationFailed)`, which the runtime retries.
  */
-public class AndroidWebEngineFactory : WebEngineFactory {
+internal class AndroidWebEngineFactory : WebEngineFactory {
     override suspend fun create(config: EngineConfig): WebEngineResult = try {
         withContext(Dispatchers.Main.immediate) { createOnMain(config) }
     } catch (e: CancellationException) {
