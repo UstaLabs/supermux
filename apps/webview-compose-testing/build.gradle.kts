@@ -27,7 +27,11 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
-    wasmJs { browser() }
+    wasmJs {
+        browser()
+        // Required by the Compose plugin's wasm test check (CMP-4906), as in webview-compose; this module ships no app.
+        binaries.executable()
+    }
     applyDefaultHierarchyTemplate()
 
     // As the library's: `check` fails on a change to the public API that the dump in api/ doesn't show, and
