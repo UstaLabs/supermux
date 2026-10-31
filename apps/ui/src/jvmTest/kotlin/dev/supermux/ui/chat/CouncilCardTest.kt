@@ -2,6 +2,7 @@ package dev.supermux.ui.chat
 
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.CompositionLocalProvider
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsSelected
@@ -58,8 +59,32 @@ class CouncilCardTest {
 
     private val card = TimelineItem.CouncilCard(council, failures = mapOf("C" to "API error (status 402 Payment Required)"))
 
+    private fun androidx.compose.ui.test.ComposeUiTest.openDetails() {
+        onNodeWithTag("council-toggle:c-3").performClick()
+        waitForIdle()
+    }
+
+    @Test fun folded_it_seats_the_members_side_by_side_with_what_each_is_doing() = runComposeUiTest {
+        setPlatformContent { CompositionLocalProvider(LocalCouncilActivity provides mapOf("mb" to "Reading Whisper docs")) { CouncilCard(card) } }
+        onNodeWithTag("council-row:c-3:A").assertDoesNotExist()
+        onNodeWithTag("council-seat:c-3:A", useUnmergedTree = true).assertExists()
+        onNodeWithTag("council-seat-name:c-3:A", useUnmergedTree = true).assertTextContains("Codex")
+        onNodeWithTag("council-seat-status:c-3:A", useUnmergedTree = true).assertTextContains("Answered")
+        onNodeWithTag("council-seat-status:c-3:B", useUnmergedTree = true).assertTextContains("Reading Whisper docs")
+        onNodeWithTag("council-seat-status:c-3:C", useUnmergedTree = true).assertTextContains("Failed")
+        onNodeWithTag("council-seat-status:c-3:D", useUnmergedTree = true).assertTextContains("Stopped")
+        onNodeWithTag("council-latest:c-3", useUnmergedTree = true).assertTextContains("Codex: With noise, add VAD.")
+        openDetails()
+        onNodeWithTag("council-seat:c-3:A", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("council-row:c-3:A").assertExists()
+        onNodeWithTag("council-toggle:c-3").performClick()
+        waitForIdle()
+        onNodeWithTag("council-row:c-3:A").assertDoesNotExist()
+    }
+
     @Test fun the_card_shows_each_member_with_its_latest_answer_and_no_badges() = runComposeUiTest {
         setPlatformContent { CouncilCard(card) }
+        openDetails()
         onNode(hasText("Parakeet or Whisper Small", substring = true) and hasAnyAncestor(hasTestTag("council-card:c-3"))).assertExists()
         onNodeWithTag("council-headline:c-3").assertTextContains("council-3 · 1 of 4 answered")
         onNodeWithTag("council-preview:c-3:A", useUnmergedTree = true).assertTextContains("With noise, add VAD.")
@@ -77,6 +102,7 @@ class CouncilCardTest {
                 CouncilCard(card)
             }
         }
+        openDetails()
         onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Searching the web for Parakeet Turkish WER")
     }
 
@@ -97,16 +123,20 @@ class CouncilCardTest {
         setPlatformContent {
             androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides mapOf("mb" to "")) { CouncilCard(card) }
         }
+        onNodeWithTag("council-seat-status:c-3:B", useUnmergedTree = true).assertTextContains("Idle")
+        openDetails()
         onNodeWithTag("council-preview:c-3:B", useUnmergedTree = true).assertTextContains("Idle, hasn't answered")
     }
 
     @Test fun a_failed_member_without_a_reason_says_failed() = runComposeUiTest {
         setPlatformContent { CouncilCard(TimelineItem.CouncilCard(council)) }
+        openDetails()
         onNodeWithTag("council-preview:c-3:C", useUnmergedTree = true).assertTextContains("Failed")
     }
 
     @Test fun tapping_a_row_opens_all_its_reports_round_by_round() = runComposeUiTest {
         setPlatformContent { CouncilCard(card) }
+        openDetails()
         onNodeWithTag("council-body:c-3:A").assertDoesNotExist()
         onNodeWithTag("council-row:c-3:A").performClick()
         waitForIdle()
@@ -122,6 +152,7 @@ class CouncilCardTest {
 
     @Test fun a_round_chip_switches_the_rows_to_that_round() = runComposeUiTest {
         setPlatformContent { CouncilCard(card) }
+        openDetails()
         onNodeWithTag("council-chip:c-3:2").assertIsSelected()
         onNodeWithTag("council-chip:c-3:1").assertTextContains("Round 1")
         onNodeWithTag("council-chip:c-3:2").assertTextContains("Round 2 · background noise")
