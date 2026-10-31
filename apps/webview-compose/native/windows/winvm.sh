@@ -12,7 +12,10 @@
 #   winvm.sh test                 run glue_test.exe again
 #   winvm.sh gradle TASK...       Gradle in Docker on desktop, on a copy of this worktree's apps/ and the fetched DLLs
 #   winvm.sh stage-sample         the sample for Windows x64 (stageWindows), mirrored from desktop to C:\wvc\lib
+#   winvm.sh stage-release DIR    the shrunk jars (DIR: under the sample's folder on desktop), mirrored to C:\wvc\lib-release
 #   winvm.sh checks [NAMES]       the sample's engine checks on tester's desktop (NAMES: comma-separated); exit 0 if all pass
+#                                 (WVC_PROPS: the run's -D properties, space-separated)
+#                                 (WVC_LIB=lib-release: the shrunk jars; WVC_LAUNCHER=C:\...\app.exe: a packaged app)
 #   winvm.sh lab [PROPS]          the sample's perf lab on WebView2 engines, unattended
 #   winvm.sh results              copy the result files this box doesn't have yet (after a cut session)
 #   winvm.sh ps FILE.ps1          run a script in the SSH session (elevated, session 0: no desktop)
@@ -296,23 +299,34 @@ PROPS
   [ "${free:-0}" -ge $(( mem_mb + 512 )) ] || die "desktop has only ${free} MB available; Gradle needs $mem (the VM or another agent?)"
   host "cd $WORK && docker run --rm --init --name wvc-gradle-$RUN --memory=$mem --memory-swap=$mem --cpus=3 $sdk \
     --user \$(id -u):\$(id -g) -e HOME=/w/home -e GRADLE_USER_HOME=/w/gradle-home \
-    -e JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 -e JAVA_TOOL_OPTIONS=-Duser.home=/w/home \
+    -e JAVA_HOME=${WVC_JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64} -e JAVA_TOOL_OPTIONS=-Duser.home=/w/home \
     -v \$PWD:/w -w /w/trees/$TREE/apps $IMAGE ./gradlew --no-daemon --console=plain $*"
 }
 
-# Mirrors desktop's build/windows/lib into C:\wvc\lib: copied to lib.new, then swapped in, so a cut copy never leaves a
-# half classpath. Runs on desktop with this box's agent forwarded (the guest authorizes only this box's key).
-mirror_lib() {
-  local G; G="$(vm)"
+# Mirrors desktop's folder FROM into C:\wvc\TO: copied to TO.new, then swapped in, so a cut copy never leaves a half
+# classpath. Runs on desktop with this box's agent forwarded (the guest authorizes only this box's key).
+mirror_dir() {
+  local from="$1" to="$2" G; G="$(vm)"
   ssh -A "${HSSHO[@]}" "$JUMP" bash -s <<EOF
 set -euo pipefail
 O="-o BatchMode=yes -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new"
 # -n: without it the first ssh reads the rest of this script from stdin, and nothing after it runs.
 G="ssh -n \$O $G"
-\$G 'Remove-Item -Recurse -Force C:\wvc\lib.new -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force C:\wvc\lib.new | Out-Null'
-scp -q \$O $SRC/webview-sample/build/windows/lib/* $G:C:/wvc/lib.new/ </dev/null
-\$G 'Remove-Item -Recurse -Force C:\wvc\lib -ErrorAction SilentlyContinue; Rename-Item C:\wvc\lib.new lib; (Get-ChildItem C:\wvc\lib).Count'
+\$G 'Remove-Item -Recurse -Force C:\wvc\\$to.new -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force C:\wvc\\$to.new | Out-Null'
+scp -q \$O $from/* $G:C:/wvc/$to.new/ </dev/null
+\$G 'Remove-Item -Recurse -Force C:\wvc\\$to -ErrorAction SilentlyContinue; Rename-Item C:\wvc\\$to.new $to; (Get-ChildItem C:\wvc\\$to).Count'
 EOF
+}
+mirror_lib() { mirror_dir "$SRC/webview-sample/build/windows/lib" lib; }
+
+# The shrunk jars (Task 30) into C:\wvc\lib-release, as stage-sample mirrors lib: DIR is under the sample's folder on
+# desktop, as windows-release-check.sh's proguard.sh prints it.
+cmd_stage_release() {
+  local dir="${1:?stage-release DIR, under the sample folder on desktop}" n want
+  n="$(with_agent mirror_dir "$SRC/webview-sample/$dir" lib-release | tail -1 | tr -d '\r')"
+  want="$(host "ls $SRC/webview-sample/$dir | wc -l")"
+  [ "$n" = "$want" ] || die "C:/wvc/lib-release has $n files, $dir $want"
+  echo "winvm: C:/wvc/lib-release matches $dir ($n files)"
 }
 
 cmd_stage_sample() {
@@ -366,17 +380,18 @@ run_sample() {
   local mode="$1" only="$2" props="$3" job
   job="$(mktemp --suffix=.ps1)"
   cat > "$job" <<EOF
-& C:\wvc\vm\run-sample.ps1 -Mode '$mode' -Run '$RUN' -Only '$only' -Props '$props' -TimeoutSec 2400
+& C:\wvc\vm\run-sample.ps1 -Mode '$mode' -Run '$RUN' -Only '$only' -Props '$props' -Lib '${WVC_LIB:-lib}' -Launcher '${WVC_LAUNCHER:-}' -TimeoutSec 2400
 EOF
   guest 'New-Item -ItemType Directory -Force C:\wvc\vm | Out-Null'
-  gscp "$HERE/vm/run-sample.ps1" "$(vm):C:/wvc/vm/run-sample.ps1"
+  # Every guest script: the lab's memory measure runs webview2-memory.ps1 from there.
+  gscp "$HERE"/vm/*.ps1 "$(vm):C:/wvc/vm/"
   cmd_ui "$job" 2500
   rm -f "$job"
   cmd_results
 }
 
 cmd_checks() {
-  run_sample checks "${1:-}" ""
+  run_sample checks "${1:-}" "${WVC_PROPS:-}"
   local log="$SAMPLE/build/windows-results/checks-$RUN.log"
   [ -f "$log" ] || die "no log for run $RUN: winvm.sh results, then look in $SAMPLE/build/windows-results"
   grep -E '^CHECK |^CHECKS ' "$log" || true
@@ -397,6 +412,7 @@ case "${1:-}" in
   test) require_ours; cmd_test ;;
   gradle) shift; cmd_gradle "$@" ;;
   stage-sample) require_ours; cmd_stage_sample ;;
+  stage-release) require_ours; cmd_stage_release "${2:-}" ;;
   checks) require_ours; cmd_checks "${2:-}" ;;
   lab) require_ours; cmd_lab "${2:-}" ;;
   results) require_ours; cmd_results ;;
