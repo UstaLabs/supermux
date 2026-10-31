@@ -58,8 +58,12 @@ export interface StreamTiming {
   turnThreshold: number
   /** How much audio Smart Turn hears (its model reads at most 8 s). */
   turnWindowMs: number
-  /** A verdict slower than this counts as "finished" (lock and move on). */
-  turnTimeoutMs: number
+  /**
+   * How long past its transcript a pass waits for Smart Turn. The verdict normally lands first
+   * (~0.4 s against ~0.7 s); a later one is not waited for — it would hold up the next pass — and
+   * counts as "not finished", so the sentence is simply transcribed again, whole, next time.
+   */
+  turnGraceMs: number
   /** At Stop, this much speech after the shown text means there is more to transcribe. */
   stopSpeechMs: number
   /** No more audio is kept past this (a forgotten open mic). */
@@ -77,7 +81,7 @@ export const DEFAULT_TIMING: StreamTiming = {
   maxSentenceMs: 15_000,
   turnThreshold: 0.5,
   turnWindowMs: 8_000,
-  turnTimeoutMs: 2_000,
+  turnGraceMs: 500,
   stopSpeechMs: 64,
   maxAudioMs: 30 * 60_000,
   lateEditMs: 8_000,
@@ -111,6 +115,8 @@ export interface DictationStreamDeps {
 type PassKind = "pause" | "run"
 
 const join = (...parts: string[]): string => parts.map((p) => p.trim()).filter(Boolean).join(" ")
+
+const sleep = (ms: number): Promise<null> => new Promise((r) => setTimeout(() => r(null), ms))
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
@@ -350,7 +356,7 @@ export class DictationStream {
     }
     const gen = this.generation
     const t0 = this.now()
-    const verdict = kind === "pause" ? withTimeout(this.deps.turn(this.window(end)), this.t.turnTimeoutMs) : null
+    const verdict = kind === "pause" ? this.deps.turn(this.window(end)).catch(() => null) : null
     const text = await this.runStt(start, end, false)
     if (this.isDone() || gen !== this.generation) return
     if (text !== null) {
@@ -361,12 +367,14 @@ export class DictationStream {
     let p: number | null = null
     let locked = false
     if (verdict) {
-      // Not past Stop, though: the verdict only places the next pass, and there is none after Stop.
-      p = await Promise.race([verdict, this.stopSignal.then(() => null)])
+      // Nor past Stop: the verdict only places the next pass, and there is none after Stop.
+      p = await Promise.race([verdict, sleep(this.t.turnGraceMs), this.stopSignal.then(() => null)])
       if (this.isDone() || gen !== this.generation) return
       const long = (end - start) / PER_MS >= this.t.maxSentenceMs
-      // An unknown verdict locks too: a short pass is worth more than a perfect boundary.
-      if (text !== null && (p === null || p >= this.t.turnThreshold || long)) {
+      // No verdict in time = not finished: a fragment locked mid-sentence costs more than a
+      // sentence transcribed twice (seen on the loaded box: "I think we should. Move both models
+      // into." when late verdicts counted as finished).
+      if (text !== null && ((p !== null && p >= this.t.turnThreshold) || long)) {
         const before = this.locked
         this.locked = join(this.locked, text)
         this.provisional = ""

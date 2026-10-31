@@ -183,6 +183,23 @@ describe("DictationStream", () => {
     expect(h.events).toEqual([{ type: "text", text: "w1 w101" }, { type: "final", text: "w1 w101" }, { type: "done" }])
   })
 
+  test("a verdict that comes too late counts as not finished: the sentence is redone whole", async () => {
+    let slow = true
+    const h = harness({
+      turn: (audio) => {
+        const ws = wordsOf(audio)
+        const p = (ws[ws.length - 1] ?? 0) >= 100 ? 0.9 : 0.1
+        return slow ? new Promise((r) => setTimeout(() => r(p), 1_000)) : Promise.resolve(p)
+      },
+    })
+    await h.push(word(1), word(101), quiet(400))
+    slow = false
+    await h.push(word(2), word(102), quiet(400))
+    // The first sentence was not locked (its verdict came late), so the second pass redid it.
+    expect(h.stt.map((c) => c.words)).toEqual([[1, 101], [1, 101, 2, 102]])
+    expect(h.texts().at(-1)).toBe("w1 w101 w2 w102")
+  })
+
   test("Stop does not wait for Smart Turn", async () => {
     const h = harness({ turn: () => new Promise<number>(() => {}) })
     h.stream.pushAudio(bytes(word(1), word(101), quiet(400)))
