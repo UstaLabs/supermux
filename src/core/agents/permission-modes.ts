@@ -90,6 +90,32 @@ const ASK_IDS: Record<AgentKind, string> = {
   antigravity: "default", // no ask mode: headless agy cannot prompt
 }
 
+/**
+ * The modes a session nobody watches can run in: a delegated child or a council member (decided 2026-10-31). Its
+ * permission prompts reach no one (the app shows no hidden session), so a mode that asks a human hangs it, and one
+ * that denies by itself leaves it unable to work. Left out, with what went wrong live: Claude plan (waits for plan
+ * approval), ask / accept-edits / auto (ask); Codex ask; Cursor ask, plan (asks), qa (fails to start: "Invalid
+ * params"); opencode ask, ask-bash; Grok ask; Antigravity accept-edits (denied even file reads), default (denies
+ * every gated tool).
+ */
+const UNATTENDED: Record<AgentKind, readonly string[]> = {
+  claude: ["bypass", "dont-ask"],
+  codex: ["full-access", "auto", "read-only"],
+  cursor: ["force", "auto-review"],
+  opencode: ["allow", "read-only"],
+  grok: ["always-approve"],
+  antigravity: ["bypass", "plan"],
+}
+
+/** The modes a delegated child or council member may be started with (UNATTENDED), in catalog order. */
+export function unattendedModesFor(agent: AgentKind): PermissionModeEntry[] {
+  return CATALOG[agent].filter((m) => UNATTENDED[agent].includes(m.id))
+}
+
+export function isUnattendedMode(agent: AgentKind, id: string): boolean {
+  return UNATTENDED[agent].includes(id) && isPermissionMode(agent, id)
+}
+
 export function permissionCatalog(): Record<AgentKind, PermissionModeEntry[]> {
   return CATALOG
 }

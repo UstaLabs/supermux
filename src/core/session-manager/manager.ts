@@ -22,7 +22,7 @@ import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { isPermissionMode, modesFor, resolvePermissionMode } from "../agents/permission-modes"
+import { isPermissionMode, isUnattendedMode, resolvePermissionMode, unattendedModesFor } from "../agents/permission-modes"
 
 import { isDraftSession } from "./supervisor"
 import { transformOutbound, parseAddress } from "../routing"
@@ -56,6 +56,7 @@ import type { ReviewStore } from "../review/store"
 import type { WalkthroughStore } from "../walkthrough/store"
 import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthrough/author"
 import { letterAt } from "../council/letters"
+import { agentChoices, effortError, type AgentChoices } from "../models/agent-choices"
 
 const log = makeLogger("session-manager")
 
@@ -475,7 +476,7 @@ export class SessionManager {
       // The shim serves this broker's tool list, not its own build's: after a restart or an update
       // it tells the agent when the list changed (src/shim/index.ts).
       const councilMember = this.ports.councils.isMember(sessionUuid)
-      const tools = shimTools(msg.server, { councilMember })
+      const tools = shimTools(msg.server, { councilMember, choices: agentChoices((kind) => this.ports.config.lookupModels(kind)) })
       const reply: RegisterReply = { name: existing.name, session_id: sessionUuid, ...(councilMember ? { council_member: true } : {}), ...(tools ? { tools } : {}) }
       if (existing.core) {
         if (agentSessionId && !existing.agent_session_id) {
@@ -799,7 +800,9 @@ export class SessionManager {
         const agent = op.args.agent
         if (!isAgentKind(agent)) return { ok: false, error: `unknown agent kind: ${String(agent)}` }
         const access = stringArg(op.args, "access")
-        if (!isPermissionMode(agent, access)) return { ok: false, error: `access must be one of ${modesFor(agent).map((m) => m.id).join(", ")} for ${agent}` }
+        if (!isUnattendedMode(agent, access)) return { ok: false, error: `access must be one of ${unattendedModesFor(agent).map((m) => m.id).join(", ")} for ${agent} (a hidden session can't wait for a person to approve)` }
+        const badEffort = effortError(agentChoices((kind) => this.ports.config.lookupModels(kind)), agent, optionalStringArg(op.args, "effort"))
+        if (badEffort) return { ok: false, error: badEffort }
         const checkout = op.args.checkout
         if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
         const task = stringArg(op.args, "task")
@@ -820,7 +823,7 @@ export class SessionManager {
         if (!s) return { ok: false, error: "unknown session" }
         const question = stringArg(op.args, "question")
         if (!question.trim()) return { ok: false, error: "question must not be empty" }
-        const members = councilMembersArg(op.args.members)
+        const members = councilMembersArg(op.args.members, agentChoices((kind) => this.ports.config.lookupModels(kind)))
         if ("error" in members) return { ok: false, error: members.error }
         const checkout = op.args.checkout
         if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
@@ -832,7 +835,7 @@ export class SessionManager {
       }
       case "council_add": {
         if (!s) return { ok: false, error: "unknown session" }
-        const members = councilMembersArg(op.args.members)
+        const members = councilMembersArg(op.args.members, agentChoices((kind) => this.ports.config.lookupModels(kind)))
         if ("error" in members) return { ok: false, error: members.error }
         const checkout = op.args.checkout
         if (checkout !== "shared" && checkout !== "worktree") return { ok: false, error: 'checkout must be "shared" or "worktree"' }
@@ -1907,7 +1910,7 @@ function optionalProviderArg(args: Record<string, unknown>, key: string): Provid
 }
 
 /** council / council_add: the members to start, each checked like the old inline loop (letters follow the order). */
-function councilMembersArg(raw: unknown): { list: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> } | { error: string } {
+function councilMembersArg(raw: unknown, choices: AgentChoices): { list: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> } | { error: string } {
   if (!Array.isArray(raw) || raw.length === 0) return { error: "members must be a non-empty array" }
   const list: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }> = []
   for (const [i, m] of raw.entries()) {
@@ -1915,7 +1918,9 @@ function councilMembersArg(raw: unknown): { list: Array<{ agent: AgentKind; mode
     const entry = (m && typeof m === "object" ? m : {}) as Record<string, unknown>
     if (!isAgentKind(entry.agent)) return { error: `${who}: unknown agent kind: ${String(entry.agent)}` }
     const access = typeof entry.access === "string" ? entry.access : ""
-    if (!isPermissionMode(entry.agent, access)) return { error: `${who}: access must be one of ${modesFor(entry.agent).map((x) => x.id).join(", ")} for ${entry.agent}` }
+    if (!isUnattendedMode(entry.agent, access)) return { error: `${who}: access must be one of ${unattendedModesFor(entry.agent).map((x) => x.id).join(", ")} for ${entry.agent} (a hidden session can't wait for a person to approve)` }
+    const badEffort = effortError(choices, entry.agent, optionalStringArg(entry, "effort"))
+    if (badEffort) return { error: `${who}: ${badEffort}` }
     list.push({ agent: entry.agent, model: optionalStringArg(entry, "model"), effort: optionalStringArg(entry, "effort"), access })
   }
   return { list }

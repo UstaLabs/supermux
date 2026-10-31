@@ -97,6 +97,7 @@ import { SETTINGS_KEY_MUX_SHIM, muxShimMode, resolveMuxShimMode, setMuxShimMode 
 import { bindMuxTools } from "./core/mux-tools/server"
 import { bindCreatedBy } from "./core/agents/instructions"
 import { DelegatedChildren, SUPERMUX_SENDER } from "./core/delegate/children"
+import { agentChoices } from "./core/models/agent-choices"
 import { failedTurn } from "./core/delegate/failed-turn"
 import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
@@ -1226,6 +1227,7 @@ bindMuxTools({
   outbound: (sessionId, op) => sessionManager.outbound(sessionId, op),
   orchestration: (sessionId, op) => sessionManager.orchestration(sessionId, op),
   councilMember: (id) => !!councilStore.membership(id),
+  choices: () => agentChoices((kind) => lookupModels(kind)),
 })
 // A delegated child's preamble names the session that created it (spec §3); a council member's, its council (spec §5).
 bindCreatedBy((sessionId) => {

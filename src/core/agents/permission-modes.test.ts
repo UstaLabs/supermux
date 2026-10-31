@@ -6,10 +6,12 @@ import {
   defaultPermissionMode,
   driverSettingsFor,
   isPermissionMode,
+  isUnattendedMode,
   modesFor,
   permissionCatalog,
   permissionsFor,
   resolvePermissionMode,
+  unattendedModesFor,
 } from "./permission-modes"
 
 test("every agent has exactly one default and unique ids", () => {
@@ -105,4 +107,18 @@ test("every catalog mode has the level from the spec's table (§2)", () => {
     cursor: { force: "full", "auto-review": "full", ask: "ask", plan: "read-only", qa: "read-only" },
     antigravity: { bypass: "full", "accept-edits": "edit", plan: "read-only", default: "ask" },
   })
+})
+
+test("a delegated child or council member gets only the modes nobody needs to approve", () => {
+  const ids = (agent: Parameters<typeof unattendedModesFor>[0]) => unattendedModesFor(agent).map((m) => m.id)
+  expect(ids("claude")).toEqual(["bypass", "dont-ask"])
+  expect(ids("codex")).toEqual(["full-access", "auto", "read-only"])
+  expect(ids("cursor")).toEqual(["force", "auto-review"])
+  expect(ids("opencode")).toEqual(["allow", "read-only"])
+  expect(ids("grok")).toEqual(["always-approve"])
+  expect(ids("antigravity")).toEqual(["bypass", "plan"])
+  expect(isUnattendedMode("claude", "plan")).toBe(false)
+  expect(isUnattendedMode("cursor", "qa")).toBe(false)
+  expect(isUnattendedMode("claude", "dont-ask")).toBe(true)
+  expect(isUnattendedMode("claude", "nope")).toBe(false)
 })
