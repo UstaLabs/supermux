@@ -112,7 +112,8 @@ final class dev.supermux.webview.testing/FakeWebEngine : dev.supermux.webview.en
 }
 
 final class dev.supermux.webview.testing/FakeWebEngineFactory : dev.supermux.webview.engine/WebEngineFactory { // dev.supermux.webview.testing/FakeWebEngineFactory|null[0]
-    constructor <init>(dev.supermux.webview.engine/EmbeddingMode = ..., dev.supermux.webview.testing/FakeEngineBehavior = ...) // dev.supermux.webview.testing/FakeWebEngineFactory.<init>|<init>(dev.supermux.webview.engine.EmbeddingMode;dev.supermux.webview.testing.FakeEngineBehavior){}[0]
+    constructor <init>(dev.supermux.webview.engine/EmbeddingMode, dev.supermux.webview.testing/FakeEngineBehavior = ...) // dev.supermux.webview.testing/FakeWebEngineFactory.<init>|<init>(dev.supermux.webview.engine.EmbeddingMode;dev.supermux.webview.testing.FakeEngineBehavior){}[0]
+    constructor <init>(dev.supermux.webview.testing/FakeEngineBehavior = ...) // dev.supermux.webview.testing/FakeWebEngineFactory.<init>|<init>(dev.supermux.webview.testing.FakeEngineBehavior){}[0]
 
     final val created // dev.supermux.webview.testing/FakeWebEngineFactory.created|{}created[0]
         final fun <get-created>(): kotlin.collections/MutableList<dev.supermux.webview.testing/FakeWebEngine> // dev.supermux.webview.testing/FakeWebEngineFactory.created.<get-created>|<get-created>(){}[0]

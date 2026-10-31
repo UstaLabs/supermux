@@ -83,6 +83,8 @@ public final class dev/supermux/webview/testing/FakeWebEngineFactory : dev/super
 	public fun <init> ()V
 	public fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;)V
 	public synthetic fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public synthetic fun <init> (Ldev/supermux/webview/testing/FakeEngineBehavior;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun create (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
 	public final fun getCreateGate ()Lkotlinx/coroutines/CompletableDeferred;

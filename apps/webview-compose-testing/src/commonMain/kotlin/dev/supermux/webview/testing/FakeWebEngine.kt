@@ -32,6 +32,7 @@ import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.WebEngineSpi
 import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -615,11 +616,22 @@ public class FakeWebEngine(
 /**
  * Creates [FakeWebEngine]s numbered 1, 2, 3…, each with the config it was created for, and keeps them all in
  * [created].
+ *
+ * Giving it to a runtime, shaping its pages ([behavior]) and checking what it made needs no opt-in: an app's test of its
+ * web views uses no engine SPI. Its engines say they are native views ([EmbeddingMode.NativeView]) unless it is made
+ * with a mode, which is the SPI's (`@OptIn(WebEngineSpi::class)`).
  */
 public class FakeWebEngineFactory(
-    private val mode: EmbeddingMode = EmbeddingMode.NativeView,
     public var behavior: FakeEngineBehavior = FakeEngineBehavior(),
 ) : WebEngineFactory {
+    private var mode: EmbeddingMode = EmbeddingMode.NativeView
+
+    /** A factory whose engines say they are [mode] ([WebEngine.mode]): [EmbeddingMode.Frames] stands for a frame engine. */
+    @WebEngineSpi
+    public constructor(mode: EmbeddingMode, behavior: FakeEngineBehavior = FakeEngineBehavior()) : this(behavior) {
+        this.mode = mode
+    }
+
     public val created: MutableList<FakeWebEngine> = mutableListOf()
 
     /** When set, every [create] reports this reason, with the detail `"fake"`. */
