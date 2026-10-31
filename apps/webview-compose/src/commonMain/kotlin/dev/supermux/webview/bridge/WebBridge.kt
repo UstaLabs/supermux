@@ -41,9 +41,9 @@ internal data class BridgeLimits(
     val maxHeldChars: Int = 256 * 1024,
 )
 
-open class BridgeException(message: String) : Exception(message)
+public open class BridgeException(message: String) : Exception(message)
 
-class BridgeTimeoutException(method: String, timeoutMillis: Long) :
+public class BridgeTimeoutException(method: String, timeoutMillis: Long) :
     BridgeException("call '$method' timed out after $timeoutMillis ms")
 
 /**
@@ -109,7 +109,7 @@ internal data class PageAnswer(val result: JsonElement, val origin: String)
  * [connect] parents a never-completing child job to the given scope until [disconnect]. A scope that joins its
  * children (`coroutineScope`, `runTest`) must disconnect first.
  */
-class WebBridge internal constructor(
+public class WebBridge internal constructor(
     private val onReservedEvent: (name: String, data: JsonElement) -> Unit,
     private val limits: BridgeLimits = BridgeLimits(),
     clock: () -> Long = monotonicClock(),
@@ -191,16 +191,16 @@ class WebBridge internal constructor(
      * Inbound messages dropped (budget, size, shape, origin, sender, unknown reply or reserved name), plus posts
      * dropped: the oldest queued ones beyond the limit, and pinned ones that met a document of another origin.
      */
-    var droppedMessages: Long = 0
+    public var droppedMessages: Long = 0
         private set
 
     /** Sees exceptions from page-call handlers and [on] listeners, which the page itself never sees. */
-    var onError: ((Throwable) -> Unit)? = null
+    public var onError: ((Throwable) -> Unit)? = null
 
-    val isConnected: Boolean get() = connection != null
+    public val isConnected: Boolean get() = connection != null
 
     /** Whether a trusted document has announced itself on the other end. */
-    val isReady: Boolean get() = document != null
+    public val isReady: Boolean get() = document != null
 
     /**
      * The origin of the current document (the trusted one that announced itself and hasn't navigated away), or null.
@@ -210,7 +210,7 @@ class WebBridge internal constructor(
     internal val documentOrigin: String? get() = document?.origin
 
     /** Calls the page's `hostBridge.handle(method, …)` handler and returns its result. */
-    suspend fun call(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): JsonElement =
+    public suspend fun call(method: String, params: JsonElement = JsonNull, timeoutMillis: Long = 10_000): JsonElement =
         request(method, params, timeoutMillis).result
 
     /**
@@ -270,7 +270,8 @@ class WebBridge internal constructor(
      *   dropped. So it is right after [dev.supermux.webview.WebViewState.load]: it waits for the new content's document.
      * - Returns false when it can't be delivered: not connected, or [data] isn't strict JSON.
      */
-    fun post(name: String, data: JsonElement = JsonNull): Boolean = postEvent(BridgeMessage.Event(name, data), onlyTo = null)
+    public fun post(name: String, data: JsonElement = JsonNull): Boolean =
+        postEvent(BridgeMessage.Event(name, data), onlyTo = null)
 
     /**
      * [post], pinned to [origin]: the event reaches only a document of that origin, as state saved there must
@@ -312,7 +313,7 @@ class WebBridge internal constructor(
      * serves the next one with what the previous one registered, so remove them before loading another party's
      * content, or give each party a state of its own.
      */
-    fun on(name: String, listener: (JsonElement) -> Unit): () -> Unit {
+    public fun on(name: String, listener: (JsonElement) -> Unit): () -> Unit {
         listeners.getOrPut(name) { mutableListOf() } += listener
         return { listeners[name]?.remove(listener) }
     }
@@ -321,7 +322,7 @@ class WebBridge internal constructor(
      * Answers the page's `hostBridge.call(method, …)`. Returns the function that removes the handler. Like listeners
      * ([on]), handlers stay registered across [dev.supermux.webview.WebViewState.load].
      */
-    fun handle(method: String, handler: suspend (JsonElement) -> JsonElement): () -> Unit {
+    public fun handle(method: String, handler: suspend (JsonElement) -> JsonElement): () -> Unit {
         methods[method] = handler
         return { if (methods[method] === handler) methods.remove(method) }
     }
@@ -689,7 +690,7 @@ class WebBridge internal constructor(
         }
     }
 
-    companion object {
+    public companion object {
         internal const val READY: String = "\$ready"
 
         /**
@@ -697,10 +698,10 @@ class WebBridge internal constructor(
          * without parsing it, so it has a budget of its own; engines recognize it the same way, so they never drop one
          * (see **Buffering** in the [dev.supermux.webview.engine.WebEngine] contract).
          */
-        const val READY_PREFIX: String = "{\"t\":\"event\",\"n\":\"\$ready\""
+        public const val READY_PREFIX: String = "{\"t\":\"event\",\"n\":\"\$ready\""
 
         /** The longest page message that can be a `$ready`: one that starts with [READY_PREFIX] and is no longer. */
-        const val READY_MAX_CHARS: Int = 256
+        public const val READY_MAX_CHARS: Int = 256
 
         /**
          * Asks the page to announce itself again. Constant, carrying no data and no address, so any document may

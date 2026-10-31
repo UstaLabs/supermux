@@ -24,4 +24,4 @@ internal fun mobileRuntimeConfig(tablet: Boolean, maxIdle: Int): RuntimeConfig =
  * it, to count the engines it creates, say. Until a platform's engine is built, its engines are
  * `Unavailable(NotImplemented)`.
  */
-fun platformWebEngineFactory(): WebEngineFactory = platformEngineFactory()
+public fun platformWebEngineFactory(): WebEngineFactory = platformEngineFactory()

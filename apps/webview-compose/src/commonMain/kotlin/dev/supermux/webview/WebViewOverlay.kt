@@ -38,14 +38,15 @@ import kotlin.math.min
  * - A clip by an ancestor doesn't shrink it: the clipped edge would keep the outline's round corners, and cut too
  *   little there. Each page clips it to its own visible area, where that edge's corners turn square.
  */
-fun Modifier.webViewOverlay(shape: Shape = RectangleShape): Modifier = this then OverlayElement(shape)
+public fun Modifier.webViewOverlay(shape: Shape = RectangleShape): Modifier = this then OverlayElement(shape)
 
 /**
  * Marks a modal scrim drawn over web views. A page that sits above Compose can't be covered, so it dims with [color]
  * where the scrim is drawn (spec §6): give it the color the scrim is drawn with. Scrims stack in the order they
  * appeared, so stacked ones compound as they do in Compose.
  */
-fun Modifier.webViewScrim(color: Color = Color.Black.copy(alpha = 0.32f)): Modifier = this then ScrimElement(color)
+public fun Modifier.webViewScrim(color: Color = Color.Black.copy(alpha = 0.32f)): Modifier =
+    this then ScrimElement(color)
 
 private data class OverlayElement(val shape: Shape) : ModifierNodeElement<OverlayNode>() {
     override fun create() = OverlayNode(shape)

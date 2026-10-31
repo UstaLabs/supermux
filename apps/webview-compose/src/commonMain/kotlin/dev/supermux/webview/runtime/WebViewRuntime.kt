@@ -2,6 +2,7 @@ package dev.supermux.webview.runtime
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
@@ -30,7 +31,7 @@ import kotlinx.coroutines.launch
  *   that, so a view that needs its slot takes it at once, and memory pressure reclaims those pages first.
  * @property pageMemoryEntries how many pages the page memory remembers.
  */
-data class RuntimeConfig(
+public data class RuntimeConfig(
     val maxLive: Int,
     val maxIdle: Int = 3,
     val snapshotCacheBytes: Long,
@@ -48,14 +49,14 @@ data class RuntimeConfig(
         }
     }
 
-    companion object {
+    public companion object {
         /**
          * This platform's sizes: 4 live engines on phones, 6 on tablets (Android's smallest width of 600 dp or more,
          * iPads), 8 on desktop and 12 iframes on the web, with 3 spares (2 on iOS, where each idle WKWebView may keep its
          * own WebContent process). Snapshots, stored: 32 MB on phones and tablets, 128 MB on desktop, 64 MB on the web;
          * decoded, ready to draw: 24 MB, and 64 MB on desktop.
          */
-        fun platformDefault(): RuntimeConfig = platformRuntimeConfig()
+        public fun platformDefault(): RuntimeConfig = platformRuntimeConfig()
     }
 }
 
@@ -76,13 +77,13 @@ data class RuntimeConfig(
  * @param clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing,
  *   how long pages have been parked among it.
  */
-class WebViewRuntime(
-    val factory: WebEngineFactory = platformEngineFactory(),
-    val config: RuntimeConfig = RuntimeConfig.platformDefault(),
-    val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
-    val clock: () -> Long = monotonicClock(),
+public class WebViewRuntime(
+    public val factory: WebEngineFactory = platformEngineFactory(),
+    public val config: RuntimeConfig = RuntimeConfig.platformDefault(),
+    public val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+    public val clock: () -> Long = monotonicClock(),
 ) {
-    val pool: EnginePool = EnginePool(
+    public val pool: EnginePool = EnginePool(
         factory,
         config.maxLive,
         config.maxIdle,
@@ -90,15 +91,15 @@ class WebViewRuntime(
         clock = clock,
         parkedReleaseMillis = config.hiddenReleaseMillis,
     )
-    val snapshots: SnapshotCache = SnapshotCache(config.snapshotCacheBytes, config.decodedSnapshotBytes, scope)
-    val pages: PageMemoryStore = PageMemoryStore(config.pageMemoryEntries)
-    val overlays: OverlayRegistry = OverlayRegistry()
+    public val snapshots: SnapshotCache = SnapshotCache(config.snapshotCacheBytes, config.decodedSnapshotBytes, scope)
+    public val pages: PageMemoryStore = PageMemoryStore(config.pageMemoryEntries)
+    public val overlays: OverlayRegistry = OverlayRegistry()
 
     /**
      * Sees what the runtime's guards catch, for logs: engines that throw or stop answering (their views treat them as
      * crashed), and what the pool's guards catch. Nothing an engine throws reaches the app otherwise.
      */
-    var onError: ((Throwable) -> Unit)? = null
+    public var onError: ((Throwable) -> Unit)? = null
 
     /**
      * The bytes of the snapshots that web views on screen hold now as their covers, the image a view shows until its
@@ -106,11 +107,11 @@ class WebViewRuntime(
      * so this stays within about a screenful. A cover is usually the snapshot cache's own decoded image, counted in
      * [SnapshotCache.decodedBytes] too; it outlives the cache's copy only while its view stays on screen.
      */
-    var coverBytes: Long = 0
+    public var coverBytes: Long = 0
         private set
 
     /** How many web views on screen hold a cover now ([coverBytes]). */
-    var coverCount: Int = 0
+    public var coverCount: Int = 0
         private set
 
     /** The view the user touched last; it outranks every other visible view. */
@@ -177,7 +178,7 @@ class WebViewRuntime(
      * When this returns, the budget is halved and the spares are gone, so an [onMemoryRecovered] right after it ends
      * the window. The evicted views may still be saving themselves.
      */
-    fun onMemoryPressure() {
+    public fun onMemoryPressure() {
         snapshots.onMemoryPressure()
         // Undispatched: on main the pool's lock is always free, so the window opens before this returns, never after a
         // later onMemoryRecovered().
@@ -193,7 +194,7 @@ class WebViewRuntime(
      * and a view of it restores it). Live views keep their pages, hidden ones too, and no window follows: unlike
      * [onMemoryPressure], the budget stays whole and spares are kept again from the next engine given back.
      */
-    fun onBackgroundTrim() {
+    public fun onBackgroundTrim() {
         snapshots.trimDecodedTo(0)
         // Undispatched, as onMemoryPressure: on main the pool's lock is always free, so the spares are gone on return.
         scope.launch(start = CoroutineStart.UNDISPATCHED) { pool.trim() }
@@ -202,7 +203,7 @@ class WebViewRuntime(
     /**
      * Memory is fine again: the pool goes back to its full budget and keeps spares again, and the cache to its budgets.
      */
-    fun onMemoryRecovered() {
+    public fun onMemoryRecovered() {
         pool.onMemoryRecovered()
     }
 
@@ -225,7 +226,7 @@ class WebViewRuntime(
      * Engines keep their profile's cookies and storage: give each user a [dev.supermux.webview.WebProfile.Named] of
      * their own, or clear that data through the platform.
      */
-    fun clear() {
+    public fun clear() {
         pages.clear()
         snapshots.clear()
         memoryEpoch++
@@ -250,7 +251,7 @@ class WebViewRuntime(
      * of the content under way when it is forgotten keeps nothing. For content that is gone (a deleted message, an
      * uninstalled plugin). States that no view shows now keep what they hold; at logout, use [clear].
      */
-    fun forget(content: WebContent) {
+    public fun forget(content: WebContent) {
         val key = content.key
         forgets++
         forgotten.addLast(key)
@@ -275,9 +276,9 @@ class WebViewRuntime(
         return false
     }
 
-    companion object {
+    public companion object {
         /** The process-wide runtime, with this platform's engines and sizes, used when nothing is provided. */
-        val Default: WebViewRuntime by lazy { WebViewRuntime() }
+        public val Default: WebViewRuntime by lazy { WebViewRuntime() }
 
         /** How many [forget]s the runtime remembers the keys of ([forgottenSince]). */
         private const val FORGETS_KEPT = 1_024
@@ -294,10 +295,11 @@ internal interface PageHolder {
 }
 
 /** The runtime web views and overlays use: [WebViewRuntime.Default] unless [ProvideWebViewRuntime] provides one. */
-val LocalWebViewRuntime = staticCompositionLocalOf { WebViewRuntime.Default }
+public val LocalWebViewRuntime: ProvidableCompositionLocal<WebViewRuntime> =
+    staticCompositionLocalOf { WebViewRuntime.Default }
 
 /** Provides [runtime] to the web views and overlays in [content]. */
 @Composable
-fun ProvideWebViewRuntime(runtime: WebViewRuntime, content: @Composable () -> Unit) {
+public fun ProvideWebViewRuntime(runtime: WebViewRuntime, content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalWebViewRuntime provides runtime, content = content)
 }

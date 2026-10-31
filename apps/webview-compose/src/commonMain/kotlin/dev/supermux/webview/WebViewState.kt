@@ -34,38 +34,38 @@ import kotlinx.serialization.json.intOrNull
  * time. Main thread only.
  */
 @Stable
-class WebViewState(initialContent: WebContent) {
-    var content: WebContent by mutableStateOf(initialContent)
+public class WebViewState(initialContent: WebContent) {
+    public var content: WebContent by mutableStateOf(initialContent)
         private set
-    var url: String? by mutableStateOf(null)
+    public var url: String? by mutableStateOf(null)
         internal set
-    var title: String? by mutableStateOf(null)
+    public var title: String? by mutableStateOf(null)
         internal set
-    var loading: LoadingState by mutableStateOf(LoadingState.Idle)
+    public var loading: LoadingState by mutableStateOf(LoadingState.Idle)
         internal set
-    var canGoBack: Boolean by mutableStateOf(false)
+    public var canGoBack: Boolean by mutableStateOf(false)
         internal set
-    var canGoForward: Boolean by mutableStateOf(false)
+    public var canGoForward: Boolean by mutableStateOf(false)
         internal set
-    var phase: WebViewPhase by mutableStateOf(WebViewPhase.Cold)
+    public var phase: WebViewPhase by mutableStateOf(WebViewPhase.Cold)
         internal set
-    var error: WebError? by mutableStateOf(null)
+    public var error: WebError? by mutableStateOf(null)
         internal set
 
     /**
      * The page's content size in CSS pixels (≈ dp), as the page reported it, each side at most 32,000: Compose can lay
      * that out at any density up to 8. Kept while cold; new content starts without one.
      */
-    var contentSize: DpSize? by mutableStateOf(null)
+    public var contentSize: DpSize? by mutableStateOf(null)
         internal set
 
     private val consoleFlow = MutableSharedFlow<ConsoleMessage>(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** Console output and uncaught errors from the page, while it is live. */
-    val console: SharedFlow<ConsoleMessage> = consoleFlow.asSharedFlow()
+    public val console: SharedFlow<ConsoleMessage> = consoleFlow.asSharedFlow()
 
-    val bridge: WebBridge = WebBridge(::onReservedEvent)
-    val navigator: WebNavigator = WebNavigator(this)
+    public val bridge: WebBridge = WebBridge(::onReservedEvent)
+    public val navigator: WebNavigator = WebNavigator(this)
 
     /**
      * The engine the owning view has bound, or null. Only the owner's: a view that lost the state, but still holds an
@@ -128,7 +128,7 @@ class WebViewState(initialContent: WebContent) {
      * - Other content (another key) also loses the old page's snapshot, size and loop verdict. The same page keeps
      *   them, so its snapshot covers it at its height until the new document paints.
      */
-    fun load(newContent: WebContent) {
+    public fun load(newContent: WebContent) {
         val samePage = newContent.key == content.key
         bridge.detach()
         content = newContent
@@ -360,23 +360,23 @@ internal interface StateOwner {
  * Commands reach only the engine of the view that owns the state, guarded: an engine that throws is treated as
  * crashed (the view shows [WebViewPhase.Crashed]), and the exception never reaches the caller.
  */
-class WebNavigator internal constructor(private val state: WebViewState) {
+public class WebNavigator internal constructor(private val state: WebViewState) {
     /**
      * Shows [url], as [WebViewState.load] does: it navigates there, even when it is the content already shown.
      * @throws IllegalArgumentException if [url] isn't an http(s) URL with a host. Parse what a person typed with
      *   [WebContent.Url.parse] first.
      */
-    fun load(url: String) = state.load(WebContent.Url(url))
+    public fun load(url: String): Unit = state.load(WebContent.Url(url))
 
-    fun back() {
+    public fun back() {
         state.owner?.onEngine { it.goBack() }
     }
 
-    fun forward() {
+    public fun forward() {
         state.owner?.onEngine { it.goForward() }
     }
 
-    fun stop() {
+    public fun stop() {
         state.owner?.onEngine { it.stop() }
     }
 
@@ -384,7 +384,7 @@ class WebNavigator internal constructor(private val state: WebViewState) {
      * Reloads the page, and clears its error. A live page reloads in its engine. A cold, crashed or unavailable view is
      * asked to activate again, so a retry button works.
      */
-    fun reload() {
+    public fun reload() {
         state.error = null
         if (state.owner?.onEngine { it.reload() } == true) return
         val phase = state.phase
@@ -403,7 +403,7 @@ class WebNavigator internal constructor(private val state: WebViewState) {
  *   snapshot, size and engine state back for the same content.
  */
 @Composable
-fun rememberWebViewState(content: WebContent): WebViewState {
+public fun rememberWebViewState(content: WebContent): WebViewState {
     val state = remember(content.key) { WebViewState(content) }
     val shown = remember(state) { LastArgument(content) }
     SideEffect {

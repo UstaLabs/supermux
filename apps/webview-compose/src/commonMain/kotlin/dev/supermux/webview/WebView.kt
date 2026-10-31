@@ -88,7 +88,7 @@ private val DEFAULT_ACTIVATION: Activation = Activation.WhenVisible()
  *   [settings] resolve to. A custom one should be opaque too, or the engine's unpainted surface may show through.
  */
 @Composable
-fun WebView(
+public fun WebView(
     state: WebViewState,
     modifier: Modifier = Modifier,
     settings: WebSettings = WebSettings.Default,

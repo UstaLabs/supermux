@@ -2,15 +2,15 @@ package dev.supermux.webview
 
 import androidx.compose.runtime.Immutable
 
-enum class DarkMode { Auto, Light, Dark }
+public enum class DarkMode { Auto, Light, Dark }
 
 /** Where cookies and storage live. */
 @Immutable
-sealed interface WebProfile {
-    data object Default : WebProfile
+public sealed interface WebProfile {
+    public data object Default : WebProfile
 
     /** A named, persistent profile. [id] is 1–64 of `A-Z a-z 0-9 _ -`, which every engine accepts as a store name. */
-    data class Named(val id: String) : WebProfile {
+    public data class Named(val id: String) : WebProfile {
         init {
             require(ID.matches(id)) { "WebProfile.Named id must be 1-64 of [A-Za-z0-9_-]: '$id'" }
         }
@@ -25,11 +25,11 @@ sealed interface WebProfile {
      * leaves live, parked, and the next view of it adopts, is still that page, and keeps its storage across the
      * adoption.
      */
-    data object Ephemeral : WebProfile
+    public data object Ephemeral : WebProfile
 }
 
 @Immutable
-data class WebSettings(
+public data class WebSettings(
     val javaScriptEnabled: Boolean = true,
     /** Exposes the page to the platform inspector (Safari, chrome://inspect, Edge DevTools). */
     val inspectable: Boolean = false,
@@ -58,8 +58,8 @@ data class WebSettings(
         }
     }
 
-    companion object {
-        val Default: WebSettings = WebSettings()
+    public companion object {
+        public val Default: WebSettings = WebSettings()
     }
 }
 

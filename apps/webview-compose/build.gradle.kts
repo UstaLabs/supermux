@@ -17,6 +17,8 @@ version = "0.1.0-dev.1"
 
 kotlin {
     jvmToolchain(17)
+    // Every declaration apps can reach says so: `public`, with its type written out. What isn't for apps is `internal`.
+    explicitApi()
     jvm()
     androidTarget { publishLibraryVariants("release") }
     // Apple targets: their compile/link tasks are disabled on Linux (kotlin.native.ignoreDisabledTargets)

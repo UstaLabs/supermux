@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
@@ -10,7 +11,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
  *   scrolling parent measures (a lazy list's item of a fixed height). A pane gives its page every gesture.
  */
 @Immutable
-data class WebSurfaceHints(val inScrollingList: Boolean = false)
+public data class WebSurfaceHints(val inScrollingList: Boolean = false)
 
 /** What a view's surface hints are when nothing provides others. */
 internal val DefaultWebSurfaceHints = WebSurfaceHints()
@@ -26,4 +27,5 @@ internal val DefaultWebSurfaceHints = WebSurfaceHints()
  * `false` for a pane that a scrolling parent measures. The hint matters on iOS, macOS and Linux; Android and the web
  * chain scrolling to the list their own way, whatever it says.
  */
-val LocalWebSurfaceHints = staticCompositionLocalOf { DefaultWebSurfaceHints }
+public val LocalWebSurfaceHints: ProvidableCompositionLocal<WebSurfaceHints> =
+    staticCompositionLocalOf { DefaultWebSurfaceHints }

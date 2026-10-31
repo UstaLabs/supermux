@@ -127,7 +127,7 @@ internal sealed interface AcquireResult {
  *   then it is reclaimed, as a view needing its slot would reclaim it. 10 minutes, as long as a hidden view keeps its
  *   engine ([RuntimeConfig.hiddenReleaseMillis], which the runtime passes).
  */
-class EnginePool(
+public class EnginePool(
     private val factory: WebEngineFactory,
     maxLive: Int,
     maxIdle: Int,
@@ -195,7 +195,7 @@ class EnginePool(
     }
 
     /** The budget without memory pressure. Change it with [setMaxLive]. */
-    var maxLive: Int = maxLive.coerceAtLeast(1)
+    public var maxLive: Int = maxLive.coerceAtLeast(1)
         private set
 
     private val maxIdle = maxIdle.coerceAtLeast(0)
@@ -247,17 +247,17 @@ class EnginePool(
      */
     internal var onPressureEnded: (() -> Unit)? = null
 
-    val liveCount: Int get() = live.size
-    val idleCount: Int get() = idle.size
+    public val liveCount: Int get() = live.size
+    public val idleCount: Int get() = idle.size
 
     /** Live pages whose views left, parked for the next view of the page ([park]). Each holds a slot of [budget]. */
-    val parkedCount: Int get() = parked.size
+    public val parkedCount: Int get() = parked.size
 
     /** Engines given up on after their eviction or reset overran its bound, not yet released. */
     internal val overdueCount: Int get() = overdue
 
     /** The budget now: [maxLive], or half of it (at least 1) during a memory-pressure window ([onMemoryPressure]). */
-    val budget: Int get() = if (pressure == null) maxLive else (maxLive / 2).coerceAtLeast(1)
+    public val budget: Int get() = if (pressure == null) maxLive else (maxLive / 2).coerceAtLeast(1)
 
     /** How many spares may be kept now: none during a memory-pressure window. */
     private val spareLimit: Int get() = if (pressure == null) maxIdle else 0
@@ -438,7 +438,7 @@ class EnginePool(
      * - Only while the budget has room for the spare to be leased, and not during a memory-pressure window.
      * - The new spare is released if one for [config] came back while it was being created.
      */
-    suspend fun prewarm(config: EngineConfig) {
+    public suspend fun prewarm(config: EngineConfig) {
         val start = mutex.withLock {
             dropUnusableSpares()
             dropUnusableParked()

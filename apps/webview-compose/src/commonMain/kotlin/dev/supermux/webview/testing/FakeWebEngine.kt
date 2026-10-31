@@ -45,7 +45,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /** How a [FakeWebEngine] behaves. */
-data class FakeEngineBehavior(
+public data class FakeEngineBehavior(
     /** Emit [EngineEvent.FirstPaint] during every load, reload and restore. */
     val paintsOnLoad: Boolean = true,
     /** The page's content height in CSS px, reported after load (for WrapContentHeight); null = never reported. */
@@ -82,7 +82,7 @@ data class FakeEngineBehavior(
     val replayPaintsAtOnce: Boolean = true,
 ) {
     /** The colour [content]'s pages paint: [color] if set, else one derived from [content]'s key. */
-    fun colorOf(content: WebContent): Color = color ?: keyColor(content.key)
+    public fun colorOf(content: WebContent): Color = color ?: keyColor(content.key)
 }
 
 /**
@@ -135,12 +135,12 @@ private fun keyColor(key: String): Color {
  *   paint once it has painted. [documentsStarted] counts its documents, so a test can tell a page that was kept alive
  *   from one that was started again.
  */
-class FakeWebEngine(
-    val id: Int,
+public class FakeWebEngine(
+    public val id: Int,
     override val mode: EmbeddingMode = EmbeddingMode.NativeView,
-    var behavior: FakeEngineBehavior = FakeEngineBehavior(),
+    public var behavior: FakeEngineBehavior = FakeEngineBehavior(),
     /** What the engine was created with. [FakeWebEngineFactory] passes the config it was asked for. */
-    val config: EngineConfig = EngineConfig(WebProfile.Default),
+    public val config: EngineConfig = EngineConfig(WebProfile.Default),
 ) : WebEngine {
     private val log = ArrayDeque<String>()
 
@@ -148,7 +148,7 @@ class FakeWebEngine(
      * Every call, oldest first, with payloads cut to 200 characters. Only the last 2,000 are kept, so a long perf-lab
      * run doesn't grow without bound.
      */
-    val calls: List<String> get() = log
+    public val calls: List<String> get() = log
 
     private val violationLog = mutableListOf<String>()
 
@@ -156,7 +156,7 @@ class FakeWebEngine(
      * How the caller broke the engine contract: `"load without configure"`, `"<member> during reset"`,
      * `"<member> after a failed reset"` or `"<member> after release"`. Tests assert it stays empty.
      */
-    val violations: List<String> get() = violationLog
+    public val violations: List<String> get() = violationLog
 
     /**
      * The real engines' own buffer: what the page is while nobody subscribes (a parked page) waits for the next
@@ -172,7 +172,7 @@ class FakeWebEngine(
     override val needsCutouts: Boolean get() = behavior.needsCutouts
 
     /** Whether [release] was called. */
-    var released: Boolean = false
+    public var released: Boolean = false
         private set
     private var crashed = false
     override val isUsable: Boolean get() = !released && !crashed
@@ -181,7 +181,7 @@ class FakeWebEngine(
     override var onUnusable: (() -> Unit)? = null
 
     /** What [configure] set for the current lease; null before it, and again from the moment a [reset] starts. */
-    var lastSetup: PageSetup? = null
+    public var lastSetup: PageSetup? = null
         private set
 
     /** Whether [configure] was called since creation or since the last [reset] started. */
@@ -194,16 +194,16 @@ class FakeWebEngine(
     private var resetFailed = false
 
     /** While set, [reset] waits for it to complete. */
-    var resetGate: CompletableDeferred<Unit>? = null
+    public var resetGate: CompletableDeferred<Unit>? = null
 
     /** While set, [saveState] waits for it to complete, as a real engine's asynchronous save may take a while. */
-    var saveStateGate: CompletableDeferred<Unit>? = null
+    public var saveStateGate: CompletableDeferred<Unit>? = null
 
-    var cutouts: OverlayCutouts? by mutableStateOf(null)
+    public var cutouts: OverlayCutouts? by mutableStateOf(null)
         private set
 
     /** The size [Surface] was last laid out at, in pixels. */
-    var surfaceSize: IntSize = IntSize(100, 100)
+    public var surfaceSize: IntSize = IntSize(100, 100)
         private set
 
     /** The density [Surface] last saw, which turns its width into CSS pixels. */
@@ -225,7 +225,7 @@ class FakeWebEngine(
     private var paintedColor: Color? by mutableStateOf(null)
 
     /** Whether the surface shows a painted page ([paintedColor]). */
-    val painted: Boolean get() = paintedColor != null
+    public val painted: Boolean get() = paintedColor != null
 
     /** Whether the current document has painted: [snapshot] gives nothing until then. */
     private var documentPainted = false
@@ -246,7 +246,7 @@ class FakeWebEngine(
      * Emits [event] as if the page did something. [EngineEvent.FirstPaint] shows the current document, and
      * [EngineEvent.Crashed] makes the engine unusable for good. Main thread only, as the engines' queue is.
      */
-    fun emit(event: EngineEvent) = emit(event, document = null)
+    public fun emit(event: EngineEvent): Unit = emit(event, document = null)
 
     /** [emit], for a page message from [document] (its nonce), so the queue knows which document's `$ready` it is. */
     private fun emit(event: EngineEvent, document: String?) {
@@ -273,7 +273,7 @@ class FakeWebEngine(
      * shim sends it. False, and nothing is sent, when the document runs no shim or the engine was released.
      * @throws IllegalArgumentException if [data] isn't strict JSON.
      */
-    fun postFromPage(name: String, data: JsonElement = JsonNull): Boolean {
+    public fun postFromPage(name: String, data: JsonElement = JsonNull): Boolean {
         val content = current ?: return false
         val document = nonce ?: return false
         if (released) return false
@@ -407,7 +407,7 @@ class FakeWebEngine(
     }
 
     /** How many documents the engine has started: loads, reloads and restores. */
-    val documentsStarted: Int get() = documents
+    public val documentsStarted: Int get() = documents
 
     override fun requestFocus() {
         record("focus")
@@ -620,20 +620,20 @@ class FakeWebEngine(
  * Creates [FakeWebEngine]s numbered 1, 2, 3…, each with the config it was created for, and keeps them all in
  * [created].
  */
-class FakeWebEngineFactory(
+public class FakeWebEngineFactory(
     private val mode: EmbeddingMode = EmbeddingMode.NativeView,
-    var behavior: FakeEngineBehavior = FakeEngineBehavior(),
+    public var behavior: FakeEngineBehavior = FakeEngineBehavior(),
 ) : WebEngineFactory {
-    val created: MutableList<FakeWebEngine> = mutableListOf()
+    public val created: MutableList<FakeWebEngine> = mutableListOf()
 
     /** When set, every [create] reports this reason, with the detail `"fake"`. */
-    var unavailable: UnavailableReason? = null
+    public var unavailable: UnavailableReason? = null
 
     /** While set, [create] waits for it to complete, as WebView2 and WPE take a while to start. */
-    var createGate: CompletableDeferred<Unit>? = null
+    public var createGate: CompletableDeferred<Unit>? = null
 
     /** When true, [create] throws: a factory that breaks its contract, to test the pool's guard. */
-    var failCreate: Boolean = false
+    public var failCreate: Boolean = false
 
     override suspend fun create(config: EngineConfig): WebEngineResult {
         createGate?.await()

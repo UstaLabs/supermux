@@ -1,8 +1,8 @@
 package dev.supermux.webview
 
-data class NavigationRequest(val url: String, val isMainFrame: Boolean, val isUserGesture: Boolean)
+public data class NavigationRequest(val url: String, val isMainFrame: Boolean, val isUserGesture: Boolean)
 
-enum class NavigationDecision { Allow, Block, OpenExternally }
+public enum class NavigationDecision { Allow, Block, OpenExternally }
 
 /**
  * What to do with a page's request for a new window (`window.open`, `target=_blank`).
@@ -10,37 +10,37 @@ enum class NavigationDecision { Allow, Block, OpenExternally }
  *   navigation.
  * - [OpenExternally] hands it to the OS, subject to the same scheme rules.
  */
-enum class NewWindowDecision { OpenHere, OpenExternally, Block }
+public enum class NewWindowDecision { OpenHere, OpenExternally, Block }
 
-sealed interface WebDialog {
-    val message: String
+public sealed interface WebDialog {
+    public val message: String
 
     /** The URL of the document that raised the dialog, so the app can say who is asking. */
-    val url: String?
+    public val url: String?
 
-    data class Alert(override val message: String, override val url: String? = null) : WebDialog
-    data class Confirm(override val message: String, override val url: String? = null) : WebDialog
-    data class Prompt(override val message: String, val defaultValue: String, override val url: String? = null) : WebDialog
-    data class BeforeUnload(override val message: String, override val url: String? = null) : WebDialog
+    public data class Alert(override val message: String, override val url: String? = null) : WebDialog
+    public data class Confirm(override val message: String, override val url: String? = null) : WebDialog
+    public data class Prompt(override val message: String, val defaultValue: String, override val url: String? = null) : WebDialog
+    public data class BeforeUnload(override val message: String, override val url: String? = null) : WebDialog
 }
 
-sealed interface DialogResult {
+public sealed interface DialogResult {
     /** Alert OK, Confirm/Prompt cancel, BeforeUnload "stay on the page". */
-    data object Dismissed : DialogResult
+    public data object Dismissed : DialogResult
     /** Confirm OK, BeforeUnload "leave the page". */
-    data object Confirmed : DialogResult
-    data class Text(val value: String) : DialogResult
+    public data object Confirmed : DialogResult
+    public data class Text(val value: String) : DialogResult
 }
 
-data class FileChooserRequest(val acceptTypes: List<String>, val allowMultiple: Boolean)
+public data class FileChooserRequest(val acceptTypes: List<String>, val allowMultiple: Boolean)
 
-enum class PermissionKind { Camera, Microphone, Geolocation, Notifications, ClipboardRead, Other }
+public enum class PermissionKind { Camera, Microphone, Geolocation, Notifications, ClipboardRead, Other }
 
-data class PermissionRequest(val origin: String, val kinds: Set<PermissionKind>)
+public data class PermissionRequest(val origin: String, val kinds: Set<PermissionKind>)
 
-data class DownloadRequest(val url: String, val suggestedFileName: String?, val mimeType: String?, val contentLength: Long?)
+public data class DownloadRequest(val url: String, val suggestedFileName: String?, val mimeType: String?, val contentLength: Long?)
 
-data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
+public data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
 
 /**
  * Answers the page's requests. Every default is the safe answer.
@@ -50,30 +50,30 @@ data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
  * fast, pure and thread-safe. The others may suspend (to show a Compose dialog, say), because every engine can answer
  * them later.
  */
-interface WebClient {
+public interface WebClient {
     /**
      * A navigation the page started. [content] is what the view is showing. May run off the main thread: keep it fast,
      * pure and thread-safe.
      */
-    fun onNavigation(request: NavigationRequest, content: WebContent): NavigationDecision =
+    public fun onNavigation(request: NavigationRequest, content: WebContent): NavigationDecision =
         defaultNavigationDecision(request, content)
 
     /** Alert, Confirm and Prompt are dismissed. BeforeUnload leaves the page, so a page can't trap the user. */
-    suspend fun onDialog(dialog: WebDialog): DialogResult =
+    public suspend fun onDialog(dialog: WebDialog): DialogResult =
         if (dialog is WebDialog.BeforeUnload) DialogResult.Confirmed else DialogResult.Dismissed
 
     /** The chosen files as platform URI strings, or null to cancel. */
-    suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null
+    public suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null
 
-    suspend fun onPermission(request: PermissionRequest): Boolean = false
+    public suspend fun onPermission(request: PermissionRequest): Boolean = false
 
-    suspend fun onDownload(request: DownloadRequest): Boolean = false
+    public suspend fun onDownload(request: DownloadRequest): Boolean = false
 
     /** A request for a new window. May run off the main thread: keep it fast, pure and thread-safe. */
-    fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block
+    public fun onNewWindow(request: NewWindowRequest): NewWindowDecision = NewWindowDecision.Block
 
-    companion object {
-        val Default: WebClient = object : WebClient {}
+    public companion object {
+        public val Default: WebClient = object : WebClient {}
     }
 }
 
@@ -88,7 +88,7 @@ internal val EXTERNAL_SCHEMES: Set<String> = setOf("mailto", "tel", "sms")
  * - Local content (Html, Bundle) stays on its own origin, its own blob: URLs and about:blank/srcdoc.
  * - A network page may not navigate into a local origin, and local content never hops to another.
  */
-fun defaultNavigationDecision(request: NavigationRequest, content: WebContent): NavigationDecision {
+public fun defaultNavigationDecision(request: NavigationRequest, content: WebContent): NavigationDecision {
     if (!request.isMainFrame) return NavigationDecision.Allow
     val url = normalizeUrl(request.url)
     val leave = if (request.isUserGesture) NavigationDecision.OpenExternally else NavigationDecision.Block

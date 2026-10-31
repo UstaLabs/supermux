@@ -14,14 +14,15 @@ import kotlin.math.roundToLong
  * A Compose overlay drawn over web views (a menu, a dialog, a bottom sheet), in window pixels. Every corner has its
  * own radius, so a bottom sheet keeps its square bottom corners.
  */
-data class OverlayShape(val shape: RoundRect) {
-    constructor(bounds: Rect, cornerRadius: CornerRadius = CornerRadius.Zero) : this(RoundRect(bounds, cornerRadius))
+public data class OverlayShape(val shape: RoundRect) {
+    public constructor(bounds: Rect, cornerRadius: CornerRadius = CornerRadius.Zero) :
+        this(RoundRect(bounds, cornerRadius))
 
     val bounds: Rect get() = shape.boundingRect
 }
 
 /** A modal scrim over web views, in window pixels. The page dims under it instead of disappearing. */
-data class ScrimShape(val bounds: Rect, val color: Color)
+public data class ScrimShape(val bounds: Rect, val color: Color)
 
 /**
  * What a page that sits above Compose does to itself so Compose overlays show (spec §6). Everything here is in window
@@ -38,7 +39,7 @@ data class ScrimShape(val bounds: Rect, val color: Color)
  * - It draws [scrims] over itself in order, each within its bounds, so stacked scrims compound as they do in
  *   Compose. Like the holes, scrims are in window pixels: subtract [pageBounds]' top-left to draw one on the page.
  */
-data class OverlayCutouts(
+public data class OverlayCutouts(
     val pageBounds: Rect,
     val visibleBounds: Rect,
     val holes: List<OverlayShape>,
@@ -53,7 +54,7 @@ data class OverlayCutouts(
      * The visible area minus the holes, as an even-odd SVG path in the page's own coordinates (CSS `clip-path`).
      * When nothing is visible it is an empty rectangle, which hides the whole page.
      */
-    fun toEvenOddPath(): String {
+    public fun toEvenOddPath(): String {
         val dx = -pageBounds.left
         val dy = -pageBounds.top
         val visible = visibleBounds
@@ -65,7 +66,7 @@ data class OverlayCutouts(
     }
 
     /** The same cut-outs in another unit, e.g. CSS pixels: `scaled(1 / density)`. [factor] is finite and above 0. */
-    fun scaled(factor: Float): OverlayCutouts {
+    public fun scaled(factor: Float): OverlayCutouts {
         require(factor.isFinite() && factor > 0f) { "A scale factor is finite and above 0, not $factor" }
         return OverlayCutouts(
             pageBounds.scaledBy(factor),
@@ -75,9 +76,9 @@ data class OverlayCutouts(
         )
     }
 
-    companion object {
+    public companion object {
         /** No page and nothing visible: a page given these hides everything, as one not laid out yet should. */
-        val Hidden: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
+        public val Hidden: OverlayCutouts = OverlayCutouts(Rect.Zero, Rect.Zero, emptyList(), emptyList())
     }
 }
 
@@ -148,7 +149,7 @@ private class PageLocalWriter(size: Int) {
  * Worst case, n overlays cost O(n²), and a group of k overlapping ones that has to be cut as rects O(k²), in time and
  * in holes. A window shows a handful of overlays, so a frame's recomputation stays in microseconds.
  */
-fun computeCutouts(
+public fun computeCutouts(
     pageBounds: Rect,
     visibleBounds: Rect,
     overlays: Collection<OverlayShape>,

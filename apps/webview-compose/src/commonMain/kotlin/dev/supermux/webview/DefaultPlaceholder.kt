@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
  * must never show through it.
  */
 @Composable
-fun DefaultPlaceholder(state: WebViewState, dark: Boolean = isSystemInDarkTheme()) {
+public fun DefaultPlaceholder(state: WebViewState, dark: Boolean = isSystemInDarkTheme()) {
     val fill = if (dark) Color(0xFF202124) else Color(0xFFF1F3F4)
     val frame = if (dark) Color(0x24FFFFFF) else Color(0x1F000000)
     val text = if (dark) Color(0x99FFFFFF) else Color(0x99000000)

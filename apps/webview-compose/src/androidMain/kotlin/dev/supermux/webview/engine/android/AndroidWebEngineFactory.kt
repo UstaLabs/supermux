@@ -21,7 +21,7 @@ import kotlin.coroutines.resume
  * - A WebView without the features the engine needs (see `Features`): `Unavailable(NoWebViewProvider)` with the list.
  * - No Activity has shown a web view yet, or anything else: `Unavailable(CreationFailed)`, which the runtime retries.
  */
-class AndroidWebEngineFactory : WebEngineFactory {
+public class AndroidWebEngineFactory : WebEngineFactory {
     override suspend fun create(config: EngineConfig): WebEngineResult = try {
         withContext(Dispatchers.Main.immediate) { createOnMain(config) }
     } catch (e: CancellationException) {

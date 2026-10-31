@@ -22,7 +22,7 @@ import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.flow.Flow
 
 /** How an engine reaches the screen (spec §7). */
-enum class EmbeddingMode {
+public enum class EmbeddingMode {
     /** The engine's own native view, positioned by Compose. */
     NativeView,
     /** The engine renders off screen; its [WebEngine.Surface] draws the frames and forwards input. */
@@ -34,7 +34,7 @@ enum class EmbeddingMode {
  * WebKit's media playback policy). Engines are pooled per distinct config. Everything else is set per lease, through
  * [WebEngine.configure].
  */
-data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequiresGesture: Boolean = true)
+public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequiresGesture: Boolean = true)
 
 /**
  * What one lease sets on its engine, through [WebEngine.configure]: resolved, per-lease values only. Nothing
@@ -46,7 +46,7 @@ data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequiresGestur
  * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
  */
-data class PageSetup(
+public data class PageSetup(
     val javaScriptEnabled: Boolean,
     val inspectable: Boolean,
     val dark: Boolean,
@@ -68,11 +68,11 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     bridgeOrigins = bridgeOrigins,
 )
 
-sealed interface WebEngineResult {
-    data class Created(val engine: WebEngine) : WebEngineResult
+public sealed interface WebEngineResult {
+    public data class Created(val engine: WebEngine) : WebEngineResult
 
     /** No engine, because of [reason]. [detail] says more, for logs: a missing library, an exception's message… */
-    data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebEngineResult
+    public data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebEngineResult
 }
 
 /**
@@ -81,8 +81,8 @@ sealed interface WebEngineResult {
  * [create] may suspend, because WebView2 and WPE start asynchronously. It never throws: failures are
  * [WebEngineResult.Unavailable]. The pool calls it outside its lock, and guards it anyway.
  */
-interface WebEngineFactory {
-    suspend fun create(config: EngineConfig): WebEngineResult
+public interface WebEngineFactory {
+    public suspend fun create(config: EngineConfig): WebEngineResult
 
     /**
      * Whether a [dev.supermux.webview.WebProfile.Named] profile's cookies and storage outlive the app's run here. Named
@@ -90,11 +90,12 @@ interface WebEngineFactory {
      * each gets a store of its own that is forgotten when the app quits, and this is false: the app may ask its users
      * to sign in again at each launch, or choose another profile. True unless an engine says otherwise.
      */
-    val namedProfilesPersist: Boolean get() = true
+    public val namedProfilesPersist: Boolean get() = true
 }
 
 /** A [WebEngineFactory] that runs [create], so call sites can write `WebEngineFactory { config -> … }`. */
-fun WebEngineFactory(create: suspend (EngineConfig) -> WebEngineResult): WebEngineFactory = LambdaEngineFactory(create)
+public fun WebEngineFactory(create: suspend (EngineConfig) -> WebEngineResult): WebEngineFactory =
+    LambdaEngineFactory(create)
 
 private class LambdaEngineFactory(private val block: suspend (EngineConfig) -> WebEngineResult) : WebEngineFactory {
     override suspend fun create(config: EngineConfig): WebEngineResult = block(config)
@@ -106,46 +107,46 @@ private class LambdaEngineFactory(private val block: suspend (EngineConfig) -> W
  *   engine's own UI thread (see [WebEngine]), so they answer fast, thread-safe and without blocking.
  * - The rest may suspend.
  */
-interface EngineClient {
-    fun onNavigation(request: NavigationRequest): NavigationDecision
-    suspend fun onDialog(dialog: WebDialog): DialogResult
-    suspend fun onFileChooser(request: FileChooserRequest): List<String>?
-    suspend fun onPermission(request: PermissionRequest): Boolean
-    suspend fun onDownload(request: DownloadRequest): Boolean
-    fun onNewWindow(request: NewWindowRequest): NewWindowDecision
+public interface EngineClient {
+    public fun onNavigation(request: NavigationRequest): NavigationDecision
+    public suspend fun onDialog(dialog: WebDialog): DialogResult
+    public suspend fun onFileChooser(request: FileChooserRequest): List<String>?
+    public suspend fun onPermission(request: PermissionRequest): Boolean
+    public suspend fun onDownload(request: DownloadRequest): Boolean
+    public fun onNewWindow(request: NewWindowRequest): NewWindowDecision
 }
 
-sealed interface EngineEvent {
+public sealed interface EngineEvent {
     /**
      * A main-frame commit or a same-document URL change, in the terms the [WebEngine] contract sets. [url] is null
      * only for a commit whose URL the engine can't read, which is opaque; a same-document change always has its URL.
      */
-    data class UrlChanged(val url: String?) : EngineEvent
-    data class TitleChanged(val title: String?) : EngineEvent
+    public data class UrlChanged(val url: String?) : EngineEvent
+    public data class TitleChanged(val title: String?) : EngineEvent
     /** Load progress in 0..1, or null when idle. */
-    data class Progress(val progress: Float?) : EngineEvent
-    data class HistoryChanged(val canGoBack: Boolean, val canGoForward: Boolean) : EngineEvent
+    public data class Progress(val progress: Float?) : EngineEvent
+    public data class HistoryChanged(val canGoBack: Boolean, val canGoForward: Boolean) : EngineEvent
     /**
      * The current document is shown in its place with its content: the engine has drawn it there, under the runtime's
      * cover, for at least a frame. Not its commit, and not its bare background: the runtime lifts the cover on this, so
      * the first frame without the cover is one the page has drawn.
      */
-    data object FirstPaint : EngineEvent
+    public data object FirstPaint : EngineEvent
     /**
      * The engine let the current document go on its own, and its surface shows nothing of it until the next
      * [FirstPaint]: the web gives the slot of a page of another site that is off screen to one on screen. The runtime
      * covers the view again, as before a first paint; the engine loads the page afresh when it can show it again.
      */
-    data object PaintLost : EngineEvent
+    public data object PaintLost : EngineEvent
     /** The main frame failed to load. Subframe and subresource failures are not reported. */
-    data class Error(val error: WebError) : EngineEvent
+    public data class Error(val error: WebError) : EngineEvent
     /** A console message the engine captured natively. Pages running the shim report through [PageMessage]. */
-    data class Console(val message: ConsoleMessage) : EngineEvent
+    public data class Console(val message: ConsoleMessage) : EngineEvent
     /**
      * A bridge message from the main frame's document: [json] in the bridge's JSON wire format, from [origin], the
      * engine's report of that document's origin (see **Origins** in the [WebEngine] contract).
      */
-    data class PageMessage(val origin: String, val json: String) : EngineEvent
+    public data class PageMessage(val origin: String, val json: String) : EngineEvent
     /**
      * The document's size in CSS pixels, if the engine measures it natively. [viewportHeightCss] is the height of the
      * engine's viewport in CSS pixels, where the engine knows it. With it, the runtime catches a page that grows with
@@ -154,14 +155,14 @@ sealed interface EngineEvent {
      * Engines that inject the shim don't also report sizes natively: the shim reports them, and two sources that
      * measure the same page a little differently look like a page that keeps changing on its own.
      */
-    data class ContentSize(val widthCss: Float, val heightCss: Float, val viewportHeightCss: Float? = null) : EngineEvent
+    public data class ContentSize(val widthCss: Float, val heightCss: Float, val viewportHeightCss: Float? = null) : EngineEvent
     /**
      * Keyboard focus entered ([focused]) or left the page. Engines report it, because Compose never sees pointer
      * events over native views or iframes.
      */
-    data class FocusChanged(val focused: Boolean) : EngineEvent
+    public data class FocusChanged(val focused: Boolean) : EngineEvent
     /** The renderer died. The engine is unusable and will be destroyed, not recycled. */
-    data object Crashed : EngineEvent
+    public data object Crashed : EngineEvent
 }
 
 /**
@@ -278,19 +279,19 @@ sealed interface EngineEvent {
  *   page says from the replay on reaches the adopting view, even before the page has answered the bridge's `$hello`
  *   with its `$ready`.
  */
-interface WebEngine {
-    val mode: EmbeddingMode
-    val events: Flow<EngineEvent>
+public interface WebEngine {
+    public val mode: EmbeddingMode
+    public val events: Flow<EngineEvent>
 
     /**
      * Answers the page's requests while the engine is leased. With none, every request gets its safe default:
      * navigations and new windows are blocked, dialogs dismissed (beforeunload leaves the page), file choosers
      * cancelled, and permissions and downloads denied.
      */
-    var client: EngineClient?
+    public var client: EngineClient?
 
     /** False, for good, once the renderer crashed or the engine was released. The pool checks it before reuse. */
-    val isUsable: Boolean
+    public val isUsable: Boolean
 
     /**
      * Whom to tell when [isUsable] turns false by the engine's own doing, while no view holds it: its renderer died, or
@@ -300,7 +301,7 @@ interface WebEngine {
      * false, and after the [EngineEvent.Crashed] it offers, if it offers one; never for its own [release]. Optional: an
      * engine that never calls it is released at the next lease instead.
      */
-    var onUnusable: (() -> Unit)?
+    public var onUnusable: (() -> Unit)?
         get() = null
         set(@Suppress("UNUSED_PARAMETER") value) {}
 
@@ -308,16 +309,16 @@ interface WebEngine {
      * Applies a lease's [setup]. The runtime calls it before every [load] or [restoreState] of a lease, and may call
      * it again mid-lease (a theme or settings change); it applies to the current page where the platform allows.
      */
-    fun configure(setup: PageSetup)
+    public fun configure(setup: PageSetup)
 
-    fun load(content: WebContent)
-    fun goBack()
-    fun goForward()
-    fun reload()
-    fun stop()
+    public fun load(content: WebContent)
+    public fun goBack()
+    public fun goForward()
+    public fun reload()
+    public fun stop()
 
     /** Runs [script] in the page and returns its result JSON-encoded, or null. */
-    suspend fun evaluate(script: String): String?
+    public suspend fun evaluate(script: String): String?
 
     /**
      * Delivers a bridge message to the main frame's shim (`window.__hostBridgeReceive`), only if the main frame's
@@ -326,7 +327,7 @@ interface WebEngine {
      * per-document `MessagePort` (web), an origin test inside the delivering script in an isolated world (WebKit,
      * WPE), or a receiver installed at document creation (WebView2). See **Delivery** in the contract above.
      */
-    fun postMessage(json: String, targetOrigin: String)
+    public fun postMessage(json: String, targetOrigin: String)
 
     /**
      * The page as it looks now.
@@ -335,17 +336,17 @@ interface WebEngine {
      * - Valid only while [Surface] is in the composition and laid out with a non-zero size: otherwise null, as it is
      *   where a snapshot is impossible (a cross-origin iframe).
      */
-    suspend fun snapshot(): ImageBitmap?
+    public suspend fun snapshot(): ImageBitmap?
 
     /** Opaque engine state (history, scroll) for [restoreState], or null where unsupported. */
-    suspend fun saveState(): ByteArray?
+    public suspend fun saveState(): ByteArray?
 
     /**
      * Restores [state] from [saveState] and reloads the saved page, which is [content]'s. While it restores, the
      * engine serves local content ([WebContent.Html], [WebContent.Bundle]) from [content]. Returns false when it
      * can't (the state is unknown or unsupported, or isn't [content]'s); the runtime then loads [content] instead.
      */
-    fun restoreState(state: ByteArray, content: WebContent): Boolean
+    public fun restoreState(state: ByteArray, content: WebContent): Boolean
 
     /**
      * Whether the view is on screen. Engines may throttle a hidden page; frame engines stop capturing. A parked page
@@ -353,7 +354,7 @@ interface WebEngine {
      * to show again, never reloading it, but for the web's budget of pages of other sites: a hidden page there may give
      * its slot to one on screen, and loads afresh when its view shows it again.
      */
-    fun setVisible(visible: Boolean) {}
+    public fun setVisible(visible: Boolean) {}
 
     /**
      * Tells the subscriber what the page is now, as the events it would have heard: [EngineEvent.UrlChanged] for the
@@ -372,10 +373,10 @@ interface WebEngine {
      *
      * No default: an engine that replayed nothing would leave an adopted page under its view's cover.
      */
-    fun replayState()
+    public fun replayState()
 
     /** Moves keyboard focus into the page. */
-    fun requestFocus() {}
+    public fun requestFocus() {}
 
     /**
      * Whether the runtime gives the page its overlay cut-outs ([applyOverlays]): the web's iframe, which sits above
@@ -384,10 +385,10 @@ interface WebEngine {
      * desktops) return false, and the runtime then computes no cut-outs for them: a live page that moves costs a cut-out
      * computation a frame otherwise. Read once per lease.
      */
-    val needsCutouts: Boolean get() = true
+    public val needsCutouts: Boolean get() = true
 
     /** Cuts overlays out of a page that sits above Compose. A no-op where Compose already draws on top. */
-    fun applyOverlays(cutouts: OverlayCutouts)
+    public fun applyOverlays(cutouts: OverlayCutouts)
 
     /**
      * What is over the page as the runtime is about to ask for a [snapshot]: told just before each one to an engine
@@ -396,7 +397,7 @@ interface WebEngine {
      * only when [OverlayCutouts.isNone] (the page wholly on screen, and no overlay or scrim the app marked over it), and
      * only for the snapshot that follows. Optional: engines that draw their page themselves can ignore it.
      */
-    fun overlaysAtSnapshot(cutouts: OverlayCutouts) {}
+    public fun overlaysAtSnapshot(cutouts: OverlayCutouts) {}
 
     /**
      * Hosts the engine in the composition: its native view, or its frames.
@@ -407,7 +408,7 @@ interface WebEngine {
      * engine from the next view, and the Surface may then be composed in its new place before it leaves the old one.
      */
     @Composable
-    fun Surface(modifier: Modifier)
+    public fun Surface(modifier: Modifier)
 
     /**
      * Readies the engine for another lease. Returns true only if, once it returns:
@@ -420,8 +421,8 @@ interface WebEngine {
      *
      * Returns false when it can't guarantee all of that; the pool then destroys the engine. Never throws.
      */
-    suspend fun reset(): Boolean
+    public suspend fun reset(): Boolean
 
     /** Destroys the engine. */
-    fun release()
+    public fun release()
 }

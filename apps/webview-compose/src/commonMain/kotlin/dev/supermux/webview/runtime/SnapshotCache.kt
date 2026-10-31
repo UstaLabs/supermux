@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
  * of, fewer than [density] when it was kept smaller (three pixels a dp at most, the pixel cap, an engine's own draw
  * stepped down), so its cover is drawn at its true size.
  */
-data class SnapshotKey(
+public data class SnapshotKey(
     val contentKey: String,
     val profile: WebProfile,
     val width: Int,
@@ -36,11 +36,11 @@ data class SnapshotKey(
  * - [request] gives a decoded snapshot at once, or starts its decode, off the main thread, once however many views
  *   ask, and tells each of them when it is done.
  */
-class SnapshotCache internal constructor(
+public class SnapshotCache internal constructor(
     /** The budget for stored snapshots, in encoded bytes. */
-    val maxBytes: Long,
+    public val maxBytes: Long,
     /** The budget for decoded snapshots, in pixel bytes. */
-    val decodedMaxBytes: Long,
+    public val decodedMaxBytes: Long,
     /** Where decodes run: their results come back on its thread. */
     private val scope: CoroutineScope,
     /** How snapshots are encoded and decoded. Tests code them on the UI thread instead. */
@@ -68,18 +68,18 @@ class SnapshotCache internal constructor(
     private val decodes = HashMap<SnapshotKey, Decode>()
 
     /** The bytes of the snapshots stored. */
-    var sizeBytes: Long = 0
+    public var sizeBytes: Long = 0
         private set
 
     /** How many snapshots are stored. */
-    val count: Int get() = entries.size
+    public val count: Int get() = entries.size
 
     /** The pixel bytes of the snapshots kept decoded. */
-    var decodedBytes: Long = 0
+    public var decodedBytes: Long = 0
         private set
 
     /** How many snapshots are kept decoded. */
-    val decodedCount: Int get() = ready.size
+    public val decodedCount: Int get() = ready.size
 
     /**
      * A lower budget for stored snapshots while memory is short, or null. Setting it evicts down to it at once, and the
@@ -108,7 +108,7 @@ class SnapshotCache internal constructor(
     internal operator fun get(key: SnapshotKey): ByteArray? = use(key)?.bytes
 
     /** Whether a snapshot is stored under [key]. */
-    operator fun contains(key: SnapshotKey): Boolean = key in entries
+    public operator fun contains(key: SnapshotKey): Boolean = key in entries
 
     /** Marks the snapshot stored under [key] used, as a view showing it does. False if there is none. */
     internal fun touch(key: SnapshotKey): Boolean = use(key) != null
@@ -119,7 +119,7 @@ class SnapshotCache internal constructor(
      * if it stored them. A snapshot bigger than the whole cache, or than what memory pressure leaves of it, isn't kept,
      * and what is stored, under [key] too, stays.
      */
-    fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null): Boolean {
+    public fun put(key: SnapshotKey, bytes: ByteArray, decoded: ImageBitmap? = null): Boolean {
         val entry = Entry(bytes)
         if (entry.cost > budget) return false
         val waiting = decodes.remove(key)?.let { superseded ->
@@ -148,7 +148,7 @@ class SnapshotCache internal constructor(
      * [onDecoded] it is a prefetch: it starts a decode only if the cache would keep what it gives. Either way the
      * snapshot counts as used.
      */
-    fun request(key: SnapshotKey, onDecoded: ((SnapshotKey, ImageBitmap) -> Unit)? = null): ImageBitmap? {
+    public fun request(key: SnapshotKey, onDecoded: ((SnapshotKey, ImageBitmap) -> Unit)? = null): ImageBitmap? {
         val entry = use(key) ?: return null
         ready.remove(key)?.let { kept ->
             ready[key] = kept
@@ -226,19 +226,19 @@ class SnapshotCache internal constructor(
     }
 
     /** Removes the snapshot stored under [key], decoded too; a decode of it under way gives nothing. */
-    fun remove(key: SnapshotKey) {
+    public fun remove(key: SnapshotKey) {
         entries.remove(key)?.let { sizeBytes -= it.cost }
         dropDecoded(key)
         decodes.remove(key)?.job?.cancel()
     }
 
     /** Removes every snapshot of the content of [contentKey], in every profile, size, theme and density. */
-    fun forget(contentKey: String) {
+    public fun forget(contentKey: String) {
         entries.keys.filter { it.contentKey == contentKey }.forEach(::remove)
     }
 
     /** Removes every snapshot. */
-    fun clear() {
+    public fun clear() {
         entries.clear()
         sizeBytes = 0
         ready.clear()
@@ -248,7 +248,7 @@ class SnapshotCache internal constructor(
     }
 
     /** Evicts least-recently-used stored snapshots, and their decoded copies, until at most [limit] bytes remain. */
-    fun trimTo(limit: Long) {
+    public fun trimTo(limit: Long) {
         while (sizeBytes > limit) remove(entries.keys.firstOrNull() ?: return)
     }
 

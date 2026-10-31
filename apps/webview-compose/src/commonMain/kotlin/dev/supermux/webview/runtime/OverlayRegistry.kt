@@ -3,6 +3,7 @@ package dev.supermux.webview.runtime
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.referentialEqualityPolicy
@@ -25,21 +26,21 @@ import androidx.compose.runtime.staticCompositionLocalOf
  * Main thread only.
  */
 @Stable
-class OverlayRegistry {
+public class OverlayRegistry {
     private val overlayEntries = mutableStateOf(Entries<OverlayShape>(), referentialEqualityPolicy())
     private val scrimEntries = mutableStateOf(Entries<ScrimShape>(), referentialEqualityPolicy())
 
     /** The overlays, in the order they registered. */
-    val shapes: List<OverlayShape> get() = overlayEntries.value.values
+    public val shapes: List<OverlayShape> get() = overlayEntries.value.values
 
     /** The scrims, in the order they registered: the order stacked modals open in, so they compound as drawn. */
-    val scrims: List<ScrimShape> get() = scrimEntries.value.values
+    public val scrims: List<ScrimShape> get() = scrimEntries.value.values
 
     /** Registers [shape] for [key], in place of what [key] had; null forgets [key]. Keys are compared with `==`. */
-    fun setOverlay(key: Any, shape: OverlayShape?) = update(overlayEntries, key, shape)
+    public fun setOverlay(key: Any, shape: OverlayShape?): Unit = update(overlayEntries, key, shape)
 
     /** Registers [scrim] for [key], in place of what [key] had; null forgets [key]. Keys are compared with `==`. */
-    fun setScrim(key: Any, scrim: ScrimShape?) = update(scrimEntries, key, scrim)
+    public fun setScrim(key: Any, scrim: ScrimShape?): Unit = update(scrimEntries, key, scrim)
 
     private fun <T : Any> update(state: MutableState<Entries<T>>, key: Any, value: T?) {
         // A writer doesn't come to depend on what it writes, wherever it runs.
@@ -69,7 +70,7 @@ private class Entries<T : Any>(private val keys: List<Any> = emptyList(), val va
  * The overlay registry of the window this composition is in, which overlays, scrims and web views use. Null, the
  * default, means the runtime's own ([WebViewRuntime.overlays]), which serves a single-window app.
  */
-val LocalWebViewOverlays = staticCompositionLocalOf<OverlayRegistry?> { null }
+public val LocalWebViewOverlays: ProvidableCompositionLocal<OverlayRegistry?> = staticCompositionLocalOf { null }
 
 /**
  * Gives [content], one window's content, its own overlay registry. A multi-window desktop app wraps each window's
@@ -77,7 +78,7 @@ val LocalWebViewOverlays = staticCompositionLocalOf<OverlayRegistry?> { null }
  * dialogs opened from [content] use it too.
  */
 @Composable
-fun ProvideWebViewOverlays(content: @Composable () -> Unit) {
+public fun ProvideWebViewOverlays(content: @Composable () -> Unit) {
     val registry = remember { OverlayRegistry() }
     CompositionLocalProvider(LocalWebViewOverlays provides registry, content = content)
 }

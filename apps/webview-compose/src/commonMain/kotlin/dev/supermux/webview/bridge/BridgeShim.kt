@@ -42,9 +42,9 @@ package dev.supermux.webview.bridge
  * It captures built-ins at install (`JSON`, `Promise`, `Error`, `TypeError`, timers…), so pages that replace them or
  * patch prototypes later can't break it: its rejections stay real errors. Nothing here names the host app.
  */
-object BridgeShim {
+public object BridgeShim {
     /** The longest console message text kept; longer text is cut and ends with an ellipsis. */
-    const val CONSOLE_TEXT_MAX: Int = 8192
+    public const val CONSOLE_TEXT_MAX: Int = 8192
 
     /**
      * The shim's JavaScript.
@@ -53,7 +53,7 @@ object BridgeShim {
      *   there.
      * @param callTimeoutMillis how long a page-side `call` waits for the host.
      */
-    fun source(
+    public fun source(
         sendExpression: String,
         mainFrameExpression: String = "window === window.top",
         callTimeoutMillis: Long = 30_000,
