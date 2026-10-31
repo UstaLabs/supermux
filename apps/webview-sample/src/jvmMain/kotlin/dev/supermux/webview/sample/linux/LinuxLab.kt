@@ -72,8 +72,8 @@ fun linuxLabMain(out: File) {
 
 /** The runs, then the screenshots; null when all of it happened, else why not. (Windows' lab runs it too.) */
 internal suspend fun runLab(lab: PerfLabState, out: File, window: AwtWindow, show: (Screen) -> Unit): String? {
-    // The first screen of messages live: pages loaded, painted, snapshotted.
-    withTimeoutOrNull(60_000) { while (lab.sample().live == 0) delay(200) } ?: return "no page went live in 60 s"
+    // The first screen of messages live: pages loaded, painted, snapshotted (the images baseline has none to wait for).
+    if (!lab.baseline) withTimeoutOrNull(60_000) { while (lab.sample().live == 0) delay(200) } ?: return "no page went live in 60 s"
     delay(3_000)
     for (run in listOf(LabRun.Scroll, LabRun.Reading)) {
         val before = lab.lastReport

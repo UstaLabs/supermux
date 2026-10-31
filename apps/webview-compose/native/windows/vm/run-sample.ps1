@@ -34,6 +34,7 @@ if ($Mode -eq 'checks') {
     if ($Only) { $runProps += "-Dwebview.sample.only=$Only" }
 } else {
     $runProps += '-Dwebview.sample.engine=webview2'
+    $runProps += "-Dwvc.memoryScript=$root\vm\webview2-memory.ps1"
 }
 $jvmArgs = @('-Xms256m', '-Xmx2g', '-XX:+UseG1GC') + $runProps + @($Props -split ' ' | Where-Object { $_ })
 $cfg = $null

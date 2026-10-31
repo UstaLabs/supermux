@@ -28,10 +28,16 @@ fun webview2PerfLab(): PerfLabState = wpePerfLab()
 /**
  * The sample on WebView2 engines (`-Dwebview.sample.engine=webview2`): by hand without [out]; with it, unattended
  * (winvm.sh lab), as Linux's lab: the perf lab's scroll and reading runs (`perf-lab` lines), a screenshot of each screen
- * into [out] (`SHOT` lines), then `LAB DONE` and exit 0, or `LAB FAIL <why>` and exit 1.
+ * into [out] (`SHOT` lines), then `LAB DONE` and exit 0, or `LAB FAIL <why>` and exit 1. With
+ * `-Dwebview.sample.lab=<measures>` (comma-separated: memory, firstpaint, bridge, press), those measures instead
+ * ([windowsMeasuresMain], Task 31); with `-Dwebview.sample.labImages=true`, the runs on the lab's images (its baseline,
+ * what the web views' runs are judged against).
  */
 fun windowsLabMain(out: File?) {
-    val lab = webview2PerfLab()
+    System.getProperty("webview.sample.lab")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.let { steps ->
+        return windowsMeasuresMain(steps)
+    }
+    val lab = webview2PerfLab().apply { baseline = System.getProperty("webview.sample.labImages") == "true" }
     // The lab's 1100 x 1000 dp, within the screen: the VM's virtio display is smaller.
     val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
     val size = DpSize(minOf(1100, screen.width).dp, minOf(1000, screen.height).dp)
