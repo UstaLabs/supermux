@@ -101,10 +101,10 @@ test("/settings/config says whether the apps may stream", async () => {
   const caps = () => ({ codexAvailable: true, livePartials: true, streaming: true })
   const getAppConfig = () => ({ telegramBotToken: "", claudeOauthToken: "", anthropicApiKey: "", codexApiKey: "", cursorApiKey: "", whatsappGowaBasicAuth: "", whatsappWebhookSecret: "" }) as any
   let token = await setup({ openDictationStream: open, voiceCaps: caps, getAppConfig })
-  let cfg = await (await fetch(`${http()}/settings/config`, { headers: { authorization: `Bearer ${token}` } })).json()
+  let cfg = await (await fetch(`${http()}/settings/config`, { headers: { authorization: `Bearer ${token}` } })).json() as Record<string, unknown>
   expect(cfg.voiceStreaming).toBe(true)
   await channel!.stop()
   token = await setup({ voiceCaps: caps, getAppConfig })
-  cfg = await (await fetch(`${http()}/settings/config`, { headers: { authorization: `Bearer ${token}` } })).json()
+  cfg = await (await fetch(`${http()}/settings/config`, { headers: { authorization: `Bearer ${token}` } })).json() as Record<string, unknown>
   expect(cfg.voiceStreaming).toBe(false)
 })

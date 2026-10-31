@@ -1,20 +1,18 @@
-// Silero VAD and Smart Turn for the dictation stream, run in worker threads
+// Silero VAD and Smart Turn for the dictation stream, run in a worker thread
 // (speech-models-worker.ts) so neither ever blocks the broker's main thread.
 //
-// Two workers, one per model: Silero scores every 32 ms of every live dictation and must not wait
-// behind a ~0.4 s Smart Turn check. They start with the first dictation rather than at boot (the
-// box is short of memory), warm up while the user says their first words, and stop after
-// [IDLE_MS] with no dictation.
+// One worker holds both models (a worker costs ~100 MB for the runtime alone). It starts with the
+// first dictation rather than at boot (the box is short of memory), warms up while the user says
+// their first words, and stops after [IDLE_MS] with no dictation.
 
+import { IS_COMPILED } from "../../../shared/build-info"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("speech-models")
 
-export type ModelRole = "vad" | "turn"
-
 /** Main thread → worker. */
 export type ToWorker =
-  | { op: "init"; role: ModelRole }
+  | { op: "init" }
   | { op: "open"; id: string }
   | { op: "close"; id: string }
   | { op: "push"; id: string; seq: number; pcm: Int16Array }
@@ -52,13 +50,22 @@ export interface WorkerLike {
   terminate(): void
 }
 
-/** Stop the workers after this long with no dictation and no turn check out. */
-export const IDLE_MS = 10 * 60_000
-/** After a worker failed to start, fail fast for this long instead of retrying on every dictation. */
+/** Stop the worker after this long with no dictation and no turn check out. */
+export const IDLE_MS = 15 * 60_000
+/** After the worker failed to start, fail fast for this long instead of retrying on every dictation. */
 const FAILED_BACKOFF_MS = 60_000
 
-const spawnWorker = (): WorkerLike =>
-  new Worker(new URL("./speech-models-worker.ts", import.meta.url).href) as unknown as WorkerLike
+/**
+ * Where the worker's code is. From source, next to this file. In a compiled binary this module is
+ * bundled into the entry (src/cli.ts, at the root of $bunfs), and the worker — compiled as a
+ * second entrypoint by scripts/build-binary.sh — sits at its path under src/, as .js.
+ */
+const workerUrl = (): string =>
+  IS_COMPILED
+    ? new URL("./core/transcription/stream/speech-models-worker.js", import.meta.url).href
+    : new URL("./speech-models-worker.ts", import.meta.url).href
+
+const spawnWorker = (): WorkerLike => new Worker(workerUrl()) as unknown as WorkerLike
 
 interface VadEntry {
   onProbs: (probs: Float32Array) => void
@@ -68,26 +75,21 @@ interface VadEntry {
   waiters: { seq: number; resolve: () => void }[]
 }
 
-/** One model's worker and what is waiting on it. */
+/** The worker and whether it has died. */
 class ModelWorker {
   readonly worker: WorkerLike
   dead: Error | null = null
 
-  constructor(
-    readonly role: ModelRole,
-    spawn: () => WorkerLike,
-    onMessage: (m: FromWorker) => void,
-    private readonly onDeath: (err: Error) => void,
-  ) {
+  constructor(spawn: () => WorkerLike, onMessage: (m: FromWorker) => void, private readonly onDeath: (err: Error) => void) {
     this.worker = spawn()
     this.worker.onmessage = (ev) => {
       const m = ev.data
-      if (m.op === "ready") log.info("speech_model_ready", { role })
-      else if (m.op === "failed") this.die(new Error(`${role} model failed to load: ${m.message}`))
+      if (m.op === "ready") log.info("speech_models_ready", {})
+      else if (m.op === "failed") this.die(new Error(`speech models failed to load: ${m.message}`))
       else onMessage(m)
     }
-    this.worker.onerror = (ev) => this.die(new Error(`${role} worker error: ${ev?.message ?? "unknown"}`))
-    this.worker.postMessage({ op: "init", role })
+    this.worker.onerror = (ev) => this.die(new Error(`speech models worker error: ${ev?.message ?? "unknown"}`))
+    this.worker.postMessage({ op: "init" })
   }
 
   post(msg: ToWorker, transfer?: ArrayBuffer[]): void {
@@ -97,15 +99,14 @@ class ModelWorker {
   die(err: Error): void {
     if (this.dead) return
     this.dead = err
-    log.warn("speech_model_dead", { role: this.role, err: err.message })
+    log.warn("speech_models_dead", { err: err.message })
     try { this.worker.terminate() } catch { /* already gone */ }
     this.onDeath(err)
   }
 }
 
 export class WorkerSpeechModels implements SpeechModels {
-  private vadWorker: ModelWorker | null = null
-  private turnWorker: ModelWorker | null = null
+  private current: ModelWorker | null = null
   private readonly streams = new Map<string, VadEntry>()
   private readonly turns = new Map<number, { resolve: (p: number) => void; reject: (e: Error) => void }>()
   private nextId = 0
@@ -124,7 +125,7 @@ export class WorkerSpeechModels implements SpeechModels {
     const entry: VadEntry = { onProbs, onError, pushed: 0, scored: 0, waiters: [] }
     let worker: ModelWorker | null = null
     try {
-      worker = this.vad()
+      worker = this.worker()
     } catch (e) {
       queueMicrotask(() => onError(e as Error))
     }
@@ -133,9 +134,6 @@ export class WorkerSpeechModels implements SpeechModels {
       worker.post({ op: "open", id })
     }
     this.touch()
-    const settle = () => {
-      for (const w of entry.waiters.splice(0)) w.resolve()
-    }
     return {
       push: (pcm) => {
         if (!worker || worker.dead || !this.streams.has(id) || pcm.length === 0) return
@@ -148,7 +146,7 @@ export class WorkerSpeechModels implements SpeechModels {
       },
       close: () => {
         if (!this.streams.delete(id)) return
-        settle()
+        for (const w of entry.waiters.splice(0)) w.resolve()
         worker?.post({ op: "close", id })
         this.touch()
       },
@@ -158,7 +156,7 @@ export class WorkerSpeechModels implements SpeechModels {
   turn(audio: Float32Array): Promise<number> {
     let worker: ModelWorker
     try {
-      worker = this.turnModel()
+      worker = this.worker()
     } catch (e) {
       return Promise.reject(e)
     }
@@ -170,52 +168,43 @@ export class WorkerSpeechModels implements SpeechModels {
     return p.finally(() => this.touch())
   }
 
-  /** Stop both workers now (tests, shutdown). */
+  /** Stop the worker now (tests, shutdown). */
   dispose(): void {
     if (this.idle) clearTimeout(this.idle)
     this.idle = null
-    for (const w of [this.vadWorker, this.turnWorker]) {
-      if (w && !w.dead) {
-        w.dead = new Error("disposed")
-        try { w.worker.terminate() } catch { /* gone */ }
-      }
+    const w = this.current
+    this.current = null
+    if (w && !w.dead) {
+      w.dead = new Error("disposed")
+      try { w.worker.terminate() } catch { /* gone */ }
     }
-    this.vadWorker = null
-    this.turnWorker = null
   }
 
-  private vad(): ModelWorker {
-    if (this.vadWorker && !this.vadWorker.dead) return this.vadWorker
-    this.checkBackoff()
-    const w = new ModelWorker("vad", this.spawn, (m) => this.onVadMessage(m), (err) => {
-      if (this.vadWorker === w) this.vadWorker = null
-      this.noteFailure(err)
+  private worker(): ModelWorker {
+    if (this.current && !this.current.dead) return this.current
+    if (this.lastFailure && this.now() < this.failedUntil) throw this.lastFailure
+    const w = new ModelWorker(this.spawn, (m) => this.onMessage(m), (err) => {
+      if (this.current === w) this.current = null
+      // A worker that never came up backs off; one that died mid-dictation is retried at once.
+      if (/failed to load|worker error/.test(err.message)) {
+        this.lastFailure = err
+        this.failedUntil = this.now() + FAILED_BACKOFF_MS
+      }
       for (const [id, e] of this.streams) {
         this.streams.delete(id)
         for (const waiter of e.waiters.splice(0)) waiter.resolve()
         e.onError(err)
       }
-    })
-    this.vadWorker = w
-    return w
-  }
-
-  private turnModel(): ModelWorker {
-    if (this.turnWorker && !this.turnWorker.dead) return this.turnWorker
-    this.checkBackoff()
-    const w = new ModelWorker("turn", this.spawn, (m) => this.onTurnMessage(m), (err) => {
-      if (this.turnWorker === w) this.turnWorker = null
-      this.noteFailure(err)
       for (const [id, t] of this.turns) {
         this.turns.delete(id)
         t.reject(err)
       }
     })
-    this.turnWorker = w
+    this.current = w
     return w
   }
 
-  private onVadMessage(m: FromWorker): void {
+  private onMessage(m: FromWorker): void {
     if (m.op === "vad") {
       const e = this.streams.get(m.id)
       if (!e) return
@@ -224,45 +213,30 @@ export class WorkerSpeechModels implements SpeechModels {
       const left: VadEntry["waiters"] = []
       for (const w of e.waiters) (w.seq <= e.scored ? w.resolve() : left.push(w))
       e.waiters = left
-    } else if (m.op === "error" && m.id) {
-      const e = this.streams.get(m.id)
-      if (!e) return
-      this.streams.delete(m.id)
-      for (const w of e.waiters.splice(0)) w.resolve()
-      e.onError(new Error(m.message))
-    }
-  }
-
-  private onTurnMessage(m: FromWorker): void {
-    if (m.op === "turn") {
+    } else if (m.op === "turn") {
       const t = this.turns.get(m.reqId)
       this.turns.delete(m.reqId)
       t?.resolve(m.p)
-    } else if (m.op === "error" && m.reqId !== undefined) {
-      const t = this.turns.get(m.reqId)
-      this.turns.delete(m.reqId)
-      t?.reject(new Error(m.message))
+    } else if (m.op === "error") {
+      if (m.id) {
+        const e = this.streams.get(m.id)
+        if (!e) return
+        this.streams.delete(m.id)
+        for (const w of e.waiters.splice(0)) w.resolve()
+        e.onError(new Error(m.message))
+      } else if (m.reqId !== undefined) {
+        const t = this.turns.get(m.reqId)
+        this.turns.delete(m.reqId)
+        t?.reject(new Error(m.message))
+      }
     }
   }
 
-  private checkBackoff(): void {
-    if (this.lastFailure && this.now() < this.failedUntil) throw this.lastFailure
-  }
-
-  private noteFailure(err: Error): void {
-    // Only a worker that never came up counts: one that died mid-dictation is retried at once.
-    if (/failed to load|worker error/.test(err.message)) {
-      this.lastFailure = err
-      this.failedUntil = this.now() + FAILED_BACKOFF_MS
-    }
-  }
-
-  /** (Re)start the idle countdown when nothing is using the workers; cancel it otherwise. */
+  /** (Re)start the idle countdown when nothing is using the worker; cancel it otherwise. */
   private touch(): void {
     if (this.idle) clearTimeout(this.idle)
     this.idle = null
-    if (this.streams.size > 0 || this.turns.size > 0) return
-    if (!this.vadWorker && !this.turnWorker) return
+    if (this.streams.size > 0 || this.turns.size > 0 || !this.current) return
     this.idle = setTimeout(() => {
       log.info("speech_models_idle_stop", {})
       this.dispose()
@@ -273,7 +247,7 @@ export class WorkerSpeechModels implements SpeechModels {
 
 let shared: WorkerSpeechModels | null = null
 
-/** The broker's one set of speech-model workers. */
+/** The broker's one speech-model worker. */
 export function speechModels(): SpeechModels {
   return (shared ??= new WorkerSpeechModels())
 }

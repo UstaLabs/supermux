@@ -165,16 +165,20 @@ bun scripts/generate-static-manifest.ts
 
 # Compile. --define statically replaces the build-info env reads; IS_COMPILED is
 # auto-detected at runtime (entry path under /$bunfs/).
+# The dictation stream's speech models run in a Worker, which a compiled binary only
+# carries when its file is a second entrypoint; speech-models.ts finds it at its path
+# under src/ (smoke-binary.sh check 6 proves it loads).
+SPEECH_WORKER=src/core/transcription/stream/speech-models-worker.ts
 if [ "$TARGET" = "windows-x64" ]; then
   # The exe's version info says supermux, not Bun (Windows Firewall prompt, Task Manager).
   . "$ROOT/scripts/lib/windows-exe-meta.sh"
-  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts \
+  bun_compile_windows "supermux broker" "$VERSION" --compile --minify src/cli.ts "$SPEECH_WORKER" \
     --target="$BUN_TARGET" \
     --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
     --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \
     --outfile "$OUT"
 else
-  bun build --compile --minify src/cli.ts \
+  bun build --compile --minify src/cli.ts "$SPEECH_WORKER" \
     --target="$BUN_TARGET" \
     --define "process.env.SUPERMUX_BUILD_VERSION=\"$VERSION\"" \
     --define "process.env.SUPERMUX_BUILD_COMMIT=\"$COMMIT\"" \

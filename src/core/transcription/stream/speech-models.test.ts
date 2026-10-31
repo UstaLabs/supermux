@@ -45,13 +45,14 @@ describe("WorkerSpeechModels (fake workers)", () => {
     let vadErr: Error | null = null
     models.openVad(() => {}, (e) => { vadErr = e })
     const turn = models.turn(new Float32Array(16_000))
+    // One worker holds both models.
+    expect(workers.length).toBe(1)
     workers[0]!.reply({ op: "failed", message: "no model" })
-    workers[1]!.reply({ op: "failed", message: "no model" })
     expect(vadErr).not.toBeNull()
     await expect(turn).rejects.toThrow(/failed to load/)
     // Within the backoff: no new worker, an immediate failure instead.
     await expect(models.turn(new Float32Array(16_000))).rejects.toThrow(/failed to load/)
-    expect(workers.length).toBe(2)
+    expect(workers.length).toBe(1)
     models.dispose()
   })
 

@@ -175,6 +175,15 @@ describe("DictationStream", () => {
     expect(h.events).toEqual([{ type: "text", text: "w1 w101" }, { type: "final", text: "w1 w101" }, { type: "done" }])
   })
 
+  test("Stop does not wait for Smart Turn", async () => {
+    const h = harness({ turn: () => new Promise<number>(() => {}) })
+    h.stream.pushAudio(bytes(word(1), word(101), quiet(400)))
+    const t0 = performance.now()
+    await h.stream.stop()
+    expect(performance.now() - t0).toBeLessThan(500)
+    expect(h.events.slice(-2)).toEqual([{ type: "final", text: "w1 w101" }, { type: "done" }])
+  })
+
   test("the user's own edit wins, and dictation carries on after it", async () => {
     const h = harness()
     await h.push(word(1), word(101), quiet(400))

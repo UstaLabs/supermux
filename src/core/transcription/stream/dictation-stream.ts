@@ -153,6 +153,9 @@ export class DictationStream {
   private editsOut = 0
 
   private state: "live" | "stopping" | "done" = "live"
+  /** Resolves when Stop begins: a pass stops waiting for Smart Turn then (Stop keeps every word anyway). */
+  private stopping!: () => void
+  private readonly stopSignal = new Promise<void>((r) => { this.stopping = r })
   private passes = 0
 
   constructor(private readonly deps: DictationStreamDeps) {
@@ -210,6 +213,7 @@ export class DictationStream {
   async stop(): Promise<void> {
     if (this.state !== "live") return
     this.state = "stopping"
+    this.stopping()
     const t0 = this.now()
     await this.vad.flush()
     await this.whenIdle()
@@ -346,7 +350,8 @@ export class DictationStream {
     let p: number | null = null
     let locked = false
     if (verdict) {
-      p = await verdict
+      // Not past Stop, though: the verdict only places the next pass, and there is none after Stop.
+      p = await Promise.race([verdict, this.stopSignal.then(() => null)])
       if (this.isDone() || gen !== this.generation) return
       const long = (end - start) / PER_MS >= this.t.maxSentenceMs
       // An unknown verdict locks too: a short pass is worth more than a perfect boundary.

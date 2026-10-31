@@ -1,7 +1,9 @@
 // The dictation stream's speech models, in a worker thread so their inference never runs on the
 // broker's main thread: a Smart Turn check takes ~0.4 s on the WebAssembly runtime, and Silero
-// scores every 32 ms of every live dictation. [SpeechModels] (speech-models.ts) starts one worker
-// per role, so a turn check never holds up the speech frames queued behind it.
+// scores every 32 ms of every live dictation. Both share ONE worker: each worker costs ~100 MB
+// for the runtime alone (measured 2026-10-31: 141 MB with Silero, +114 MB for a second one with
+// Smart Turn), and frames that wait behind a turn check (which only runs right after a pause)
+// catch up in a few milliseconds.
 //
 // The runtime is onnxruntime-web's WebAssembly build, not onnxruntime-node: it works inside a
 // `bun build --compile` binary (the `/wasm` entry inlines its glue and the .wasm is embedded as a
@@ -16,7 +18,7 @@ import * as ort from "onnxruntime-web/wasm"
 import wasmPath from "onnxruntime-web/ort-wasm-simd-threaded.wasm" with { type: "file" }
 import sileroPath from "./models/silero_vad_v5.onnx" with { type: "file" }
 import smartTurnPath from "./models/smart-turn-v3.2-cpu.onnx" with { type: "file" }
-import type { ToWorker, FromWorker, ModelRole } from "./speech-models"
+import type { ToWorker, FromWorker } from "./speech-models"
 
 declare var self: Worker
 
@@ -28,8 +30,8 @@ ort.env.logLevel = "error"
 ort.env.wasm.numThreads = 1
 ort.env.wasm.wasmBinary = readFileSync(wasmPath)
 
-let session: ort.InferenceSession | null = null
-let role: ModelRole | null = null
+let silero: ort.InferenceSession | null = null
+let smartTurn: ort.InferenceSession | null = null
 
 /** Each dictation's detector state: Silero is recurrent, so its state carries from frame to frame. */
 interface VadState {
@@ -42,13 +44,13 @@ const streams = new Map<string, VadState>()
 
 const post = (msg: FromWorker, transfer?: ArrayBuffer[]) => self.postMessage(msg, transfer ?? [])
 
-async function load(r: ModelRole): Promise<void> {
-  role = r
-  session = await ort.InferenceSession.create(readFileSync(r === "vad" ? sileroPath : smartTurnPath))
+async function load(): Promise<void> {
+  silero = await ort.InferenceSession.create(readFileSync(sileroPath))
+  smartTurn = await ort.InferenceSession.create(readFileSync(smartTurnPath))
   // The first inference is several times slower than the rest (~1.4 s vs ~0.4 s for Smart Turn
   // on the GMKtec box): pay it here, not at the user's first pause.
-  if (r === "vad") await vadFrames({ state: new Float32Array(256), context: new Float32Array(CONTEXT), carry: new Float32Array(0) }, new Float32Array(FRAME))
-  else await turnProbability(new Float32Array(16_000))
+  await vadFrames({ state: new Float32Array(256), context: new Float32Array(CONTEXT), carry: new Float32Array(0) }, new Float32Array(FRAME))
+  await turnProbability(new Float32Array(16_000))
 }
 
 /** Score every whole frame in [samples] (appended to the stream's carry), in order. */
@@ -64,7 +66,7 @@ async function vadFrames(s: VadState, samples: Float32Array): Promise<Float32Arr
     const input = new Float32Array(CONTEXT + FRAME)
     input.set(s.context, 0)
     input.set(frame, CONTEXT)
-    const out = await session!.run({
+    const out = await silero!.run({
       input: new ort.Tensor("float32", input, [1, CONTEXT + FRAME]),
       state: new ort.Tensor("float32", s.state, [2, 1, 128]),
       sr,
@@ -80,8 +82,8 @@ async function vadFrames(s: VadState, samples: Float32Array): Promise<Float32Arr
 async function turnProbability(audio: Float32Array): Promise<number> {
   const features = extractFeatures(audio)
   const frames = features.length / 80
-  const out = await session!.run({ input_features: new ort.Tensor("float32", features, [1, 80, frames]) })
-  const first = out[session!.outputNames[0]!]!
+  const out = await smartTurn!.run({ input_features: new ort.Tensor("float32", features, [1, 80, frames]) })
+  const first = out[smartTurn!.outputNames[0]!]!
   return (first.data as Float32Array)[0]!
 }
 
@@ -89,7 +91,7 @@ async function handle(msg: ToWorker): Promise<void> {
   switch (msg.op) {
     case "init":
       try {
-        await load(msg.role)
+        await load()
         post({ op: "ready" })
       } catch (e) {
         post({ op: "failed", message: e instanceof Error ? e.message : String(e) })
@@ -103,7 +105,7 @@ async function handle(msg: ToWorker): Promise<void> {
       return
     case "push": {
       const s = streams.get(msg.id)
-      if (!s || role !== "vad") return
+      if (!s) return
       const f = new Float32Array(msg.pcm.length)
       for (let i = 0; i < f.length; i++) f[i] = msg.pcm[i]! / 32768
       try {
