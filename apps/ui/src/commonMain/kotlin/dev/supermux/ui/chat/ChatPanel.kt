@@ -1084,6 +1084,13 @@ fun ChatPanel(
                                 .widthIn(max = CONTENT_MAX_WIDTH)
                                 .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
                         ) {
+                            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
+                                CouncilStrips(
+                                    cards = remember(timelineItems) { timelineItems.filterIsInstance<TimelineItem.CouncilCard>() },
+                                    onOpenFile = onOpenFile,
+                                    endCouncil = actions.endCouncil,
+                                )
+                            }
                             RunningStrip(
                                 subagents = subagents,
                                 bgTasks = state.bgTasks,

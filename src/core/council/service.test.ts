@@ -310,6 +310,17 @@ test("council_remove: stops the members by letter, no notice; unknown or gone le
   await expect(t.council.remove(t.a.id, t.c.id, ["A"])).rejects.toThrow("only the council's caller can remove members")
 })
 
+test("a removed member leaves the card, its reports with it", async () => {
+  const t = setup()
+  t.council.report(t.a.id, "A says")
+  t.council.report(t.b.id, "B says")
+  await t.council.remove(t.caller.id, t.c.id, ["B"])
+  const view = t.changes.at(-1)!.view
+  expect(view.members.map((m) => m.letter)).toEqual(["A"])
+  expect(view.rounds[0]!.reports.map((r) => r.text)).toEqual(["A says"])
+  expect(t.council.forCaller(t.caller.id)[0]!.members.map((m) => m.letter)).toEqual(["A"])
+})
+
 test("the last member gone ends the council; the caller hears it unless it removed them itself", async () => {
   const t = setup()
   t.registry.unregister(t.a.id)

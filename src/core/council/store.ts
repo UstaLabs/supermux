@@ -21,7 +21,7 @@ export type CouncilRecord = {
   callId?: string
   createdAt: string
 }
-export type CouncilMember = { councilId: string; sessionId: string; letter: string }
+export type CouncilMember = { councilId: string; sessionId: string; letter: string; removed?: boolean }
 export type CouncilRound = { round: number; focus?: string; startedAt: string; completedAt?: string }
 export type CouncilReport = { id: string; councilId: string; round: number; memberSessionId: string; letter: string; seq: number; text: string; at: string }
 
@@ -86,9 +86,14 @@ export class CouncilStore {
     this.db.run("INSERT INTO council_members (council_id, session_id, letter) VALUES (?, ?, ?)", [councilId, sessionId, letter])
   }
 
+  /** council_remove: the member leaves the council's card. Its row stays (its letter is never reused). */
+  markRemoved(councilId: string, sessionId: string, now: Date = new Date()): void {
+    this.db.run("UPDATE council_members SET removed_at = ? WHERE council_id = ? AND session_id = ? AND removed_at IS NULL", [now.toISOString(), councilId, sessionId])
+  }
+
   members(councilId: string): CouncilMember[] {
-    return (this.db.query("SELECT council_id, session_id, letter FROM council_members WHERE council_id = ? ORDER BY length(letter), letter").all(councilId) as Array<{ council_id: string; session_id: string; letter: string }>)
-      .map((r) => ({ councilId: r.council_id, sessionId: r.session_id, letter: r.letter }))
+    return (this.db.query("SELECT council_id, session_id, letter, removed_at FROM council_members WHERE council_id = ? ORDER BY length(letter), letter").all(councilId) as Array<{ council_id: string; session_id: string; letter: string; removed_at: string | null }>)
+      .map((r) => ({ councilId: r.council_id, sessionId: r.session_id, letter: r.letter, ...(r.removed_at ? { removed: true } : {}) }))
   }
 
   membership(sessionId: string): CouncilMember | undefined {

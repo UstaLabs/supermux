@@ -137,7 +137,10 @@ export class Council {
       if (!this.alive(c, m.sessionId)) throw new Error(`${c.name} · ${letter} is not running`)
       return m
     })
+    // Marked first: the kill's update already shows the council without them.
+    for (const m of picked) this.deps.store.markRemoved(c.id, m.sessionId)
     for (const m of picked) if (this.deps.isLive(m.sessionId)) await this.deps.kill(m.sessionId)
+    this.emit(this.deps.store.get(c.id) ?? c)
     return { removed: picked.map((m) => m.letter) }
   }
 
@@ -309,6 +312,9 @@ export class Council {
     const statuses = this.deps.store.statuses(c.id, c.currentRound)
     const reports = this.deps.store.reports(c.id)
     const rounds = this.deps.store.rounds(c.id)
+    const all = this.deps.store.members(c.id)
+    const members = all.filter((m) => !m.removed)
+    const removed = new Set(all.filter((m) => m.removed).map((m) => m.sessionId))
     return {
       id: c.id,
       name: c.name,
@@ -321,7 +327,8 @@ export class Council {
       ...(c.endedAt ? { endedAt: c.endedAt } : {}),
       ...(c.callId ? { callId: c.callId } : {}),
       createdAt: c.createdAt,
-      members: this.deps.store.members(c.id).map((m) => {
+      // A removed member leaves the card, with its reports.
+      members: members.map((m) => {
         const s = this.deps.session(m.sessionId)
         // No session row yet: the member is still starting.
         const status = statuses.get(m.sessionId) ?? (!s || this.deps.isLive(m.sessionId) ? "working" : "killed")
@@ -337,7 +344,7 @@ export class Council {
       }),
       rounds: rounds.map((r) => ({
         ...r,
-        reports: reports.filter((x) => x.round === r.round).map((x) => ({ id: x.id, letter: x.letter, seq: x.seq, text: x.text, at: x.at })),
+        reports: reports.filter((x) => x.round === r.round && !removed.has(x.memberSessionId)).map((x) => ({ id: x.id, letter: x.letter, seq: x.seq, text: x.text, at: x.at })),
       })),
     }
   }
