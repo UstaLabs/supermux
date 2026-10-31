@@ -51,7 +51,7 @@ export interface WorkerLike {
 }
 
 /** Stop the worker after this long with no dictation and no turn check out. */
-export const IDLE_MS = 15 * 60_000
+export const IDLE_MS = 30 * 60_000
 /** After the worker failed to start, fail fast for this long instead of retrying on every dictation. */
 const FAILED_BACKOFF_MS = 60_000
 
