@@ -38,25 +38,92 @@ public enum class UnavailableReason {
     CreationFailed,
 }
 
+/**
+ * Why the main frame failed to load ([WebViewState.error]). Plain classes, not data classes, so they can grow without
+ * breaking code built against them: a new property comes as a new constructor parameter at the end, with a default, and
+ * the signature before it stays, hidden. Compare them with `==`.
+ */
 public sealed interface WebError {
     public val url: String?
 
-    public data class Network(override val url: String?, val description: String) : WebError
-    public data class Certificate(override val url: String?, val description: String) : WebError
-    public data class Http(override val url: String?, val status: Int) : WebError
-    public data class BlockedByPolicy(override val url: String?) : WebError
-    public data class UnsupportedOnPlatform(override val url: String?) : WebError
+    /** The network failed: no connection, a name that doesn't resolve, a reset. */
+    public class Network(override val url: String?, public val description: String) : WebError {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Network && url == other.url && description == other.description
+
+        override fun hashCode(): Int = 31 * (url?.hashCode() ?: 0) + description.hashCode()
+
+        override fun toString(): String = "Network(url=$url, description=$description)"
+    }
+
+    /** The server's certificate was refused. Engines never bypass it. */
+    public class Certificate(override val url: String?, public val description: String) : WebError {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Certificate && url == other.url && description == other.description
+
+        override fun hashCode(): Int = 31 * (url?.hashCode() ?: 0) + description.hashCode()
+
+        override fun toString(): String = "Certificate(url=$url, description=$description)"
+    }
+
+    /** The server answered with an error [status]. */
+    public class Http(override val url: String?, public val status: Int) : WebError {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Http && url == other.url && status == other.status
+
+        override fun hashCode(): Int = 31 * (url?.hashCode() ?: 0) + status
+
+        override fun toString(): String = "Http(url=$url, status=$status)"
+    }
+
+    /** The navigation policy blocked the load. */
+    public class BlockedByPolicy(override val url: String?) : WebError {
+        override fun equals(other: Any?): Boolean = this === other || other is BlockedByPolicy && url == other.url
+
+        override fun hashCode(): Int = url?.hashCode() ?: 0
+
+        override fun toString(): String = "BlockedByPolicy(url=$url)"
+    }
+
+    /** This platform's engine can't show it. */
+    public class UnsupportedOnPlatform(override val url: String?) : WebError {
+        override fun equals(other: Any?): Boolean = this === other || other is UnsupportedOnPlatform && url == other.url
+
+        override fun hashCode(): Int = url?.hashCode() ?: 0
+
+        override fun toString(): String = "UnsupportedOnPlatform(url=$url)"
+    }
 }
 
 public enum class ConsoleLevel { Debug, Log, Info, Warn, Error }
 
-public data class ConsoleMessage(
-    val level: ConsoleLevel,
-    val message: String,
-    val source: String? = null,
-    val line: Int? = null,
-    val uncaught: Boolean = false,
-)
+/**
+ * A line of the page's console output, or an uncaught error ([uncaught]), from [WebViewState.console]. A plain class, not
+ * a data class, so it can grow as the requests can; compare with `==`.
+ */
+public class ConsoleMessage(
+    public val level: ConsoleLevel,
+    public val message: String,
+    public val source: String? = null,
+    public val line: Int? = null,
+    public val uncaught: Boolean = false,
+) {
+    override fun equals(other: Any?): Boolean = this === other || other is ConsoleMessage &&
+        level == other.level && message == other.message && source == other.source && line == other.line &&
+        uncaught == other.uncaught
+
+    override fun hashCode(): Int {
+        var result = level.hashCode()
+        result = 31 * result + message.hashCode()
+        result = 31 * result + (source?.hashCode() ?: 0)
+        result = 31 * result + (line ?: 0)
+        result = 31 * result + uncaught.hashCode()
+        return result
+    }
+
+    override fun toString(): String =
+        "ConsoleMessage(level=$level, message=$message, source=$source, line=$line, uncaught=$uncaught)"
+}
 
 /** When a logical web view leases a live engine (spec §4). */
 @Immutable

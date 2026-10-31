@@ -35,7 +35,7 @@ class WebViewRuntimeTest {
     private fun TestScope.runtime(
         config: RuntimeConfig,
         clock: () -> Long = { testScheduler.currentTime },
-    ) = WebViewRuntime(factory, config, scope = backgroundScope, clock = clock)
+    ) = WebViewRuntime(config.copy(factory = factory, scope = backgroundScope, clock = clock))
 
     private suspend fun WebViewRuntime.lease(holder: LeaseHolder = Holder()): AcquireResult = pool.acquire(holder, engineConfig)
 

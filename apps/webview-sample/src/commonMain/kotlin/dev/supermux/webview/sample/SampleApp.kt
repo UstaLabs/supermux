@@ -134,7 +134,7 @@ fun SampleTheme(content: @Composable () -> Unit) {
  */
 fun samplePerfLab(): PerfLabState {
     val engines = EngineCounter(fakeEngines())
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    val runtime = WebViewRuntime(RuntimeConfig.platformDefault().copy(factory = engines))
     runtime.onError = { println("webview-sample: the runtime caught $it") }
     return PerfLabState(engines, runtime)
 }
@@ -145,7 +145,7 @@ fun samplePerfLab(): PerfLabState {
  */
 fun platformPerfLab(): PerfLabState {
     val engines = EngineCounter(platformWebEngineFactory())
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    val runtime = WebViewRuntime(RuntimeConfig.platformDefault().copy(factory = engines))
     runtime.onError = { println("webview-sample: the runtime caught $it") }
     return PerfLabState(engines, runtime)
 }

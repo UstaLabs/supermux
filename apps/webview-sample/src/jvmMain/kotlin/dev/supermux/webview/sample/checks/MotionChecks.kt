@@ -114,7 +114,7 @@ object MotionChecks {
 
     private class Stage {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val runtime = WebViewRuntime(config = RuntimeConfig(maxLive = 1, maxIdle = 0, snapshotCacheBytes = 16L shl 20), scope = scope)
+        val runtime = WebViewRuntime(RuntimeConfig(maxLive = 1, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
         val state = WebViewState(PAGE)
         val scroll = ScrollState(0)
         var pane by mutableStateOf(0.dp)

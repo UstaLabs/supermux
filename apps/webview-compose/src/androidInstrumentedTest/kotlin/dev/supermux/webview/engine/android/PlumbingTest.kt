@@ -82,9 +82,12 @@ class PlumbingTest {
         instrumentation.runOnMainSync {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
             val runtime = WebViewRuntime(
-                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-                config = RuntimeConfig(maxLive = 4, snapshotCacheBytes = 1L shl 20),
-                scope = scope,
+                RuntimeConfig(
+                    maxLive = 4,
+                    snapshotCacheBytes = 1L shl 20,
+                    factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                    scope = scope,
+                ),
             )
             MemoryHook.attach(runtime, app)
             MemoryHook.attach(runtime, app)
@@ -112,9 +115,12 @@ class PlumbingTest {
         lateinit var runtime: WebViewRuntime
         instrumentation.runOnMainSync {
             runtime = WebViewRuntime(
-                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-                config = RuntimeConfig(maxLive = 4, snapshotCacheBytes = 1L shl 20),
-                scope = scope,
+                RuntimeConfig(
+                    maxLive = 4,
+                    snapshotCacheBytes = 1L shl 20,
+                    factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                    scope = scope,
+                ),
             )
             MemoryHook.attach(runtime, app)
             app.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)

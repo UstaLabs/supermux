@@ -9,9 +9,19 @@ import androidx.compose.runtime.staticCompositionLocalOf
  * @property inScrollingList the view is an embed in a scrolling list, where a drag that starts on the page should still
  *   scroll the list: one that sizes itself to its page ([dev.supermux.webview.WebSizing.WrapContentHeight]), or one a
  *   scrolling parent measures (a lazy list's item of a fixed height). A pane gives its page every gesture.
+ *
+ * A plain class, not a data class, so it can grow without breaking code built against it: a new hint comes as a new
+ * constructor parameter at the end, with a default, and the signature before it stays, hidden. Compare with `==`.
  */
 @Immutable
-public data class WebSurfaceHints(val inScrollingList: Boolean = false)
+public class WebSurfaceHints(public val inScrollingList: Boolean = false) {
+    override fun equals(other: Any?): Boolean =
+        this === other || other is WebSurfaceHints && inScrollingList == other.inScrollingList
+
+    override fun hashCode(): Int = inScrollingList.hashCode()
+
+    override fun toString(): String = "WebSurfaceHints(inScrollingList=$inScrollingList)"
+}
 
 /** What a view's surface hints are when nothing provides others. */
 internal val DefaultWebSurfaceHints = WebSurfaceHints()

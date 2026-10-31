@@ -487,8 +487,7 @@ object IosChecks {
     private class ViewStage(content: WebContent) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
-            config = RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 8L shl 20, hiddenReleaseMillis = 0),
-            scope = scope,
+            RuntimeConfig(maxLive = 2, maxIdle = 1, snapshotCacheBytes = 8L shl 20, hiddenReleaseMillis = 0, scope = scope),
         )
         val state = WebViewState(content)
         var shown by mutableStateOf(true)

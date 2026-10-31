@@ -79,10 +79,7 @@ hostBridge.handle('state', function () {
     /** What a check's scene shows, and where its parts are in the window (px). */
     private class Stage(withEmbed: Boolean = false) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val runtime = WebViewRuntime(
-            config = RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20),
-            scope = scope,
-        )
+        val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
         val state = WebViewState(INPUT_PAGE)
         val embedState = if (withEmbed) WebViewState(WebContent.Html("<!doctype html><title>embed</title><p>An embed</p>")) else null
         var page: Rect? = null

@@ -28,7 +28,7 @@ fun main() {
     val caught = ArrayList<String>()
     // The platform's engines, counted as the desktop lab counts its fakes.
     val engines = EngineCounter(WebViewRuntime.Default.factory)
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    val runtime = WebViewRuntime(RuntimeConfig.platformDefault().copy(factory = engines))
     runtime.onError = { caught += it.toString() }
     val lab = PerfLabState(engines, runtime)
     val screen = if (queryParam("screen") == "overlays") Screen.Overlays else Screen.PerfLab

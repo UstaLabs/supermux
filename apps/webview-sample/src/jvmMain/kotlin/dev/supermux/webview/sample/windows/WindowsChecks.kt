@@ -893,7 +893,7 @@ object WindowsChecks {
     /** A check's own runtime (no spares) and one `WebView` of [content]; [close] lets them all go. */
     private class ViewStage(content: WebContent, private val settings: WebSettings = WebSettings()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val runtime = WebViewRuntime(config = RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 8L shl 20), scope = scope)
+        val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 8L shl 20, scope = scope))
         val state = WebViewState(content)
 
         @Composable

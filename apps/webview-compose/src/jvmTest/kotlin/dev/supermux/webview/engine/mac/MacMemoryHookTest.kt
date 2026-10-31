@@ -22,9 +22,13 @@ class MacMemoryHookTest {
         var started = 0
         val hooks = MemoryHooks(load = { null }, start = { started++ }, register = { MacPages.onMemoryPressure = it })
         val runtime = WebViewRuntime(
-            factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-            config = RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 1L shl 20),
-            scope = backgroundScope,
+            RuntimeConfig(
+                maxLive = 4,
+                maxIdle = 0,
+                snapshotCacheBytes = 1L shl 20,
+                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                scope = backgroundScope,
+            ),
         )
         hooks.attach(runtime)
         hooks.attach(runtime)
@@ -42,9 +46,13 @@ class MacMemoryHookTest {
     @Test fun withoutTheGlueNothingIsHooked() = runTest {
         val hooks = MemoryHooks(load = { "no glue here" }, start = { error("never started") }, register = { MacPages.onMemoryPressure = it })
         val runtime = WebViewRuntime(
-            factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-            config = RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 1L shl 20),
-            scope = backgroundScope,
+            RuntimeConfig(
+                maxLive = 4,
+                maxIdle = 0,
+                snapshotCacheBytes = 1L shl 20,
+                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                scope = backgroundScope,
+            ),
         )
         hooks.attach(runtime)
         assertEquals(0, hooks.observers(runtime))

@@ -17,7 +17,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Pool and cache sizes (spec §4). [platformDefault] gives this platform's; the perf lab measures them.
+ * What a [WebViewRuntime] is made with: the pool's budget and the caches' sizes (spec §4), and the engines, the scope
+ * and the clock it runs with. [platformDefault] gives this platform's sizes, and leaves the rest to the runtime; the
+ * perf lab measures them. Build one with named arguments and change one with [copy]:
+ * `RuntimeConfig.platformDefault().copy(maxLive = 6)`. Compare with `==`.
+ *
+ * A plain class, not a data class, so it can grow without breaking code built against it: a new option comes as a new
+ * parameter at the end of the constructor and of [copy], each with a default, and the signatures before it stay,
+ * hidden. There are no `componentN` functions: positions mean nothing. The runtime takes this one object, so a new option
+ * never changes its constructor.
+ *
  * @property maxLive how many engines may be live at once: at least 1.
  * @property maxIdle how many spare engines, fresh or reset, are kept for reuse: 3 by default, as on every platform but
  *   iOS. With fewer spares than a screenful of views, a page whose views give their engines back before the next page
@@ -30,14 +39,25 @@ import kotlinx.coroutines.launch
  *   was parked, if no view adopts it meanwhile. A hidden view ranks below every visible one, and a parked page below
  *   that, so a view that needs its slot takes it at once, and memory pressure reclaims those pages first.
  * @property pageMemoryEntries how many pages the page memory remembers.
+ * @property factory creates the runtime's engines: null, the default, means this platform's
+ *   ([platformWebEngineFactory]).
+ * @property scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows, and where web
+ *   views save their pages and talk to them. Cancelling it stops that work. Null, the default, means a scope of the
+ *   runtime's own on `Dispatchers.Main`; on desktop the library brings kotlinx-coroutines-swing for it.
+ * @property clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing,
+ *   how long pages have been parked among it. Null, the default, means the platform's monotonic clock; a test passes its
+ *   own (`{ mainClock.currentTime }`).
  */
-public data class RuntimeConfig(
-    val maxLive: Int,
-    val maxIdle: Int = 3,
-    val snapshotCacheBytes: Long,
-    val decodedSnapshotBytes: Long = 24L shl 20,
-    val hiddenReleaseMillis: Long = 600_000,
-    val pageMemoryEntries: Int = 512,
+public class RuntimeConfig(
+    public val maxLive: Int,
+    public val maxIdle: Int = 3,
+    public val snapshotCacheBytes: Long,
+    public val decodedSnapshotBytes: Long = 24L shl 20,
+    public val hiddenReleaseMillis: Long = 600_000,
+    public val pageMemoryEntries: Int = 512,
+    public val factory: WebEngineFactory? = null,
+    public val scope: CoroutineScope? = null,
+    public val clock: (() -> Long)? = null,
 ) {
     init {
         require(maxLive >= 1) { "maxLive must be at least 1, not $maxLive" }
@@ -48,6 +68,58 @@ public data class RuntimeConfig(
             "Sizes and times can't be negative: $this"
         }
     }
+
+    /** This config, with the options named changed. */
+    public fun copy(
+        maxLive: Int = this.maxLive,
+        maxIdle: Int = this.maxIdle,
+        snapshotCacheBytes: Long = this.snapshotCacheBytes,
+        decodedSnapshotBytes: Long = this.decodedSnapshotBytes,
+        hiddenReleaseMillis: Long = this.hiddenReleaseMillis,
+        pageMemoryEntries: Int = this.pageMemoryEntries,
+        factory: WebEngineFactory? = this.factory,
+        scope: CoroutineScope? = this.scope,
+        clock: (() -> Long)? = this.clock,
+    ): RuntimeConfig = RuntimeConfig(
+        maxLive = maxLive,
+        maxIdle = maxIdle,
+        snapshotCacheBytes = snapshotCacheBytes,
+        decodedSnapshotBytes = decodedSnapshotBytes,
+        hiddenReleaseMillis = hiddenReleaseMillis,
+        pageMemoryEntries = pageMemoryEntries,
+        factory = factory,
+        scope = scope,
+        clock = clock,
+    )
+
+    override fun equals(other: Any?): Boolean = this === other || other is RuntimeConfig &&
+        maxLive == other.maxLive &&
+        maxIdle == other.maxIdle &&
+        snapshotCacheBytes == other.snapshotCacheBytes &&
+        decodedSnapshotBytes == other.decodedSnapshotBytes &&
+        hiddenReleaseMillis == other.hiddenReleaseMillis &&
+        pageMemoryEntries == other.pageMemoryEntries &&
+        factory == other.factory &&
+        scope == other.scope &&
+        clock == other.clock
+
+    override fun hashCode(): Int {
+        var result = maxLive
+        result = 31 * result + maxIdle
+        result = 31 * result + snapshotCacheBytes.hashCode()
+        result = 31 * result + decodedSnapshotBytes.hashCode()
+        result = 31 * result + hiddenReleaseMillis.hashCode()
+        result = 31 * result + pageMemoryEntries
+        result = 31 * result + (factory?.hashCode() ?: 0)
+        result = 31 * result + (scope?.hashCode() ?: 0)
+        result = 31 * result + (clock?.hashCode() ?: 0)
+        return result
+    }
+
+    override fun toString(): String =
+        "RuntimeConfig(maxLive=$maxLive, maxIdle=$maxIdle, snapshotCacheBytes=$snapshotCacheBytes, " +
+            "decodedSnapshotBytes=$decodedSnapshotBytes, hiddenReleaseMillis=$hiddenReleaseMillis, " +
+            "pageMemoryEntries=$pageMemoryEntries, factory=$factory, scope=$scope, clock=$clock)"
 
     public companion object {
         /**
@@ -69,20 +141,20 @@ public data class RuntimeConfig(
  *
  * Main thread only: the thread of [scope]'s dispatcher.
  *
- * @param factory creates this platform's engines.
- * @param config the pool's budget, the cache sizes, and how long hidden views and parked pages keep their engines.
- * @param scope where the pool's own work runs: evictions, resets, creations and memory-pressure windows, and where web
- *   views save their pages and talk to them. Cancelling it stops that work. The default runs on `Dispatchers.Main`;
- *   on desktop the library brings kotlinx-coroutines-swing for it.
- * @param clock milliseconds on a monotonic clock, for how long views have been hidden or still, and the pool's timing,
- *   how long pages have been parked among it.
+ * @param config what the runtime is made with: the pool's budget, the cache sizes, how long hidden views and parked
+ *   pages keep their engines, and the engines, the scope and the clock it runs with, each the platform's unless the
+ *   config names one. One object, so an option added to it later changes no constructor here.
  */
-public class WebViewRuntime(
-    public val factory: WebEngineFactory = platformEngineFactory(),
-    public val config: RuntimeConfig = RuntimeConfig.platformDefault(),
-    public val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
-    public val clock: () -> Long = monotonicClock(),
-) {
+public class WebViewRuntime(public val config: RuntimeConfig = RuntimeConfig.platformDefault()) {
+    /** Creates the runtime's engines: [RuntimeConfig.factory], or this platform's ([platformWebEngineFactory]). */
+    public val factory: WebEngineFactory = config.factory ?: platformEngineFactory()
+
+    /** Where the runtime's work runs: [RuntimeConfig.scope], or a scope of its own on `Dispatchers.Main`. */
+    public val scope: CoroutineScope = config.scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** The runtime's monotonic clock, in milliseconds: [RuntimeConfig.clock], or the platform's. */
+    public val clock: () -> Long = config.clock ?: monotonicClock()
+
     public val pool: EnginePool = EnginePool(
         factory,
         config.maxLive,

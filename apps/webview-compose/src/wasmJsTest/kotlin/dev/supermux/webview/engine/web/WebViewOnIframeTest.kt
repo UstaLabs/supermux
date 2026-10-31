@@ -105,9 +105,14 @@ private class CountingFactory : WebEngineFactory {
 
 class WebViewOnIframeTest {
     private fun runtime(factory: WebEngineFactory = IframeEngineFactory, maxLive: Int = 4) = WebViewRuntime(
-        factory = factory,
-        config = RuntimeConfig(maxLive = maxLive, maxIdle = 2, snapshotCacheBytes = 0, hiddenReleaseMillis = 300),
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+        RuntimeConfig(
+            maxLive = maxLive,
+            maxIdle = 2,
+            snapshotCacheBytes = 0,
+            hiddenReleaseMillis = 300,
+            factory = factory,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+        ),
     )
 
     /**
@@ -367,9 +372,14 @@ class WebViewOnIframeTest {
     @Test fun aViewBackOnScreenWithNoSlotShowsItsPlaceholderAndLoadsWhenOneFrees() = runTest(timeout = 3.minutes) {
         val factory = TrackingFactory()
         val rt = WebViewRuntime(
-            factory = factory,
-            config = RuntimeConfig(maxLive = 8, maxIdle = 2, snapshotCacheBytes = 0, hiddenReleaseMillis = 600_000),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+            RuntimeConfig(
+                maxLive = 8,
+                maxIdle = 2,
+                snapshotCacheBytes = 0,
+                hiddenReleaseMillis = 600_000,
+                factory = factory,
+                scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+            ),
         )
         try {
             viewsBackOnScreenWithNoSlot(rt)

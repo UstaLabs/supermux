@@ -1,6 +1,23 @@
 package dev.supermux.webview
 
-public data class NavigationRequest(val url: String, val isMainFrame: Boolean, val isUserGesture: Boolean)
+// The requests below are plain classes, not data classes, so they can grow without breaking code built against them: a
+// new property comes as a new constructor parameter at the end, with a default, and the signature before it stays,
+// hidden. Compare them with `==`; there are no `componentN` functions.
+
+/** A navigation the page started, for [WebClient.onNavigation]. */
+public class NavigationRequest(
+    public val url: String,
+    public val isMainFrame: Boolean,
+    public val isUserGesture: Boolean,
+) {
+    override fun equals(other: Any?): Boolean = this === other || other is NavigationRequest &&
+        url == other.url && isMainFrame == other.isMainFrame && isUserGesture == other.isUserGesture
+
+    override fun hashCode(): Int = 31 * (31 * url.hashCode() + isMainFrame.hashCode()) + isUserGesture.hashCode()
+
+    override fun toString(): String =
+        "NavigationRequest(url=$url, isMainFrame=$isMainFrame, isUserGesture=$isUserGesture)"
+}
 
 public enum class NavigationDecision { Allow, Block, OpenExternally }
 
@@ -12,16 +29,56 @@ public enum class NavigationDecision { Allow, Block, OpenExternally }
  */
 public enum class NewWindowDecision { OpenHere, OpenExternally, Block }
 
+/** A dialog the page raised, for [WebClient.onDialog]. Plain classes, as the requests are. */
 public sealed interface WebDialog {
     public val message: String
 
     /** The URL of the document that raised the dialog, so the app can say who is asking. */
     public val url: String?
 
-    public data class Alert(override val message: String, override val url: String? = null) : WebDialog
-    public data class Confirm(override val message: String, override val url: String? = null) : WebDialog
-    public data class Prompt(override val message: String, val defaultValue: String, override val url: String? = null) : WebDialog
-    public data class BeforeUnload(override val message: String, override val url: String? = null) : WebDialog
+    /** `alert()`. */
+    public class Alert(override val message: String, override val url: String? = null) : WebDialog {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Alert && message == other.message && url == other.url
+
+        override fun hashCode(): Int = 31 * message.hashCode() + (url?.hashCode() ?: 0)
+
+        override fun toString(): String = "Alert(message=$message, url=$url)"
+    }
+
+    /** `confirm()`. */
+    public class Confirm(override val message: String, override val url: String? = null) : WebDialog {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is Confirm && message == other.message && url == other.url
+
+        override fun hashCode(): Int = 31 * message.hashCode() + (url?.hashCode() ?: 0)
+
+        override fun toString(): String = "Confirm(message=$message, url=$url)"
+    }
+
+    /** `prompt()`, with the text field's [defaultValue]. */
+    public class Prompt(
+        override val message: String,
+        public val defaultValue: String,
+        override val url: String? = null,
+    ) : WebDialog {
+        override fun equals(other: Any?): Boolean = this === other || other is Prompt &&
+            message == other.message && defaultValue == other.defaultValue && url == other.url
+
+        override fun hashCode(): Int = 31 * (31 * message.hashCode() + defaultValue.hashCode()) + (url?.hashCode() ?: 0)
+
+        override fun toString(): String = "Prompt(message=$message, defaultValue=$defaultValue, url=$url)"
+    }
+
+    /** `beforeunload`: whether to leave the page. */
+    public class BeforeUnload(override val message: String, override val url: String? = null) : WebDialog {
+        override fun equals(other: Any?): Boolean =
+            this === other || other is BeforeUnload && message == other.message && url == other.url
+
+        override fun hashCode(): Int = 31 * message.hashCode() + (url?.hashCode() ?: 0)
+
+        override fun toString(): String = "BeforeUnload(message=$message, url=$url)"
+    }
 }
 
 public sealed interface DialogResult {
@@ -32,15 +89,60 @@ public sealed interface DialogResult {
     public data class Text(val value: String) : DialogResult
 }
 
-public data class FileChooserRequest(val acceptTypes: List<String>, val allowMultiple: Boolean)
+/** A file chooser the page opened (`<input type=file>`), for [WebClient.onFileChooser]. */
+public class FileChooserRequest(public val acceptTypes: List<String>, public val allowMultiple: Boolean) {
+    override fun equals(other: Any?): Boolean = this === other || other is FileChooserRequest &&
+        acceptTypes == other.acceptTypes && allowMultiple == other.allowMultiple
+
+    override fun hashCode(): Int = 31 * acceptTypes.hashCode() + allowMultiple.hashCode()
+
+    override fun toString(): String = "FileChooserRequest(acceptTypes=$acceptTypes, allowMultiple=$allowMultiple)"
+}
 
 public enum class PermissionKind { Camera, Microphone, Geolocation, Notifications, ClipboardRead, Other }
 
-public data class PermissionRequest(val origin: String, val kinds: Set<PermissionKind>)
+/** Permissions the page of [origin] asks for, for [WebClient.onPermission]. */
+public class PermissionRequest(public val origin: String, public val kinds: Set<PermissionKind>) {
+    override fun equals(other: Any?): Boolean =
+        this === other || other is PermissionRequest && origin == other.origin && kinds == other.kinds
 
-public data class DownloadRequest(val url: String, val suggestedFileName: String?, val mimeType: String?, val contentLength: Long?)
+    override fun hashCode(): Int = 31 * origin.hashCode() + kinds.hashCode()
 
-public data class NewWindowRequest(val url: String, val isUserGesture: Boolean)
+    override fun toString(): String = "PermissionRequest(origin=$origin, kinds=$kinds)"
+}
+
+/** A download the page started, for [WebClient.onDownload]. */
+public class DownloadRequest(
+    public val url: String,
+    public val suggestedFileName: String?,
+    public val mimeType: String?,
+    public val contentLength: Long?,
+) {
+    override fun equals(other: Any?): Boolean = this === other || other is DownloadRequest &&
+        url == other.url && suggestedFileName == other.suggestedFileName && mimeType == other.mimeType &&
+        contentLength == other.contentLength
+
+    override fun hashCode(): Int {
+        var result = url.hashCode()
+        result = 31 * result + (suggestedFileName?.hashCode() ?: 0)
+        result = 31 * result + (mimeType?.hashCode() ?: 0)
+        result = 31 * result + (contentLength?.hashCode() ?: 0)
+        return result
+    }
+
+    override fun toString(): String =
+        "DownloadRequest(url=$url, suggestedFileName=$suggestedFileName, mimeType=$mimeType, contentLength=$contentLength)"
+}
+
+/** A new window the page asked for (`window.open`, `target=_blank`), for [WebClient.onNewWindow]. */
+public class NewWindowRequest(public val url: String, public val isUserGesture: Boolean) {
+    override fun equals(other: Any?): Boolean =
+        this === other || other is NewWindowRequest && url == other.url && isUserGesture == other.isUserGesture
+
+    override fun hashCode(): Int = 31 * url.hashCode() + isUserGesture.hashCode()
+
+    override fun toString(): String = "NewWindowRequest(url=$url, isUserGesture=$isUserGesture)"
+}
 
 /**
  * Answers the page's requests. Every default is the safe answer.

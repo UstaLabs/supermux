@@ -44,7 +44,7 @@ internal suspend fun ComposeUiTest.testLab(config: RuntimeConfig): TestLab {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     currentCoroutineContext().job.invokeOnCompletion { scope.cancel() }
     val engines = EngineCounter(fakes)
-    val runtime = WebViewRuntime(engines, config, scope, clock = { mainClock.currentTime })
+    val runtime = WebViewRuntime(config.copy(factory = engines, scope = scope, clock = { mainClock.currentTime }))
     val errors = mutableListOf<Throwable>()
     runtime.onError = { errors += it }
     return TestLab(PerfLabState(engines, runtime), fakes, errors)

@@ -27,7 +27,7 @@ internal fun runtimeOnAndroid(
     block: suspend RuntimeOnAndroid.() -> Unit,
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    val runtime = WebViewRuntime(config = config, scope = scope)
+    val runtime = WebViewRuntime(config.copy(scope = scope))
     val launched = ActivityScenario.launch(EngineTestActivity::class.java)
     try {
         launched.onActivity { it.setContent { ProvideWebViewRuntime(runtime) { content() } } }

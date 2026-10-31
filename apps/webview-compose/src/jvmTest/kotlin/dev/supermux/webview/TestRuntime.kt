@@ -38,15 +38,15 @@ internal suspend fun ComposeUiTest.testRuntime(
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     currentCoroutineContext().job.invokeOnCompletion { scope.cancel() }
     return WebViewRuntime(
-        factory = factory,
-        config = RuntimeConfig(
+        RuntimeConfig(
             maxLive = maxLive,
             maxIdle = maxIdle,
             snapshotCacheBytes = snapshotCacheBytes,
             decodedSnapshotBytes = decodedSnapshotBytes,
             hiddenReleaseMillis = hiddenReleaseMillis,
+            factory = factory,
+            scope = scope,
+            clock = { mainClock.currentTime },
         ),
-        scope = scope,
-        clock = { mainClock.currentTime },
     ).also { it.snapshots.codec = codec }
 }

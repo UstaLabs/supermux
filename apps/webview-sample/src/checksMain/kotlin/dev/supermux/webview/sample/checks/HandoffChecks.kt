@@ -98,13 +98,13 @@ body{padding:16px}h1{font-size:20px;margin:0 0 8px}.bars{display:flex;align-item
     private class Stage(scenario: Scenario, look: Look) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
-            config = RuntimeConfig(
+            RuntimeConfig(
                 maxLive = 2,
                 maxIdle = 1,
                 snapshotCacheBytes = 32L shl 20,
                 hiddenReleaseMillis = scenario.hiddenReleaseMillis,
+                scope = scope,
             ),
-            scope = scope,
         )
         val state = WebViewState(look.content)
         var composed by mutableStateOf(true)

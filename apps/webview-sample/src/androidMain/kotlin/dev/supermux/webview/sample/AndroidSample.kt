@@ -11,7 +11,7 @@ import dev.supermux.webview.runtime.platformWebEngineFactory
  */
 fun androidPerfLab(fake: Boolean): PerfLabState {
     val engines = EngineCounter(if (fake) fakeEngines() else platformWebEngineFactory())
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    val runtime = WebViewRuntime(RuntimeConfig.platformDefault().copy(factory = engines))
     runtime.onError = { Log.w("webview-sample", "the runtime caught", it) }
     return PerfLabState(engines, runtime)
 }

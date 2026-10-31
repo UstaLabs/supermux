@@ -35,7 +35,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** The perf lab on this platform's engines (WPE WebKit on Linux), counted, with this platform's pool and cache sizes. */
 fun wpePerfLab(): PerfLabState {
     val engines = EngineCounter(platformWebEngineFactory())
-    val runtime = WebViewRuntime(factory = engines, config = RuntimeConfig.platformDefault())
+    val runtime = WebViewRuntime(RuntimeConfig.platformDefault().copy(factory = engines))
     runtime.onError = { println("webview-sample: the runtime caught $it") }
     return PerfLabState(engines, runtime)
 }

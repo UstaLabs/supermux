@@ -97,7 +97,7 @@ $script
     /** One check's runtime and the scene it shows; [close] lets them all go. */
     private class Stage {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val runtime = WebViewRuntime(config = RuntimeConfig(maxLive = 3, maxIdle = 0, snapshotCacheBytes = 16L shl 20), scope = scope)
+        val runtime = WebViewRuntime(RuntimeConfig(maxLive = 3, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
 
         fun close() {
             runtime.clear()

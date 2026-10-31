@@ -262,10 +262,15 @@ class ReviewProbeTest {
         val px = with(density) { 100.dp.roundToPx() }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(
-            factory,
-            RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 2L * px * px * 4, hiddenReleaseMillis = 50),
-            scope,
-            clock = { mainClock.currentTime },
+            RuntimeConfig(
+                maxLive = 4,
+                maxIdle = 0,
+                snapshotCacheBytes = 2L * px * px * 4,
+                hiddenReleaseMillis = 50,
+                factory = factory,
+                scope = scope,
+                clock = { mainClock.currentTime },
+            ),
         )
         try {
             val states = List(8) { WebViewState(WebContent.Url("https://example.test/$it")) }

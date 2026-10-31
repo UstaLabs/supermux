@@ -19,9 +19,13 @@ import kotlin.test.assertEquals
 class MemoryHookTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val runtime = WebViewRuntime(
-        factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-        config = RuntimeConfig(maxLive = 4, maxIdle = 0, snapshotCacheBytes = 1L shl 20),
-        scope = scope,
+        RuntimeConfig(
+            maxLive = 4,
+            maxIdle = 0,
+            snapshotCacheBytes = 1L shl 20,
+            factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+            scope = scope,
+        ),
     )
 
     private fun memoryWarning() {

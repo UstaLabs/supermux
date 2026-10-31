@@ -58,9 +58,13 @@ class BackgroundGlueTest {
     @Test fun theMemoryHookWaitsForTheGlueOffTheUiThread() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val runtime = WebViewRuntime(
-            factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
-            config = RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 1L shl 20),
-            scope = scope,
+            RuntimeConfig(
+                maxLive = 2,
+                maxIdle = 0,
+                snapshotCacheBytes = 1L shl 20,
+                factory = WebEngineFactory { WebEngineResult.Unavailable(UnavailableReason.NotImplemented) },
+                scope = scope,
+            ),
         )
         val loadedOn = CompletableDeferred<Thread>()
         val glue = BackgroundGlue(GlueLoading { loadedOn.complete(Thread.currentThread()) })

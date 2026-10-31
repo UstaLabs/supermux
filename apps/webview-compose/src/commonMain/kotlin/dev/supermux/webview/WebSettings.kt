@@ -28,24 +28,32 @@ public sealed interface WebProfile {
     public data object Ephemeral : WebProfile
 }
 
+/**
+ * How a [WebView] shows its page. Build it with named arguments, `WebSettings(bridgeOrigins = setOf(…))`, and change
+ * one with [copy]; compare with `==`.
+ *
+ * A plain class, not a data class, so it can grow without breaking code built against it: a new setting comes as a new
+ * parameter at the end of the constructor and of [copy], each with a default, and the signatures before it stay, hidden.
+ * There are no `componentN` functions: positions mean nothing.
+ */
 @Immutable
-public data class WebSettings(
-    val javaScriptEnabled: Boolean = true,
+public class WebSettings(
+    public val javaScriptEnabled: Boolean = true,
     /** Exposes the page to the platform inspector (Safari, chrome://inspect, Edge DevTools). */
-    val inspectable: Boolean = false,
-    val darkMode: DarkMode = DarkMode.Auto,
-    val transparentBackground: Boolean = false,
-    val userAgentSuffix: String? = null,
+    public val inspectable: Boolean = false,
+    public val darkMode: DarkMode = DarkMode.Auto,
+    public val transparentBackground: Boolean = false,
+    public val userAgentSuffix: String? = null,
     /** Null means the content's default: [WebProfile.Ephemeral] for [WebContent.Html], [WebProfile.Default] otherwise. */
-    val profile: WebProfile? = null,
-    val mediaPlaybackRequiresGesture: Boolean = true,
+    public val profile: WebProfile? = null,
+    public val mediaPlaybackRequiresGesture: Boolean = true,
     /**
      * Origins whose documents get the bridge, besides the content's own local origin. Each is an origin as browsers
      * write it (`self.origin`): `scheme://host[:port]`, lowercase, without the scheme's default port, with no path and
      * no trailing slash, such as `https://app.example.com`. The bridge compares them exactly, so anything else would
      * never match: it is refused.
      */
-    val bridgeOrigins: Set<String> = emptySet(),
+    public val bridgeOrigins: Set<String> = emptySet(),
 ) {
     init {
         for (origin in bridgeOrigins) {
@@ -57,6 +65,54 @@ public data class WebSettings(
             }
         }
     }
+
+    /** These settings, with the ones named changed. */
+    public fun copy(
+        javaScriptEnabled: Boolean = this.javaScriptEnabled,
+        inspectable: Boolean = this.inspectable,
+        darkMode: DarkMode = this.darkMode,
+        transparentBackground: Boolean = this.transparentBackground,
+        userAgentSuffix: String? = this.userAgentSuffix,
+        profile: WebProfile? = this.profile,
+        mediaPlaybackRequiresGesture: Boolean = this.mediaPlaybackRequiresGesture,
+        bridgeOrigins: Set<String> = this.bridgeOrigins,
+    ): WebSettings = WebSettings(
+        javaScriptEnabled = javaScriptEnabled,
+        inspectable = inspectable,
+        darkMode = darkMode,
+        transparentBackground = transparentBackground,
+        userAgentSuffix = userAgentSuffix,
+        profile = profile,
+        mediaPlaybackRequiresGesture = mediaPlaybackRequiresGesture,
+        bridgeOrigins = bridgeOrigins,
+    )
+
+    override fun equals(other: Any?): Boolean = this === other || other is WebSettings &&
+        javaScriptEnabled == other.javaScriptEnabled &&
+        inspectable == other.inspectable &&
+        darkMode == other.darkMode &&
+        transparentBackground == other.transparentBackground &&
+        userAgentSuffix == other.userAgentSuffix &&
+        profile == other.profile &&
+        mediaPlaybackRequiresGesture == other.mediaPlaybackRequiresGesture &&
+        bridgeOrigins == other.bridgeOrigins
+
+    override fun hashCode(): Int {
+        var result = javaScriptEnabled.hashCode()
+        result = 31 * result + inspectable.hashCode()
+        result = 31 * result + darkMode.hashCode()
+        result = 31 * result + transparentBackground.hashCode()
+        result = 31 * result + (userAgentSuffix?.hashCode() ?: 0)
+        result = 31 * result + (profile?.hashCode() ?: 0)
+        result = 31 * result + mediaPlaybackRequiresGesture.hashCode()
+        result = 31 * result + bridgeOrigins.hashCode()
+        return result
+    }
+
+    override fun toString(): String =
+        "WebSettings(javaScriptEnabled=$javaScriptEnabled, inspectable=$inspectable, darkMode=$darkMode, " +
+            "transparentBackground=$transparentBackground, userAgentSuffix=$userAgentSuffix, profile=$profile, " +
+            "mediaPlaybackRequiresGesture=$mediaPlaybackRequiresGesture, bridgeOrigins=$bridgeOrigins)"
 
     public companion object {
         public val Default: WebSettings = WebSettings()

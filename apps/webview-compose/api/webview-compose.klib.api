@@ -507,9 +507,6 @@ sealed interface dev.supermux.webview/WebDialog { // dev.supermux.webview/WebDia
         final val url // dev.supermux.webview/WebDialog.Alert.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebDialog.Alert.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String // dev.supermux.webview/WebDialog.Alert.component1|component1(){}[0]
-        final fun component2(): kotlin/String? // dev.supermux.webview/WebDialog.Alert.component2|component2(){}[0]
-        final fun copy(kotlin/String = ..., kotlin/String? = ...): dev.supermux.webview/WebDialog.Alert // dev.supermux.webview/WebDialog.Alert.copy|copy(kotlin.String;kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDialog.Alert.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDialog.Alert.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebDialog.Alert.toString|toString(){}[0]
@@ -523,9 +520,6 @@ sealed interface dev.supermux.webview/WebDialog { // dev.supermux.webview/WebDia
         final val url // dev.supermux.webview/WebDialog.BeforeUnload.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebDialog.BeforeUnload.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String // dev.supermux.webview/WebDialog.BeforeUnload.component1|component1(){}[0]
-        final fun component2(): kotlin/String? // dev.supermux.webview/WebDialog.BeforeUnload.component2|component2(){}[0]
-        final fun copy(kotlin/String = ..., kotlin/String? = ...): dev.supermux.webview/WebDialog.BeforeUnload // dev.supermux.webview/WebDialog.BeforeUnload.copy|copy(kotlin.String;kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDialog.BeforeUnload.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDialog.BeforeUnload.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebDialog.BeforeUnload.toString|toString(){}[0]
@@ -539,9 +533,6 @@ sealed interface dev.supermux.webview/WebDialog { // dev.supermux.webview/WebDia
         final val url // dev.supermux.webview/WebDialog.Confirm.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebDialog.Confirm.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String // dev.supermux.webview/WebDialog.Confirm.component1|component1(){}[0]
-        final fun component2(): kotlin/String? // dev.supermux.webview/WebDialog.Confirm.component2|component2(){}[0]
-        final fun copy(kotlin/String = ..., kotlin/String? = ...): dev.supermux.webview/WebDialog.Confirm // dev.supermux.webview/WebDialog.Confirm.copy|copy(kotlin.String;kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDialog.Confirm.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDialog.Confirm.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebDialog.Confirm.toString|toString(){}[0]
@@ -557,10 +548,6 @@ sealed interface dev.supermux.webview/WebDialog { // dev.supermux.webview/WebDia
         final val url // dev.supermux.webview/WebDialog.Prompt.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebDialog.Prompt.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String // dev.supermux.webview/WebDialog.Prompt.component1|component1(){}[0]
-        final fun component2(): kotlin/String // dev.supermux.webview/WebDialog.Prompt.component2|component2(){}[0]
-        final fun component3(): kotlin/String? // dev.supermux.webview/WebDialog.Prompt.component3|component3(){}[0]
-        final fun copy(kotlin/String = ..., kotlin/String = ..., kotlin/String? = ...): dev.supermux.webview/WebDialog.Prompt // dev.supermux.webview/WebDialog.Prompt.copy|copy(kotlin.String;kotlin.String;kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebDialog.Prompt.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebDialog.Prompt.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebDialog.Prompt.toString|toString(){}[0]
@@ -577,8 +564,6 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
         final val url // dev.supermux.webview/WebError.BlockedByPolicy.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.BlockedByPolicy.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String? // dev.supermux.webview/WebError.BlockedByPolicy.component1|component1(){}[0]
-        final fun copy(kotlin/String? = ...): dev.supermux.webview/WebError.BlockedByPolicy // dev.supermux.webview/WebError.BlockedByPolicy.copy|copy(kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebError.BlockedByPolicy.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebError.BlockedByPolicy.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebError.BlockedByPolicy.toString|toString(){}[0]
@@ -592,9 +577,6 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
         final val url // dev.supermux.webview/WebError.Certificate.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.Certificate.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String? // dev.supermux.webview/WebError.Certificate.component1|component1(){}[0]
-        final fun component2(): kotlin/String // dev.supermux.webview/WebError.Certificate.component2|component2(){}[0]
-        final fun copy(kotlin/String? = ..., kotlin/String = ...): dev.supermux.webview/WebError.Certificate // dev.supermux.webview/WebError.Certificate.copy|copy(kotlin.String?;kotlin.String){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebError.Certificate.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebError.Certificate.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebError.Certificate.toString|toString(){}[0]
@@ -608,9 +590,6 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
         final val url // dev.supermux.webview/WebError.Http.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.Http.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String? // dev.supermux.webview/WebError.Http.component1|component1(){}[0]
-        final fun component2(): kotlin/Int // dev.supermux.webview/WebError.Http.component2|component2(){}[0]
-        final fun copy(kotlin/String? = ..., kotlin/Int = ...): dev.supermux.webview/WebError.Http // dev.supermux.webview/WebError.Http.copy|copy(kotlin.String?;kotlin.Int){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebError.Http.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebError.Http.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebError.Http.toString|toString(){}[0]
@@ -624,9 +603,6 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
         final val url // dev.supermux.webview/WebError.Network.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.Network.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String? // dev.supermux.webview/WebError.Network.component1|component1(){}[0]
-        final fun component2(): kotlin/String // dev.supermux.webview/WebError.Network.component2|component2(){}[0]
-        final fun copy(kotlin/String? = ..., kotlin/String = ...): dev.supermux.webview/WebError.Network // dev.supermux.webview/WebError.Network.copy|copy(kotlin.String?;kotlin.String){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebError.Network.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebError.Network.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebError.Network.toString|toString(){}[0]
@@ -638,8 +614,6 @@ sealed interface dev.supermux.webview/WebError { // dev.supermux.webview/WebErro
         final val url // dev.supermux.webview/WebError.UnsupportedOnPlatform.url|{}url[0]
             final fun <get-url>(): kotlin/String? // dev.supermux.webview/WebError.UnsupportedOnPlatform.url.<get-url>|<get-url>(){}[0]
 
-        final fun component1(): kotlin/String? // dev.supermux.webview/WebError.UnsupportedOnPlatform.component1|component1(){}[0]
-        final fun copy(kotlin/String? = ...): dev.supermux.webview/WebError.UnsupportedOnPlatform // dev.supermux.webview/WebError.UnsupportedOnPlatform.copy|copy(kotlin.String?){}[0]
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebError.UnsupportedOnPlatform.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.supermux.webview/WebError.UnsupportedOnPlatform.hashCode|hashCode(){}[0]
         final fun toString(): kotlin/String // dev.supermux.webview/WebError.UnsupportedOnPlatform.toString|toString(){}[0]
@@ -834,8 +808,6 @@ final class dev.supermux.webview.engine/WebSurfaceHints { // dev.supermux.webvie
     final val inScrollingList // dev.supermux.webview.engine/WebSurfaceHints.inScrollingList|{}inScrollingList[0]
         final fun <get-inScrollingList>(): kotlin/Boolean // dev.supermux.webview.engine/WebSurfaceHints.inScrollingList.<get-inScrollingList>|<get-inScrollingList>(){}[0]
 
-    final fun component1(): kotlin/Boolean // dev.supermux.webview.engine/WebSurfaceHints.component1|component1(){}[0]
-    final fun copy(kotlin/Boolean = ...): dev.supermux.webview.engine/WebSurfaceHints // dev.supermux.webview.engine/WebSurfaceHints.copy|copy(kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.engine/WebSurfaceHints.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview.engine/WebSurfaceHints.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview.engine/WebSurfaceHints.toString|toString(){}[0]
@@ -926,10 +898,14 @@ final class dev.supermux.webview.runtime/PageMemoryStore { // dev.supermux.webvi
 }
 
 final class dev.supermux.webview.runtime/RuntimeConfig { // dev.supermux.webview.runtime/RuntimeConfig|null[0]
-    constructor <init>(kotlin/Int, kotlin/Int = ..., kotlin/Long, kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ...) // dev.supermux.webview.runtime/RuntimeConfig.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int){}[0]
+    constructor <init>(kotlin/Int, kotlin/Int = ..., kotlin/Long, kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., dev.supermux.webview.engine/WebEngineFactory? = ..., kotlinx.coroutines/CoroutineScope? = ..., kotlin/Function0<kotlin/Long>? = ...) // dev.supermux.webview.runtime/RuntimeConfig.<init>|<init>(kotlin.Int;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;dev.supermux.webview.engine.WebEngineFactory?;kotlinx.coroutines.CoroutineScope?;kotlin.Function0<kotlin.Long>?){}[0]
 
+    final val clock // dev.supermux.webview.runtime/RuntimeConfig.clock|{}clock[0]
+        final fun <get-clock>(): kotlin/Function0<kotlin/Long>? // dev.supermux.webview.runtime/RuntimeConfig.clock.<get-clock>|<get-clock>(){}[0]
     final val decodedSnapshotBytes // dev.supermux.webview.runtime/RuntimeConfig.decodedSnapshotBytes|{}decodedSnapshotBytes[0]
         final fun <get-decodedSnapshotBytes>(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.decodedSnapshotBytes.<get-decodedSnapshotBytes>|<get-decodedSnapshotBytes>(){}[0]
+    final val factory // dev.supermux.webview.runtime/RuntimeConfig.factory|{}factory[0]
+        final fun <get-factory>(): dev.supermux.webview.engine/WebEngineFactory? // dev.supermux.webview.runtime/RuntimeConfig.factory.<get-factory>|<get-factory>(){}[0]
     final val hiddenReleaseMillis // dev.supermux.webview.runtime/RuntimeConfig.hiddenReleaseMillis|{}hiddenReleaseMillis[0]
         final fun <get-hiddenReleaseMillis>(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.hiddenReleaseMillis.<get-hiddenReleaseMillis>|<get-hiddenReleaseMillis>(){}[0]
     final val maxIdle // dev.supermux.webview.runtime/RuntimeConfig.maxIdle|{}maxIdle[0]
@@ -938,16 +914,12 @@ final class dev.supermux.webview.runtime/RuntimeConfig { // dev.supermux.webview
         final fun <get-maxLive>(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.maxLive.<get-maxLive>|<get-maxLive>(){}[0]
     final val pageMemoryEntries // dev.supermux.webview.runtime/RuntimeConfig.pageMemoryEntries|{}pageMemoryEntries[0]
         final fun <get-pageMemoryEntries>(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.pageMemoryEntries.<get-pageMemoryEntries>|<get-pageMemoryEntries>(){}[0]
+    final val scope // dev.supermux.webview.runtime/RuntimeConfig.scope|{}scope[0]
+        final fun <get-scope>(): kotlinx.coroutines/CoroutineScope? // dev.supermux.webview.runtime/RuntimeConfig.scope.<get-scope>|<get-scope>(){}[0]
     final val snapshotCacheBytes // dev.supermux.webview.runtime/RuntimeConfig.snapshotCacheBytes|{}snapshotCacheBytes[0]
         final fun <get-snapshotCacheBytes>(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.snapshotCacheBytes.<get-snapshotCacheBytes>|<get-snapshotCacheBytes>(){}[0]
 
-    final fun component1(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.component1|component1(){}[0]
-    final fun component2(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.component2|component2(){}[0]
-    final fun component3(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.component3|component3(){}[0]
-    final fun component4(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.component4|component4(){}[0]
-    final fun component5(): kotlin/Long // dev.supermux.webview.runtime/RuntimeConfig.component5|component5(){}[0]
-    final fun component6(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.component6|component6(){}[0]
-    final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ...): dev.supermux.webview.runtime/RuntimeConfig // dev.supermux.webview.runtime/RuntimeConfig.copy|copy(kotlin.Int;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int){}[0]
+    final fun copy(kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ..., kotlin/Int = ..., dev.supermux.webview.engine/WebEngineFactory? = ..., kotlinx.coroutines/CoroutineScope? = ..., kotlin/Function0<kotlin/Long>? = ...): dev.supermux.webview.runtime/RuntimeConfig // dev.supermux.webview.runtime/RuntimeConfig.copy|copy(kotlin.Int;kotlin.Int;kotlin.Long;kotlin.Long;kotlin.Long;kotlin.Int;dev.supermux.webview.engine.WebEngineFactory?;kotlinx.coroutines.CoroutineScope?;kotlin.Function0<kotlin.Long>?){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.runtime/RuntimeConfig.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview.runtime/RuntimeConfig.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview.runtime/RuntimeConfig.toString|toString(){}[0]
@@ -996,7 +968,7 @@ final class dev.supermux.webview.runtime/SnapshotCache { // dev.supermux.webview
 }
 
 final class dev.supermux.webview.runtime/WebViewRuntime { // dev.supermux.webview.runtime/WebViewRuntime|null[0]
-    constructor <init>(dev.supermux.webview.engine/WebEngineFactory = ..., dev.supermux.webview.runtime/RuntimeConfig = ..., kotlinx.coroutines/CoroutineScope = ..., kotlin/Function0<kotlin/Long> = ...) // dev.supermux.webview.runtime/WebViewRuntime.<init>|<init>(dev.supermux.webview.engine.WebEngineFactory;dev.supermux.webview.runtime.RuntimeConfig;kotlinx.coroutines.CoroutineScope;kotlin.Function0<kotlin.Long>){}[0]
+    constructor <init>(dev.supermux.webview.runtime/RuntimeConfig = ...) // dev.supermux.webview.runtime/WebViewRuntime.<init>|<init>(dev.supermux.webview.runtime.RuntimeConfig){}[0]
 
     final val clock // dev.supermux.webview.runtime/WebViewRuntime.clock|{}clock[0]
         final fun <get-clock>(): kotlin/Function0<kotlin/Long> // dev.supermux.webview.runtime/WebViewRuntime.clock.<get-clock>|<get-clock>(){}[0]
@@ -1049,12 +1021,6 @@ final class dev.supermux.webview/ConsoleMessage { // dev.supermux.webview/Consol
     final val uncaught // dev.supermux.webview/ConsoleMessage.uncaught|{}uncaught[0]
         final fun <get-uncaught>(): kotlin/Boolean // dev.supermux.webview/ConsoleMessage.uncaught.<get-uncaught>|<get-uncaught>(){}[0]
 
-    final fun component1(): dev.supermux.webview/ConsoleLevel // dev.supermux.webview/ConsoleMessage.component1|component1(){}[0]
-    final fun component2(): kotlin/String // dev.supermux.webview/ConsoleMessage.component2|component2(){}[0]
-    final fun component3(): kotlin/String? // dev.supermux.webview/ConsoleMessage.component3|component3(){}[0]
-    final fun component4(): kotlin/Int? // dev.supermux.webview/ConsoleMessage.component4|component4(){}[0]
-    final fun component5(): kotlin/Boolean // dev.supermux.webview/ConsoleMessage.component5|component5(){}[0]
-    final fun copy(dev.supermux.webview/ConsoleLevel = ..., kotlin/String = ..., kotlin/String? = ..., kotlin/Int? = ..., kotlin/Boolean = ...): dev.supermux.webview/ConsoleMessage // dev.supermux.webview/ConsoleMessage.copy|copy(dev.supermux.webview.ConsoleLevel;kotlin.String;kotlin.String?;kotlin.Int?;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/ConsoleMessage.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/ConsoleMessage.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/ConsoleMessage.toString|toString(){}[0]
@@ -1072,11 +1038,6 @@ final class dev.supermux.webview/DownloadRequest { // dev.supermux.webview/Downl
     final val url // dev.supermux.webview/DownloadRequest.url|{}url[0]
         final fun <get-url>(): kotlin/String // dev.supermux.webview/DownloadRequest.url.<get-url>|<get-url>(){}[0]
 
-    final fun component1(): kotlin/String // dev.supermux.webview/DownloadRequest.component1|component1(){}[0]
-    final fun component2(): kotlin/String? // dev.supermux.webview/DownloadRequest.component2|component2(){}[0]
-    final fun component3(): kotlin/String? // dev.supermux.webview/DownloadRequest.component3|component3(){}[0]
-    final fun component4(): kotlin/Long? // dev.supermux.webview/DownloadRequest.component4|component4(){}[0]
-    final fun copy(kotlin/String = ..., kotlin/String? = ..., kotlin/String? = ..., kotlin/Long? = ...): dev.supermux.webview/DownloadRequest // dev.supermux.webview/DownloadRequest.copy|copy(kotlin.String;kotlin.String?;kotlin.String?;kotlin.Long?){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/DownloadRequest.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/DownloadRequest.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/DownloadRequest.toString|toString(){}[0]
@@ -1090,9 +1051,6 @@ final class dev.supermux.webview/FileChooserRequest { // dev.supermux.webview/Fi
     final val allowMultiple // dev.supermux.webview/FileChooserRequest.allowMultiple|{}allowMultiple[0]
         final fun <get-allowMultiple>(): kotlin/Boolean // dev.supermux.webview/FileChooserRequest.allowMultiple.<get-allowMultiple>|<get-allowMultiple>(){}[0]
 
-    final fun component1(): kotlin.collections/List<kotlin/String> // dev.supermux.webview/FileChooserRequest.component1|component1(){}[0]
-    final fun component2(): kotlin/Boolean // dev.supermux.webview/FileChooserRequest.component2|component2(){}[0]
-    final fun copy(kotlin.collections/List<kotlin/String> = ..., kotlin/Boolean = ...): dev.supermux.webview/FileChooserRequest // dev.supermux.webview/FileChooserRequest.copy|copy(kotlin.collections.List<kotlin.String>;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/FileChooserRequest.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/FileChooserRequest.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/FileChooserRequest.toString|toString(){}[0]
@@ -1108,10 +1066,6 @@ final class dev.supermux.webview/NavigationRequest { // dev.supermux.webview/Nav
     final val url // dev.supermux.webview/NavigationRequest.url|{}url[0]
         final fun <get-url>(): kotlin/String // dev.supermux.webview/NavigationRequest.url.<get-url>|<get-url>(){}[0]
 
-    final fun component1(): kotlin/String // dev.supermux.webview/NavigationRequest.component1|component1(){}[0]
-    final fun component2(): kotlin/Boolean // dev.supermux.webview/NavigationRequest.component2|component2(){}[0]
-    final fun component3(): kotlin/Boolean // dev.supermux.webview/NavigationRequest.component3|component3(){}[0]
-    final fun copy(kotlin/String = ..., kotlin/Boolean = ..., kotlin/Boolean = ...): dev.supermux.webview/NavigationRequest // dev.supermux.webview/NavigationRequest.copy|copy(kotlin.String;kotlin.Boolean;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/NavigationRequest.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/NavigationRequest.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/NavigationRequest.toString|toString(){}[0]
@@ -1125,9 +1079,6 @@ final class dev.supermux.webview/NewWindowRequest { // dev.supermux.webview/NewW
     final val url // dev.supermux.webview/NewWindowRequest.url|{}url[0]
         final fun <get-url>(): kotlin/String // dev.supermux.webview/NewWindowRequest.url.<get-url>|<get-url>(){}[0]
 
-    final fun component1(): kotlin/String // dev.supermux.webview/NewWindowRequest.component1|component1(){}[0]
-    final fun component2(): kotlin/Boolean // dev.supermux.webview/NewWindowRequest.component2|component2(){}[0]
-    final fun copy(kotlin/String = ..., kotlin/Boolean = ...): dev.supermux.webview/NewWindowRequest // dev.supermux.webview/NewWindowRequest.copy|copy(kotlin.String;kotlin.Boolean){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/NewWindowRequest.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/NewWindowRequest.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/NewWindowRequest.toString|toString(){}[0]
@@ -1141,9 +1092,6 @@ final class dev.supermux.webview/PermissionRequest { // dev.supermux.webview/Per
     final val origin // dev.supermux.webview/PermissionRequest.origin|{}origin[0]
         final fun <get-origin>(): kotlin/String // dev.supermux.webview/PermissionRequest.origin.<get-origin>|<get-origin>(){}[0]
 
-    final fun component1(): kotlin/String // dev.supermux.webview/PermissionRequest.component1|component1(){}[0]
-    final fun component2(): kotlin.collections/Set<dev.supermux.webview/PermissionKind> // dev.supermux.webview/PermissionRequest.component2|component2(){}[0]
-    final fun copy(kotlin/String = ..., kotlin.collections/Set<dev.supermux.webview/PermissionKind> = ...): dev.supermux.webview/PermissionRequest // dev.supermux.webview/PermissionRequest.copy|copy(kotlin.String;kotlin.collections.Set<dev.supermux.webview.PermissionKind>){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/PermissionRequest.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/PermissionRequest.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.supermux.webview/PermissionRequest.toString|toString(){}[0]
@@ -1213,14 +1161,6 @@ final class dev.supermux.webview/WebSettings { // dev.supermux.webview/WebSettin
     final val userAgentSuffix // dev.supermux.webview/WebSettings.userAgentSuffix|{}userAgentSuffix[0]
         final fun <get-userAgentSuffix>(): kotlin/String? // dev.supermux.webview/WebSettings.userAgentSuffix.<get-userAgentSuffix>|<get-userAgentSuffix>(){}[0]
 
-    final fun component1(): kotlin/Boolean // dev.supermux.webview/WebSettings.component1|component1(){}[0]
-    final fun component2(): kotlin/Boolean // dev.supermux.webview/WebSettings.component2|component2(){}[0]
-    final fun component3(): dev.supermux.webview/DarkMode // dev.supermux.webview/WebSettings.component3|component3(){}[0]
-    final fun component4(): kotlin/Boolean // dev.supermux.webview/WebSettings.component4|component4(){}[0]
-    final fun component5(): kotlin/String? // dev.supermux.webview/WebSettings.component5|component5(){}[0]
-    final fun component6(): dev.supermux.webview/WebProfile? // dev.supermux.webview/WebSettings.component6|component6(){}[0]
-    final fun component7(): kotlin/Boolean // dev.supermux.webview/WebSettings.component7|component7(){}[0]
-    final fun component8(): kotlin.collections/Set<kotlin/String> // dev.supermux.webview/WebSettings.component8|component8(){}[0]
     final fun copy(kotlin/Boolean = ..., kotlin/Boolean = ..., dev.supermux.webview/DarkMode = ..., kotlin/Boolean = ..., kotlin/String? = ..., dev.supermux.webview/WebProfile? = ..., kotlin/Boolean = ..., kotlin.collections/Set<kotlin/String> = ...): dev.supermux.webview/WebSettings // dev.supermux.webview/WebSettings.copy|copy(kotlin.Boolean;kotlin.Boolean;dev.supermux.webview.DarkMode;kotlin.Boolean;kotlin.String?;dev.supermux.webview.WebProfile?;kotlin.Boolean;kotlin.collections.Set<kotlin.String>){}[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebSettings.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.supermux.webview/WebSettings.hashCode|hashCode(){}[0]

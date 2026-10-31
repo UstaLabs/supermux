@@ -319,7 +319,7 @@ private fun capConsoleText(text: String): String =
 private fun ConsoleMessage.capped(): ConsoleMessage {
     val text = capConsoleText(message)
     val cappedSource = source?.let(::capConsoleText)
-    return if (text === message && cappedSource === source) this else copy(message = text, source = cappedSource)
+    return if (text === message && cappedSource === source) this else ConsoleMessage(level, text, cappedSource, line, uncaught)
 }
 
 private fun consoleMessageOf(o: JsonObject): ConsoleMessage {
