@@ -3188,8 +3188,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const lang = cfg.voiceLanguages?.length === 1 ? cfg.voiceLanguages[0] : cfg.whisperLang
       const hints = { lang, languages: cfg.voiceLanguages, keyterms: cfg.voiceCleanupGlossary }
       const livePasses = livePartialsUsable(engine)
+      // Two engine connections: one for the passes at pauses and Stop, one for the passes while
+      // talking, so the first never waits behind the second.
+      const liveStream = `${dictationId}~live`
       if (livePasses) {
-        warmStt(engine, dictationId, hints).catch((err) => log.warn("dictation_stream_warm_failed", { dictationId, err: String(err) }))
+        for (const key of [dictationId, liveStream]) {
+          warmStt(engine, key, hints).catch((err) => log.warn("dictation_stream_warm_failed", { dictationId: key, err: String(err) }))
+        }
       }
       const models = speechModels()
       // Engines take a file: each pass writes its stretch as a WAV and removes it straight after.
@@ -3212,11 +3217,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         turn: (audio) => models.turn(audio),
         livePasses,
         transcribe: (pcm, o) => withWav(pcm, async (path) => (await runStt(path, {
-          engine, ...hints, context: o.context, stream: dictationId, endStream: o.final, fallback: false,
+          engine, ...hints, context: o.context, stream: o.lane === "live" ? liveStream : dictationId, endStream: o.final, fallback: false,
         })).text),
         transcribeWhole: (pcm) => withWav(pcm, async (path) => (await transcribeVoice(sessionId, { audioPath: path })).text),
         checkEdit: async (text, newWords) => (await checkDictationEdit({ text, newWords }, codexAdapter())).text,
-        endStream: () => selectStt(engine).endStream?.(dictationId),
+        endStream: () => {
+          const e = selectStt(engine)
+          e.endStream?.(dictationId)
+          e.endStream?.(liveStream)
+        },
         send: (ev) => {
           send(ev)
           if (ev.type === "done" || (ev.type === "error" && ev.fatal)) close()
@@ -3234,11 +3243,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     voiceCaps: () => {
       const cfg = settings.getAppConfig(appConfigEnv)
+      const streaming = process.env.MUX_VOICE_STREAMING !== "0"
+      // Every composer asks for these when it opens, so a dictation may follow: warm the speech
+      // models now rather than on the first words (a cold start cost several seconds).
+      if (streaming && livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE)) speechModels().prewarm?.()
       return {
         codexAvailable: selectStt("codex-realtime").isAvailable(),
         livePartials: livePartialsUsable(cfg.voiceSttEngine ?? VOICE_STT_ENGINE),
         // Apps stream their mic here instead of judging pauses themselves (MUX_VOICE_STREAMING=0 = off).
-        streaming: process.env.MUX_VOICE_STREAMING !== "0",
+        streaming,
       }
     },
     // Read-aloud as a progressive MP3 URL (current clients). `platform` is client-native.

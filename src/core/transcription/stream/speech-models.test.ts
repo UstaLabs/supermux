@@ -59,6 +59,16 @@ describe("WorkerSpeechModels (fake workers)", () => {
     models.dispose()
   })
 
+  test("prewarm starts both workers once, and they idle out", async () => {
+    const workers: FakeWorker[] = []
+    const models = new WorkerSpeechModels(() => { const w = new FakeWorker(); workers.push(w); return w }, 30)
+    models.prewarm()
+    models.prewarm()
+    expect(workers.map((w) => w.sent[0])).toEqual([{ op: "init", role: "vad" }, { op: "init", role: "turn" }])
+    await Bun.sleep(80)
+    expect(workers.map((w) => w.terminated)).toEqual([true, true])
+  })
+
   test("idle workers are stopped", async () => {
     const workers: FakeWorker[] = []
     const models = new WorkerSpeechModels(() => { const w = new FakeWorker(); workers.push(w); return w }, 20)

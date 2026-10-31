@@ -50,7 +50,11 @@ export interface StreamTiming {
   pauseMs: number
   /** A pass needs this much speech since the last one: a breath or a click is where speech models invent sentences. */
   minSpeechMs: number
-  /** Talking without a pause: a temporary pass this often, so the text keeps up. */
+  /**
+   * While talking: a provisional pass after this much speech since the last one, so the words
+   * show up while the user is still speaking. It runs on its own connection ([DictationStreamDeps.
+   * transcribe]'s `lane: "live"`), so the pass at the next pause never waits behind it.
+   */
   runPassMs: number
   /** A sentence this long is locked at its next pause whatever Smart Turn says, so passes stay short. */
   maxSentenceMs: number
@@ -77,7 +81,7 @@ export const DEFAULT_TIMING: StreamTiming = {
   silenceThreshold: 0.35,
   pauseMs: 300,
   minSpeechMs: 250,
-  runPassMs: 5_000,
+  runPassMs: 1_200,
   maxSentenceMs: 15_000,
   turnThreshold: 0.5,
   turnWindowMs: 8_000,
@@ -98,7 +102,7 @@ export interface DictationStreamDeps {
    */
   livePasses: boolean
   /** One live pass: 16 kHz mono s16 audio → its text. [context] = the dictated text before it. */
-  transcribe: (pcm: Int16Array, opts: { context: string; final: boolean }) => Promise<string>
+  transcribe: (pcm: Int16Array, opts: { context: string; final: boolean; lane: PassLane }) => Promise<string>
   /** A slow engine's Stop: the whole recording → its (cleaned) text. */
   transcribeWhole?: (pcm: Int16Array) => Promise<string>
   /** Spoken edits: (text so far, the new words) → the edited text, or null when they were dictation. */
@@ -113,8 +117,29 @@ export interface DictationStreamDeps {
 }
 
 type PassKind = "pause" | "run"
+/** Which connection a pass uses: "main" for pauses and Stop, "live" for the passes while talking. */
+export type PassLane = "main" | "live"
 
 const join = (...parts: string[]): string => parts.map((p) => p.trim()).filter(Boolean).join(" ")
+
+const norm = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")
+
+/**
+ * [full] without the words of [prefix] at its front — matched word by word, ignoring case and
+ * punctuation ("screen." = "screen,") — or null when [full] does not begin with them. How a
+ * sentence found finished late is split off a newer text that already runs past it.
+ */
+export function stripLeadingWords(full: string, prefix: string): string | null {
+  const want = prefix.split(/\s+/).map(norm).filter(Boolean)
+  const words = full.trim().split(/\s+/)
+  let i = 0
+  for (const w of want) {
+    while (i < words.length && !norm(words[i]!)) i++
+    if (i >= words.length || norm(words[i]!) !== w) return null
+    i++
+  }
+  return words.slice(i).join(" ")
+}
 
 const sleep = (ms: number): Promise<null> => new Promise((r) => setTimeout(() => r(null), ms))
 
@@ -141,7 +166,11 @@ export class DictationStream {
   private frames = 0
   private speaking = false
   private silentFrames = 0
-  private speechFramesSinceTrigger = 0
+  /** Speech since the last pause pass (does a pause deserve one?) and since the last pass of any
+   *  kind (is a while-talking pass due?). One counter for both skipped the pause pass whenever a
+   *  sentence ended < 250 ms after a while-talking pass. */
+  private speechSincePause = 0
+  private speechSinceRun = 0
 
   // The text. `locked` = finished sentences (and the user's own edits); `provisional` = the
   // current sentence as last transcribed, from `sentenceStart` up to `shownEnd`.
@@ -155,8 +184,15 @@ export class DictationStream {
   private readonly covered = new Map<number, number>()
 
   // Passes: one at a time, at most one waiting.
+  // Passes: one at a time per lane, at most one waiting. The pauses' lane ("main") and the
+  // while-talking lane ("live") run side by side; the newest result wins.
   private inFlight: Promise<void> | null = null
   private pending: { kind: PassKind; end: number } | null = null
+  private runInFlight: Promise<void> | null = null
+  private runPending = false
+  /** The newest pass whose text is shown, and whether that was a while-talking pass. */
+  private appliedPassNo = 0
+  private shownByRun = false
   /** Bumped by a hand edit and by cancel: a pass from before it must not write its answer. */
   private generation = 0
 
@@ -225,6 +261,7 @@ export class DictationStream {
     this.sentenceStart = (seq !== undefined ? this.covered.get(seq) : undefined) ?? this.shownEnd
     // The user's text covers the audio up to there; anything said after it is still to come.
     this.shownEnd = this.sentenceStart
+    this.shownByRun = false
     this.lastSent = this.locked
   }
 
@@ -235,12 +272,15 @@ export class DictationStream {
     this.stopping()
     const t0 = this.now()
     await this.vad.flush()
-    await this.whenIdle()
+    // Not the while-talking lane: from here on its answers are dropped, and Stop's own pass covers
+    // whatever it was transcribing.
+    await this.whenIdle(false)
     if (this.isDone()) return
     if (!this.deps.livePasses) {
       this.locked = await this.wholeText()
-    } else if (this.speechMs(this.shownEnd, this.frames * FRAME) >= this.t.stopSpeechMs) {
-      // Words after the shown text: one more pass, over the whole current sentence.
+    } else if (this.shownByRun || this.speechMs(this.shownEnd, this.frames * FRAME) >= this.t.stopSpeechMs) {
+      // Words after the shown text (or a while-talking pass's, which may end mid-word): one more
+      // pass, over the whole current sentence.
       const gen = this.generation
       const text = await this.runStt(this.sentenceStart, this.samples, true)
       if (this.isDone() || gen !== this.generation) return
@@ -276,13 +316,16 @@ export class DictationStream {
     this.state = "done"
     this.generation++
     this.pending = null
+    this.runPending = false
     this.vad.close()
     this.deps.endStream?.()
   }
 
-  /** Resolves when no pass is out or waiting. */
-  async whenIdle(): Promise<void> {
-    while (this.inFlight) await this.inFlight
+  /** Resolves when no pass is out or waiting (on the pauses' lane only, without [includeLive]). */
+  async whenIdle(includeLive = true): Promise<void> {
+    while (this.inFlight || (includeLive && this.runInFlight)) {
+      await (this.inFlight ?? this.runInFlight)
+    }
   }
 
   // ---- speech detection ----
@@ -300,16 +343,17 @@ export class DictationStream {
         this.speaking = true
         this.silentFrames = 0
         this.speech[i] = 1
-        this.speechFramesSinceTrigger++
+        this.speechSincePause++
+        this.speechSinceRun++
       } else if (this.speaking) {
         this.silentFrames++
         if (this.silentFrames * FRAME_MS >= this.t.pauseMs) {
           this.speaking = false
-          if (this.speechFramesSinceTrigger * FRAME_MS >= this.t.minSpeechMs) this.trigger("pause", this.frames * FRAME)
+          if (this.speechSincePause * FRAME_MS >= this.t.minSpeechMs) this.trigger("pause", this.frames * FRAME)
         }
       }
       // Talking on without a pause: counted in speech, so a silence before it does not count.
-      if (this.speaking && this.speechFramesSinceTrigger * FRAME_MS >= this.t.runPassMs) {
+      if (this.speaking && this.speechSinceRun * FRAME_MS >= this.t.runPassMs) {
         this.trigger("run", this.frames * FRAME)
       }
     }
@@ -326,11 +370,17 @@ export class DictationStream {
   // ---- passes ----
 
   private trigger(kind: PassKind, end: number): void {
-    this.speechFramesSinceTrigger = 0
+    this.speechSinceRun = 0
+    if (kind === "pause") this.speechSincePause = 0
     if (this.state === "done") return
+    if (kind === "run") {
+      // Behind one already out, the next simply takes whatever audio there is by then.
+      if (this.runInFlight) this.runPending = true
+      else this.startRun()
+      return
+    }
     if (this.inFlight) {
-      // A waiting pause keeps its place: it is the one that can lock a sentence at a silence.
-      if (!(this.pending?.kind === "pause" && kind === "run")) this.pending = { kind, end }
+      this.pending = { kind, end }
       return
     }
     this.start(kind, end)
@@ -344,6 +394,18 @@ export class DictationStream {
         const next = this.pending
         this.pending = null
         if (next && this.state !== "done") this.start(next.kind, next.end)
+      })
+  }
+
+  private startRun(): void {
+    this.runInFlight = this.pass("run", this.frames * FRAME)
+      .catch((e) => log.warn("dictation_stream_pass_failed", { id: this.deps.id ?? null, err: String(e) }))
+      .finally(() => {
+        this.runInFlight = null
+        if (this.runPending && this.state === "live") {
+          this.runPending = false
+          this.startRun()
+        }
       })
   }
 
@@ -377,10 +439,17 @@ export class DictationStream {
           },
         )
       : null
-    const text = await this.runStt(start, end, false)
+    const text = await this.runStt(start, end, false, kind === "run" ? "live" : "main")
     const sttMs = this.now() - t0
     if (this.isDone() || gen !== this.generation) return
-    if (text !== null) {
+    // A while-talking answer that lands once Stop has begun is dropped: Stop transcribes it all.
+    if (kind === "run" && this.state !== "live") return
+    // Only the newest answer on the current sentence is shown: an older one landing late, or one
+    // for a sentence locked meanwhile, would take words back.
+    const fresh = text !== null && passNo > this.appliedPassNo && this.sentenceStart === start
+    if (fresh) {
+      this.appliedPassNo = passNo
+      this.shownByRun = kind === "run"
       this.provisional = text
       this.shownEnd = end
       this.emit()
@@ -403,7 +472,12 @@ export class DictationStream {
       // No verdict in time = not finished: a fragment locked mid-sentence costs more than a
       // sentence transcribed twice (seen on the loaded box: "I think we should. Move both models
       // into." when late verdicts counted as finished).
-      if (text !== null && ((p !== null && p >= this.t.turnThreshold) || long)) {
+      // And only while this pass's text is still the newest shown: words shown since by a
+      // while-talking pass belong to the same, still open, sentence.
+      const newest = this.appliedPassNo === passNo && this.sentenceStart === start
+      // A finished verdict with newer words already shown splits the sentence off them instead.
+      if (text !== null && !newest && p !== null && p >= this.t.turnThreshold) this.lockLate(passNo, gen, start, end, text, p)
+      if (text !== null && newest && ((p !== null && p >= this.t.turnThreshold) || long)) {
         const before = this.locked
         this.locked = join(this.locked, text)
         this.provisional = ""
@@ -423,21 +497,32 @@ export class DictationStream {
   /** A verdict that came after its pass: lock that pass's sentence if it is still the newest word on it. */
   private lockLate(passNo: number, gen: number, start: number, end: number, text: string, p: number | null): void {
     if (p === null || p < this.t.turnThreshold) return
-    if (this.state !== "live" || gen !== this.generation) return
-    // A pass started since covers this audio and more; its own verdict decides.
-    if (this.passSeq !== passNo || this.sentenceStart !== start || this.shownEnd !== end) return
+    if (this.state !== "live" || gen !== this.generation || this.sentenceStart !== start) return
+    let rest = ""
+    if (this.appliedPassNo !== passNo) {
+      // The user talked on and a newer text, from the same start, is already shown. It usually
+      // begins with this sentence's words: lock them, and keep the rest as the open sentence (a
+      // pass merely started is fine too — its answer, now for an old start, is dropped). On this
+      // box Smart Turn answers 2.6–5.5 s late, so without this, sentences spoken back to back
+      // never locked and the passes grew to 15 s of audio.
+      const tail = this.shownEnd > end ? stripLeadingWords(this.provisional, text) : null
+      if (tail === null) return
+      rest = tail
+    }
     const before = this.locked
     this.locked = join(this.locked, text)
-    this.provisional = ""
+    this.provisional = rest
     this.sentenceStart = end
-    log.info("dictation_stream_locked_late", { id: this.deps.id ?? null, audioMs: Math.round((end - start) / PER_MS) })
+    if (!rest) this.shownEnd = Math.max(this.shownEnd, end)
+    log.info("dictation_stream_locked_late", { id: this.deps.id ?? null, audioMs: Math.round((end - start) / PER_MS), split: rest !== "" })
+    this.emit()
     this.launchEditCheck(before, text)
   }
 
   /** Transcribe samples [start, end); null = the engine failed (the audio stays for the next pass). */
-  private async runStt(start: number, end: number, final: boolean): Promise<string | null> {
+  private async runStt(start: number, end: number, final: boolean, lane: PassLane = "main"): Promise<string | null> {
     try {
-      return (await this.deps.transcribe(this.pcm.slice(start, end), { context: this.locked, final })).trim()
+      return (await this.deps.transcribe(this.pcm.slice(start, end), { context: this.locked, final, lane })).trim()
     } catch (e) {
       log.warn("dictation_stream_stt_failed", { id: this.deps.id ?? null, final, err: String(e) })
       return null
