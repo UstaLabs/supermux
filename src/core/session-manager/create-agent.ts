@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto"
 import { existsSync, mkdirSync, rmSync } from "fs"
-import { join } from "path"
 import { AgentKind, isAgentKind } from "../../shared/agents"
+import { agentWorkdir } from "../../shared/paths"
 import { ensureAgentMemoryFiles } from "../memory/agent-memory"
 import type { SessionRole } from "./policy"
 
@@ -58,7 +58,7 @@ export async function createAgent(deps: CreateAgentDeps, args: CreateAgentArgs):
   if (!isAgentKind(provider)) throw new CreateAgentError(`unknown provider: ${String(args.provider)}`, 400, "provider_invalid")
   deps.assertInstalled(provider)
 
-  const workdir = join(deps.muxHome, "workspace", v.name)
+  const workdir = agentWorkdir(v.name, deps.muxHome)
   if (deps.workdirInUse(workdir)) {
     throw new CreateAgentError(`name already in use: the folder ${workdir} belongs to another session`, 409, "name_taken")
   }

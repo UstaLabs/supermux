@@ -463,6 +463,14 @@ class FleetStore(
             }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
 
+    /** The ACTIVE host's mux home, bound like [activeProjectCatalog]. Null until its snapshot. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMuxHome: StateFlow<String?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.muxHome ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
     /**
      * Record ids of the connected hosts whose broker has sent a project catalog (an empty one
      * counts) — [HostStore.projectCatalogKnown] per host. An old broker never does, so "New

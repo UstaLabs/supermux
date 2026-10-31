@@ -47,6 +47,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 .toMap(),
             requests = frame.requests,
             permissionModes = frame.permissionModes,
+            muxHome = frame.muxHome,
             // A snapshot is a NEW broker connection: the broker disposed the old connection's
             // language servers with it (src/core/lsp/bridge.ts, one LspConnection per socket), so
             // every server this client had open is gone. Say so, and an editor's LSP client opens

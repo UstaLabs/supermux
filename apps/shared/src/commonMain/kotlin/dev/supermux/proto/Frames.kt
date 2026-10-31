@@ -484,6 +484,11 @@ sealed interface ServerFrame {
         val onboarded: Boolean = false,
         /** Persistent project catalog. Empty from a broker older than persistent projects. */
         val projects: List<ProjectDto> = emptyList(),
+        /**
+         * The broker's mux home (`MUX_HOME`, in the host's own path form) — see
+         * `isMuxInternalPath`. Null from an older broker.
+         */
+        val muxHome: String? = null,
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
         val requests: Map<String, List<PromptRequest>> = emptyMap(),

@@ -1,5 +1,7 @@
 package dev.supermux.session
 
+import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -119,13 +121,32 @@ class DefaultProjectTest {
         )
     }
 
-    @Test fun isMuxInternalProject_hides_mux_home_and_agent_folders_only() {
-        assertEquals(true, isMuxInternalProject("/home/a/.mux"))
-        assertEquals(true, isMuxInternalProject("/home/a/.mux/"))
-        assertEquals(true, isMuxInternalProject("/home/a/.mux/workspace/Kahya"))
-        assertEquals(true, isMuxInternalProject("C:\\Users\\a\\.mux\\workspace\\Fox"))
-        assertEquals(false, isMuxInternalProject("/home/a/.mux/state/projects/local/telpa"))
-        assertEquals(false, isMuxInternalProject("/home/a/code/supermux"))
-        assertEquals(false, isMuxInternalProject("/home/a/my.mux"))
+    @Test fun isMuxInternalPath_is_the_mux_home_and_agent_folders_only() {
+        val mux = "/home/a/.mux"
+        assertEquals(true, isMuxInternalPath("/home/a/.mux", mux))
+        assertEquals(true, isMuxInternalPath("/home/a/.mux/workspace/Kahya", mux))
+        assertEquals(false, isMuxInternalPath("/home/a/.mux/state/projects/local/telpa", mux))
+        assertEquals(false, isMuxInternalPath("/home/a/.mux-other", mux))
+        assertEquals(false, isMuxInternalPath("/home/a/code/supermux", mux))
+        assertEquals(false, isMuxInternalPath("/home/a/.mux", null))
+    }
+
+    @Test fun isMuxInternalPath_follows_a_windows_mux_home() {
+        val mux = "C:\\Users\\a\\.mux"
+        assertEquals(true, isMuxInternalPath("C:\\Users\\a\\.mux", mux))
+        assertEquals(true, isMuxInternalPath("C:\\Users\\a\\.mux\\workspace\\Fox", mux))
+        assertEquals(false, isMuxInternalPath("C:\\Users\\a\\code\\app", mux))
+    }
+
+    @Test fun withoutMuxInternal_drops_internal_locations_and_emptied_projects() {
+        val mux = "/home/a/.mux"
+        fun p(id: String, vararg paths: String) =
+            ProjectDto(id = id, name = id, locations = paths.mapIndexed { i, x -> ProjectLocationDto("$id$i", x) })
+        val out = withoutMuxInternal(
+            listOf(p("home", "/home/a/.mux"), p("mixed", "/home/a/app", "/home/a/.mux/workspace/Fox"), p("empty"), p("app", "/home/a/app2")),
+            mux,
+        )
+        assertEquals(listOf("mixed", "empty", "app"), out.map { it.id })
+        assertEquals(listOf("/home/a/app"), out[0].locations.map { it.path })
     }
 }

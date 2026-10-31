@@ -1,4 +1,4 @@
-import { join } from "path"
+import { isAbsolute, join, relative, resolve } from "path"
 import { localEndpoint } from "../core/local-endpoint"
 import { home } from "./home"
 
@@ -10,6 +10,22 @@ export const SESSION_INBOX_DIR = join(MUX_HOME, "session_inboxes")
 /** One session's inbox file: `<dir>/<session id>.jsonl`. The store, the preamble and the shell read rules all name it through this. */
 export function inboxFilePath(sessionId: string, dir: string = SESSION_INBOX_DIR): string {
   return join(dir, `${sessionId}.jsonl`)
+}
+
+/** An agent's working folder: `<mux home>/workspace/<name>`. */
+export function agentWorkdir(name: string, muxHome: string = MUX_HOME): string {
+  return join(muxHome, "workspace", name)
+}
+
+/**
+ * Supermux's own folders, which are not user projects: the mux home itself (the home agent runs
+ * there) and every agent's folder under it. Path-module based, so it holds for Windows paths too.
+ */
+export function isMuxInternalPath(path: string, muxHome: string = MUX_HOME): boolean {
+  const p = resolve(path)
+  if (p === resolve(muxHome)) return true
+  const rel = relative(agentWorkdir("", muxHome), p)
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
 }
 
 export const STATE_DIR = process.env.MUX_STATE_DIR ?? join(MUX_HOME, "state")

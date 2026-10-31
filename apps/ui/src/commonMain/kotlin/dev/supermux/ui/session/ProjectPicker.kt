@@ -83,7 +83,6 @@ import dev.supermux.session.OmniOption
 import dev.supermux.session.ProjectOption
 import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.formatWorkdir
-import dev.supermux.session.isMuxInternalProject
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.proto.ProjectDto
 import androidx.compose.material.icons.filled.Lock
@@ -239,12 +238,6 @@ fun ProjectPicker(
         PickerCatalog(catalog.associateBy { it.id }, catalogHostKey, loadCatalogImage)
     }
     val projectOptions = remember(projects, home, catalog, activity) {
-        // The mux home and the agents' folders are supermux's own, not projects to pick.
-        val projects = projects.filterNot(::isMuxInternalProject)
-        val catalog = catalog.mapNotNull { p ->
-            val locations = p.locations.filterNot { isMuxInternalProject(it.path) }
-            if (locations.isEmpty() && p.locations.isNotEmpty()) null else p.copy(locations = locations)
-        }
         if (catalog.isEmpty()) {
             projects.map { ProjectOption(it, formatWorkdir(it, home)) }
         } else {
