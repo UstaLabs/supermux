@@ -12,6 +12,7 @@
 #   winvm.sh test                 run glue_test.exe again
 #   winvm.sh gradle TASK...       Gradle in Docker on desktop, on a copy of this worktree's apps/ and the fetched DLLs
 #   winvm.sh stage-sample         the sample for Windows x64 (stageWindows), mirrored from desktop to C:\wvc\lib
+#                                 (WVC_STAGED=1: the jars Gradle staged before the VM started, mirrored only)
 #   winvm.sh stage-release DIR    the shrunk jars (DIR: under the sample's folder on desktop), mirrored to C:\wvc\lib-release
 #   winvm.sh checks [NAMES]       the sample's engine checks on tester's desktop (NAMES: comma-separated); exit 0 if all pass
 #                                 (WVC_PROPS: the run's -D properties, space-separated)
@@ -330,7 +331,9 @@ cmd_stage_release() {
 }
 
 cmd_stage_sample() {
-  cmd_gradle -Pwebview.sample.windows :webview-sample:stageWindows
+  # WVC_STAGED=1: the jars Gradle staged on desktop before the VM started (`gradle -Pwebview.sample.windows
+  # :webview-sample:stageWindows`), mirrored only: no Docker build while the VM runs (desktop's 15 GB).
+  [ "${WVC_STAGED:-}" = 1 ] || cmd_gradle -Pwebview.sample.windows :webview-sample:stageWindows
   local n want
   n="$(with_agent mirror_lib | tail -1 | tr -d '\r')"
   want="$(host "ls $SRC/webview-sample/build/windows/lib | wc -l")"
