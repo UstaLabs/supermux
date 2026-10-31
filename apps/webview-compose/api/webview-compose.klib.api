@@ -94,7 +94,6 @@ final enum class dev.supermux.webview/UnavailableReason : kotlin/Enum<dev.superm
     enum entry NoWebViewProvider // dev.supermux.webview/UnavailableReason.NoWebViewProvider|null[0]
     enum entry NoWpe // dev.supermux.webview/UnavailableReason.NoWpe|null[0]
     enum entry NotImplemented // dev.supermux.webview/UnavailableReason.NotImplemented|null[0]
-    enum entry UnsupportedContent // dev.supermux.webview/UnavailableReason.UnsupportedContent|null[0]
 
     final val entries // dev.supermux.webview/UnavailableReason.entries|#static{}entries[0]
         final fun <get-entries>(): kotlin.enums/EnumEntries<dev.supermux.webview/UnavailableReason> // dev.supermux.webview/UnavailableReason.entries.<get-entries>|<get-entries>#static(){}[0]

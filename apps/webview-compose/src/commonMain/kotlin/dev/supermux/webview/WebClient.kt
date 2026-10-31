@@ -99,6 +99,13 @@ public class FileChooserRequest(public val acceptTypes: List<String>, public val
     override fun toString(): String = "FileChooserRequest(acceptTypes=$acceptTypes, allowMultiple=$allowMultiple)"
 }
 
+/**
+ * What a page asks permission for ([PermissionRequest.kinds]). [Other] is anything the engine can't name.
+ *
+ * Open to new kinds: a later version may name more of what pages ask for, so a `when` over a kind needs an `else`
+ * branch. Without one, code built against this version stops compiling against the next, or throws at run time if it
+ * isn't rebuilt.
+ */
 public enum class PermissionKind { Camera, Microphone, Geolocation, Notifications, ClipboardRead, Other }
 
 /** Permissions the page of [origin] asks for, for [WebClient.onPermission]. */

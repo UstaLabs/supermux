@@ -10,7 +10,12 @@ public sealed interface LoadingState {
     public data class Loading(val progress: Float) : LoadingState
 }
 
-/** Where a logical web view is in its life (spec §4). */
+/**
+ * Where a logical web view is in its life (spec §4).
+ *
+ * Open to new phases: a later version may add one, so a `when` over a phase needs an `else` branch. Without one, code
+ * built against this version stops compiling against the next, or throws at run time if it isn't rebuilt.
+ */
 public sealed interface WebViewPhase {
     /** No engine. The last snapshot, or the placeholder, is shown. */
     public data object Cold : WebViewPhase
@@ -23,25 +28,50 @@ public sealed interface WebViewPhase {
      * minute; one off screen waits until it is shown. `navigator.reload()` still brings it back at any time.
      */
     public data object Crashed : WebViewPhase
+
+    /** No engine can show it here, because of [reason]; [detail] says more, for logs. */
     public data class Unavailable(val reason: UnavailableReason, val detail: String? = null) : WebViewPhase
 }
 
+/**
+ * Why a view has no engine ([WebViewPhase.Unavailable]).
+ *
+ * Open to new reasons: a later version may add one, as engines meet new ways to be missing, so a `when` over a reason
+ * needs an `else` branch. Without one, code built against this version stops compiling against the next, or throws at
+ * run time if it isn't rebuilt.
+ */
 public enum class UnavailableReason {
+    /** This platform, or this version of its OS, has no engine of the library's (the detail says which). */
     NotImplemented,
+
+    /** Android: no system WebView, one that can't start, or one without the features the engine needs. */
     NoWebViewProvider,
+
+    /** Windows: no WebView2 Runtime, or one older than the engine needs. */
     NoWebView2Runtime,
+
+    /**
+     * Linux: no WPE runtime the engine can use: none found, one of another version or architecture, its page sandbox's
+     * tools missing, or WebKit didn't start (the detail says which).
+     */
     NoWpe,
+
+    /** The engine's native glue (macOS, Linux, Windows) didn't load; the detail says why. */
     NativeLibraryFailed,
-    UnsupportedContent,
 
     /** The engine factory failed to create an engine; the detail says why. */
     CreationFailed,
 }
 
 /**
- * Why the main frame failed to load ([WebViewState.error]). Plain classes, not data classes, so they can grow without
- * breaking code built against them: a new property comes as a new constructor parameter at the end, with a default, and
- * the signature before it stays, hidden. Compare them with `==`.
+ * Why the main frame failed to load ([WebViewState.error]).
+ *
+ * Open to new kinds: a later version may add one, so a `when` over an error needs an `else` branch. Without one, code
+ * built against this version stops compiling against the next, or throws at run time if it isn't rebuilt.
+ *
+ * Plain classes, not data classes, so they can grow without breaking code built against them: a new property comes as a
+ * new constructor parameter at the end, with a default, and the signature before it stays, hidden. Compare them with
+ * `==`.
  */
 public sealed interface WebError {
     public val url: String?

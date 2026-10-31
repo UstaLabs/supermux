@@ -213,7 +213,6 @@ public final class dev/supermux/webview/UnavailableReason : java/lang/Enum {
 	public static final field NoWebViewProvider Ldev/supermux/webview/UnavailableReason;
 	public static final field NoWpe Ldev/supermux/webview/UnavailableReason;
 	public static final field NotImplemented Ldev/supermux/webview/UnavailableReason;
-	public static final field UnsupportedContent Ldev/supermux/webview/UnavailableReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/UnavailableReason;
 	public static fun values ()[Ldev/supermux/webview/UnavailableReason;
