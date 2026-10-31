@@ -125,6 +125,9 @@ internal class FrameStore(private val view: FrameSource, private val guardDraws:
         var block = writable()
         // Every block may still be drawn (guarded): the frame waits; the engine keeps its newest for the next pull.
         if (block == null && blocks.isNotEmpty()) return false
+        // A guarded store's other blocks have the room of the frames of their time: the glue copies the frame at the
+        // store's size, so a block without room for it is given room first (else the copy writes past its end).
+        if (block != null && !block.fits(width, height)) block = sized(block, width, height)
         // A frame the store won't show is pulled for the engine's sake only: what changed in it, never the whole frame.
         var whole = (full || wholeNext || (block != null && !block.last)) && view.frameSeq() >= showFrom
         // No block yet: asked at no size, so the engine says the frame's.

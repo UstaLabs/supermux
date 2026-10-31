@@ -71,6 +71,30 @@ class FrameStoreReplayTest {
         store.close()
     }
 
+    @Test fun aFrameGoesOnlyIntoABlockWithRoomForIt() {
+        // A guarded store's other block has the room of the frames of its time. In the perf lab's Reading test the views
+        // grew while a block was held, and the next frame went into the other one, made for a smaller frame: the glue's
+        // copy wrote past its end (the VM's crash: an access violation in webview_windows.dll, under pullFrame).
+        val view = FakeWpeView()
+        val store = FrameStore(view, guardDraws = true)
+        view.frame = Triple(64, 32, 1L)
+        assertTrue(store.pull(full = false))
+        val first = record(assertNotNull(store.image))
+        view.frame = Triple(64, 32, 2L)
+        assertTrue(store.pull(full = false), "into a second block, the first being held")
+        val second = record(assertNotNull(store.image))
+        first.close()
+        view.frame = Triple(64, 300, 3L)
+        assertTrue(store.pull(full = false), "taller: into the first block, given room for it")
+        val third = record(assertNotNull(store.image))
+        second.close()
+        view.frame = Triple(64, 300, 4L)
+        assertTrue(store.pull(full = false), "into the second block, free again, made for 32 rows")
+        assertEquals(300, assertNotNull(store.image).height)
+        third.close()
+        store.close()
+    }
+
     @Test fun whileEveryBlockIsHeldTheFrameWaits() {
         // A renderer far behind: the store doesn't take more memory without bound, and the frame is pulled once a block
         // is free again (the glue keeps the newest).
