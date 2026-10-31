@@ -263,8 +263,14 @@ data class CouncilView(
     val round: Int = 1,
     /** The current round's focus (round 1 has none). */
     val focus: String? = null,
-    /** "open" today. */
+    /** "open" or "ended" (its caller's council_end, the user's Stop council, or no member left). */
     val status: String = "open",
+    /** Who ended it: "caller", "user" or "empty". */
+    val endedBy: String? = null,
+    /** The caller's conclusion, given when it ended the council. */
+    val verdict: String? = null,
+    /** ISO-8601. */
+    val endedAt: String? = null,
     /** The caller's `council` tool call that opened it, when the agent reported one. */
     val callId: String? = null,
     /** ISO-8601. */

@@ -78,6 +78,9 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       council: async () => { throw new Error("unused in tests") },
       councilRound: async () => { throw new Error("unused in tests") },
       councilReport: async () => { throw new Error("unused in tests") },
+      councilAdd: () => Promise.reject(new Error("not wired")),
+      councilRemove: () => Promise.reject(new Error("not wired")),
+      councilEnd: () => Promise.reject(new Error("not wired")),
     },
     stores: {
       fileStore: {} as unknown as FileStore,

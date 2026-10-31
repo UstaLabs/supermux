@@ -101,7 +101,7 @@ import { failedTurn } from "./core/delegate/failed-turn"
 import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
 import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
-import { createCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
+import { addCouncilMembers, createCouncil, type AddMembersArgs, type StartCouncilArgs, type StartCouncilDeps, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -783,6 +783,7 @@ const councils = new Council({
     catch (err) { log.warn("council_notice_failed", { to, err: String(err) }) }
   },
   lastReply: (id) => messageLog.lastReply(id),
+  kill: (id): Promise<void> => sessionManager.killAndArchive(id, { endedBy: "parent" }),
   // A member holds its caller's settle only while it really works (decision #21).
   busy: (id: string): boolean => turnRunning(id) || !!inboxDelivery?.pending(id) || corePendingInput(id) > 0,
   changed: (caller, view) => {
@@ -798,7 +799,8 @@ const parentOfChild = (id: string): string | undefined =>
 /** Where a session's tasks come from: a child's parent, a member's council (its question and rounds). */
 function settleSource(id: string): SettleSource | undefined {
   const membership = councilStore.membership(id)
-  if (membership) return { kind: "member", from: membership.councilId }
+  // Only members of an open council are watched: an ended one is never touched again (design 2026-10-31 §4).
+  if (membership) return councils.watched(id) ? { kind: "member", from: membership.councilId } : undefined
   const parent = parentOfChild(id)
   return parent ? { kind: "child", from: parent } : undefined
 }
@@ -1174,6 +1176,12 @@ const sessionManager = new SessionManager(registry, {
     delegate: (args) => delegateSession(args),
     council: (args) => councilSession(args),
     councilRound: async (args) => councils.startRound(args.callerId, args.council, args.focus),
+    councilAdd: (args) => councilAddMembers(args),
+    councilRemove: (args) => councils.remove(args.callerId, args.council, args.letters),
+    councilEnd: async (args) => {
+      await councils.end(args.council, "caller", { callerId: args.callerId, verdict: args.verdict })
+      return { ended: true as const }
+    },
     councilReport: async (args) => {
       const report = councils.report(args.memberId, args.text)
       childSettle.reported(args.memberId)
@@ -2619,6 +2627,15 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionCouncils: (id) => councils.forCaller(id),
     messageSubagent: (id, subagentId, text) => messageSubagent(id, subagentId, text),
     stopSubagent: (id, subagentId) => stopSubagent(id, subagentId),
+    endCouncil: async (councilId) => {
+      if (!councilStore.get(councilId)) return { ok: false, status: 404, error: "council not found" }
+      try {
+        await councils.end(councilId, "user")
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, status: 409, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
     getSessionCommands: (id) => {
       const s = registry.get(id)
       return s ? commandRegistry.get(s.name) : []
@@ -3786,7 +3803,20 @@ async function delegateSession(args: {
  * the background, and the card and the caller hear each one start or fail.
  */
 async function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
-  const created = await createCouncil({
+  const created = await createCouncil(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_start_failed", { council: created.started.council, err: String(err) }))
+  return created.started
+}
+
+/** council_add (design 2026-10-31 §2): more members for an open council, started like the first ones. */
+async function councilAddMembers(args: AddMembersArgs): Promise<{ added: StartedCouncil["members"] }> {
+  const created = await addCouncilMembers(councilStartDeps(), args)
+  void created.run().catch((err) => log.warn("council_add_failed", { council: args.council, err: String(err) }))
+  return { added: created.added }
+}
+
+function councilStartDeps(): StartCouncilDeps {
+  return {
     store: councilStore,
     session: (id) => registry.sessions.getById(id),
     isLive: (id) => !!registry.get(id),
@@ -3801,9 +3831,7 @@ async function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
     opened: (councilId) => councils.opened(councilId),
     memberStarted: (id) => councils.memberStarted(id),
     memberStartFailed: (id, error) => councils.memberStartFailed(id, error),
-  }, args)
-  void created.run().catch((err) => log.warn("council_start_failed", { council: created.started.council, err: String(err) }))
-  return created.started
+  }
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
@@ -4324,7 +4352,7 @@ function seedMemberTasks(): void {
   for (const s of registry.list()) {
     const membership = councilStore.membership(s.id)
     const council = membership ? councilStore.get(membership.councilId) : undefined
-    if (!membership || !council || !registry.get(council.callerSessionId)) continue
+    if (!membership || !council || council.status !== "open" || !registry.get(council.callerSessionId)) continue
     try {
       const own = inboxStore.read(s.id)
       const seed = seedFor({

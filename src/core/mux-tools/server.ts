@@ -44,7 +44,7 @@ export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): M
   // Built per (session, connection) when the agent connects; a member's membership is recorded before it starts.
   for (const tool of listTools(rpcOnly, { councilMember: handler?.councilMember?.(ctx.sessionId) === true })) {
     const route = toolRoute(tool.name, rpcOnly)!
-    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined, reqCtx: { mcpReq?: { _meta?: unknown } } | undefined) => {
+    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never), ...("annotations" in tool && tool.annotations ? { annotations: tool.annotations } : {}) }, (async (args: Record<string, unknown> | undefined, reqCtx: { mcpReq?: { _meta?: unknown } } | undefined) => {
       const bound = handler
       if (!bound) return toolResult(tool.name, { ok: false, error: "supermux broker is not ready" }, rpcOnly)
       const callId = toolCallIdOf(reqCtx?.mcpReq?._meta)

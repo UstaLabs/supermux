@@ -48,12 +48,21 @@ export type AntigravityOptions = {
   }
 }
 
+/**
+ * supermux's own tools that only send an answer or a message: allowed in every mode. Headless agy cannot ask, so
+ * in plan/default/accept-edits it denies every MCP call ("soft-denying tool confirmation CallMcpTool") unless a
+ * `permissions.allow` rule names it (verified on agy 1.4.12, 2026-10-31). The server is supermux's mux-shim under
+ * its shadow-config name.
+ */
+const SENDS_ONLY_TOOLS = ["mcp(supermux-mux-shim/council_report)", "mcp(supermux-mux-shim/message_session)"]
+
 export function permissionFlags(spec: AntigravityPermissions): string[] {
+  const allow = ["--settings", JSON.stringify({ permissions: { allow: SENDS_ONLY_TOOLS } })]
   switch (spec.mode) {
     case "bypass": return ["--dangerously-skip-permissions"]
-    case "acceptEdits": return ["--mode", "accept-edits"]
-    case "plan": return ["--mode", "plan"]
-    default: return []
+    case "acceptEdits": return ["--mode", "accept-edits", ...allow]
+    case "plan": return ["--mode", "plan", ...allow]
+    default: return allow
   }
 }
 

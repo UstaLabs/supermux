@@ -81,7 +81,7 @@ describe("mux-shim host server: tool list", () => {
     test(`${agent}: tools/list is exactly the shim's listTools(${agent}) (names, descriptions, JSON schemas)`, async () => {
       const c = await connect(agent, "s1")
       const listed = (await c.request("tools/list")).result.tools
-      expect(listed).toEqual(listTools().map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
+      expect(listed).toEqual(listTools().map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...("annotations" in t && t.annotations ? { annotations: t.annotations } : {}) })))
     })
   }
 

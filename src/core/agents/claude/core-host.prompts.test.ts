@@ -5,7 +5,7 @@ import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import { SESSION_INBOX_DIR, inboxFilePath } from "../../../shared/paths"
-import { claudeInboxShellRules, claudeReadRule, createClaudeCoreHost } from "./core-host"
+import { CLAUDE_SENDS_ONLY_RULES, claudeInboxShellRules, claudeReadRule, createClaudeCoreHost } from "./core-host"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -117,8 +117,8 @@ test("claude may read its inbox through allow rules (Read of the folder, exact s
   // --add-dir would let accept-edits / auto modes edit in the folder without asking and load its .claude skills.
   for (const options of captured) expect(options.args ?? []).not.toContain("--add-dir")
   // Each session: the Read rule, then cat / head / tail / wc -l on ITS OWN file and no other.
-  expect(captured[0]?.allowedTools).toEqual(inboxRules("id-inbox-0"))
-  expect(captured[1]?.allowedTools).toEqual(inboxRules("id-inbox-1"))
+  expect(captured[0]?.allowedTools).toEqual([...inboxRules("id-inbox-0"), ...CLAUDE_SENDS_ONLY_RULES])
+  expect(captured[1]?.allowedTools).toEqual([...inboxRules("id-inbox-1"), ...CLAUDE_SENDS_ONLY_RULES])
   expect(captured[0]?.allowedTools?.join("\n")).not.toContain("id-inbox-1")
   // Exact commands: no `*`, no `:*`, so extra arguments and other forms still ask.
   for (const rule of captured[0]!.allowedTools!.filter(rule => rule.startsWith("Bash("))) expect(rule).not.toMatch(/[*]/)
@@ -130,7 +130,7 @@ test("an inbox folder the rules cannot carry: no rule for any session of the hos
   const { captured, logged } = await launchSessions(2, unsafe)
   expect(captured).toHaveLength(2)
   for (const options of captured) {
-    expect(options.allowedTools).toEqual([])
+    expect(options.allowedTools).toEqual(CLAUDE_SENDS_ONLY_RULES)
     expect(options.args ?? []).not.toContain("--add-dir")
   }
   const warnings = logged.filter(line => line.includes("claude_inbox_"))
@@ -144,7 +144,7 @@ test("an inbox folder the rules cannot carry: no rule for any session of the hos
 test("a folder with a space keeps the Read rule (spaces survive inside Read(...)) but gets no shell rules, with one warning", async () => {
   const spaced = "/Users/John Smith/.mux/session_inboxes" // a command naming it must be quoted, and Claude matches the typed text
   const { captured, logged } = await launchSessions(2, spaced)
-  for (const options of captured) expect(options.allowedTools).toEqual([`Read(//Users/John Smith/.mux/session_inboxes/**)`])
+  for (const options of captured) expect(options.allowedTools).toEqual([`Read(//Users/John Smith/.mux/session_inboxes/**)`, ...CLAUDE_SENDS_ONLY_RULES])
   const warnings = logged.filter(line => line.includes("claude_inbox_"))
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain("claude_inbox_shell_rules_omitted")

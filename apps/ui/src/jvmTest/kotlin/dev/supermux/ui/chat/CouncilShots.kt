@@ -128,7 +128,7 @@ class CouncilShots {
                                 ChatPanel(
                                     session = SessionInfo(id = "s-1", name = "personal-1", workdir = "/home/ahmet/openwhisper", agent = "claude"),
                                     state = ChatState(messages = messages, activity = activity, councils = listOf(council)),
-                                    actions = ChatActions(killSession = {}),
+                                    actions = ChatActions(endCouncil = {}),
                                     draft = "",
                                     onDraftChange = {},
                                 )

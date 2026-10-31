@@ -18,6 +18,8 @@ export type StartCouncilArgs = {
 export type StartedCouncil = {
   council: string
   name: string
+  /** What the caller should do now, in the result it reads right after calling (the tool description alone was skimmed). */
+  note?: string
   members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }>
 }
 
@@ -69,6 +71,21 @@ export type CreatedCouncil = {
 }
 
 /**
+ * Seen 2026-10-31: with the rule only in the tool description, a caller still told the user each answer as
+ * it arrived; the user already sees them live on the council card.
+ */
+export const CALLER_NOTE = "The members are starting. Their answers arrive in your inbox and the user sees them live on the " +
+  "council card, so don't tell the user about each answer. Replace a member that fails (council_remove, council_add); " +
+  "when you have what you need, call council_end with your verdict and tell the user the verdict once."
+
+export type AddMembersArgs = {
+  callerId: string
+  council: string
+  members: StartCouncilArgs["members"]
+  checkout: "shared" | "worktree"
+}
+
+/**
  * council (spec §5): members start like delegated children (hidden in the caller's workspace, the
  * caller their parent), each with a fixed letter recorded before it starts. Only what is quick is
  * checked before the council is saved (the caller, the agents installed, the folder a git repository for
@@ -78,43 +95,73 @@ export type CreatedCouncil = {
  * and the caller is told. The others carry on.
  */
 export async function createCouncil(deps: StartCouncilDeps, args: StartCouncilArgs): Promise<CreatedCouncil> {
-  const caller = deps.isLive(args.callerId) ? deps.session(args.callerId) : undefined
+  const { caller, repo } = await check(deps, args.callerId, args.members, args.checkout)
+  const council = deps.store.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
+  const created = launch(deps, { councilId: council.id, councilName: council.name, caller, repo, members: args.members, firstIndex: 0 })
+  deps.opened(council.id)
+  return { started: { council: council.id, name: council.name, members: created.members, note: CALLER_NOTE }, run: created.run }
+}
+
+/**
+ * council_add (design 2026-10-31 §2): more members join an open council's current round, with the next letters,
+ * started the same way. A member added after round 1 gets that round's focus and the reports before it.
+ */
+export async function addCouncilMembers(deps: StartCouncilDeps, args: AddMembersArgs): Promise<{ added: StartedCouncil["members"]; run(): Promise<void> }> {
+  const c = deps.store.get(args.council)
+  if (!c) throw new Error(`unknown council: ${args.council}`)
+  if (c.callerSessionId !== args.callerId) throw new Error("only the council's caller can add members")
+  if (c.status === "ended") throw new Error(`${c.name} has ended`)
+  const { caller, repo } = await check(deps, args.callerId, args.members, args.checkout)
+  const created = launch(deps, { councilId: c.id, councilName: c.name, caller, repo, members: args.members, firstIndex: deps.store.members(c.id).length })
+  deps.opened(c.id)
+  return { added: created.members, run: created.run }
+}
+
+/** What is quick to check before anything is saved: the caller, the agents, and the folder for "worktree". */
+async function check(deps: StartCouncilDeps, callerId: string, members: StartCouncilArgs["members"], checkout: "shared" | "worktree") {
+  const caller = deps.isLive(callerId) ? deps.session(callerId) : undefined
   if (!caller) throw new Error("unknown session")
-  for (const m of args.members) deps.assertInstalled(m.agent)
+  for (const m of members) deps.assertInstalled(m.agent)
   let repo: { root: string; branch: string } | undefined
-  if (args.checkout === "worktree") {
+  if (checkout === "worktree") {
     const info = await deps.repoInfo(caller.workdir)
     if (!info.eligible || !info.repoRoot) throw new Error(`${caller.workdir} is not a single git repository, so no worktree can be made`)
     repo = { root: info.repoRoot, branch: info.currentBranch || "HEAD" }
   }
-  const workspaceId = deps.workspaceOf(caller.id)
-  const council = deps.store.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
-  const members = args.members.map((m, i) => ({ ...m, letter: letterAt(i), id: deps.newId() }))
+  return { caller, repo }
+}
+
+/** Records the members (letters from `firstIndex`) and returns how to start them, all at once. */
+function launch(deps: StartCouncilDeps, o: {
+  councilId: string; councilName: string; caller: Session; repo?: { root: string; branch: string }
+  members: StartCouncilArgs["members"]; firstIndex: number
+}) {
+  const workspaceId = deps.workspaceOf(o.caller.id)
+  const members = o.members.map((m, i) => ({ ...m, letter: letterAt(o.firstIndex + i), id: deps.newId() }))
   // Recorded before any start: a member's preamble and its tool list read its membership.
-  for (const m of members) deps.store.addMember(council.id, m.id, m.letter)
-  deps.opened(council.id)
+  for (const m of members) deps.store.addMember(o.councilId, m.id, m.letter)
 
   const startMember = async (m: (typeof members)[number]): Promise<void> => {
     let worktree: WorktreeHandle | undefined
     try {
-      if (repo) {
+      if (o.repo) {
         try {
-          worktree = await deps.createWorktree({ repoRoot: repo.root, baseBranch: repo.branch, sessionName: `${council.name} ${m.letter}` })
+          worktree = await deps.createWorktree({ repoRoot: o.repo.root, baseBranch: o.repo.branch, sessionName: `${o.councilName} ${m.letter}` })
         } catch (err) {
           throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
       await deps.spawn({
         id: m.id,
-        workdir: caller.workdir,
-        requestedName: `${council.name} ${m.letter}`,
+        workdir: o.caller.workdir,
+        requestedName: `${o.councilName} ${m.letter}`,
         agent: m.agent,
         model: m.model,
         reasoningLevel: m.effort,
         permissionMode: m.access,
         worktree: false,
         worktreeHandle: worktree,
-        parentSessionId: caller.id,
+        parentSessionId: o.caller.id,
         workspaceId,
       })
     } catch (err) {
@@ -128,11 +175,7 @@ export async function createCouncil(deps: StartCouncilDeps, args: StartCouncilAr
   }
 
   return {
-    started: {
-      council: council.id,
-      name: council.name,
-      members: members.map((m) => ({ letter: m.letter, session: m.id, agent: m.agent, model: m.model ?? null })),
-    },
+    members: members.map((m) => ({ letter: m.letter, session: m.id, agent: m.agent, model: m.model ?? null })),
     run: async () => { await Promise.all(members.map(startMember)) },
   }
 }

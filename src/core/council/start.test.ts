@@ -5,7 +5,7 @@ import { Registry } from "../session-manager/registry"
 import type { RepoInfo } from "../git/repo-info"
 import type { WorktreeHandle } from "../worktree/manager"
 import { CouncilStore } from "./store"
-import { createCouncil, type StartCouncilArgs, type StartCouncilDeps } from "./start"
+import { addCouncilMembers, CALLER_NOTE, createCouncil, type StartCouncilArgs, type StartCouncilDeps } from "./start"
 
 const NOTHING = { councils: 0, council_members: 0, council_rounds: 0, council_reports: 0, council_member_status: 0 }
 
@@ -104,6 +104,7 @@ test("the council is saved and returned before any member starts", async () => {
   expect(created.started).toEqual({
     council: created.started.council,
     name: "council-1",
+    note: CALLER_NOTE,
     members: [
       { letter: "A", session: "m1", agent: "codex", model: "gpt-6" },
       { letter: "B", session: "m2", agent: "grok", model: null },
@@ -179,4 +180,26 @@ test("an unknown caller, or a member whose agent is not installed, is refused be
   expect((await failure(createCouncil(t.deps, { callerId: t.caller.id, question: "Q", members: MEMBERS, checkout: "shared" }))).message).toBe("grok is not installed")
   expect(t.events).toEqual([])
   expect(t.left()).toEqual(NOTHING)
+})
+
+test("council_add: new members get the next letters and start in the background", async () => {
+  const t = setup()
+  const r = await startAll(t.deps, { callerId: t.caller.id, question: "Q", members: MEMBERS, checkout: "shared" })
+  t.events.length = 0
+  const added = await addCouncilMembers(t.deps, { callerId: t.caller.id, council: r.council, members: [{ agent: "codex", access: "auto" }], checkout: "shared" })
+  expect(added.added).toEqual([{ letter: "C", session: "m3", agent: "codex", model: null }])
+  expect(t.spawns.map((a) => a.id)).toEqual(["m1", "m2"])
+  await added.run()
+  expect(t.spawns.at(-1)).toMatchObject({ id: "m3", requestedName: "council-1 C", parentSessionId: t.caller.id })
+  expect(t.events).toEqual([`opened ${r.council}`, "spawn m3", "started m3"])
+})
+
+test("council_add: only the caller, only while the council is open", async () => {
+  const t = setup()
+  const r = await startAll(t.deps, { callerId: t.caller.id, question: "Q", members: MEMBERS, checkout: "shared" })
+  const add = (callerId: string) => addCouncilMembers(t.deps, { callerId, council: r.council, members: [{ agent: "codex", access: "auto" }], checkout: "shared" })
+  expect((await failure(add("m1"))).message).toBe("only the council's caller can add members")
+  t.store.end(r.council, "caller", "done")
+  expect((await failure(add(t.caller.id))).message).toBe("council-1 has ended")
+  expect((await failure(addCouncilMembers(t.deps, { callerId: t.caller.id, council: "nope", members: MEMBERS, checkout: "shared" }))).message).toBe("unknown council: nope")
 })

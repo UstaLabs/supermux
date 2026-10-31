@@ -8,7 +8,7 @@ import { createCore } from "../src/core.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
-import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
+import { acpPermissionDecision, isSendsOnlyMuxTool, appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
 import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR } from "./helpers.js"
 
@@ -445,4 +445,18 @@ test("validatePermissionsSpec refuses readableRoots that is not an array of abso
     .toEqual({ kind: "acp", policy: "ask", nativeMode: null, readableRoots: [] })
   expect(validatePermissionsSpec({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] }))
     .toEqual({ kind: "acp", policy: "ask", nativeMode: null, askKinds: ["execute"], readableRoots: ["/a", "/b"] })
+})
+
+test("supermux's send-only tools are approved under every ACP policy, as Grok and Cursor name them", () => {
+  const options = [{ optionId: "always", kind: "allow_always" }, { optionId: "once", kind: "allow_once" }, { optionId: "no", kind: "reject_once" }]
+  for (const title of ["mux-shim__council_report", "mux-shim-council_report: council_report", "mux-shim__message_session", "mux-shim-message_session: message_session"]) {
+    expect(isSendsOnlyMuxTool(title)).toBe(true)
+    for (const policy of ["ask", "read-only"] as const) {
+      expect(acpPermissionDecision({ kind: "acp", policy, nativeMode: null }, "other", options, [], title)).toEqual({ auto: true, optionId: "once" })
+    }
+  }
+  for (const title of ["mux-shim__rename_session", "mux-shim__council_reporter", "other__council_report", "council_report", undefined]) {
+    expect(isSendsOnlyMuxTool(title)).toBe(false)
+  }
+  expect(acpPermissionDecision({ kind: "acp", policy: "ask", nativeMode: null }, "other", options, [], "mux-shim__rename_session")).toEqual({ auto: false })
 })

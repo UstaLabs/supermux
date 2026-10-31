@@ -12,6 +12,24 @@ export function toolCallIdOf(meta: unknown): string | undefined {
   return typeof id === "string" && id ? id : undefined
 }
 
+/**
+ * Marks a tool that only sends an answer or a message and changes nothing on the machine. Claude in Plan
+ * mode refuses an MCP tool without it even when --allowedTools lists the tool (verified on 2.1.308,
+ * 2026-10-31): a council member or delegated child in Plan could then never report.
+ */
+const SENDS_ONLY = { readOnlyHint: true }
+
+/** A council member to start (council, council_add). */
+const COUNCIL_MEMBERS = {
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
+    required: ["agent", "access"],
+  },
+}
+
 const OUTBOUND_TOOLS = [
   {
     name: "attach",
@@ -105,21 +123,16 @@ const ORCHESTRATION_TOOLS = [
       "\"worktree\" gives each member a new git worktree from your current branch. " +
       "It returns as soon as the council is saved; the members start in the background, so don't wait for them or check " +
       "on them: their answers arrive in your inbox. " +
+      "The user sees every member start, answer and fail live on the council card: don't update the user as answers " +
+      "arrive. You run the council: replace a member that fails with council_remove and council_add, start rounds with " +
+      "council_round, and when you have what you need, end it with council_end and a verdict, then tell the user the verdict once. " +
       "Each member runs on its agent's account with the most room left. You are told when a member can't start, crashes, " +
       "is stopped by the user or killed by someone else, or a turn of it ends in an error.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string" },
-        members: {
-          type: "array",
-          minItems: 1,
-          items: {
-            type: "object",
-            properties: { agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, access: { type: "string" } },
-            required: ["agent", "access"],
-          },
-        },
+        members: COUNCIL_MEMBERS,
         checkout: { type: "string", enum: ["shared", "worktree"] },
       },
       required: ["question", "members", "checkout"],
@@ -132,8 +145,31 @@ const ORCHESTRATION_TOOLS = [
     inputSchema: { type: "object", properties: { council: { type: "string" }, focus: { type: "string" } }, required: ["council", "focus"] },
   },
   {
+    name: "council_add",
+    description: "Add members to a council you called, in its current round, with the next letters (e.g. to replace one that " +
+      "failed). Same member shape and checkout as council. Each gets the question, and after round 1 also the round's focus " +
+      "and the previous round's reports. Returns at once; they start in the background.",
+    inputSchema: {
+      type: "object",
+      properties: { council: { type: "string" }, members: COUNCIL_MEMBERS, checkout: { type: "string", enum: ["shared", "worktree"] } },
+      required: ["council", "members", "checkout"],
+    },
+  },
+  {
+    name: "council_remove",
+    description: "Remove members from a council you called, by letter: their sessions are stopped. Their answers so far stay.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, letters: { type: "array", items: { type: "string" }, minItems: 1 } }, required: ["council", "letters"] },
+  },
+  {
+    name: "council_end",
+    description: "End a council you called once you have what you need: verdict is your conclusion in a few sentences, shown " +
+      "to the user on the council card. Stops the members still running. Then tell the user the verdict.",
+    inputSchema: { type: "object", properties: { council: { type: "string" }, verdict: { type: "string" } }, required: ["council", "verdict"] },
+  },
+  {
     name: "council_report",
     description: "Report your answer to the council you are a member of, for its current round. You can report more than once.",
+    annotations: SENDS_ONLY,
     inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
   },
   { name: "set_active",     description: "Set active session for a chat.",                   inputSchema: { type: "object", properties: { chat_id: { type: "string" }, name: { type: "string" } }, required: ["chat_id", "name"] } },
@@ -230,6 +266,7 @@ const ORCHESTRATION_TOOLS = [
     description: "Send a message to other sessions' inboxes, by session id. The message wakes each receiving session. " +
       "interrupt=true interrupts its current turn; interrupt=false delivers after the current turn ends. " +
       "Your normal reply already reaches the user: this is only for other sessions.",
+    annotations: SENDS_ONLY,
     inputSchema: {
       type: "object",
       properties: {
@@ -299,7 +336,7 @@ export function toolRoute(name: string, rpcOnly = false): ToolRoute | undefined 
 export function shimTools(server: string | undefined, opts: { councilMember?: boolean } = {}): ShimTool[] | undefined {
   if (server !== "mux-shim" && server !== "mux-rpc") return undefined
   const rpcOnly = server === "mux-rpc"
-  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, route: toolRoute(t.name, rpcOnly)! }))
+  return listTools(rpcOnly, opts).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...("annotations" in t && t.annotations ? { annotations: t.annotations } : {}), route: toolRoute(t.name, rpcOnly)! }))
 }
 
 /**

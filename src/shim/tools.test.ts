@@ -31,8 +31,8 @@ describe("shim tools", () => {
   })
 
   test("shimTools: the list the broker serves each external shim server, every tool with its route", () => {
-    const withRoutes = (rpcOnly: boolean, tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>) =>
-      tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, route: toolRoute(t.name, rpcOnly)! }))
+    const withRoutes = (rpcOnly: boolean, tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; annotations?: { readOnlyHint?: boolean } }>) =>
+      tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, ...(t.annotations ? { annotations: t.annotations } : {}), route: toolRoute(t.name, rpcOnly)! }))
     expect(shimTools("mux-shim")).toEqual(withRoutes(false, listTools()))
     expect(shimTools("mux-shim", { councilMember: true })).toEqual(withRoutes(false, listTools(false, { councilMember: true })))
     expect(shimTools("mux-rpc")).toEqual(withRoutes(true, RPC_TOOLS))
