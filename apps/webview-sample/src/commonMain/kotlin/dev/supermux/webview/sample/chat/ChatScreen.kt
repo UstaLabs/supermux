@@ -268,6 +268,12 @@ private fun Menu(chat: ChatState, onOpen: (Screen) -> Unit) {
                 enabled = idle,
                 modifier = Modifier.testTag(ChatTags.menuItem("fling")),
             )
+            DropdownMenuItem(
+                text = { Text(if (chat.baseline) "Show live previews" else "Baseline: still pictures") },
+                onClick = { open = false; chat.baseline = !chat.baseline },
+                enabled = idle,
+                modifier = Modifier.testTag(ChatTags.menuItem("baseline")),
+            )
             HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("Perf lab") },
@@ -395,7 +401,7 @@ private fun AgentRow(message: AgentMessage, chat: ChatState) {
             )
             for (preview in message.previews) {
                 Spacer(Modifier.height(8.dp))
-                PreviewCard(preview, chat)
+                if (chat.baseline) StillCard(preview) else PreviewCard(preview, chat)
             }
         }
     }
@@ -439,6 +445,27 @@ private fun PreviewCard(spec: PreviewSpec, chat: ChatState) {
             )
         }
         Caption(spec, state, chat)
+    }
+}
+
+/** The baseline's card: the same card at the preview's height, with its placeholder where the web view would be. */
+@Composable
+private fun StillCard(spec: PreviewSpec) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(CARD_SHAPE)
+            .background(cs.surfaceContainerLow)
+            .border(1.dp, cs.outlineVariant, CARD_SHAPE),
+    ) {
+        Box(Modifier.fillMaxWidth().height(spec.height ?: spec.initial)) { PreviewPlaceholder(spec) }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(spec.title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            Text("still", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+        }
     }
 }
 

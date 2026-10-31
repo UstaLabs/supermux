@@ -82,6 +82,7 @@ const val WEB_ENGINE_LABEL: String = "iframe engine"
  * @param safeArea what the lab's screens keep clear of (the status bar, a cutout, the keyboard where the platform pads
  *   for it). The chat draws its bars under the system's own and keeps its content clear of them itself.
  * @param chatRun a chat run to start 3 s after launch: it prints a `chat-perf:` line.
+ * @param chatState the chat's state, for a host that drives the chat itself (iOS's screenshots); the app's own if null.
  */
 @Composable
 fun SampleApp(
@@ -91,11 +92,12 @@ fun SampleApp(
     pickFiles: (suspend (dev.supermux.webview.FileChooserRequest) -> List<String>?)? = null,
     safeArea: WindowInsets = WindowInsets(0, 0, 0, 0),
     chatRun: ChatRun? = null,
+    chatState: ChatState? = null,
 ) {
     val screens = screensFor(engineLabel)
     var screen by remember { mutableStateOf(if (initialScreen in screens) initialScreen else Screen.PerfLab) }
     // The chat outlives its screen: switching to the lab and back keeps its place, its count and its pages.
-    val chat = remember(lab) { ChatState(lab) }
+    val chat = remember(lab, chatState) { chatState ?: ChatState(lab) }
     if (chatRun != null) {
         LaunchedEffect(chatRun) {
             screen = Screen.Chat

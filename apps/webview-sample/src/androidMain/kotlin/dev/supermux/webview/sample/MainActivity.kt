@@ -1,5 +1,6 @@
 package dev.supermux.webview.sample
 
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.LaunchedEffect
 import dev.supermux.webview.FileChooserRequest
 import dev.supermux.webview.sample.chat.ChatRun
+import dev.supermux.webview.sample.chat.ChatState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 
@@ -27,6 +29,10 @@ import kotlinx.coroutines.delay
  * - `--es run scroll|reading|fling`: opens the perf lab and starts that run 3 s after launch. Its `perf-lab:` line goes to
  *   logcat (tag System.out), where device-checks/android-sample.sh reads it.
  * - `--es chatrun read|scroll|fling`: starts that run of the chat 3 s after launch; its `chat-perf:` line goes there too.
+ *   `--ez chatbaseline true` shows the previews as still pictures instead, the baseline the web views are measured
+ *   against.
+ * - `--es orientation portrait|landscape`: holds this window in that orientation (screenshots and runs on a phone lying on
+ *   a desk), without touching the system's rotation settings.
  */
 class MainActivity : ComponentActivity() {
     private var picking: CompletableDeferred<List<Uri>>? = null
@@ -44,7 +50,12 @@ class MainActivity : ComponentActivity() {
         // A scripted run takes minutes and nobody touches the phone meanwhile: the screen stays on while this window
         // shows, so the screen timeout doesn't stop the measurement. A window flag, gone with the window.
         if (run != null || chatRun != null) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        when (intent?.getStringExtra("orientation")) {
+            "portrait" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            "landscape" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
         val lab = androidPerfLab(fake)
+        val chat = ChatState(lab).apply { baseline = intent?.getBooleanExtra("chatbaseline", false) == true }
         setContent {
             SampleApp(
                 lab,
@@ -53,6 +64,7 @@ class MainActivity : ComponentActivity() {
                 pickFiles = ::pickFiles,
                 safeArea = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                 chatRun = chatRun,
+                chatState = chat,
             )
             if (run != null) {
                 LaunchedEffect(run) {

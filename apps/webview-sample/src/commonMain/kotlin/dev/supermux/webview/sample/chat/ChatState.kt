@@ -66,6 +66,12 @@ class ChatState(val lab: PerfLabState) {
     /** The composer's text. */
     var draft: String by mutableStateOf("")
 
+    /**
+     * Whether the previews show as still pictures (their placeholders) instead of web views: the baseline the chat's
+     * runs measure the web views against, as the perf lab's still images are.
+     */
+    var baseline: Boolean by mutableStateOf(false)
+
     /** The count the counter previews show: the app keeps it, and they ask for it over the bridge. */
     var count: Int by mutableIntStateOf(0)
         private set
@@ -217,7 +223,7 @@ class ChatState(val lab: PerfLabState) {
         } finally {
             val report = recorder.report(
                 name = if (finished) run.label else "${run.label} (stopped)",
-                setup = "chat · $previewCount previews in $messageCount messages",
+                setup = "chat · $previewCount previews in $messageCount messages, ${if (baseline) "as still pictures" else "as web views"}",
                 end = lab.sample(),
                 peakEngines = lab.engines.peakEngines,
                 maxEngines = lab.runtime.config.maxLive + lab.runtime.config.maxIdle,
