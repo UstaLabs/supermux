@@ -30,7 +30,7 @@ import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.Test
 
-/** Design screenshots of the council card, folded and open. No-op unless COUNCIL_SHOTS_DIR is set. */
+/** Design screenshots of a running council's strip over the composer, folded and open. No-op unless COUNCIL_SHOTS_DIR is set. */
 @OptIn(ExperimentalTestApi::class)
 class CouncilCardShots {
     @Test
@@ -55,7 +55,7 @@ class CouncilCardShots {
         )
         val live = mapOf("mb" to "Searching the web for Parakeet Turkish WER", "mc" to "Thinking")
         for (dark in listOf(true, false)) for ((name, w) in listOf("phone" to 390, "desktop" to 720)) {
-            runDesktopComposeUiTest(width = w, height = 520) {
+            runDesktopComposeUiTest(width = w, height = 560) {
                 setPlatformContent(
                     platform = FakePlatform(),
                     pointer = w > 500,
@@ -63,9 +63,9 @@ class CouncilCardShots {
                     inputMode = if (w > 500) InputMode.Pointer else InputMode.Touch,
                 ) {
                     SupermuxTheme(appearance = if (dark) AppearanceMode.DARK else AppearanceMode.LIGHT) {
-                        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).padding(16.dp), contentAlignment = Alignment.TopCenter) {
+                        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).padding(16.dp), contentAlignment = Alignment.BottomCenter) {
                             CompositionLocalProvider(LocalCouncilActivity provides live) {
-                                CouncilCard(TimelineItem.CouncilCard(council, failures = mapOf("D" to "API error (status 402 Payment Required)")), killSession = {})
+                                CouncilStrips(listOf(TimelineItem.CouncilCard(council, failures = mapOf("D" to "API error (status 402 Payment Required)"))), killSession = {})
                             }
                         }
                     }
@@ -74,7 +74,7 @@ class CouncilCardShots {
                 mainClock.advanceTimeBy(100)
                 val tag = "council-$name-${if (dark) "dark" else "light"}"
                 ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(dir, "$tag-folded.png"))
-                onNodeWithTag("council-toggle:c-3").performClick()
+                onNodeWithTag("council-strip-head:c-3").performClick()
                 mainClock.advanceTimeBy(1000)
                 ImageIO.write(onRoot().captureToImage().toAwtImage(), "png", File(dir, "$tag-open.png"))
             }

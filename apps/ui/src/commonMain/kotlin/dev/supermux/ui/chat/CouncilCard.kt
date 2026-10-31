@@ -1,12 +1,6 @@
 /**
  * A council in its caller's chat (spec 2026-10-28 §5.1, decision #19, variant A "member rows"): ONE
- * card per council, in place of the caller's `council` tool call.
- *
- * Folded (the default) it reads like a meeting: the question, then the members side by side as
- * their agents' logos, each with what it is doing under it (a breathing ring while it works, a
- * check once it answered), and the latest thing said. "Show answers" opens the full card below.
- *
- * Open, its header is the question, the
+ * card per council, in place of the caller's `council` tool call. Its header is the question, the
  * council's name, round and focus, and how many members still work. A row per member: its letter,
  * agent and model, its status for the shown round and its latest report there in two lines. A tap
  * on a row opens every report of that member, round by round. Round chips at the foot switch the
@@ -14,9 +8,7 @@
  *
  * The forwarded reports live only here (`mergeTimeline` folds their inbox rows out of the chat).
  *
- * Test tags: `council-card:<id>`, `council-headline:<id>`, `council-seat:<id>:<letter>`,
- * `council-seat-name:<id>:<letter>`,
- * `council-seat-status:<id>:<letter>`, `council-latest:<id>`, `council-toggle:<id>`, `council-row:<id>:<letter>`,
+ * Test tags: `council-card:<id>`, `council-headline:<id>`, `council-row:<id>:<letter>`,
  * `council-status:<id>:<letter>`, `council-preview:<id>:<letter>`, `council-body:<id>:<letter>`,
  * `council-chip:<id>:<round>`, `council-stop:<id>`, `council-stop-confirm:<id>`.
  */
@@ -43,10 +35,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,7 +58,6 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.supermux.chat.TimelineItem
@@ -193,24 +181,6 @@ internal fun councilPreview(c: CouncilView, m: CouncilMember, round: Int, status
     }
 }
 
-/** What a seat says under its name: what the member does now, or how its round went. */
-internal fun councilSeatStatus(status: String, activity: String?): String = when {
-    status == "working" && activity == "" -> "Idle"
-    status == "working" -> activity ?: "Working"
-    status == "reported" -> "Answered"
-    status == "failed" -> "Failed"
-    status == "crashed" -> "Crashed"
-    status == "killed" -> "Stopped"
-    else -> "No answer"
-}
-
-/** The latest thing any member said in [round]: who said it and the report, or null. */
-internal fun councilLatestSaid(c: CouncilView, round: Int): Pair<CouncilMember, CouncilReport>? {
-    val report = c.rounds.firstOrNull { it.round == round }?.reports?.maxByOrNull { it.seq } ?: return null
-    val member = c.members.firstOrNull { it.letter == report.letter } ?: return null
-    return member to report
-}
-
 // ── the card ──────────────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -221,56 +191,65 @@ fun CouncilCard(
     killSession: ((String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    val c = item.council
-    val id = c.id
-    val live = LocalCouncilActivity.current
-    // Kept by the council's id, so scrolling the chat does not close a row or reset the round.
-    var pickedRound by rememberSaveable(id) { mutableStateOf(0) }
-    var openLetters by rememberSaveable(id) { mutableStateOf("") }
-    var detailsOpen by rememberSaveable(id) { mutableStateOf(false) }
-    val rounds = remember(c) { councilRounds(c) }
-    // 0 (nothing picked) follows the current round as new rounds start.
-    val round = pickedRound.takeIf { r -> r > 0 && rounds.any { it.first == r } } ?: c.round
-    val open = openLetters.split(',').filter { it.isNotEmpty() }.toSet()
     val shape = RoundedCornerShape(Radii.md)
-    val line = cs.outlineVariant.copy(alpha = 0.6f)
     Column(
         Modifier
             .fillMaxWidth()
             .padding(vertical = Space.xs)
             .clip(shape)
             .background(cardSurface())
-            .border(Stroke.hairline, line, shape)
+            .border(Stroke.hairline, cs.outlineVariant.copy(alpha = 0.6f), shape)
             .animateContentSize()
-            .testTag("council-card:$id"),
+            .testTag("council-card:${item.council.id}"),
     ) {
-        Header(c, rounds, round, showRounds = detailsOpen, onPick = { pickedRound = it })
-        if (!detailsOpen) Meeting(c, live, onOpen = { detailsOpen = true })
-        if (detailsOpen) for (m in c.members) {
-            HorizontalDivider(thickness = Stroke.hairline, color = line, modifier = Modifier.padding(start = 14.dp))
-            val status = councilMemberStatus(c, m, round)
-            val expanded = m.letter in open
-            MemberRow(
-                c = c,
-                m = m,
-                round = round,
-                status = status,
-                failure = item.failures[m.letter],
-                activity = if (round == c.round) live[m.session] else null,
-                expanded = expanded,
-                onToggle = {
-                    val next = if (expanded) open - m.letter else open + m.letter
-                    openLetters = next.sorted().joinToString(",")
-                },
-            )
-            if (expanded) MemberReports(c, m, onOpenFile)
-        }
-        Footer(c, detailsOpen = detailsOpen, onToggle = { detailsOpen = !detailsOpen }, killSession = killSession)
+        CouncilCardBody(item, onOpenFile, killSession)
     }
 }
 
+/** The card's content without its frame: the chat's card, and the running strip's open council. */
 @Composable
-private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: Int, showRounds: Boolean, onPick: (Int) -> Unit) {
+internal fun CouncilCardBody(
+    item: TimelineItem.CouncilCard,
+    onOpenFile: (FilePathRef) -> Unit = {},
+    killSession: ((String) -> Unit)? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    val c = item.council
+    val id = c.id
+    val live = LocalCouncilActivity.current
+    // Kept by the council's id, so scrolling the chat does not close a row or reset the round.
+    var pickedRound by rememberSaveable(id) { mutableStateOf(0) }
+    var openLetters by rememberSaveable(id) { mutableStateOf("") }
+    val rounds = remember(c) { councilRounds(c) }
+    // 0 (nothing picked) follows the current round as new rounds start.
+    val round = pickedRound.takeIf { r -> r > 0 && rounds.any { it.first == r } } ?: c.round
+    val open = openLetters.split(',').filter { it.isNotEmpty() }.toSet()
+    val line = cs.outlineVariant.copy(alpha = 0.6f)
+    Header(c, rounds, round, onPick = { pickedRound = it })
+    for (m in c.members) {
+        HorizontalDivider(thickness = Stroke.hairline, color = line, modifier = Modifier.padding(start = 14.dp))
+        val status = councilMemberStatus(c, m, round)
+        val expanded = m.letter in open
+        MemberRow(
+            c = c,
+            m = m,
+            round = round,
+            status = status,
+            failure = item.failures[m.letter],
+            activity = if (round == c.round) live[m.session] else null,
+            expanded = expanded,
+            onToggle = {
+                val next = if (expanded) open - m.letter else open + m.letter
+                openLetters = next.sorted().joinToString(",")
+            },
+        )
+        if (expanded) MemberReports(c, m, onOpenFile)
+    }
+    Footer(c, killSession = killSession)
+}
+
+@Composable
+private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: Int, onPick: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 10.dp),
@@ -302,17 +281,8 @@ private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: I
                 maxLines = 1,
                 modifier = Modifier.testTag("council-headline:${c.id}"),
             )
-            // Folded, only the round that runs; open, the rounds read as words in the same line:
-            // the shown one in full ink, the others quiet.
-            if (!showRounds) {
-                Text(
-                    " · ${councilRoundLabel(c.round, c.focus)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = cs.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-            if (showRounds) for ((round, focus) in rounds) {
+            // The rounds read as words in the same line: the shown one in full ink, the others quiet.
+            for ((round, focus) in rounds) {
                 Text(" · ", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
                 RoundTab(
                     text = councilRoundLabel(round, focus),
@@ -322,128 +292,6 @@ private fun Header(c: CouncilView, rounds: List<Pair<Int, String?>>, selected: I
                 )
             }
         }
-    }
-}
-
-/** The folded card: the members side by side, then the latest thing said. A tap opens the card. */
-@Composable
-private fun Meeting(c: CouncilView, live: Map<String, String>, onOpen: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClickLabel = "Show answers", onClick = onOpen)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            for (m in c.members) Seat(c, m, live[m.session])
-        }
-        val said = councilLatestSaid(c, c.round)
-        if (said != null) {
-            val (m, report) = said
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (m.agent.isNotBlank()) AgentLogo(m.agent, size = 16.dp, modifier = Modifier.padding(top = 1.dp))
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 10.dp, bottomEnd = 10.dp, bottomStart = 10.dp))
-                        .background(cs.onSurface.copy(alpha = 0.05f))
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        "${councilMemberWho(m).first}: ${councilPreviewText(report.text)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = cs.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("council-latest:${c.id}"),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** One member at the table: its agent's logo in a ring, its name, and what it is doing. */
-@Composable
-private fun Seat(c: CouncilView, m: CouncilMember, activity: String?) {
-    val cs = MaterialTheme.colorScheme
-    val status = m.status
-    val idle = status == "working" && activity == ""
-    val working = status == "working" && !idle
-    val gone = status == "killed" || status == "crashed" || idle
-    val ringColor = when (status) {
-        "failed", "crashed" -> cs.error
-        "reported" -> cs.primary.copy(alpha = 0.55f)
-        else -> cs.outlineVariant
-    }
-    Column(
-        Modifier
-            .width(76.dp)
-            .testTag("council-seat:${c.id}:${m.letter}")
-            .semantics { stateDescription = councilStatusWord(status) },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-            if (working) {
-                BreathingRing(cs.primary)
-            } else {
-                Box(Modifier.size(40.dp).border(1.5.dp, ringColor, CircleShape))
-            }
-            Box(
-                Modifier.size(34.dp).clip(CircleShape).background(cs.onSurface.copy(alpha = 0.05f)).alpha(if (gone) 0.45f else 1f),
-                contentAlignment = Alignment.Center,
-            ) {
-                AgentLogo(m.agent.ifBlank { null }, size = 20.dp, fallbackLetter = m.agent.ifBlank { m.letter }.take(1).uppercase())
-            }
-            if (status == "reported") {
-                Box(
-                    Modifier.align(Alignment.BottomEnd).size(15.dp).clip(CircleShape).background(cardSurface()).padding(1.5.dp)
-                        .clip(CircleShape).background(cs.primary),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.Check,
-                        contentDescription = null,
-                        tint = cs.onPrimary,
-                        modifier = Modifier.size(9.dp),
-                    )
-                }
-            }
-        }
-        Text(
-            councilMemberWho(m).first,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            color = cs.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.testTag("council-seat-name:${c.id}:${m.letter}"),
-        )
-        Text(
-            councilSeatStatus(status, activity),
-            style = MaterialTheme.typography.labelSmall,
-            color = when {
-                status == "failed" || status == "crashed" -> cs.error
-                working -> cs.primary
-                else -> cs.onSurfaceVariant
-            },
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.testTag("council-seat-status:${c.id}:${m.letter}"),
-        )
     }
 }
 
@@ -577,32 +425,18 @@ private fun MemberReports(c: CouncilView, m: CouncilMember, onOpenFile: (FilePat
     }
 }
 
-/** The card's foot: Show / Hide answers, and Stop as a quiet text action while a member still runs. */
+/** Stop, as a quiet text action at the card's foot: only while a member still runs. */
 @Composable
-private fun Footer(c: CouncilView, detailsOpen: Boolean, onToggle: () -> Unit, killSession: ((String) -> Unit)?) {
+private fun Footer(c: CouncilView, killSession: ((String) -> Unit)?) {
     val live = c.members.filter(::isLiveCouncilMember)
+    if (killSession == null || live.isEmpty()) return
     val cs = MaterialTheme.colorScheme
     var confirming by remember(c.id) { mutableStateOf(false) }
-    if (detailsOpen) HorizontalDivider(thickness = Stroke.hairline, color = cs.outlineVariant.copy(alpha = 0.6f))
-    Row(
-        Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onToggle, modifier = Modifier.testTag("council-toggle:${c.id}")) {
-            Text(
-                if (detailsOpen) "Hide answers" else "Show answers",
-                style = MaterialTheme.typography.labelMedium,
-                color = cs.primary,
-            )
-        }
-        Box(Modifier.weight(1f))
-        if (killSession != null && live.isNotEmpty()) {
-            TextButton(onClick = { confirming = true }, modifier = Modifier.testTag("council-stop:${c.id}")) {
-                Text("Stop council", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-            }
+    Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, bottom = 4.dp), horizontalArrangement = Arrangement.End) {
+        TextButton(onClick = { confirming = true }, modifier = Modifier.testTag("council-stop:${c.id}")) {
+            Text("Stop council", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
         }
     }
-    if (killSession == null || live.isEmpty()) return
     if (confirming) {
         val letters = live.joinToString(", ") { it.letter }
         AlertDialog(
@@ -641,19 +475,6 @@ private fun PulsingDot(color: Color) {
         label = "council-pulse-alpha",
     )
     Box(Modifier.size(6.dp).alpha(alpha).clip(CircleShape).background(color))
-}
-
-/** A working member's ring, breathing (1.2s, down to 25%). */
-@Composable
-private fun BreathingRing(color: Color) {
-    val pulse = rememberInfiniteTransition(label = "council-ring")
-    val alpha by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.25f,
-        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "council-ring-alpha",
-    )
-    Box(Modifier.size(40.dp).alpha(alpha).border(2.dp, color, CircleShape))
 }
 
 /** "Round 2 · noise" as words in the header line: the shown round in full ink, the others quiet. */
