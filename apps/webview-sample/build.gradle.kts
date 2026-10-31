@@ -84,6 +84,11 @@ kotlin {
             // Material3 dresses the sample's own controls. The web views use nothing of it.
             implementation(compose.material3)
             implementation(libs.coroutines.core)
+            // The chat demo's previews (HTML, the kit, three.js) are Compose resources, served to the web views as a
+            // WebContent.Bundle: offline, and the same files on every platform.
+            implementation(compose.components.resources)
+            // System back from the lab's screens to the chat (Compose Multiplatform's own BackHandler).
+            implementation("org.jetbrains.compose.ui:ui-backhandler:${libs.versions.composeMultiplatform.get()}")
         }
         // The engines' conformance checks (plan Task 12, D11): shared by the iOS app and the macOS desktop app, which run
         // them in a real window on their platform's engine. Compose, Skia and the library, and asserts of their own:
@@ -132,9 +137,20 @@ compose.desktop {
         buildTypes.release.proguard {
             configurationFiles.from(project(":webview-compose").file("src/jvmMain/resources/META-INF/proguard/webview-compose-desktop.pro"))
         }
-        // jpackage takes one to three integers, and macOS a major version of 1 or more: not 0.1.0-dev.1.
-        nativeDistributions { packageVersion = "1.0.0" }
+        nativeDistributions {
+            // jpackage takes one to three integers, and macOS a major version of 1 or more: not 0.1.0-dev.1.
+            packageVersion = "1.0.0"
+            // The packaged app's own id, as the phones' apps have: WebKit keeps its data under it, apart from any other
+            // Java process's.
+            macOS { bundleID = "dev.supermux.webview.sample" }
+        }
     }
+}
+
+// The chat demo's previews, read with Res.readBytes("files/previews/…").
+compose.resources {
+    packageOfResClass = "dev.supermux.webview.sample.resources"
+    generateResClass = always
 }
 
 // The sample's jar and its runtime classpath in build/linux/lib, for device-checks/linux-engine-checks.sh. Run it with

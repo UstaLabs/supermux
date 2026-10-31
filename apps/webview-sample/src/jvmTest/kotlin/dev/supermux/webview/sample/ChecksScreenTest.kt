@@ -19,7 +19,7 @@ import kotlin.test.Test
 class ChecksScreenTest {
     @Test fun theChecksPageShowsUnderItsControlsAndItsMenu() = runComposeUiTest {
         val test = testLab(RuntimeConfig.platformDefault())
-        setContent { SampleApp(test.lab) }
+        setContent { SampleApp(test.lab, initialScreen = Screen.PerfLab) }
         onNodeWithTag(SampleTags.screen(Screen.Checks)).performClick()
         waitForIdle()
         onNodeWithTag(SampleTags.ChecksPage).assertExists()
@@ -31,7 +31,7 @@ class ChecksScreenTest {
     @Test fun theChecksTabCanBeReachedOnAPhoneWideScreen() = runComposeUiTest {
         val test = testLab(RuntimeConfig.platformDefault())
         // The Fold7's cover screen: 1080 px at 420 dpi is 411 dp wide, too narrow for the header's title and three tabs.
-        setContent { Box(Modifier.width(411.dp)) { SampleApp(test.lab) } }
+        setContent { Box(Modifier.width(411.dp)) { SampleApp(test.lab, initialScreen = Screen.PerfLab) } }
         onNodeWithTag(SampleTags.screen(Screen.Checks)).performScrollTo().assertIsDisplayed().performClick()
         waitForIdle()
         onNodeWithTag(SampleTags.ChecksPage).assertExists()

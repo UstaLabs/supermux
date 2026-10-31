@@ -35,8 +35,9 @@ UDID="$(xcrun simctl list devices | grep "$DEVICE (" | grep -oE "[0-9A-F-]{36}" 
 [ -n "$UDID" ] || UDID="$DEVICE"
 xcrun simctl install "$UDID" build/dd/Build/Products/Debug-iphonesimulator/WebViewSampleApp.app || { echo "FAIL install"; exit 1; }
 xcrun simctl terminate "$UDID" "$APP_ID" 2>/dev/null
-# Attached to the app's console, for its output: the launch is killed at the end, never left running.
-xcrun simctl launch --console-pty --terminate-running-process "$UDID" "$APP_ID" > "$OUT/console.log" 2>&1 &
+# Attached to the app's console, for its output: the launch is killed at the end, never left running. The app opens
+# on the chat demo; the flows start from the perf lab (-screen perflab).
+xcrun simctl launch --console-pty --terminate-running-process "$UDID" "$APP_ID" -screen perflab > "$OUT/console.log" 2>&1 &
 LAUNCH=$!
 sleep 6
 FAILS=0

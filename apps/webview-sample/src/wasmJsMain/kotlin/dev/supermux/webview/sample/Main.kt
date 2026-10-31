@@ -43,7 +43,7 @@ fun main() {
             ProvideWebViewRuntime(runtime) { ProbeScreen(probe) }
             LaunchedEffect(Unit) { markReady() }
         } else {
-            SampleApp(lab, engineLabel = "iframe engine", initialScreen = screen)
+            SampleApp(lab, engineLabel = WEB_ENGINE_LABEL, initialScreen = screen)
             LabAutomation(lab, run)
         }
     }

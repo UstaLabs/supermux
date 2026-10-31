@@ -13,6 +13,7 @@ import dev.supermux.webview.sample.checks.MacCheckPlatform
 import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
+import dev.supermux.webview.sample.chat.ChatRun
 import dev.supermux.webview.sample.checks.ReviewChecks
 import dev.supermux.webview.sample.linux.linuxChecksMain
 import dev.supermux.webview.sample.linux.linuxDrawLabMain
@@ -38,7 +39,9 @@ import java.io.File
  * - `-engine-measure` runs the measurements, which print `MEASURE` lines too.
  * - `-out <dir>`: where the checks save their frames.
  * - `-perf-lab` runs the perf lab's Reading and Scroll tests, with web views and then still images, and exits.
- * - `-screen perflab|overlays` opens that screen; with `-shots <dir>` the app asks for one screenshot of it and exits.
+ * - `-screen chat|perflab|overlays|checks` opens that screen (the chat demo unless told otherwise); with `-shots <dir>`
+ *   the app asks for one screenshot of it and exits.
+ * - `-chat-run read|scroll|fling` starts that run of the chat 3 s after launch; it prints a `chat-perf:` line.
  */
 fun main(args: Array<String>) {
     when (System.getProperty("webview.sample.checks")) {
@@ -61,10 +64,9 @@ fun main(args: Array<String>) {
     val out = File(argument(args, "-out") ?: System.getProperty("java.io.tmpdir"))
     val real = MacEngineTesting.isAvailable
     val shots = argument(args, "-shots")?.let(::File)
-    val screen = when (argument(args, "-screen")) {
-        "overlays" -> Screen.Overlays
-        else -> Screen.PerfLab
-    }
+    val screen = argument(args, "-screen")?.let { name -> Screen.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+        ?: Screen.Chat
+    val chatRun = argument(args, "-chat-run")?.let { name -> ChatRun.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
     val label = if (real) MACOS_ENGINE_LABEL else FAKE_ENGINE_LABEL
     application {
         val state = rememberWindowState(width = 1100.dp, height = 1000.dp)
@@ -84,11 +86,17 @@ fun main(args: Array<String>) {
                 CheckScreen(list, only, platform)
             } else if (perfLab) {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
-                SampleApp(lab, engineLabel = label)
+                SampleApp(lab, engineLabel = label, initialScreen = Screen.PerfLab)
                 LabRuns(lab)
             } else {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
-                SampleApp(lab, engineLabel = label, initialScreen = screen, pickFiles = { request -> pickFiles(window, request) })
+                SampleApp(
+                    lab,
+                    engineLabel = label,
+                    initialScreen = screen,
+                    pickFiles = { request -> pickFiles(window, request) },
+                    chatRun = chatRun,
+                )
                 if (shots != null) ShotRequest(window, shots, screen.name.lowercase())
             }
         }

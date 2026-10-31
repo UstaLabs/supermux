@@ -29,7 +29,7 @@ class SampleScreensTest {
     @Test fun theSampleScreensComposeAndDraw() = runComposeUiTest(testTimeout = 5.minutes) {
         val test = testLab(RuntimeConfig.platformDefault())
         val lab = test.lab
-        setContent { SampleApp(lab) }
+        setContent { SampleApp(lab, initialScreen = Screen.PerfLab) }
 
         // The perf lab: the first messages' pages go live and are snapshotted.
         waitUntil("pages live and snapshotted", WAIT_MILLIS) { ui { lab.sample() }.let { it.live >= 2 && it.snapshots >= 2 } }

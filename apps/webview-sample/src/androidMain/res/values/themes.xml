@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A window background before Compose draws; the sample's colours come from SampleTheme. -->
+<!--
+  A window background before Compose draws, in the theme the system is in (values-night has the dark one), so the chat
+  opens without a flash of the other theme. The sample's colours come from SampleTheme and the chat's own theme.
+-->
 <resources>
-    <style name="Theme.WebViewSample" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#FF101114</item>
+    <style name="Theme.WebViewSample" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFBF8FF</item>
     </style>
 </resources>

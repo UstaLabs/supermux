@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -19,12 +21,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.runtime.ProvideWebViewOverlays
@@ -32,9 +37,14 @@ import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.runtime.RuntimeConfig
 import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.platformWebEngineFactory
+import dev.supermux.webview.sample.chat.ChatRun
+import dev.supermux.webview.sample.chat.ChatScreen
+import dev.supermux.webview.sample.chat.ChatState
+import kotlinx.coroutines.delay
 
-/** The sample's screens. */
+/** The sample's screens. The chat demo comes first: it is what the app opens on. */
 enum class Screen(val label: String) {
+    Chat("Chat"),
     PerfLab("Perf lab"),
     Overlays("Overlays"),
     Checks("Checks"),
@@ -58,58 +68,102 @@ const val MACOS_ENGINE_LABEL: String = "WKWebView on macOS"
 /** What the header says on Windows with `-Dwebview.sample.engine=webview2`, whose pages run on WebView2's frames. */
 const val WINDOWS_ENGINE_LABEL: String = "WebView2 engine (Windows)"
 
+/** What the header says in a browser, whose pages are iframes. It serves no `WebContent.Bundle`, so it has no chat. */
+const val WEB_ENGINE_LABEL: String = "iframe engine"
+
 /**
- * The sample app: the perf lab, a page under Compose overlays, and the shared checks page. Everything runs on [lab]'s
- * runtime. The window gets its own overlay registry, as each window of a multi-window app should.
+ * The sample app: the chat demo (live previews in a chat, the screen it opens on), the perf lab, a page under Compose
+ * overlays, and the shared checks page. Everything runs on [lab]'s runtime. The window gets its own overlay registry,
+ * as each window of a multi-window app should.
  * @param engineLabel what the header says the pages run on: the desktop's fake engine, the browser's iframes,
  *   Android's WebView, or iOS's WKWebView.
  * @param initialScreen the screen it opens on.
  * @param pickFiles the platform's file picker for the checks page, where the app has one.
+ * @param safeArea what the lab's screens keep clear of (the status bar, a cutout, the keyboard where the platform pads
+ *   for it). The chat draws its bars under the system's own and keeps its content clear of them itself.
+ * @param chatRun a chat run to start 3 s after launch: it prints a `chat-perf:` line.
  */
 @Composable
 fun SampleApp(
     lab: PerfLabState,
     engineLabel: String = FAKE_ENGINE_LABEL,
-    initialScreen: Screen = Screen.PerfLab,
+    initialScreen: Screen = Screen.Chat,
     pickFiles: (suspend (dev.supermux.webview.FileChooserRequest) -> List<String>?)? = null,
+    safeArea: WindowInsets = WindowInsets(0, 0, 0, 0),
+    chatRun: ChatRun? = null,
 ) {
-    var screen by remember { mutableStateOf(initialScreen) }
+    val screens = screensFor(engineLabel)
+    var screen by remember { mutableStateOf(if (initialScreen in screens) initialScreen else Screen.PerfLab) }
+    // The chat outlives its screen: switching to the lab and back keeps its place, its count and its pages.
+    val chat = remember(lab) { ChatState(lab) }
+    if (chatRun != null) {
+        LaunchedEffect(chatRun) {
+            screen = Screen.Chat
+            delay(3_000)
+            chat.start(chatRun)
+        }
+    }
     SampleTheme {
         ProvideWebViewRuntime(lab.runtime) {
             ProvideWebViewOverlays {
                 Surface(Modifier.fillMaxSize()) {
-                    Column(Modifier.fillMaxSize()) {
-                        Row(
-                            // Scrolls on a phone-wide screen, where the title and the three tabs don't fit.
-                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("webview-sample", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                engineLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Screen.entries.forEach { s ->
-                                FilterChip(
-                                    selected = screen == s,
-                                    onClick = { screen = s },
-                                    label = { Text(s.label) },
-                                    modifier = Modifier.testTag(SampleTags.screen(s)),
-                                )
-                            }
-                        }
-                        HorizontalDivider()
-                        when (screen) {
-                            Screen.PerfLab -> PerfLab(lab)
-                            Screen.Overlays -> OverlayDemo(hint = overlayHint(engineLabel))
-                            Screen.Checks -> ChecksScreen(pickFiles)
-                        }
+                    if (screen == Screen.Chat) {
+                        ChatScreen(chat, onOpen = { screen = it })
+                    } else {
+                        LabScreens(lab, screen, screens, engineLabel, pickFiles, safeArea, onOpen = { screen = it })
                     }
                 }
             }
+        }
+    }
+}
+
+/** The screens the app offers on [engineLabel]'s engine: the web serves no `WebContent.Bundle`, so it has no chat. */
+internal fun screensFor(engineLabel: String): List<Screen> =
+    if (engineLabel == WEB_ENGINE_LABEL) Screen.entries - Screen.Chat else Screen.entries
+
+/** The lab's screens under their header, whose chips switch screens. System back returns to the chat. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun LabScreens(
+    lab: PerfLabState,
+    screen: Screen,
+    screens: List<Screen>,
+    engineLabel: String,
+    pickFiles: (suspend (dev.supermux.webview.FileChooserRequest) -> List<String>?)?,
+    safeArea: WindowInsets,
+    onOpen: (Screen) -> Unit,
+) {
+    BackHandler(enabled = Screen.Chat in screens) { onOpen(Screen.Chat) }
+    Column(Modifier.fillMaxSize().windowInsetsPadding(safeArea)) {
+        Row(
+            // Scrolls on a phone-wide screen, where the title and the tabs don't fit.
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("webview-sample", style = MaterialTheme.typography.titleMedium)
+            Text(
+                engineLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(16.dp))
+            screens.forEach { s ->
+                FilterChip(
+                    selected = screen == s,
+                    onClick = { onOpen(s) },
+                    label = { Text(s.label) },
+                    modifier = Modifier.testTag(SampleTags.screen(s)),
+                )
+            }
+        }
+        HorizontalDivider()
+        when (screen) {
+            Screen.PerfLab -> PerfLab(lab)
+            Screen.Overlays -> OverlayDemo(hint = overlayHint(engineLabel))
+            Screen.Checks -> ChecksScreen(pickFiles)
+            Screen.Chat -> Unit
         }
     }
 }
