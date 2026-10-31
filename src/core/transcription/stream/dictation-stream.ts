@@ -169,6 +169,8 @@ export class DictationStream {
   private stopping!: () => void
   private readonly stopSignal = new Promise<void>((r) => { this.stopping = r })
   private passes = 0
+  /** Numbers each pass as it starts: a late verdict may lock only the newest pass's sentence. */
+  private passSeq = 0
 
   constructor(private readonly deps: DictationStreamDeps) {
     this.t = { ...DEFAULT_TIMING, ...deps.timing }
@@ -355,9 +357,28 @@ export class DictationStream {
       return
     }
     const gen = this.generation
+    const passNo = ++this.passSeq
     const t0 = this.now()
-    const verdict = kind === "pause" ? this.deps.turn(this.window(end)).catch(() => null) : null
+    // Diagnostics: how far the detector lagged the audio when it called this pass, and how long
+    // Smart Turn and the engine each took (a late verdict is logged when it finally lands).
+    const vadLagMs = Math.round((this.samples - end) / PER_MS)
+    let turnMs: number | null = null
+    let turnLate = false
+    const verdict = kind === "pause"
+      ? this.deps.turn(this.window(end)).then(
+          (v) => {
+            turnMs = this.now() - t0
+            if (turnLate) log.info("dictation_stream_turn_late", { id: this.deps.id ?? null, turnMs, turn: Math.round(v * 1000) / 1000 })
+            return v
+          },
+          (e) => {
+            log.warn("dictation_stream_turn_failed", { id: this.deps.id ?? null, err: String(e) })
+            return null
+          },
+        )
+      : null
     const text = await this.runStt(start, end, false)
+    const sttMs = this.now() - t0
     if (this.isDone() || gen !== this.generation) return
     if (text !== null) {
       this.provisional = text
@@ -369,6 +390,14 @@ export class DictationStream {
     if (verdict) {
       // Nor past Stop: the verdict only places the next pass, and there is none after Stop.
       p = await Promise.race([verdict, sleep(this.t.turnGraceMs), this.stopSignal.then(() => null)])
+      if (turnMs === null) {
+        turnLate = true
+        // Too late for this pass, but not wasted: when it lands and nothing has started since, it
+        // still locks the sentence, so the next pass starts after it instead of redoing it. (On
+        // the loaded box Smart Turn took 1.6–2.1 s against ~1 s of transcription, so no sentence
+        // locked and passes grew to 17 s of audio and 3.9 s of transcription.)
+        if (text !== null) void verdict.then((late) => this.lockLate(passNo, gen, start, end, text, late))
+      }
       if (this.isDone() || gen !== this.generation) return
       const long = (end - start) / PER_MS >= this.t.maxSentenceMs
       // No verdict in time = not finished: a fragment locked mid-sentence costs more than a
@@ -386,8 +415,23 @@ export class DictationStream {
     this.passes++
     log.info("dictation_stream_pass", {
       id: this.deps.id ?? null, kind, audioMs: Math.round((end - start) / PER_MS), ms: this.now() - t0,
+      sttMs, turnMs, vadLagMs,
       turn: p === null ? null : Math.round(p * 1000) / 1000, locked, chars: text?.length ?? null,
     })
+  }
+
+  /** A verdict that came after its pass: lock that pass's sentence if it is still the newest word on it. */
+  private lockLate(passNo: number, gen: number, start: number, end: number, text: string, p: number | null): void {
+    if (p === null || p < this.t.turnThreshold) return
+    if (this.state !== "live" || gen !== this.generation) return
+    // A pass started since covers this audio and more; its own verdict decides.
+    if (this.passSeq !== passNo || this.sentenceStart !== start || this.shownEnd !== end) return
+    const before = this.locked
+    this.locked = join(this.locked, text)
+    this.provisional = ""
+    this.sentenceStart = end
+    log.info("dictation_stream_locked_late", { id: this.deps.id ?? null, audioMs: Math.round((end - start) / PER_MS) })
+    this.launchEditCheck(before, text)
   }
 
   /** Transcribe samples [start, end); null = the engine failed (the audio stays for the next pass). */

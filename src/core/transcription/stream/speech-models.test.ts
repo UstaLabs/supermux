@@ -27,8 +27,11 @@ describe("WorkerSpeechModels (fake workers)", () => {
     vad.push(new Int16Array(512))
     let flushed = false
     const f = vad.flush().then(() => { flushed = true })
+    // One worker per model; opening a detector also warms the turn model.
+    expect(workers.length).toBe(2)
     const w = workers[0]!
     expect(w.sent.map((m) => m.op)).toEqual(["init", "open", "push", "push"])
+    expect(workers[1]!.sent).toEqual([{ op: "init", role: "turn" }])
     const id = (w.sent[1] as { id: string }).id
     w.reply({ op: "vad", id, seq: 1, probs: new Float32Array([0.1]) })
     await Promise.resolve()
@@ -45,14 +48,14 @@ describe("WorkerSpeechModels (fake workers)", () => {
     let vadErr: Error | null = null
     models.openVad(() => {}, (e) => { vadErr = e })
     const turn = models.turn(new Float32Array(16_000))
-    // One worker holds both models.
-    expect(workers.length).toBe(1)
+    expect(workers.length).toBe(2)
     workers[0]!.reply({ op: "failed", message: "no model" })
+    workers[1]!.reply({ op: "failed", message: "no model" })
     expect(vadErr).not.toBeNull()
     await expect(turn).rejects.toThrow(/failed to load/)
     // Within the backoff: no new worker, an immediate failure instead.
     await expect(models.turn(new Float32Array(16_000))).rejects.toThrow(/failed to load/)
-    expect(workers.length).toBe(1)
+    expect(workers.length).toBe(2)
     models.dispose()
   })
 
@@ -62,7 +65,7 @@ describe("WorkerSpeechModels (fake workers)", () => {
     const vad = models.openVad(() => {}, () => {})
     vad.close()
     await Bun.sleep(60)
-    expect(workers[0]!.terminated).toBe(true)
+    expect(workers.map((w) => w.terminated)).toEqual([true, true])
   })
 })
 

@@ -200,6 +200,23 @@ describe("DictationStream", () => {
     expect(h.texts().at(-1)).toBe("w1 w101 w2 w102")
   })
 
+  test("a late verdict still locks the sentence when nothing has started since", async () => {
+    const h = harness({
+      turn: (audio) => {
+        const ws = wordsOf(audio)
+        const p = (ws[ws.length - 1] ?? 0) >= 100 ? 0.9 : 0.1
+        return new Promise((r) => setTimeout(() => r(p), 700))
+      },
+    })
+    await h.push(word(1), word(101), quiet(400))
+    // The pass is over (its verdict missed the grace); the verdict lands while the user is quiet.
+    await Bun.sleep(400)
+    await h.push(word(2), word(102), quiet(400))
+    expect(h.stt.map((c) => c.words)).toEqual([[1, 101], [2, 102]])
+    expect(h.stt[1]!.context).toBe("w1 w101")
+    expect(h.texts().at(-1)).toBe("w1 w101 w2 w102")
+  })
+
   test("Stop does not wait for Smart Turn", async () => {
     const h = harness({ turn: () => new Promise<number>(() => {}) })
     h.stream.pushAudio(bytes(word(1), word(101), quiet(400)))
