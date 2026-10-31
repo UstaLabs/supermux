@@ -161,6 +161,19 @@ static void originsAreSchemeHostAndPort() {
     CHECK(wv::originOf(L"https:///x") == L"");
 }
 
+static void autoplayIsTheDefaultAgainOnlyWhenItsLastPageGoes() {
+    // Two pages of one profile on one origin, both letting it autoplay: the first one's release leaves it allowed.
+    wv::AutoplayGrants grants;
+    CHECK(grants.acquire(L"P|https://a.invalid"));    // the first page: ALLOW now
+    CHECK(!grants.acquire(L"P|https://a.invalid"));   // the second: already allowed
+    CHECK(grants.acquire(L"Q|https://a.invalid"));    // another profile counts on its own
+    CHECK(!grants.release(L"P|https://a.invalid"));   // one page left: still allowed
+    CHECK(grants.release(L"P|https://a.invalid"));    // the last: DEFAULT again
+    CHECK(!grants.release(L"P|https://a.invalid"));   // nothing held: nothing to undo
+    CHECK(grants.acquire(L"P|https://a.invalid"));    // and a new page allows it again
+    CHECK(grants.release(L"Q|https://a.invalid"));
+}
+
 int main() {
     int tests = 0;
     signatureAcceptsOnlyTheEpochsSecret(); ++tests;
@@ -175,6 +188,7 @@ int main() {
     contextMenusKeepOnlyEditing(); ++tests;
     aNavigationsDocumentRequestIsItsEpochs(); ++tests;
     originsAreSchemeHostAndPort(); ++tests;
+    autoplayIsTheDefaultAgainOnlyWhenItsLastPageGoes(); ++tests;
     std::printf("glue_test: %s (%d failure(s)), %d tests, %d checks\n", failures == 0 ? "PASS" : "FAIL", failures, tests, checks);
     return failures == 0 ? 0 : 1;
 }

@@ -597,6 +597,31 @@ object WindowsChecks {
             assertEquals("\"NotAllowedError\"", played(requiresGesture = true), "with a gesture required")
             assertEquals("\"played\"", played(requiresGesture = false), "without")
         },
+        Check("autoplay-outlives-another-engines-release") {
+            // Without a gesture required, play() is allowed by the profile's site setting for the origin an engine shows,
+            // which a document takes as it commits. One engine's release must not take it from another engine of the
+            // profile on that origin: here the second's document is on its way (the server holds it 5 s) as the first goes.
+            val config = EngineConfig(WebProfile.Named("autoplay-check"), mediaPlaybackRequiresGesture = false)
+            val first = engine(config)
+            val firstEvents = record(first)
+            start(first, WebContent.Url("${LocalServer.origin}/page"))
+            firstEvents.await("the first engine's commit") { it == EngineEvent.UrlChanged("${LocalServer.origin}/page") }
+            val second = engine(config)
+            val events = record(second)
+            show(second)
+            start(second, WebContent.Url("${LocalServer.origin}/held"))
+            events.await("the second engine's load starting") { it is EngineEvent.Progress }
+            delay(300)
+            first.release()
+            events.await("the second engine's commit", millis = 10_000) { it == EngineEvent.UrlChanged("${LocalServer.origin}/held") }
+            second.evaluate(
+                "window.__play = 'pending'; new Audio('data:audio/wav;base64,$WAV').play()" +
+                    ".then(function () { window.__play = 'played'; }, function (e) { window.__play = e.name; }); 1",
+            )
+            var result: String? = null
+            eventually("play() settled", millis = 5_000) { second.evaluate("window.__play").also { result = it } != "\"pending\"" }
+            assertEquals("\"played\"", result, "the second engine's play(), its document committed after the first's release")
+        },
         Check("the-context-menu-has-only-editing-items") {
             // D17, L11: WebView2's own menu, with editing items only (which ones is glue_test's; this is its look by eye).
             val engine = engine()

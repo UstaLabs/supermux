@@ -299,6 +299,29 @@ inline std::wstring originOf(std::wstring_view url) {
     return out;
 }
 
+/**
+ * The pages of this process that let each (profile, origin) autoplay (EngineConfig.mediaPlaybackRequiresGesture false):
+ * the profile's AUTOPLAY site setting is ALLOW while one of them shows the origin, and the default again only once the
+ * last one is released. Keys are the profile's path and the origin. The glue's UI thread only.
+ */
+class AutoplayGrants {
+public:
+    /** A page now lets [key] autoplay: true when it is the first, and the setting is to be ALLOW. */
+    bool acquire(std::wstring const& key) { return counts_[key]++ == 0; }
+
+    /** A page that let [key] autoplay is released: true when it was the last, and the setting goes back to the default. */
+    bool release(std::wstring const& key) {
+        auto it = counts_.find(key);
+        if (it == counts_.end()) return false;
+        if (--it->second > 0) return false;
+        counts_.erase(it);
+        return true;
+    }
+
+private:
+    std::map<std::wstring, int> counts_;
+};
+
 /** The path of a hierarchical URL, "/" when it has none. */
 inline std::wstring pathOf(std::wstring_view url) {
     const size_t start = url.find(L"://");

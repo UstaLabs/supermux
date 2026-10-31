@@ -197,9 +197,11 @@ void WvPage::configure(int flags, uint32_t background, std::wstring userAgentSuf
 
 void WvPage::release() {
     if (released_) return;
-    // A profile's site settings outlive the page: the origins it let autoplay go back to the default.
+    // A profile's site settings outlive the page: the origins it let autoplay go back to the default once no other page of
+    // the process lets them (another engine of the profile may show the same origin).
     if (profile_) {
         for (auto const& origin : autoplayOrigins_) {
+            if (!autoplayGrants().release(autoplayKey(origin))) continue;
             profile_->SetPermissionState(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, origin.c_str(), COREWEBVIEW2_PERMISSION_STATE_DEFAULT,
                                          Callback<ICoreWebView2SetPermissionStateCompletedHandler>([](HRESULT) { return S_OK; }).Get());
         }
@@ -302,14 +304,30 @@ void WvPage::registerNavigationEvents() {
 /**
  * EngineConfig.mediaPlaybackRequiresGesture false: WebView2 raises no PermissionRequested for a play() with no gesture,
  * and its policy refuses it (156). The profile's AUTOPLAY site setting allows it, set for each main-frame navigation's
- * origin before its document commits (it completes at once). Engines of one profile that show one origin share it.
+ * origin before its document commits (it completes at once). Engines of one profile that show one origin share it: it is
+ * the default again when the last of them is released ([AutoplayGrants]).
  */
 void WvPage::allowAutoplay(std::wstring const& url) {
     const std::wstring origin = originOf(url);
     if (origin.empty() || !profile_) return;
-    autoplayOrigins_.insert(origin);
+    if (autoplayOrigins_.insert(origin).second) autoplayGrants().acquire(autoplayKey(origin));   // each page counted once
+    // ALLOW at every navigation, as each document takes it when it commits: another process of the app, on the same
+    // profile, may have set it back to the default meanwhile.
     profile_->SetPermissionState(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, origin.c_str(), COREWEBVIEW2_PERMISSION_STATE_ALLOW,
                                  Callback<ICoreWebView2SetPermissionStateCompletedHandler>([](HRESULT) { return S_OK; }).Get());
+}
+
+/** The process's autoplay grants: the UI thread's only. */
+AutoplayGrants& WvPage::autoplayGrants() {
+    static AutoplayGrants grants;
+    return grants;
+}
+
+/** [origin] in this page's profile: the profile's folder (each profile's own, InPrivate ones too) and the origin. */
+std::wstring WvPage::autoplayKey(std::wstring const& origin) const {
+    CoString path;
+    if (profile_) profile_->get_ProfilePath(path.put());
+    return path.str() + L"|" + origin;
 }
 
 /**
