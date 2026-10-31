@@ -422,7 +422,7 @@ export interface WebChannelOpts {
     close: () => void
   }) => {
     audio: (bytes: Uint8Array) => void
-    control: (msg: { type?: unknown; text?: unknown }) => void
+    control: (msg: { type?: unknown; text?: unknown; seq?: unknown }) => void
     closed: () => void
   }
   /**
@@ -1424,7 +1424,7 @@ export class WebChannel implements Channel {
     if (typeof msg === "string") {
       let m: unknown
       try { m = JSON.parse(msg) } catch { return }
-      if (m && typeof m === "object") h.control(m as { type?: unknown; text?: unknown })
+      if (m && typeof m === "object") h.control(m as { type?: unknown; text?: unknown; seq?: unknown })
       return
     }
     h.audio(new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength))

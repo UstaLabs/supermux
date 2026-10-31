@@ -29,8 +29,11 @@ const FRAME_MS = FRAME / PER_MS
 
 /** Broker → app. */
 export type StreamEvent =
-  /** The complete dictated text so far — it replaces everything dictated. */
-  | { type: "text"; text: string }
+  /**
+   * The complete dictated text so far — it replaces everything dictated. [seq] numbers it, so a
+   * hand edit can say which text it was made on (`edit(text, seq)`).
+   */
+  | { type: "text"; text: string; seq: number }
   /** Stop's answer. `pendingEdit` = a spoken-edit check is still out; a `text` may follow before `done`. */
   | { type: "final"; text: string; pendingEdit?: boolean }
   /** Nothing more will come; the app may close the socket. */
@@ -141,6 +144,9 @@ export class DictationStream {
   private sentenceStart = 0
   private shownEnd = 0
   private lastSent = ""
+  /** Each sent text's number, and how far into the audio that text reached. */
+  private textSeq = 0
+  private readonly covered = new Map<number, number>()
 
   // Passes: one at a time, at most one waiting.
   private inFlight: Promise<void> | null = null
@@ -198,14 +204,19 @@ export class DictationStream {
 
   /**
    * The user changed the dictated text by hand while recording. Their version wins: it becomes
-   * the text so far, and transcription carries on with the audio after what they were shown.
+   * the text so far, and transcription carries on with the audio after what they were shown —
+   * text [seq] when the app says which one (a newer text may have crossed their edit on the way),
+   * else the last one sent.
    */
-  edit(text: string): void {
-    if (this.state === "done") return
+  edit(text: string, seq?: number): void {
+    // Not once Stop has begun: the text is being finished, and starting over would drop `final`.
+    if (this.state !== "live") return
     this.generation++
     this.locked = text.trim()
     this.provisional = ""
-    this.sentenceStart = this.shownEnd
+    this.sentenceStart = (seq !== undefined ? this.covered.get(seq) : undefined) ?? this.shownEnd
+    // The user's text covers the audio up to there; anything said after it is still to come.
+    this.shownEnd = this.sentenceStart
     this.lastSent = this.locked
   }
 
@@ -404,8 +415,15 @@ export class DictationStream {
   private emit(): void {
     const text = join(this.locked, this.provisional)
     if (text === this.lastSent) return
+    this.sendText(text)
+  }
+
+  private sendText(text: string): void {
     this.lastSent = text
-    this.deps.send({ type: "text", text })
+    const seq = ++this.textSeq
+    this.covered.set(seq, this.shownEnd)
+    this.covered.delete(seq - 32)
+    this.deps.send({ type: "text", text, seq })
   }
 
   /**
@@ -425,8 +443,7 @@ export class DictationStream {
         this.locked = join(edited, this.locked.slice(snapshot.length))
         // After Stop the app is still listening for this one (`pendingEdit`).
         if (this.state === "done") {
-          this.lastSent = this.locked
-          this.deps.send({ type: "text", text: this.locked })
+          this.sendText(this.locked)
         } else {
           this.emit()
         }

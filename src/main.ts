@@ -3111,7 +3111,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         control: (msg) => {
           if (msg.type === "stop") void stream.stop()
           else if (msg.type === "cancel") stream.cancel()
-          else if (msg.type === "edit" && typeof msg.text === "string") stream.edit(msg.text)
+          else if (msg.type === "edit" && typeof msg.text === "string") stream.edit(msg.text, typeof msg.seq === "number" ? msg.seq : undefined)
         },
         closed: () => stream.cancel(),
       }

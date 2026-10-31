@@ -55,7 +55,9 @@ function fakeVad(): FakeVad {
 
 interface Harness {
   stream: DictationStream
-  events: StreamEvent[]
+  /** What was sent, `seq` left out (the tests that care read [raw]). */
+  events: unknown[]
+  raw: StreamEvent[]
   texts: () => string[]
   stt: { words: number[]; context: string; final: boolean }[]
   turns: number
@@ -64,15 +66,17 @@ interface Harness {
 }
 
 function harness(over: Partial<DictationStreamDeps> = {}): Harness {
-  const events: StreamEvent[] = []
+  const events: unknown[] = []
+  const raw: StreamEvent[] = []
   const stt: Harness["stt"] = []
   const vad = fakeVad()
   const h: Harness = {
     events,
+    raw,
     stt,
     turns: 0,
     vad,
-    texts: () => events.filter((e) => e.type === "text").map((e) => (e as { text: string }).text),
+    texts: () => raw.filter((e) => e.type === "text").map((e) => (e as { text: string }).text),
     stream: null as unknown as DictationStream,
     push: async (...parts) => {
       h.stream.pushAudio(bytes(...parts))
@@ -92,7 +96,11 @@ function harness(over: Partial<DictationStreamDeps> = {}): Harness {
       const ws = wordsOf(audio)
       return (ws[ws.length - 1] ?? 0) >= 100 ? 0.9 : 0.1
     },
-    send: (e) => events.push(e),
+    send: (e) => {
+      raw.push(e)
+      if (e.type === "text") events.push({ type: "text", text: e.text })
+      else events.push(e)
+    },
     ...over,
   })
   return h
@@ -191,6 +199,31 @@ describe("DictationStream", () => {
     await h.push(word(2), word(102), quiet(400))
     expect(h.stt[1]!).toEqual({ words: [2, 102], context: "Hello there.", final: false })
     expect(h.texts().at(-1)).toBe("Hello there. w2 w102")
+  })
+
+  test("texts are numbered, and an edit made on an older one resumes after ITS audio", async () => {
+    const h = harness()
+    await h.push(word(1), word(101), quiet(400))
+    await h.push(word(2), word(102), quiet(400))
+    const seqs = h.raw.flatMap((e) => (e.type === "text" ? [e.seq] : []))
+    expect(seqs).toEqual([1, 2])
+    // The user edited text 1 while text 2 was on its way: the words of text 2 are not lost.
+    h.stream.edit("Mine.", 1)
+    await h.stream.stop()
+    expect(h.stt.at(-1)).toEqual({ words: [2, 102], context: "Mine.", final: true })
+    expect(h.events.at(-2)).toEqual({ type: "final", text: "Mine. w2 w102" })
+  })
+
+  test("an edit that arrives during Stop is ignored, and final still comes", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const h = harness({ transcribe: async (pcm) => { await gate; return say(wordsOf(pcm)) } })
+    h.stream.pushAudio(bytes(word(1), word(101), quiet(400)))
+    const stopped = h.stream.stop()
+    h.stream.edit("Too late.")
+    release()
+    await stopped
+    expect(h.events.slice(-2)).toEqual([{ type: "final", text: "w1 w101" }, { type: "done" }])
   })
 
   test("an edit made while a pass is out drops that pass's answer", async () => {
@@ -292,7 +325,7 @@ describe("DictationStream", () => {
     await h.push(word(1), word(101), quiet(400))
     h.stream.cancel()
     await h.stream.stop()
-    expect(h.events.map((e) => e.type)).toEqual(["text"])
+    expect(h.raw.map((e) => e.type)).toEqual(["text"])
     expect(ended).toBe(1)
   })
 })
