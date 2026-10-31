@@ -92,14 +92,26 @@ function withinRoots(path: string, roots: readonly string[]): boolean {
   })
 }
 
+/**
+ * supermux's own tools that only send an answer or a message (council_report, message_session), as an ACP agent
+ * names them in a permission request: Grok "mux-shim__council_report", Cursor "mux-shim-council_report:
+ * council_report" (seen in keeper journals). Approved under every policy, so an asking council member or delegated
+ * child can always report: nobody can answer a hidden session's prompt.
+ */
+export function isSendsOnlyMuxTool(title: string | undefined): boolean {
+  return typeof title === "string" && /^mux-shim(?:__|-|_)(?:council_report|message_session)(?![A-Za-z0-9_])/.test(title)
+}
+
 export function acpPermissionDecision(
   spec: Extract<PermissionsSpec, { kind: "acp" }>,
   toolKind: string | undefined,
   options: { optionId: string; kind: string }[],
   paths: readonly string[] = [],
+  title?: string,
 ): { auto: true; optionId: string; message?: string } | { auto: false } {
   const allow = options.find(o => o.kind === "allow_once" || o.kind === "allow_always")
   const reject = options.find(o => o.kind === "reject_once" || o.kind === "reject_always")
+  if (allow && isSendsOnlyMuxTool(title)) return { auto: true, optionId: (options.find(o => o.kind === "allow_once") ?? allow).optionId }
   const kind = toolKind ?? "other"
   if (allow && spec.readableRoots?.length && (kind === "read" || kind === "search")
       && paths.length > 0 && paths.every(p => withinRoots(p, spec.readableRoots!))) {
