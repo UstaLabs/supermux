@@ -118,7 +118,7 @@ class SetupWizardScreenTest {
     @Test fun back_returns_from_agents_to_welcome() = runComposeUiTest {
         wizard()
         advanceTo(1)
-        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithText("Step 2 of 5 — Providers").assertIsDisplayed() }
         onNodeWithTag("setup_back").performClick()
         eventually { onNodeWithText("Step 1 of 5 — Welcome").assertIsDisplayed() }
         onNodeWithTag("setup_back").assertDoesNotExist()
@@ -127,28 +127,28 @@ class SetupWizardScreenTest {
     @Test fun agents_step_blocks_next_until_one_agent_is_authed() = runComposeUiTest {
         wizard(statuses = unauthedAgent)
         advanceTo(1)
-        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithText("Step 2 of 5 — Providers").assertIsDisplayed() }
         eventually { onNodeWithTag("setup_next").assertIsNotEnabled() }
     }
 
     @Test fun agents_step_unblocks_next_when_an_agent_is_authed() = runComposeUiTest {
         wizard(statuses = authedAgent)
         advanceTo(1)
-        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithText("Step 2 of 5 — Providers").assertIsDisplayed() }
         eventually { onNodeWithTag("setup_next").assertIsEnabled() }
     }
 
     @Test fun a_broker_with_no_agents_keeps_next_disabled() = runComposeUiTest {
         wizard(agentsActions = AgentSettingsActions(agentStatuses = { emptyList() }))
         advanceTo(1)
-        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithText("Step 2 of 5 — Providers").assertIsDisplayed() }
         eventually { onNodeWithTag("setup_next").assertIsNotEnabled() }
     }
 
     @Test fun a_failed_status_load_keeps_next_disabled() = runComposeUiTest {
         wizard(agentsActions = AgentSettingsActions(agentStatuses = { null }))
         advanceTo(1)
-        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithText("Step 2 of 5 — Providers").assertIsDisplayed() }
         eventually { onNodeWithTag("setup_next").assertIsNotEnabled() }
     }
 

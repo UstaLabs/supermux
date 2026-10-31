@@ -308,7 +308,7 @@ test("everything that publishes waits on the tag's channel + branch guard", () =
 
 test("an alpha tag is a GitHub pre-release, so releases/latest keeps pointing at stable", () => {
   expect(releaseJob).toContain('if [ "$CHANNEL" = "alpha" ]; then prerelease=(--prerelease); fi')
-  expect(releaseJob).toContain('gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}"')
+  expect(releaseJob).toContain('gh release create "${GITHUB_REF_NAME}" --generate-notes "${notes[@]}" "${prerelease[@]}"')
   // The rerun path uploads into an existing release and must not leave it promoted.
   expect(releaseJob).toContain('gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false')
 })

@@ -84,7 +84,7 @@ class RouteTest {
     @Test
     fun settings_sections_keep_desktops_rail_order_and_labels() {
         assertEquals(
-            listOf("Providers", "Accounts", "Devices", "System", "Git hosting", "Proxies", "Worktrees", "Curator", "Voice", "Editor / LSP", "Agents"),
+            listOf("Providers", "Accounts", "Devices", "System", "Git hosting", "Proxies", "Worktrees", "Curator", "Voice", "Editor / LSP"),
             SettingsSection.entries.map { it.label },
         )
     }

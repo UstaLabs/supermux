@@ -439,14 +439,14 @@ class SessionListScreenTest {
                 onGroupByProjectChange = { seen += it },
             )
         }
-        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        onNodeWithText("ACTIVE").assertDoesNotExist()
         onNodeWithContentDescription("Group by status").performClick()
-        onNodeWithText("READY FOR YOU").assertIsDisplayed()
+        onNodeWithText("ACTIVE").assertIsDisplayed()
         onNodeWithText("EVERYTHING ELSE").assertIsDisplayed()
         onNodeWithText("fresh").assertIsDisplayed()
         onNodeWithText("quiet").assertIsDisplayed()
         onNodeWithContentDescription("Group by project").performClick()
-        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        onNodeWithText("ACTIVE").assertDoesNotExist()
         assertEquals(listOf(false, true), seen)
     }
 
@@ -492,10 +492,10 @@ class SessionListScreenTest {
             )
         }
         onNodeWithContentDescription("Flat list").performClick()
-        onNodeWithText("AGENTS").assertIsDisplayed()
+        // Agents left the flat list for their own zone above it (never a project, never tagged).
+        onNodeWithText("Agents").assertIsDisplayed()
+        onNodeWithText("My PA").assertIsDisplayed()
         onNodeWithText("IN PROGRESS").assertDoesNotExist()
-        // projectLabel of the PA's own workdir — the tag Android's flat row carried.
-        onNodeWithText("pa").assertIsDisplayed()
     }
 
     /**

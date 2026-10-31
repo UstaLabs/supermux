@@ -137,10 +137,13 @@ test("BUG 1: a child its parent closed (notLoaded) is resumed before the message
   const child = "01a0e789-3982-7f20-9a82-6a928de9c924"
   const source = rows("codex-message.ndjson")
   const parentDone = source.findIndex(r => r.d === "a" && r.m.method === "turn/completed" && r.m.params.threadId === "01a0e788-f41f-7a20-9beb-85b44d10810b")
-  // Real close_agent tail (truth capture 2026-10-03): the child thread is unloaded.
+  // Real close_agent tail (truth capture 2026-10-03): the child thread is unloaded. close_agent is a
+  // tool call inside the parent's turn, so the notice lands BEFORE the parent's turn/completed — which
+  // is also what makes `receipt.completed` a guarantee that the driver has seen it (after it, a slow
+  // runner could message the child before the notice was read, and skip the resume).
   const closed = { d: "a", m: { method: "thread/status/changed", params: { threadId: child, status: { type: "notLoaded" } } } }
   const resume = [{ d: "c", m: { id: 99, method: "thread/resume", params: { threadId: child } } }, { d: "a", m: { id: 99, result: { thread: { id: child } } } }]
-  const synthetic = [...source.slice(0, parentDone + 1), closed, ...resume, ...source.slice(parentDone + 1)]
+  const synthetic = [...source.slice(0, parentDone), closed, source[parentDone], ...resume, ...source.slice(parentDone + 1)]
   const dir = await mkdtemp(join(tmpdir(), "codex-fixture-"))
   dirs.push(dir)
   const file = join(dir, "child-closed.ndjson")
