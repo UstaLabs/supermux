@@ -50,13 +50,31 @@ const REPORT_REMINDER = "\n\nAnswer with council_report({ text })."
 export class Council {
   constructor(private readonly deps: CouncilDeps) {}
 
-  /** Round 1: each member's only starting message is the question, from the council (spec §5). */
+  /** The council was saved: the caller's card shows it while its members start. */
   opened(councilId: string): void {
     const c = this.deps.store.get(councilId)
+    if (c) this.emit(c)
+  }
+
+  /** Round 1: a member that started gets the question, its only starting message, from the council (spec §5). */
+  memberStarted(memberId: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
     if (!c) return
-    for (const m of this.deps.store.members(c.id)) {
-      // A killed member is archived; a message would restore it.
-      if (this.deps.isLive(m.sessionId)) this.deps.send(this.sender(c), m.sessionId, `${c.question}${REPORT_REMINDER}`)
+    // Stopped while it was starting: a message would restore it.
+    if (this.deps.isLive(memberId)) this.deps.send(this.sender(c), memberId, `${c.question}${REPORT_REMINDER}`)
+    this.emit(c)
+  }
+
+  /** A member couldn't start: its status is "failed" and a live caller hears why. */
+  memberStartFailed(memberId: string, error: string): void {
+    const membership = this.deps.store.membership(memberId)
+    const c = membership && this.deps.store.get(membership.councilId)
+    if (!membership || !c) return
+    this.deps.store.setStatus(c.id, c.currentRound, memberId, "failed")
+    if (this.deps.isLive(c.callerSessionId)) {
+      const member = this.deps.session(memberId)
+      this.deps.notify(c.callerSessionId, `${c.name} · ${membership.letter}${member ? ` [${member.name}:${member.id}]` : ""} couldn't start:\n${error}`)
     }
     this.emit(c)
   }
@@ -130,7 +148,7 @@ export class Council {
    */
   memberArchived(member: Session, how: { cascade?: boolean; endedBy?: "parent" | "client" }): void {
     if (how.cascade) return
-    this.ended(member.id, "killed", how.endedBy === "parent")
+    this.ended(member.id, "killed", how.endedBy === "parent", how.endedBy === "client")
   }
 
   /**
@@ -174,7 +192,8 @@ export class Council {
     return this.deps.store.byCaller(callerSessionId).map((c) => this.view(c))
   }
 
-  private ended(memberId: string, status: "crashed" | "killed", quiet = false): void {
+  /** `byUser`: the user stopped it (the app's Stop, /kill), and the caller is told so. */
+  private ended(memberId: string, status: "crashed" | "killed", quiet = false, byUser = false): void {
     const membership = this.deps.store.membership(memberId)
     const c = membership && this.deps.store.get(membership.councilId)
     const member = this.deps.session(memberId)
@@ -182,7 +201,7 @@ export class Council {
     this.deps.store.setStatus(c.id, c.currentRound, memberId, status)
     if (!quiet && this.deps.isLive(c.callerSessionId)) {
       const last = this.deps.lastReply(memberId)
-      const what = status === "crashed" ? "crashed" : "was killed"
+      const what = status === "crashed" ? "crashed" : byUser ? "was stopped by the user" : "was killed"
       this.deps.notify(c.callerSessionId, [`${c.name} · ${membership.letter} [${member.name}:${member.id}] ${what}.`, last ? `Its last message:\n${last}` : "It sent no message."].join("\n"))
     }
     this.emit(c)
@@ -211,7 +230,8 @@ export class Council {
       createdAt: c.createdAt,
       members: this.deps.store.members(c.id).map((m) => {
         const s = this.deps.session(m.sessionId)
-        const status = statuses.get(m.sessionId) ?? (this.deps.isLive(m.sessionId) ? "working" : "killed")
+        // No session row yet: the member is still starting.
+        const status = statuses.get(m.sessionId) ?? (!s || this.deps.isLive(m.sessionId) ? "working" : "killed")
         return {
           letter: m.letter,
           session: m.sessionId,

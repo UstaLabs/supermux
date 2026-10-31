@@ -101,7 +101,7 @@ import { failedTurn } from "./core/delegate/failed-turn"
 import { ChildSettle, NUDGE_PREFIX, nudgeText, quietText, seedFor, type SettleSource } from "./core/delegate/settle"
 import { CouncilStore } from "./core/council/store"
 import { Council, MEMBER_NUDGE_PREFIX } from "./core/council/service"
-import { startCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
+import { createCouncil, type StartCouncilArgs, type StartedCouncil } from "./core/council/start"
 import { nameFromTask } from "./core/delegate/name"
 import { sweepAdapterLiveness } from "./core/session-manager/adapter-liveness"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
@@ -3768,9 +3768,12 @@ async function delegateSession(args: {
   return { session: child.id, agent: child.agent, model: child.model ?? null, access: resolvePermissionMode(child.agent, child.permissionMode) }
 }
 
-/** council (spec §5): a council's start (startCouncil), with main.ts's collaborators. */
-function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
-  return startCouncil({
+/**
+ * council (spec §5): the council is saved and returned at once (createCouncil); its members start in
+ * the background, and the card and the caller hear each one start or fail.
+ */
+async function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
+  const created = await createCouncil({
     store: councilStore,
     session: (id) => registry.sessions.getById(id),
     isLive: (id) => !!registry.get(id),
@@ -3783,7 +3786,11 @@ function councilSession(args: StartCouncilArgs): Promise<StartedCouncil> {
     spawn: (a) => spawnSession(a),
     kill: (id) => sessionManager.killAndArchive(id, { endedBy: "parent" }),
     opened: (councilId) => councils.opened(councilId),
+    memberStarted: (id) => councils.memberStarted(id),
+    memberStartFailed: (id, error) => councils.memberStartFailed(id, error),
   }, args)
+  void created.run().catch((err) => log.warn("council_start_failed", { council: created.started.council, err: String(err) }))
+  return created.started
 }
 
 // Model/effort switching lives in SessionManager.applyConfig (the last
