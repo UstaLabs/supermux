@@ -10,6 +10,7 @@ import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.staticCompositionLocalOf
+import dev.supermux.webview.engine.WebEngineSpi
 
 /**
  * The Compose overlays and scrims drawn over the web views of one window right now, in window pixels (spec §6).
@@ -32,9 +33,11 @@ public class OverlayRegistry internal constructor() {
     private val scrimEntries = mutableStateOf(Entries<ScrimShape>(), referentialEqualityPolicy())
 
     /** The overlays, in the order they registered. */
+    @WebEngineSpi
     public val shapes: List<OverlayShape> get() = overlayEntries.value.values
 
     /** The scrims, in the order they registered: the order stacked modals open in, so they compound as drawn. */
+    @WebEngineSpi
     public val scrims: List<ScrimShape> get() = scrimEntries.value.values
 
     /** Registers [shape] for [key], in place of what [key] had; null forgets [key]. Keys are compared with `==`. */

@@ -1,5 +1,6 @@
 package dev.supermux.webview.bridge
 
+import dev.supermux.webview.engine.WebEngineSpi
 import dev.supermux.webview.monotonicClock
 import dev.supermux.webview.originOf
 import kotlinx.coroutines.CancellationException
@@ -698,9 +699,11 @@ public class WebBridge internal constructor(
          * without parsing it, so it has a budget of its own; engines recognize it the same way, so they never drop one
          * (see **Buffering** in the [dev.supermux.webview.engine.WebEngine] contract).
          */
+        @WebEngineSpi
         public const val READY_PREFIX: String = "{\"t\":\"event\",\"n\":\"\$ready\""
 
         /** The longest page message that can be a `$ready`: one that starts with [READY_PREFIX] and is no longer. */
+        @WebEngineSpi
         public const val READY_MAX_CHARS: Int = 256
 
         /**

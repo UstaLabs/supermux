@@ -82,6 +82,11 @@ kotlin {
         matching { it.name.endsWith("Test") }.configureEach {
             languageSettings.optIn("kotlinx.coroutines.ExperimentalCoroutinesApi")
         }
+        // The engine SPI (WebEngineSpi): the library's own engines implement it, and its runtime and tests drive it, so
+        // every source set opts in, for the same reason as above. Apps don't: it isn't stable.
+        configureEach {
+            languageSettings.optIn("dev.supermux.webview.engine.WebEngineSpi")
+        }
         // The iOS engine is Objective-C interop throughout: pointers, structs and NSObject subclasses. Every iOS source
         // set names the opt-ins, for the same reason as above.
         matching { it.name.startsWith("ios") }.configureEach {

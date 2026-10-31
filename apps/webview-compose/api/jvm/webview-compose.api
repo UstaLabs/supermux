@@ -1007,6 +1007,9 @@ public final class dev/supermux/webview/engine/WebEngineResult$Unavailable : dev
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface annotation class dev/supermux/webview/engine/WebEngineSpi : java/lang/annotation/Annotation {
+}
+
 public final class dev/supermux/webview/engine/WebSurfaceHints {
 	public static final field $stable I
 	public fun <init> ()V

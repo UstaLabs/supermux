@@ -7,6 +7,10 @@
 // - Show declarations: true
 
 // Library unique name: <dev.supermux.webview:webview-compose>
+open annotation class dev.supermux.webview.engine/WebEngineSpi : kotlin/Annotation { // dev.supermux.webview.engine/WebEngineSpi|null[0]
+    constructor <init>() // dev.supermux.webview.engine/WebEngineSpi.<init>|<init>(){}[0]
+}
+
 final enum class dev.supermux.webview.engine/EmbeddingMode : kotlin/Enum<dev.supermux.webview.engine/EmbeddingMode> { // dev.supermux.webview.engine/EmbeddingMode|null[0]
     enum entry Frames // dev.supermux.webview.engine/EmbeddingMode.Frames|null[0]
     enum entry NativeView // dev.supermux.webview.engine/EmbeddingMode.NativeView|null[0]

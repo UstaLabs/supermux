@@ -67,6 +67,12 @@ kotlin {
         matching { it.name.startsWith("ios") }.configureEach {
             languageSettings.optIn("kotlinx.cinterop.ExperimentalForeignApi")
         }
+        // The engines' conformance checks and the lab's wrapping factories drive engines through the engine SPI
+        // (WebEngineSpi), which an app's code never needs: every source set opts in, since the compiler takes opt-ins only
+        // from a compilation's own source set.
+        configureEach {
+            languageSettings.optIn("dev.supermux.webview.engine.WebEngineSpi")
+        }
         commonMain.dependencies {
             implementation(project(":webview-compose"))
             implementation(compose.runtime)

@@ -22,6 +22,7 @@ import dev.supermux.webview.runtime.OverlayCutouts
 import kotlinx.coroutines.flow.Flow
 
 /** How an engine reaches the screen (spec §7). */
+@WebEngineSpi
 public enum class EmbeddingMode {
     /** The engine's own native view, positioned by Compose. */
     NativeView,
@@ -34,6 +35,7 @@ public enum class EmbeddingMode {
  * WebKit's media playback policy). Engines are pooled per distinct config. Everything else is set per lease, through
  * [WebEngine.configure].
  */
+@WebEngineSpi
 public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequiresGesture: Boolean = true)
 
 /**
@@ -46,6 +48,7 @@ public data class EngineConfig(val profile: WebProfile, val mediaPlaybackRequire
  * @property userAgentSuffix appended to the engine's user agent, or null.
  * @property bridgeOrigins the origins whose documents get the bridge shim.
  */
+@WebEngineSpi
 public data class PageSetup(
     val javaScriptEnabled: Boolean,
     val inspectable: Boolean,
@@ -68,6 +71,7 @@ internal fun WebSettings.pageSetup(dark: Boolean, bridgeOrigins: Set<String>): P
     bridgeOrigins = bridgeOrigins,
 )
 
+@WebEngineSpi
 public sealed interface WebEngineResult {
     public data class Created(val engine: WebEngine) : WebEngineResult
 
@@ -80,8 +84,12 @@ public sealed interface WebEngineResult {
  *
  * [create] may suspend, because WebView2 and WPE start asynchronously. It never throws: failures are
  * [WebEngineResult.Unavailable]. The pool calls it outside its lock, and guards it anyway.
+ *
+ * Apps hold factories and give them to the runtime, the platform's ([dev.supermux.webview.runtime.platformWebEngineFactory])
+ * or a test's, without opting in; making engines ([create]) is the engine SPI ([WebEngineSpi]).
  */
 public interface WebEngineFactory {
+    @WebEngineSpi
     public suspend fun create(config: EngineConfig): WebEngineResult
 
     /**
@@ -94,6 +102,7 @@ public interface WebEngineFactory {
 }
 
 /** A [WebEngineFactory] that runs [create], so call sites can write `WebEngineFactory { config -> … }`. */
+@WebEngineSpi
 public fun WebEngineFactory(create: suspend (EngineConfig) -> WebEngineResult): WebEngineFactory =
     LambdaEngineFactory(create)
 
@@ -107,6 +116,7 @@ private class LambdaEngineFactory(private val block: suspend (EngineConfig) -> W
  *   engine's own UI thread (see [WebEngine]), so they answer fast, thread-safe and without blocking.
  * - The rest may suspend.
  */
+@WebEngineSpi
 public interface EngineClient {
     public fun onNavigation(request: NavigationRequest): NavigationDecision
     public suspend fun onDialog(dialog: WebDialog): DialogResult
@@ -116,6 +126,7 @@ public interface EngineClient {
     public fun onNewWindow(request: NewWindowRequest): NewWindowDecision
 }
 
+@WebEngineSpi
 public sealed interface EngineEvent {
     /**
      * A main-frame commit or a same-document URL change, in the terms the [WebEngine] contract sets. [url] is null
@@ -279,6 +290,7 @@ public sealed interface EngineEvent {
  *   page says from the replay on reaches the adopting view, even before the page has answered the bridge's `$hello`
  *   with its `$ready`.
  */
+@WebEngineSpi
 public interface WebEngine {
     public val mode: EmbeddingMode
     public val events: Flow<EngineEvent>

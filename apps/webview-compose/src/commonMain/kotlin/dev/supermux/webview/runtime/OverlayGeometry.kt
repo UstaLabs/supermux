@@ -5,6 +5,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.boundingRect
 import androidx.compose.ui.graphics.Color
+import dev.supermux.webview.engine.WebEngineSpi
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -14,6 +15,7 @@ import kotlin.math.roundToLong
  * A Compose overlay drawn over web views (a menu, a dialog, a bottom sheet), in window pixels. Every corner has its
  * own radius, so a bottom sheet keeps its square bottom corners.
  */
+@WebEngineSpi
 public data class OverlayShape(val shape: RoundRect) {
     public constructor(bounds: Rect, cornerRadius: CornerRadius = CornerRadius.Zero) :
         this(RoundRect(bounds, cornerRadius))
@@ -22,6 +24,7 @@ public data class OverlayShape(val shape: RoundRect) {
 }
 
 /** A modal scrim over web views, in window pixels. The page dims under it instead of disappearing. */
+@WebEngineSpi
 public data class ScrimShape(val bounds: Rect, val color: Color)
 
 /**
@@ -39,6 +42,7 @@ public data class ScrimShape(val bounds: Rect, val color: Color)
  * - It draws [scrims] over itself in order, each within its bounds, so stacked scrims compound as they do in
  *   Compose. Like the holes, scrims are in window pixels: subtract [pageBounds]' top-left to draw one on the page.
  */
+@WebEngineSpi
 public data class OverlayCutouts(
     val pageBounds: Rect,
     val visibleBounds: Rect,

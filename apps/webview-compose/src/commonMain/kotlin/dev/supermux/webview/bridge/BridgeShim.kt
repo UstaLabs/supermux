@@ -1,5 +1,7 @@
 package dev.supermux.webview.bridge
 
+import dev.supermux.webview.engine.WebEngineSpi
+
 /**
  * The page side of the bridge: `window.hostBridge`, identical on every engine. Engines inject [source] at the start
  * of the main frame of every document whose origin may talk to the host. Host messages are delivered by calling
@@ -42,6 +44,7 @@ package dev.supermux.webview.bridge
  * It captures built-ins at install (`JSON`, `Promise`, `Error`, `TypeError`, timers…), so pages that replace them or
  * patch prototypes later can't break it: its rejections stay real errors. Nothing here names the host app.
  */
+@WebEngineSpi
 public object BridgeShim {
     /** The longest console message text kept; longer text is cut and ends with an ellipsis. */
     public const val CONSOLE_TEXT_MAX: Int = 8192
