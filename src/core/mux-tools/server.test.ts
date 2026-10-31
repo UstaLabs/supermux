@@ -527,7 +527,7 @@ describe("delegate", () => {
     t.ports.orchestration.delegate = async () => { throw new Error("must not be called") }
     const call = (args: Record<string, unknown>) => t.m.orchestration(t.worker.id, { name: "delegate", args })
     expect(await call({ ...ok, agent: "gemini" })).toEqual({ ok: false, error: "unknown agent kind: gemini" })
-    expect(await call({ ...ok, access: "bypass" })).toEqual({ ok: false, error: "access must be one of full-access, auto, ask, read-only for codex" })
+    expect(await call({ ...ok, access: "bypass" })).toEqual({ ok: false, error: "access must be one of full-access, auto, read-only for codex (a hidden session can't wait for a person to approve)" })
     expect(await call({ ...ok, checkout: "elsewhere" })).toEqual({ ok: false, error: 'checkout must be "shared" or "worktree"' })
     expect(await call({ ...ok, task: "   " })).toEqual({ ok: false, error: "task must not be empty" })
     expect(await t.m.orchestration("no-such-session", { name: "delegate", args: ok })).toEqual({ ok: false, error: "unknown session" })
@@ -561,7 +561,7 @@ describe("council tools", () => {
     expect(await call({ question: " ", members: [member], checkout: "shared" })).toEqual({ ok: false, error: "question must not be empty" })
     expect(await call({ question: "Q", members: [], checkout: "shared" })).toEqual({ ok: false, error: "members must be a non-empty array" })
     expect(await call({ question: "Q", members: [{ agent: "gemini", access: "x" }], checkout: "shared" })).toEqual({ ok: false, error: "member A: unknown agent kind: gemini" })
-    expect(await call({ question: "Q", members: [member, { agent: "codex", access: "bypass" }], checkout: "shared" })).toEqual({ ok: false, error: "member B: access must be one of full-access, auto, ask, read-only for codex" })
+    expect(await call({ question: "Q", members: [member, { agent: "codex", access: "bypass" }], checkout: "shared" })).toEqual({ ok: false, error: "member B: access must be one of full-access, auto, read-only for codex (a hidden session can't wait for a person to approve)" })
     expect(await call({ question: "Q", members: [member], checkout: "x" })).toEqual({ ok: false, error: 'checkout must be "shared" or "worktree"' })
   })
 

@@ -96,7 +96,7 @@ const ORCHESTRATION_TOOLS = [
     description: "Start a child session on any agent and model with a task. It is a session of its own, hidden from " +
       "the user's session list and shown in your subagents; its output stays in its own chat. It can message you " +
       "with message_session, and supermux messages you if it crashes, someone else kills it, or a turn of it ends in an error. If it goes idle without reporting, supermux reminds it, then tells you. access: one of that agent's " +
-      "access levels from list_models. checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
+      "ids in the access field (only modes that never wait for a person to approve: nobody sees a hidden session's prompts). checkout: \"shared\" works in your folder; \"worktree\" makes a new git " +
       "worktree branched from your current branch, and fails if it can't. title: the child's session name (from " +
       "the task when omitted). It runs on the agent's account with the most room left.",
     inputSchema: {
@@ -119,7 +119,7 @@ const ORCHESTRATION_TOOLS = [
       "session list) that gets the question and answers with council_report; every answer is forwarded to you " +
       "as it arrives, with the member's letter and name. Start a follow-up round with council_round: the members then " +
       "see each other's answers by letter only. members: [{ agent, model?, effort?, access }], access being one of " +
-      "that agent's access levels from list_models. checkout applies to every member: \"shared\" works in your folder; " +
+      "that agent's ids in the access field (only modes that never wait for a person to approve). checkout applies to every member: \"shared\" works in your folder; " +
       "\"worktree\" gives each member a new git worktree from your current branch. " +
       "It returns as soon as the council is saved; the members start in the background, so don't wait for them or check " +
       "on them: their answers arrive in your inbox. " +

@@ -3,7 +3,7 @@
 // always picking the most restrictive level), and the check of a call's values.
 import { AGENT_KINDS, type AgentKind } from "../../shared/agents"
 import type { ModelInfo } from "./discovery"
-import { modesFor } from "../agents/permission-modes"
+import { unattendedModesFor } from "../agents/permission-modes"
 import { supportedReasoningLevels } from "./reasoning-levels"
 
 export type AgentChoices = Record<string, {
@@ -22,7 +22,8 @@ export function agentChoices(lookupModels: (agent: AgentKind) => ModelInfo[]): A
     const efforts = new Set<string>()
     for (const m of [undefined, ...models.map((x) => x.id)]) for (const l of supportedReasoningLevels(agent, models, m)) efforts.add(l.id)
     out[agent] = {
-      access: modesFor(agent).map((m) => ({ id: m.id, level: m.level, description: m.description })),
+      // Only the modes a session nobody watches can run in: these tools start hidden sessions.
+      access: unattendedModesFor(agent).map((m) => ({ id: m.id, level: m.level, description: m.description })),
       // Right after a broker start the catalog can still be empty: then don't forbid what isn't known.
       efforts: models.length === 0 && EFFORT_FROM_CATALOG.has(agent) ? null : [...efforts],
     }

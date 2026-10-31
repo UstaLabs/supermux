@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test"
 import { agentChoices, effortError } from "./agent-choices"
-import { modesFor } from "../agents/permission-modes"
+import { unattendedModesFor } from "../agents/permission-modes"
 import { claudeReasoningLevels } from "./reasoning-levels"
 
 test("each agent's access levels from the catalog and the efforts its models take", () => {
   const c = agentChoices(() => [])
-  expect(c.claude!.access.map((m) => m.id)).toEqual(modesFor("claude").map((m) => m.id))
-  expect(c.claude!.access.find((m) => m.id === "plan")).toMatchObject({ level: "read-only" })
+  // Only the modes a hidden session can run in: Claude's plan (waits for plan approval) is not offered.
+  expect(c.claude!.access.map((m) => m.id)).toEqual(unattendedModesFor("claude").map((m) => m.id))
+  expect(c.claude!.access.find((m) => m.id === "dont-ask")).toMatchObject({ level: "read-only" })
+  expect(c.claude!.access.find((m) => m.id === "plan")).toBeUndefined()
   expect(c.claude!.efforts).toEqual(claudeReasoningLevels().map((l) => l.id))
   for (const agent of ["cursor", "opencode", "antigravity"]) expect(c[agent]!.efforts).toEqual([])
   // No catalog yet (right after a broker start): Codex and Grok efforts aren't known, so nothing is refused.
