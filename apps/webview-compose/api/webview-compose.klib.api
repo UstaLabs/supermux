@@ -801,17 +801,6 @@ final class dev.supermux.webview.engine/PageSetup { // dev.supermux.webview.engi
     final fun toString(): kotlin/String // dev.supermux.webview.engine/PageSetup.toString|toString(){}[0]
 }
 
-final class dev.supermux.webview.engine/WebSurfaceHints { // dev.supermux.webview.engine/WebSurfaceHints|null[0]
-    constructor <init>(kotlin/Boolean = ...) // dev.supermux.webview.engine/WebSurfaceHints.<init>|<init>(kotlin.Boolean){}[0]
-
-    final val inScrollingList // dev.supermux.webview.engine/WebSurfaceHints.inScrollingList|{}inScrollingList[0]
-        final fun <get-inScrollingList>(): kotlin/Boolean // dev.supermux.webview.engine/WebSurfaceHints.inScrollingList.<get-inScrollingList>|<get-inScrollingList>(){}[0]
-
-    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview.engine/WebSurfaceHints.equals|equals(kotlin.Any?){}[0]
-    final fun hashCode(): kotlin/Int // dev.supermux.webview.engine/WebSurfaceHints.hashCode|hashCode(){}[0]
-    final fun toString(): kotlin/String // dev.supermux.webview.engine/WebSurfaceHints.toString|toString(){}[0]
-}
-
 final class dev.supermux.webview.runtime/EnginePool { // dev.supermux.webview.runtime/EnginePool|null[0]
     final val budget // dev.supermux.webview.runtime/EnginePool.budget|{}budget[0]
         final fun <get-budget>(): kotlin/Int // dev.supermux.webview.runtime/EnginePool.budget.<get-budget>|<get-budget>(){}[0]
@@ -1171,6 +1160,17 @@ final class dev.supermux.webview/WebSettings { // dev.supermux.webview/WebSettin
     }
 }
 
+final class dev.supermux.webview/WebSurfaceHints { // dev.supermux.webview/WebSurfaceHints|null[0]
+    constructor <init>(kotlin/Boolean = ...) // dev.supermux.webview/WebSurfaceHints.<init>|<init>(kotlin.Boolean){}[0]
+
+    final val inScrollingList // dev.supermux.webview/WebSurfaceHints.inScrollingList|{}inScrollingList[0]
+        final fun <get-inScrollingList>(): kotlin/Boolean // dev.supermux.webview/WebSurfaceHints.inScrollingList.<get-inScrollingList>|<get-inScrollingList>(){}[0]
+
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.supermux.webview/WebSurfaceHints.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.supermux.webview/WebSurfaceHints.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.supermux.webview/WebSurfaceHints.toString|toString(){}[0]
+}
+
 final class dev.supermux.webview/WebViewState { // dev.supermux.webview/WebViewState|null[0]
     constructor <init>(dev.supermux.webview/WebContent) // dev.supermux.webview/WebViewState.<init>|<init>(dev.supermux.webview.WebContent){}[0]
 
@@ -1248,8 +1248,6 @@ final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Start$stableprop[0]
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Title$stableprop[0]
 final val dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop // dev.supermux.webview.engine.webkit/dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop|#static{}dev_supermux_webview_engine_webkit_RelayMessage_Url$stableprop[0]
-final val dev.supermux.webview.engine/LocalWebSurfaceHints // dev.supermux.webview.engine/LocalWebSurfaceHints|{}LocalWebSurfaceHints[0]
-    final fun <get-LocalWebSurfaceHints>(): androidx.compose.runtime/ProvidableCompositionLocal<dev.supermux.webview.engine/WebSurfaceHints> // dev.supermux.webview.engine/LocalWebSurfaceHints.<get-LocalWebSurfaceHints>|<get-LocalWebSurfaceHints>(){}[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineConfig$stableprop|#static{}dev_supermux_webview_engine_EngineConfig$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEventQueue$stableprop|#static{}dev_supermux_webview_engine_EngineEventQueue$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Console$stableprop|#static{}dev_supermux_webview_engine_EngineEvent_Console$stableprop[0]
@@ -1267,7 +1265,6 @@ final val dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Ur
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_PageSetup$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_PageSetup$stableprop|#static{}dev_supermux_webview_engine_PageSetup$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Created$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Created$stableprop|#static{}dev_supermux_webview_engine_WebEngineResult_Created$stableprop[0]
 final val dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop|#static{}dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop[0]
-final val dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop // dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop|#static{}dev_supermux_webview_engine_WebSurfaceHints$stableprop[0]
 final val dev.supermux.webview.runtime/LocalWebViewOverlays // dev.supermux.webview.runtime/LocalWebViewOverlays|{}LocalWebViewOverlays[0]
     final fun <get-LocalWebViewOverlays>(): androidx.compose.runtime/ProvidableCompositionLocal<dev.supermux.webview.runtime/OverlayRegistry?> // dev.supermux.webview.runtime/LocalWebViewOverlays.<get-LocalWebViewOverlays>|<get-LocalWebViewOverlays>(){}[0]
 final val dev.supermux.webview.runtime/LocalWebViewRuntime // dev.supermux.webview.runtime/LocalWebViewRuntime|{}LocalWebViewRuntime[0]
@@ -1289,6 +1286,8 @@ final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_RuntimeConfi
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_ScrimShape$stableprop|#static{}dev_supermux_webview_runtime_ScrimShape$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_SnapshotCache$stableprop|#static{}dev_supermux_webview_runtime_SnapshotCache$stableprop[0]
 final val dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop // dev.supermux.webview.runtime/dev_supermux_webview_runtime_WebViewRuntime$stableprop|#static{}dev_supermux_webview_runtime_WebViewRuntime$stableprop[0]
+final val dev.supermux.webview/LocalWebSurfaceHints // dev.supermux.webview/LocalWebSurfaceHints|{}LocalWebSurfaceHints[0]
+    final fun <get-LocalWebSurfaceHints>(): androidx.compose.runtime/ProvidableCompositionLocal<dev.supermux.webview/WebSurfaceHints> // dev.supermux.webview/LocalWebSurfaceHints.<get-LocalWebSurfaceHints>|<get-LocalWebSurfaceHints>(){}[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_Eager$stableprop|#static{}dev_supermux_webview_Activation_Eager$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_OnInteraction$stableprop|#static{}dev_supermux_webview_Activation_OnInteraction$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop // dev.supermux.webview/dev_supermux_webview_Activation_WhenVisible$stableprop|#static{}dev_supermux_webview_Activation_WhenVisible$stableprop[0]
@@ -1324,6 +1323,7 @@ final val dev.supermux.webview/dev_supermux_webview_WebResource$stableprop // de
 final val dev.supermux.webview/dev_supermux_webview_WebSettings$stableprop // dev.supermux.webview/dev_supermux_webview_WebSettings$stableprop|#static{}dev_supermux_webview_WebSettings$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebSizing_Fill$stableprop // dev.supermux.webview/dev_supermux_webview_WebSizing_Fill$stableprop|#static{}dev_supermux_webview_WebSizing_Fill$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebSizing_WrapContentHeight$stableprop // dev.supermux.webview/dev_supermux_webview_WebSizing_WrapContentHeight$stableprop|#static{}dev_supermux_webview_WebSizing_WrapContentHeight$stableprop[0]
+final val dev.supermux.webview/dev_supermux_webview_WebSurfaceHints$stableprop // dev.supermux.webview/dev_supermux_webview_WebSurfaceHints$stableprop|#static{}dev_supermux_webview_WebSurfaceHints$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebViewHost_Cover$stableprop // dev.supermux.webview/dev_supermux_webview_WebViewHost_Cover$stableprop|#static{}dev_supermux_webview_WebViewHost_Cover$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebViewHost_SurfacePresence$stableprop // dev.supermux.webview/dev_supermux_webview_WebViewHost_SurfacePresence$stableprop|#static{}dev_supermux_webview_WebViewHost_SurfacePresence$stableprop[0]
 final val dev.supermux.webview/dev_supermux_webview_WebViewPhase_Activating$stableprop // dev.supermux.webview/dev_supermux_webview_WebViewPhase_Activating$stableprop|#static{}dev_supermux_webview_WebViewPhase_Activating$stableprop[0]
@@ -1387,7 +1387,6 @@ final fun dev.supermux.webview.engine/dev_supermux_webview_engine_EngineEvent_Ur
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_PageSetup$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_PageSetup$stableprop_getter|dev_supermux_webview_engine_PageSetup$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Created$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Created$stableprop_getter|dev_supermux_webview_engine_WebEngineResult_Created$stableprop_getter(){}[0]
 final fun dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop_getter|dev_supermux_webview_engine_WebEngineResult_Unavailable$stableprop_getter(){}[0]
-final fun dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter(): kotlin/Int // dev.supermux.webview.engine/dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter|dev_supermux_webview_engine_WebSurfaceHints$stableprop_getter(){}[0]
 final fun dev.supermux.webview.runtime/ProvideWebViewOverlays(kotlin/Function2<androidx.compose.runtime/Composer, kotlin/Int, kotlin/Unit>, androidx.compose.runtime/Composer?, kotlin/Int) // dev.supermux.webview.runtime/ProvideWebViewOverlays|ProvideWebViewOverlays(kotlin.Function2<androidx.compose.runtime.Composer,kotlin.Int,kotlin.Unit>;androidx.compose.runtime.Composer?;kotlin.Int){}[0]
 final fun dev.supermux.webview.runtime/ProvideWebViewRuntime(dev.supermux.webview.runtime/WebViewRuntime, kotlin/Function2<androidx.compose.runtime/Composer, kotlin/Int, kotlin/Unit>, androidx.compose.runtime/Composer?, kotlin/Int) // dev.supermux.webview.runtime/ProvideWebViewRuntime|ProvideWebViewRuntime(dev.supermux.webview.runtime.WebViewRuntime;kotlin.Function2<androidx.compose.runtime.Composer,kotlin.Int,kotlin.Unit>;androidx.compose.runtime.Composer?;kotlin.Int){}[0]
 final fun dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter(): kotlin/Int // dev.supermux.webview.runtime/dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter|dev_supermux_webview_runtime_AcquireResult_Denied$stableprop_getter(){}[0]
@@ -1446,6 +1445,7 @@ final fun dev.supermux.webview/dev_supermux_webview_WebResource$stableprop_gette
 final fun dev.supermux.webview/dev_supermux_webview_WebSettings$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebSettings$stableprop_getter|dev_supermux_webview_WebSettings$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebSizing_Fill$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebSizing_Fill$stableprop_getter|dev_supermux_webview_WebSizing_Fill$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebSizing_WrapContentHeight$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebSizing_WrapContentHeight$stableprop_getter|dev_supermux_webview_WebSizing_WrapContentHeight$stableprop_getter(){}[0]
+final fun dev.supermux.webview/dev_supermux_webview_WebSurfaceHints$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebSurfaceHints$stableprop_getter|dev_supermux_webview_WebSurfaceHints$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebViewHost_Cover$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebViewHost_Cover$stableprop_getter|dev_supermux_webview_WebViewHost_Cover$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebViewHost_SurfacePresence$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebViewHost_SurfacePresence$stableprop_getter|dev_supermux_webview_WebViewHost_SurfacePresence$stableprop_getter(){}[0]
 final fun dev.supermux.webview/dev_supermux_webview_WebViewPhase_Activating$stableprop_getter(): kotlin/Int // dev.supermux.webview/dev_supermux_webview_WebViewPhase_Activating$stableprop_getter|dev_supermux_webview_WebViewPhase_Activating$stableprop_getter(){}[0]

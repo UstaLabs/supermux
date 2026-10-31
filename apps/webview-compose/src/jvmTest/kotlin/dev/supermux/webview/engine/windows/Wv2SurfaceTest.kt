@@ -13,8 +13,8 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
-import dev.supermux.webview.engine.LocalWebSurfaceHints
-import dev.supermux.webview.engine.WebSurfaceHints
+import dev.supermux.webview.LocalWebSurfaceHints
+import dev.supermux.webview.WebSurfaceHints
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals

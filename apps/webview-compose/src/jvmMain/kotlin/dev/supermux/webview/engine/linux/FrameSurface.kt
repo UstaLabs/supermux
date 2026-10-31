@@ -67,7 +67,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import dev.supermux.webview.engine.LocalWebSurfaceHints
+import dev.supermux.webview.LocalWebSurfaceHints
 import java.awt.Cursor
 
 /**

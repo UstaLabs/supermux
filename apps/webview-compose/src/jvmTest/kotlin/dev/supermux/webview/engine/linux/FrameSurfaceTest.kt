@@ -26,8 +26,8 @@ import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
-import dev.supermux.webview.engine.LocalWebSurfaceHints
-import dev.supermux.webview.engine.WebSurfaceHints
+import dev.supermux.webview.LocalWebSurfaceHints
+import dev.supermux.webview.WebSurfaceHints
 import dev.supermux.webview.engine.webkit.WebKitScripts
 import kotlin.test.Test
 import kotlin.test.assertContains

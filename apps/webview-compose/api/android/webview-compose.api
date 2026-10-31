@@ -527,6 +527,21 @@ public final class dev/supermux/webview/WebSizing$WrapContentHeight : dev/superm
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/supermux/webview/WebSurfaceHints {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun <init> (Z)V
+	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInScrollingList ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebSurfaceHintsKt {
+	public static final fun getLocalWebSurfaceHints ()Landroidx/compose/runtime/ProvidableCompositionLocal;
+}
+
 public final class dev/supermux/webview/WebViewKt {
 	public static final fun WebView (Ldev/supermux/webview/WebViewState;Landroidx/compose/ui/Modifier;Ldev/supermux/webview/WebSettings;Ldev/supermux/webview/WebClient;Ldev/supermux/webview/Activation;Ldev/supermux/webview/WebSizing;Lkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
 }
@@ -862,10 +877,6 @@ public final class dev/supermux/webview/engine/PageSetup {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class dev/supermux/webview/engine/SurfaceHintsKt {
-	public static final fun getLocalWebSurfaceHints ()Landroidx/compose/runtime/ProvidableCompositionLocal;
-}
-
 public abstract interface class dev/supermux/webview/engine/WebEngine {
 	public abstract fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
 	public abstract fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
@@ -949,17 +960,6 @@ public final class dev/supermux/webview/engine/WebEngineResult$Unavailable : dev
 }
 
 public abstract interface annotation class dev/supermux/webview/engine/WebEngineSpi : java/lang/annotation/Annotation {
-}
-
-public final class dev/supermux/webview/engine/WebSurfaceHints {
-	public static final field $stable I
-	public fun <init> ()V
-	public fun <init> (Z)V
-	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getInScrollingList ()Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/supermux/webview/runtime/EnginePool {

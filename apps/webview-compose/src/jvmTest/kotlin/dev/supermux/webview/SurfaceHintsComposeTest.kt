@@ -11,11 +11,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
-import dev.supermux.webview.engine.LocalWebSurfaceHints
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
-import dev.supermux.webview.engine.WebSurfaceHints
 import dev.supermux.webview.runtime.ProvideWebViewRuntime
 import dev.supermux.webview.testing.FakeWebEngine
 import kotlin.test.Test

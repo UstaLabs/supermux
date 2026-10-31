@@ -24,7 +24,7 @@ import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
-import dev.supermux.webview.engine.LocalWebSurfaceHints
+import dev.supermux.webview.LocalWebSurfaceHints
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
 import dev.supermux.webview.engine.webkit.NavigationVerdict
