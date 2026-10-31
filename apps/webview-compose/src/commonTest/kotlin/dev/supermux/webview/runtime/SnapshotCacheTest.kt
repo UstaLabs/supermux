@@ -239,6 +239,7 @@ class SnapshotCacheTest {
      * phones keep. Its pixels are 2.8 MB: as pixels, 32 MB would hold 11.
      */
     @Test fun thirtyTwoMegabytesHoldAtLeast150PhoneSizedCovers() = runTest {
+        assumeRealImages()
         val stored = assertNotNull(SnapshotCodec.encode(pageLike(945, 735)))
         val cache = cache(32L shl 20)
         repeat(200) { cache.put(SnapshotKey("page$it", WebProfile.Default, 945, 735, false, 2.625f), stored) }

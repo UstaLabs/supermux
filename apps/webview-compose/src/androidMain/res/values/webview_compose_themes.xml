@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   What prefers-color-scheme tells a page. For targetSdk 33+ WebView reads android:isLightTheme from its context's theme
-  (EngineContext), applied here over the Activity's own theme, which otherwise stays as it is.
+  (EngineContext), applied here over the Activity's own theme, which otherwise stays as it is. The attribute is API 29's:
+  below it Android ignores it, and WebView there doesn't ask (tools:targetApi says so to lint).
 -->
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <style name="WebViewCompose.Light" parent="">
-        <item name="android:isLightTheme">true</item>
+        <item name="android:isLightTheme" tools:targetApi="29">true</item>
     </style>
     <style name="WebViewCompose.Dark" parent="">
-        <item name="android:isLightTheme">false</item>
+        <item name="android:isLightTheme" tools:targetApi="29">false</item>
     </style>
 </resources>

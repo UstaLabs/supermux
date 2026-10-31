@@ -55,11 +55,13 @@ class SnapshotScalingTest {
     }
 
     @Test fun aSnapshotAtTheScreensDensityInFullColourIsKeptAsItIs() {
+        assumeRealImages()
         val image = solid(800, 600, Color.Red)
         assertSame(image, keptSnapshot(image, viewWidthDp = 400f))
     }
 
     @Test fun nothingIsKeptIn16BitPixels() {
+        assumeRealImages()
         val sixteen = solid(800, 600, Color.Red, ImageBitmapConfig.Rgb565)
         val kept = keptSnapshot(sixteen, viewWidthDp = 400f)
         assertEquals(IntSize(800, 600), IntSize(kept.width, kept.height))
@@ -68,6 +70,7 @@ class SnapshotScalingTest {
     }
 
     @Test fun aSnapshotDenserThanThreePixelsADpIsScaledDownInFullColour() {
+        assumeRealImages()
         // 200 dp at density 4.
         val kept = keptSnapshot(solid(800, 600, Color.Blue), viewWidthDp = 200f)
         assertEquals(IntSize(600, 450), IntSize(kept.width, kept.height))

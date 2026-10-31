@@ -22,6 +22,7 @@ import kotlin.test.assertTrue
 /** Snapshots stored as JPEG 92 (sharp snapshots, Task 1), on every platform the common tests run on. */
 class SnapshotCodecTest {
     @Test fun aRoundTripKeepsTheSize() = runTest {
+        assumeRealImages()
         val bytes = assertNotNull(SnapshotCodec.encode(pageLike(300, 200)))
         val back = assertNotNull(SnapshotCodec.decode(bytes))
         assertEquals(300 to 200, back.width to back.height)
@@ -30,6 +31,7 @@ class SnapshotCodecTest {
 
     /** A phone-sized page (text, a gradient, flat areas): at most 400 KB of its 4.3 MB of pixels, to the eye the same. */
     @Test fun aPhoneSizedPageIsSmallAndLooksTheSame() = runTest {
+        assumeRealImages()
         val page = pageLike(1_080, 1_000)
         val bytes = assertNotNull(SnapshotCodec.encode(page))
         val back = assertNotNull(SnapshotCodec.decode(bytes))
@@ -41,6 +43,7 @@ class SnapshotCodecTest {
 
     /** A page with a transparent background shows what's under the view through its snapshot too: stored lossless. */
     @Test fun aTransparentSnapshotKeepsItsAlpha() = runTest {
+        assumeRealImages()
         val image = ImageBitmap(40, 20)
         val canvas = Canvas(image)
         canvas.drawRect(0f, 0f, 40f, 20f, Paint().apply { blendMode = BlendMode.Clear })
