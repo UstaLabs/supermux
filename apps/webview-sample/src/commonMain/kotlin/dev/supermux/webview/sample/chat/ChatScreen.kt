@@ -387,11 +387,15 @@ private fun AgentRow(message: AgentMessage, chat: ChatState) {
         AgentAvatar(32.dp)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("Agent", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.width(6.dp))
-                Text(message.time, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+            // One text for the name and the time: a row that scrolls in lays out as few texts as it can.
+            val small = MaterialTheme.typography.labelSmall
+            val header = remember(message.time, cs.onSurfaceVariant, small) {
+                buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append("Agent") }
+                    withStyle(SpanStyle(color = cs.onSurfaceVariant, fontSize = small.fontSize)) { append("  ${message.time}") }
+                }
             }
+            Text(header, style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(4.dp))
             Text(
                 message.text,

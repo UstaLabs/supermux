@@ -1,8 +1,10 @@
 package dev.supermux.webview.sample.chat
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -47,14 +49,18 @@ enum class ChatRun(val label: String) {
  * The chat demo's state: its messages, newest last, the list's position, what the previews told the app over the
  * bridge, and the composer. It lives as long as the app (the screen can go and come back), on [lab]'s runtime, whose
  * numbers its runs report. Main thread only.
+ * @param cacheWindow whether the list composes rows ahead of the screen (a viewport ahead, half one behind) instead of
+ *   Compose's default prefetch of the next row: spreads a fling's composition over the frames' idle time.
  */
 @Stable
-class ChatState(val lab: PerfLabState) {
+@OptIn(ExperimentalFoundationApi::class)
+class ChatState(val lab: PerfLabState, val cacheWindow: Boolean = false) {
     /** Every row, oldest first. The list shows them newest at the bottom ([itemAt]). */
     val items = mutableStateListOf<ChatItem>().apply { addAll(chatScript()) }
 
     /** The list's position: index 0 is the newest message, at the bottom. */
-    val list: LazyListState = LazyListState()
+    val list: LazyListState =
+        if (cacheWindow) LazyListState(LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)) else LazyListState()
 
     val snackbars: SnackbarHostState = SnackbarHostState()
 
@@ -223,7 +229,8 @@ class ChatState(val lab: PerfLabState) {
         } finally {
             val report = recorder.report(
                 name = if (finished) run.label else "${run.label} (stopped)",
-                setup = "chat · $previewCount previews in $messageCount messages, ${if (baseline) "as still pictures" else "as web views"}",
+                setup = "chat · $previewCount previews in $messageCount messages, ${if (baseline) "as still pictures" else "as web views"}" +
+                    if (cacheWindow) ", cache window" else "",
                 end = lab.sample(),
                 peakEngines = lab.engines.peakEngines,
                 maxEngines = lab.runtime.config.maxLive + lab.runtime.config.maxIdle,

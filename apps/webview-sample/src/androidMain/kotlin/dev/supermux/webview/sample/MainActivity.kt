@@ -30,7 +30,7 @@ import kotlinx.coroutines.delay
  *   logcat (tag System.out), where device-checks/android-sample.sh reads it.
  * - `--es chatrun read|scroll|fling`: starts that run of the chat 3 s after launch; its `chat-perf:` line goes there too.
  *   `--ez chatbaseline true` shows the previews as still pictures instead, the baseline the web views are measured
- *   against.
+ *   against; `--ez chatcache true` composes rows ahead of the screen (`ChatState.cacheWindow`).
  * - `--es orientation portrait|landscape`: holds this window in that orientation (screenshots and runs on a phone lying on
  *   a desk), without touching the system's rotation settings.
  */
@@ -55,7 +55,8 @@ class MainActivity : ComponentActivity() {
             "landscape" -> requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         }
         val lab = androidPerfLab(fake)
-        val chat = ChatState(lab).apply { baseline = intent?.getBooleanExtra("chatbaseline", false) == true }
+        val chat = ChatState(lab, cacheWindow = intent?.getBooleanExtra("chatcache", false) == true)
+            .apply { baseline = intent?.getBooleanExtra("chatbaseline", false) == true }
         setContent {
             SampleApp(
                 lab,
