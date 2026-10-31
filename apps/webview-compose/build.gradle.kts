@@ -34,6 +34,12 @@ kotlin {
     }
     applyDefaultHierarchyTemplate()
 
+    // The public API, as compiled for every target, is checked against the dump in api/: `check` fails on any change to
+    // it that the dump doesn't show too. After a deliberate change, `webview-mac-gradle :webview-compose:updateKotlinAbi`
+    // writes the dump again (on a Mac: the iOS targets build there only), and its diff is reviewed with the code's.
+    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
+    abiValidation()
+
     sourceSets {
         commonMain.dependencies {
             api(compose.runtime)

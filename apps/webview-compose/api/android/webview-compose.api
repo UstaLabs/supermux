@@ -1,0 +1,1390 @@
+public abstract interface class dev/supermux/webview/Activation {
+}
+
+public final class dev/supermux/webview/Activation$Eager : dev/supermux/webview/Activation {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/Activation$Eager;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/Activation$OnInteraction : dev/supermux/webview/Activation {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/Activation$OnInteraction;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/Activation$WhenVisible : dev/supermux/webview/Activation {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun <init> (J)V
+	public synthetic fun <init> (JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun copy (J)Ldev/supermux/webview/Activation$WhenVisible;
+	public static synthetic fun copy$default (Ldev/supermux/webview/Activation$WhenVisible;JILjava/lang/Object;)Ldev/supermux/webview/Activation$WhenVisible;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSettleMillis ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/ConsoleLevel : java/lang/Enum {
+	public static final field Debug Ldev/supermux/webview/ConsoleLevel;
+	public static final field Error Ldev/supermux/webview/ConsoleLevel;
+	public static final field Info Ldev/supermux/webview/ConsoleLevel;
+	public static final field Log Ldev/supermux/webview/ConsoleLevel;
+	public static final field Warn Ldev/supermux/webview/ConsoleLevel;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/ConsoleLevel;
+	public static fun values ()[Ldev/supermux/webview/ConsoleLevel;
+}
+
+public final class dev/supermux/webview/ConsoleMessage {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/ConsoleLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Z)V
+	public synthetic fun <init> (Ldev/supermux/webview/ConsoleLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/supermux/webview/ConsoleLevel;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Integer;
+	public final fun component5 ()Z
+	public final fun copy (Ldev/supermux/webview/ConsoleLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Z)Ldev/supermux/webview/ConsoleMessage;
+	public static synthetic fun copy$default (Ldev/supermux/webview/ConsoleMessage;Ldev/supermux/webview/ConsoleLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;ZILjava/lang/Object;)Ldev/supermux/webview/ConsoleMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLevel ()Ldev/supermux/webview/ConsoleLevel;
+	public final fun getLine ()Ljava/lang/Integer;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getSource ()Ljava/lang/String;
+	public final fun getUncaught ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/DarkMode : java/lang/Enum {
+	public static final field Auto Ldev/supermux/webview/DarkMode;
+	public static final field Dark Ldev/supermux/webview/DarkMode;
+	public static final field Light Ldev/supermux/webview/DarkMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/DarkMode;
+	public static fun values ()[Ldev/supermux/webview/DarkMode;
+}
+
+public final class dev/supermux/webview/DefaultPlaceholderKt {
+	public static final fun DefaultPlaceholder (Ldev/supermux/webview/WebViewState;ZLandroidx/compose/runtime/Composer;II)V
+}
+
+public abstract interface class dev/supermux/webview/DialogResult {
+}
+
+public final class dev/supermux/webview/DialogResult$Confirmed : dev/supermux/webview/DialogResult {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/DialogResult$Confirmed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/DialogResult$Dismissed : dev/supermux/webview/DialogResult {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/DialogResult$Dismissed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/DialogResult$Text : dev/supermux/webview/DialogResult {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/DialogResult$Text;
+	public static synthetic fun copy$default (Ldev/supermux/webview/DialogResult$Text;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/DialogResult$Text;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/DownloadRequest {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Long;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;)Ldev/supermux/webview/DownloadRequest;
+	public static synthetic fun copy$default (Ldev/supermux/webview/DownloadRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;ILjava/lang/Object;)Ldev/supermux/webview/DownloadRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContentLength ()Ljava/lang/Long;
+	public final fun getMimeType ()Ljava/lang/String;
+	public final fun getSuggestedFileName ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/FileChooserRequest {
+	public static final field $stable I
+	public fun <init> (Ljava/util/List;Z)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/util/List;Z)Ldev/supermux/webview/FileChooserRequest;
+	public static synthetic fun copy$default (Ldev/supermux/webview/FileChooserRequest;Ljava/util/List;ZILjava/lang/Object;)Ldev/supermux/webview/FileChooserRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAcceptTypes ()Ljava/util/List;
+	public final fun getAllowMultiple ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class dev/supermux/webview/LoadingState {
+}
+
+public final class dev/supermux/webview/LoadingState$Idle : dev/supermux/webview/LoadingState {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/LoadingState$Idle;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/LoadingState$Loading : dev/supermux/webview/LoadingState {
+	public static final field $stable I
+	public fun <init> (F)V
+	public final fun component1 ()F
+	public final fun copy (F)Ldev/supermux/webview/LoadingState$Loading;
+	public static synthetic fun copy$default (Ldev/supermux/webview/LoadingState$Loading;FILjava/lang/Object;)Ldev/supermux/webview/LoadingState$Loading;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProgress ()F
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/NavigationDecision : java/lang/Enum {
+	public static final field Allow Ldev/supermux/webview/NavigationDecision;
+	public static final field Block Ldev/supermux/webview/NavigationDecision;
+	public static final field OpenExternally Ldev/supermux/webview/NavigationDecision;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/NavigationDecision;
+	public static fun values ()[Ldev/supermux/webview/NavigationDecision;
+}
+
+public final class dev/supermux/webview/NavigationRequest {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;ZZ)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun component3 ()Z
+	public final fun copy (Ljava/lang/String;ZZ)Ldev/supermux/webview/NavigationRequest;
+	public static synthetic fun copy$default (Ldev/supermux/webview/NavigationRequest;Ljava/lang/String;ZZILjava/lang/Object;)Ldev/supermux/webview/NavigationRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isMainFrame ()Z
+	public final fun isUserGesture ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/NewWindowDecision : java/lang/Enum {
+	public static final field Block Ldev/supermux/webview/NewWindowDecision;
+	public static final field OpenExternally Ldev/supermux/webview/NewWindowDecision;
+	public static final field OpenHere Ldev/supermux/webview/NewWindowDecision;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/NewWindowDecision;
+	public static fun values ()[Ldev/supermux/webview/NewWindowDecision;
+}
+
+public final class dev/supermux/webview/NewWindowRequest {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Z)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Ldev/supermux/webview/NewWindowRequest;
+	public static synthetic fun copy$default (Ldev/supermux/webview/NewWindowRequest;Ljava/lang/String;ZILjava/lang/Object;)Ldev/supermux/webview/NewWindowRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isUserGesture ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/PermissionKind : java/lang/Enum {
+	public static final field Camera Ldev/supermux/webview/PermissionKind;
+	public static final field ClipboardRead Ldev/supermux/webview/PermissionKind;
+	public static final field Geolocation Ldev/supermux/webview/PermissionKind;
+	public static final field Microphone Ldev/supermux/webview/PermissionKind;
+	public static final field Notifications Ldev/supermux/webview/PermissionKind;
+	public static final field Other Ldev/supermux/webview/PermissionKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/PermissionKind;
+	public static fun values ()[Ldev/supermux/webview/PermissionKind;
+}
+
+public final class dev/supermux/webview/PermissionRequest {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/util/Set;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Set;
+	public final fun copy (Ljava/lang/String;Ljava/util/Set;)Ldev/supermux/webview/PermissionRequest;
+	public static synthetic fun copy$default (Ldev/supermux/webview/PermissionRequest;Ljava/lang/String;Ljava/util/Set;ILjava/lang/Object;)Ldev/supermux/webview/PermissionRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKinds ()Ljava/util/Set;
+	public final fun getOrigin ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/UnavailableReason : java/lang/Enum {
+	public static final field CreationFailed Ldev/supermux/webview/UnavailableReason;
+	public static final field NativeLibraryFailed Ldev/supermux/webview/UnavailableReason;
+	public static final field NoWebView2Runtime Ldev/supermux/webview/UnavailableReason;
+	public static final field NoWebViewProvider Ldev/supermux/webview/UnavailableReason;
+	public static final field NoWpe Ldev/supermux/webview/UnavailableReason;
+	public static final field NotImplemented Ldev/supermux/webview/UnavailableReason;
+	public static final field UnsupportedContent Ldev/supermux/webview/UnavailableReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/UnavailableReason;
+	public static fun values ()[Ldev/supermux/webview/UnavailableReason;
+}
+
+public abstract interface class dev/supermux/webview/WebClient {
+	public static final field Companion Ldev/supermux/webview/WebClient$Companion;
+	public fun onDialog (Ldev/supermux/webview/WebDialog;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun onDownload (Ldev/supermux/webview/DownloadRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun onFileChooser (Ldev/supermux/webview/FileChooserRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun onNavigation (Ldev/supermux/webview/NavigationRequest;Ldev/supermux/webview/WebContent;)Ldev/supermux/webview/NavigationDecision;
+	public fun onNewWindow (Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
+	public fun onPermission (Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/supermux/webview/WebClient$Companion {
+	public final fun getDefault ()Ldev/supermux/webview/WebClient;
+}
+
+public final class dev/supermux/webview/WebClient$DefaultImpls {
+	public static fun onDialog (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/WebDialog;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun onDownload (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/DownloadRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun onFileChooser (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/FileChooserRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun onNavigation (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/NavigationRequest;Ldev/supermux/webview/WebContent;)Ldev/supermux/webview/NavigationDecision;
+	public static fun onNewWindow (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
+	public static fun onPermission (Ldev/supermux/webview/WebClient;Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/supermux/webview/WebClientKt {
+	public static final fun defaultNavigationDecision (Ldev/supermux/webview/NavigationRequest;Ldev/supermux/webview/WebContent;)Ldev/supermux/webview/NavigationDecision;
+}
+
+public abstract interface class dev/supermux/webview/WebContent {
+	public abstract fun getKey ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebContent$Bundle : dev/supermux/webview/WebContent {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/WebOrigin;Ldev/supermux/webview/WebResourceProvider;Ljava/lang/String;)V
+	public synthetic fun <init> (Ldev/supermux/webview/WebOrigin;Ldev/supermux/webview/WebResourceProvider;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/supermux/webview/WebOrigin;
+	public final fun component2 ()Ldev/supermux/webview/WebResourceProvider;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ldev/supermux/webview/WebOrigin;Ldev/supermux/webview/WebResourceProvider;Ljava/lang/String;)Ldev/supermux/webview/WebContent$Bundle;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebContent$Bundle;Ldev/supermux/webview/WebOrigin;Ldev/supermux/webview/WebResourceProvider;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebContent$Bundle;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEntry ()Ljava/lang/String;
+	public fun getKey ()Ljava/lang/String;
+	public final fun getOrigin ()Ldev/supermux/webview/WebOrigin;
+	public final fun getResources ()Ldev/supermux/webview/WebResourceProvider;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebContent$Html : dev/supermux/webview/WebContent {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebOrigin;)V
+	public synthetic fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebOrigin;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHtml ()Ljava/lang/String;
+	public fun getKey ()Ljava/lang/String;
+	public final fun getOrigin ()Ldev/supermux/webview/WebOrigin;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebContent$Url : dev/supermux/webview/WebContent {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/WebContent$Url$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy (Ljava/lang/String;Ljava/util/Map;)Ldev/supermux/webview/WebContent$Url;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebContent$Url;Ljava/lang/String;Ljava/util/Map;ILjava/lang/Object;)Ldev/supermux/webview/WebContent$Url;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeaders ()Ljava/util/Map;
+	public fun getKey ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebContent$Url$Companion {
+	public final fun parse (Ljava/lang/String;)Ldev/supermux/webview/WebContent$Url;
+}
+
+public abstract interface class dev/supermux/webview/WebDialog {
+	public abstract fun getMessage ()Ljava/lang/String;
+	public abstract fun getUrl ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDialog$Alert : dev/supermux/webview/WebDialog {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebDialog$Alert;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDialog$Alert;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebDialog$Alert;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getMessage ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDialog$BeforeUnload : dev/supermux/webview/WebDialog {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebDialog$BeforeUnload;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDialog$BeforeUnload;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebDialog$BeforeUnload;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getMessage ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDialog$Confirm : dev/supermux/webview/WebDialog {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebDialog$Confirm;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDialog$Confirm;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebDialog$Confirm;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getMessage ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebDialog$Prompt : dev/supermux/webview/WebDialog {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebDialog$Prompt;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebDialog$Prompt;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebDialog$Prompt;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDefaultValue ()Ljava/lang/String;
+	public fun getMessage ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class dev/supermux/webview/WebError {
+	public abstract fun getUrl ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebError$BlockedByPolicy : dev/supermux/webview/WebError {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/WebError$BlockedByPolicy;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebError$BlockedByPolicy;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebError$BlockedByPolicy;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebError$Certificate : dev/supermux/webview/WebError {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebError$Certificate;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebError$Certificate;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebError$Certificate;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDescription ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebError$Http : dev/supermux/webview/WebError {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;I)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun copy (Ljava/lang/String;I)Ldev/supermux/webview/WebError$Http;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebError$Http;Ljava/lang/String;IILjava/lang/Object;)Ldev/supermux/webview/WebError$Http;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getStatus ()I
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebError$Network : dev/supermux/webview/WebError {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/WebError$Network;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebError$Network;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebError$Network;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDescription ()Ljava/lang/String;
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebError$UnsupportedOnPlatform : dev/supermux/webview/WebError {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/WebError$UnsupportedOnPlatform;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebError$UnsupportedOnPlatform;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebError$UnsupportedOnPlatform;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebNavigator {
+	public static final field $stable I
+	public final fun back ()V
+	public final fun forward ()V
+	public final fun load (Ljava/lang/String;)V
+	public final fun reload ()V
+	public final fun stop ()V
+}
+
+public final class dev/supermux/webview/WebOrigin {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/WebOrigin$Companion;
+	public static final field SUFFIX Ljava/lang/String;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/WebOrigin;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebOrigin;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebOrigin;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHost ()Ljava/lang/String;
+	public final fun getOrigin ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun owns (Ljava/lang/String;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebOrigin$Companion {
+	public final fun forContent (Ljava/lang/String;)Ldev/supermux/webview/WebOrigin;
+}
+
+public abstract interface class dev/supermux/webview/WebProfile {
+}
+
+public final class dev/supermux/webview/WebProfile$Default : dev/supermux/webview/WebProfile {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebProfile$Default;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebProfile$Ephemeral : dev/supermux/webview/WebProfile {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebProfile$Ephemeral;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebProfile$Named : dev/supermux/webview/WebProfile {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/WebProfile$Named;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebProfile$Named;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebProfile$Named;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebResource {
+	public static final field $stable I
+	public fun <init> ([BLjava/lang/String;Ljava/util/Map;)V
+	public synthetic fun <init> ([BLjava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getBytes ()[B
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getMimeType ()Ljava/lang/String;
+}
+
+public abstract interface class dev/supermux/webview/WebResourceProvider {
+	public abstract fun load (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/supermux/webview/WebSettings {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/WebSettings$Companion;
+	public fun <init> ()V
+	public fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)V
+	public synthetic fun <init> (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun component3 ()Ldev/supermux/webview/DarkMode;
+	public final fun component4 ()Z
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ldev/supermux/webview/WebProfile;
+	public final fun component7 ()Z
+	public final fun component8 ()Ljava/util/Set;
+	public final fun copy (ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;)Ldev/supermux/webview/WebSettings;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebSettings;ZZLdev/supermux/webview/DarkMode;ZLjava/lang/String;Ldev/supermux/webview/WebProfile;ZLjava/util/Set;ILjava/lang/Object;)Ldev/supermux/webview/WebSettings;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBridgeOrigins ()Ljava/util/Set;
+	public final fun getDarkMode ()Ldev/supermux/webview/DarkMode;
+	public final fun getInspectable ()Z
+	public final fun getJavaScriptEnabled ()Z
+	public final fun getMediaPlaybackRequiresGesture ()Z
+	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
+	public final fun getTransparentBackground ()Z
+	public final fun getUserAgentSuffix ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebSettings$Companion {
+	public final fun getDefault ()Ldev/supermux/webview/WebSettings;
+}
+
+public abstract interface class dev/supermux/webview/WebSizing {
+}
+
+public final class dev/supermux/webview/WebSizing$Fill : dev/supermux/webview/WebSizing {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebSizing$Fill;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebSizing$WrapContentHeight : dev/supermux/webview/WebSizing {
+	public static final field $stable I
+	public synthetic fun <init> (FFILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (FFLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1-D9Ej5fM ()F
+	public final fun component2-D9Ej5fM ()F
+	public final fun copy-YgX7TsA (FF)Ldev/supermux/webview/WebSizing$WrapContentHeight;
+	public static synthetic fun copy-YgX7TsA$default (Ldev/supermux/webview/WebSizing$WrapContentHeight;FFILjava/lang/Object;)Ldev/supermux/webview/WebSizing$WrapContentHeight;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInitial-D9Ej5fM ()F
+	public final fun getMax-D9Ej5fM ()F
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewKt {
+	public static final fun WebView (Ldev/supermux/webview/WebViewState;Landroidx/compose/ui/Modifier;Ldev/supermux/webview/WebSettings;Ldev/supermux/webview/WebClient;Ldev/supermux/webview/Activation;Ldev/supermux/webview/WebSizing;Lkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
+}
+
+public final class dev/supermux/webview/WebViewOverlayKt {
+	public static final fun webViewOverlay (Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;)Landroidx/compose/ui/Modifier;
+	public static synthetic fun webViewOverlay$default (Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;ILjava/lang/Object;)Landroidx/compose/ui/Modifier;
+	public static final fun webViewScrim-4WTKRHQ (Landroidx/compose/ui/Modifier;J)Landroidx/compose/ui/Modifier;
+	public static synthetic fun webViewScrim-4WTKRHQ$default (Landroidx/compose/ui/Modifier;JILjava/lang/Object;)Landroidx/compose/ui/Modifier;
+}
+
+public abstract interface class dev/supermux/webview/WebViewPhase {
+}
+
+public final class dev/supermux/webview/WebViewPhase$Activating : dev/supermux/webview/WebViewPhase {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebViewPhase$Activating;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewPhase$Cold : dev/supermux/webview/WebViewPhase {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebViewPhase$Cold;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewPhase$Crashed : dev/supermux/webview/WebViewPhase {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebViewPhase$Crashed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewPhase$Live : dev/supermux/webview/WebViewPhase {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/WebViewPhase$Live;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewPhase$Unavailable : dev/supermux/webview/WebViewPhase {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;)V
+	public synthetic fun <init> (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/supermux/webview/UnavailableReason;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;)Ldev/supermux/webview/WebViewPhase$Unavailable;
+	public static synthetic fun copy$default (Ldev/supermux/webview/WebViewPhase$Unavailable;Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/WebViewPhase$Unavailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public final fun getReason ()Ldev/supermux/webview/UnavailableReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/WebViewState {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/WebContent;)V
+	public final fun getBridge ()Ldev/supermux/webview/bridge/WebBridge;
+	public final fun getCanGoBack ()Z
+	public final fun getCanGoForward ()Z
+	public final fun getConsole ()Lkotlinx/coroutines/flow/SharedFlow;
+	public final fun getContent ()Ldev/supermux/webview/WebContent;
+	public final fun getContentSize-rqqXlrw ()Landroidx/compose/ui/unit/DpSize;
+	public final fun getError ()Ldev/supermux/webview/WebError;
+	public final fun getLoading ()Ldev/supermux/webview/LoadingState;
+	public final fun getNavigator ()Ldev/supermux/webview/WebNavigator;
+	public final fun getPhase ()Ldev/supermux/webview/WebViewPhase;
+	public final fun getTitle ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public final fun load (Ldev/supermux/webview/WebContent;)V
+}
+
+public final class dev/supermux/webview/WebViewStateKt {
+	public static final fun rememberWebViewState (Ldev/supermux/webview/WebContent;Landroidx/compose/runtime/Composer;I)Ldev/supermux/webview/WebViewState;
+}
+
+public class dev/supermux/webview/bridge/BridgeException : java/lang/Exception {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class dev/supermux/webview/bridge/BridgeShim {
+	public static final field $stable I
+	public static final field CONSOLE_TEXT_MAX I
+	public static final field INSTANCE Ldev/supermux/webview/bridge/BridgeShim;
+	public final fun source (Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;
+	public static synthetic fun source$default (Ldev/supermux/webview/bridge/BridgeShim;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/bridge/BridgeTimeoutException : dev/supermux/webview/bridge/BridgeException {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;J)V
+}
+
+public final class dev/supermux/webview/bridge/WebBridge {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/bridge/WebBridge$Companion;
+	public static final field READY_MAX_CHARS I
+	public static final field READY_PREFIX Ljava/lang/String;
+	public final fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun call$default (Ldev/supermux/webview/bridge/WebBridge;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getDroppedMessages ()J
+	public final fun getOnError ()Lkotlin/jvm/functions/Function1;
+	public final fun handle (Ljava/lang/String;Lkotlin/jvm/functions/Function2;)Lkotlin/jvm/functions/Function0;
+	public final fun isConnected ()Z
+	public final fun isReady ()Z
+	public final fun on (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Lkotlin/jvm/functions/Function0;
+	public final fun post (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Z
+	public static synthetic fun post$default (Ldev/supermux/webview/bridge/WebBridge;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Z
+	public final fun setOnError (Lkotlin/jvm/functions/Function1;)V
+}
+
+public final class dev/supermux/webview/bridge/WebBridge$Companion {
+}
+
+public final class dev/supermux/webview/engine/EmbeddingMode : java/lang/Enum {
+	public static final field Frames Ldev/supermux/webview/engine/EmbeddingMode;
+	public static final field NativeView Ldev/supermux/webview/engine/EmbeddingMode;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/supermux/webview/engine/EmbeddingMode;
+	public static fun values ()[Ldev/supermux/webview/engine/EmbeddingMode;
+}
+
+public abstract interface class dev/supermux/webview/engine/EngineClient {
+	public abstract fun onDialog (Ldev/supermux/webview/WebDialog;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun onDownload (Ldev/supermux/webview/DownloadRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun onFileChooser (Ldev/supermux/webview/FileChooserRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun onNavigation (Ldev/supermux/webview/NavigationRequest;)Ldev/supermux/webview/NavigationDecision;
+	public abstract fun onNewWindow (Ldev/supermux/webview/NewWindowRequest;)Ldev/supermux/webview/NewWindowDecision;
+	public abstract fun onPermission (Ldev/supermux/webview/PermissionRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/supermux/webview/engine/EngineConfig {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/WebProfile;Z)V
+	public synthetic fun <init> (Ldev/supermux/webview/WebProfile;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/supermux/webview/WebProfile;
+	public final fun component2 ()Z
+	public final fun copy (Ldev/supermux/webview/WebProfile;Z)Ldev/supermux/webview/engine/EngineConfig;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineConfig;Ldev/supermux/webview/WebProfile;ZILjava/lang/Object;)Ldev/supermux/webview/engine/EngineConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMediaPlaybackRequiresGesture ()Z
+	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class dev/supermux/webview/engine/EngineEvent {
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$Console : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/ConsoleMessage;)V
+	public final fun component1 ()Ldev/supermux/webview/ConsoleMessage;
+	public final fun copy (Ldev/supermux/webview/ConsoleMessage;)Ldev/supermux/webview/engine/EngineEvent$Console;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$Console;Ldev/supermux/webview/ConsoleMessage;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$Console;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ldev/supermux/webview/ConsoleMessage;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$ContentSize : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (FFLjava/lang/Float;)V
+	public synthetic fun <init> (FFLjava/lang/Float;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()F
+	public final fun component2 ()F
+	public final fun component3 ()Ljava/lang/Float;
+	public final fun copy (FFLjava/lang/Float;)Ldev/supermux/webview/engine/EngineEvent$ContentSize;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$ContentSize;FFLjava/lang/Float;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$ContentSize;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeightCss ()F
+	public final fun getViewportHeightCss ()Ljava/lang/Float;
+	public final fun getWidthCss ()F
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$Crashed : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/engine/EngineEvent$Crashed;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$Error : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/WebError;)V
+	public final fun component1 ()Ldev/supermux/webview/WebError;
+	public final fun copy (Ldev/supermux/webview/WebError;)Ldev/supermux/webview/engine/EngineEvent$Error;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$Error;Ldev/supermux/webview/WebError;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$Error;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Ldev/supermux/webview/WebError;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$FirstPaint : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/engine/EngineEvent$FirstPaint;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$FocusChanged : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Z)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Ldev/supermux/webview/engine/EngineEvent$FocusChanged;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$FocusChanged;ZILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$FocusChanged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFocused ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$HistoryChanged : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (ZZ)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun copy (ZZ)Ldev/supermux/webview/engine/EngineEvent$HistoryChanged;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$HistoryChanged;ZZILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$HistoryChanged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCanGoBack ()Z
+	public final fun getCanGoForward ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$PageMessage : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/engine/EngineEvent$PageMessage;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$PageMessage;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$PageMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getJson ()Ljava/lang/String;
+	public final fun getOrigin ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$PaintLost : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/engine/EngineEvent$PaintLost;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$Progress : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/Float;)V
+	public final fun component1 ()Ljava/lang/Float;
+	public final fun copy (Ljava/lang/Float;)Ldev/supermux/webview/engine/EngineEvent$Progress;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$Progress;Ljava/lang/Float;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$Progress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProgress ()Ljava/lang/Float;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$TitleChanged : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/engine/EngineEvent$TitleChanged;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$TitleChanged;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$TitleChanged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getTitle ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/EngineEvent$UrlChanged : dev/supermux/webview/engine/EngineEvent {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Ldev/supermux/webview/engine/EngineEvent$UrlChanged;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/EngineEvent$UrlChanged;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/engine/EngineEvent$UrlChanged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/PageSetup {
+	public static final field $stable I
+	public fun <init> (ZZZZLjava/lang/String;Ljava/util/Set;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun component3 ()Z
+	public final fun component4 ()Z
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/util/Set;
+	public final fun copy (ZZZZLjava/lang/String;Ljava/util/Set;)Ldev/supermux/webview/engine/PageSetup;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/PageSetup;ZZZZLjava/lang/String;Ljava/util/Set;ILjava/lang/Object;)Ldev/supermux/webview/engine/PageSetup;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBridgeOrigins ()Ljava/util/Set;
+	public final fun getDark ()Z
+	public final fun getInspectable ()Z
+	public final fun getJavaScriptEnabled ()Z
+	public final fun getTransparentBackground ()Z
+	public final fun getUserAgentSuffix ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/SurfaceHintsKt {
+	public static final fun getLocalWebSurfaceHints ()Landroidx/compose/runtime/ProvidableCompositionLocal;
+}
+
+public abstract interface class dev/supermux/webview/engine/WebEngine {
+	public abstract fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
+	public abstract fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public abstract fun configure (Ldev/supermux/webview/engine/PageSetup;)V
+	public abstract fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getClient ()Ldev/supermux/webview/engine/EngineClient;
+	public abstract fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun getMode ()Ldev/supermux/webview/engine/EmbeddingMode;
+	public fun getNeedsCutouts ()Z
+	public fun getOnUnusable ()Lkotlin/jvm/functions/Function0;
+	public abstract fun goBack ()V
+	public abstract fun goForward ()V
+	public abstract fun isUsable ()Z
+	public abstract fun load (Ldev/supermux/webview/WebContent;)V
+	public fun overlaysAtSnapshot (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public abstract fun postMessage (Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun release ()V
+	public abstract fun reload ()V
+	public abstract fun replayState ()V
+	public fun requestFocus ()V
+	public abstract fun reset (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun restoreState ([BLdev/supermux/webview/WebContent;)Z
+	public abstract fun saveState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun setClient (Ldev/supermux/webview/engine/EngineClient;)V
+	public fun setOnUnusable (Lkotlin/jvm/functions/Function0;)V
+	public fun setVisible (Z)V
+	public abstract fun snapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun stop ()V
+}
+
+public final class dev/supermux/webview/engine/WebEngine$DefaultImpls {
+	public static fun getNeedsCutouts (Ldev/supermux/webview/engine/WebEngine;)Z
+	public static fun getOnUnusable (Ldev/supermux/webview/engine/WebEngine;)Lkotlin/jvm/functions/Function0;
+	public static fun overlaysAtSnapshot (Ldev/supermux/webview/engine/WebEngine;Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public static fun requestFocus (Ldev/supermux/webview/engine/WebEngine;)V
+	public static fun setOnUnusable (Ldev/supermux/webview/engine/WebEngine;Lkotlin/jvm/functions/Function0;)V
+	public static fun setVisible (Ldev/supermux/webview/engine/WebEngine;Z)V
+}
+
+public abstract interface class dev/supermux/webview/engine/WebEngineFactory {
+	public abstract fun create (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getNamedProfilesPersist ()Z
+}
+
+public final class dev/supermux/webview/engine/WebEngineFactory$DefaultImpls {
+	public static fun getNamedProfilesPersist (Ldev/supermux/webview/engine/WebEngineFactory;)Z
+}
+
+public final class dev/supermux/webview/engine/WebEngineKt {
+	public static final fun WebEngineFactory (Lkotlin/jvm/functions/Function2;)Ldev/supermux/webview/engine/WebEngineFactory;
+}
+
+public abstract interface class dev/supermux/webview/engine/WebEngineResult {
+}
+
+public final class dev/supermux/webview/engine/WebEngineResult$Created : dev/supermux/webview/engine/WebEngineResult {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/engine/WebEngine;)V
+	public final fun component1 ()Ldev/supermux/webview/engine/WebEngine;
+	public final fun copy (Ldev/supermux/webview/engine/WebEngine;)Ldev/supermux/webview/engine/WebEngineResult$Created;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/WebEngineResult$Created;Ldev/supermux/webview/engine/WebEngine;ILjava/lang/Object;)Ldev/supermux/webview/engine/WebEngineResult$Created;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEngine ()Ldev/supermux/webview/engine/WebEngine;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/WebEngineResult$Unavailable : dev/supermux/webview/engine/WebEngineResult {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;)V
+	public synthetic fun <init> (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ldev/supermux/webview/UnavailableReason;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;)Ldev/supermux/webview/engine/WebEngineResult$Unavailable;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/WebEngineResult$Unavailable;Ldev/supermux/webview/UnavailableReason;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/engine/WebEngineResult$Unavailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public final fun getReason ()Ldev/supermux/webview/UnavailableReason;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/WebSurfaceHints {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun <init> (Z)V
+	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Ldev/supermux/webview/engine/WebSurfaceHints;
+	public static synthetic fun copy$default (Ldev/supermux/webview/engine/WebSurfaceHints;ZILjava/lang/Object;)Ldev/supermux/webview/engine/WebSurfaceHints;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getInScrollingList ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/engine/android/AndroidWebEngineFactory : dev/supermux/webview/engine/WebEngineFactory {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun create (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getNamedProfilesPersist ()Z
+}
+
+public final class dev/supermux/webview/runtime/EnginePool {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;IILkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;JJJJJJJ)V
+	public synthetic fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;IILkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;JJJJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getBudget ()I
+	public final fun getIdleCount ()I
+	public final fun getLiveCount ()I
+	public final fun getMaxLive ()I
+	public final fun getParkedCount ()I
+	public final fun prewarm (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/supermux/webview/runtime/OverlayCutouts {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/runtime/OverlayCutouts$Companion;
+	public fun <init> (Landroidx/compose/ui/geometry/Rect;Landroidx/compose/ui/geometry/Rect;Ljava/util/List;Ljava/util/List;)V
+	public final fun component1 ()Landroidx/compose/ui/geometry/Rect;
+	public final fun component2 ()Landroidx/compose/ui/geometry/Rect;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/util/List;
+	public final fun copy (Landroidx/compose/ui/geometry/Rect;Landroidx/compose/ui/geometry/Rect;Ljava/util/List;Ljava/util/List;)Ldev/supermux/webview/runtime/OverlayCutouts;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/OverlayCutouts;Landroidx/compose/ui/geometry/Rect;Landroidx/compose/ui/geometry/Rect;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Ldev/supermux/webview/runtime/OverlayCutouts;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHoles ()Ljava/util/List;
+	public final fun getPageBounds ()Landroidx/compose/ui/geometry/Rect;
+	public final fun getScrims ()Ljava/util/List;
+	public final fun getVisibleBounds ()Landroidx/compose/ui/geometry/Rect;
+	public fun hashCode ()I
+	public final fun isNone ()Z
+	public final fun scaled (F)Ldev/supermux/webview/runtime/OverlayCutouts;
+	public final fun toEvenOddPath ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/OverlayCutouts$Companion {
+	public final fun getHidden ()Ldev/supermux/webview/runtime/OverlayCutouts;
+}
+
+public final class dev/supermux/webview/runtime/OverlayGeometryKt {
+	public static final fun computeCutouts (Landroidx/compose/ui/geometry/Rect;Landroidx/compose/ui/geometry/Rect;Ljava/util/Collection;Ljava/util/List;)Ldev/supermux/webview/runtime/OverlayCutouts;
+}
+
+public final class dev/supermux/webview/runtime/OverlayRegistry {
+	public static final field $stable I
+	public fun <init> ()V
+	public final fun getScrims ()Ljava/util/List;
+	public final fun getShapes ()Ljava/util/List;
+	public final fun setOverlay (Ljava/lang/Object;Ldev/supermux/webview/runtime/OverlayShape;)V
+	public final fun setScrim (Ljava/lang/Object;Ldev/supermux/webview/runtime/ScrimShape;)V
+}
+
+public final class dev/supermux/webview/runtime/OverlayRegistryKt {
+	public static final fun ProvideWebViewOverlays (Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;I)V
+	public static final fun getLocalWebViewOverlays ()Landroidx/compose/runtime/ProvidableCompositionLocal;
+}
+
+public final class dev/supermux/webview/runtime/OverlayShape {
+	public static final field $stable I
+	public synthetic fun <init> (Landroidx/compose/ui/geometry/Rect;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Landroidx/compose/ui/geometry/Rect;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Landroidx/compose/ui/geometry/RoundRect;)V
+	public final fun component1 ()Landroidx/compose/ui/geometry/RoundRect;
+	public final fun copy (Landroidx/compose/ui/geometry/RoundRect;)Ldev/supermux/webview/runtime/OverlayShape;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/OverlayShape;Landroidx/compose/ui/geometry/RoundRect;ILjava/lang/Object;)Ldev/supermux/webview/runtime/OverlayShape;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBounds ()Landroidx/compose/ui/geometry/Rect;
+	public final fun getShape ()Landroidx/compose/ui/geometry/RoundRect;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/PageKey {
+	public static final field $stable I
+	public fun <init> (Ldev/supermux/webview/WebProfile;Ljava/lang/String;)V
+	public final fun component1 ()Ldev/supermux/webview/WebProfile;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ldev/supermux/webview/WebProfile;Ljava/lang/String;)Ldev/supermux/webview/runtime/PageKey;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/PageKey;Ldev/supermux/webview/WebProfile;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/runtime/PageKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContentKey ()Ljava/lang/String;
+	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/PageMemory {
+	public static final field $stable I
+	public synthetic fun <init> (Ldev/supermux/webview/runtime/SnapshotKey;Landroidx/compose/ui/unit/DpSize;[BLdev/supermux/webview/runtime/SavedPageState;ZLdev/supermux/webview/runtime/SizeReport;ZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getContentSize-rqqXlrw ()Landroidx/compose/ui/unit/DpSize;
+	public final fun getEngineState ()[B
+	public final fun getGrowsWithViewport ()Z
+	public final fun getLastSizeReport ()Ldev/supermux/webview/runtime/SizeReport;
+	public final fun getPageSavesState ()Z
+	public final fun getPageState ()Ldev/supermux/webview/runtime/SavedPageState;
+	public final fun getSnapshotKey ()Ldev/supermux/webview/runtime/SnapshotKey;
+}
+
+public final class dev/supermux/webview/runtime/PageMemoryStore {
+	public static final field $stable I
+	public fun <init> (IJ)V
+	public synthetic fun <init> (IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear ()V
+	public final fun forget (Ljava/lang/String;)V
+	public final fun getCount ()I
+	public final fun getMaxBytes ()J
+	public final fun getSizeBytes ()J
+	public final fun recall (Ldev/supermux/webview/runtime/PageKey;)Ldev/supermux/webview/runtime/PageMemory;
+	public final fun remember (Ldev/supermux/webview/runtime/PageKey;Ldev/supermux/webview/runtime/PageMemory;)V
+}
+
+public final class dev/supermux/webview/runtime/PlatformKt {
+	public static final fun platformWebEngineFactory ()Ldev/supermux/webview/engine/WebEngineFactory;
+}
+
+public final class dev/supermux/webview/runtime/RuntimeConfig {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/runtime/RuntimeConfig$Companion;
+	public fun <init> (IIJJJI)V
+	public synthetic fun <init> (IIJJJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()I
+	public final fun copy (IIJJJI)Ldev/supermux/webview/runtime/RuntimeConfig;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/RuntimeConfig;IIJJJIILjava/lang/Object;)Ldev/supermux/webview/runtime/RuntimeConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDecodedSnapshotBytes ()J
+	public final fun getHiddenReleaseMillis ()J
+	public final fun getMaxIdle ()I
+	public final fun getMaxLive ()I
+	public final fun getPageMemoryEntries ()I
+	public final fun getSnapshotCacheBytes ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/RuntimeConfig$Companion {
+	public final fun platformDefault ()Ldev/supermux/webview/runtime/RuntimeConfig;
+}
+
+public final class dev/supermux/webview/runtime/SavedPageState {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Ldev/supermux/webview/runtime/SavedPageState;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SavedPageState;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/supermux/webview/runtime/SavedPageState;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getJson ()Ljava/lang/String;
+	public final fun getOrigin ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/ScrimShape {
+	public static final field $stable I
+	public synthetic fun <init> (Landroidx/compose/ui/geometry/Rect;JLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Landroidx/compose/ui/geometry/Rect;
+	public final fun component2-0d7_KjU ()J
+	public final fun copy-4WTKRHQ (Landroidx/compose/ui/geometry/Rect;J)Ldev/supermux/webview/runtime/ScrimShape;
+	public static synthetic fun copy-4WTKRHQ$default (Ldev/supermux/webview/runtime/ScrimShape;Landroidx/compose/ui/geometry/Rect;JILjava/lang/Object;)Ldev/supermux/webview/runtime/ScrimShape;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBounds ()Landroidx/compose/ui/geometry/Rect;
+	public final fun getColor-0d7_KjU ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/SizeReport {
+	public static final field $stable I
+	public fun <init> (FLjava/lang/Float;)V
+	public final fun component1 ()F
+	public final fun component2 ()Ljava/lang/Float;
+	public final fun copy (FLjava/lang/Float;)Ldev/supermux/webview/runtime/SizeReport;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SizeReport;FLjava/lang/Float;ILjava/lang/Object;)Ldev/supermux/webview/runtime/SizeReport;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHeight ()F
+	public final fun getViewportHeight ()Ljava/lang/Float;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/SnapshotCache {
+	public static final field $stable I
+	public final fun clear ()V
+	public final fun contains (Ldev/supermux/webview/runtime/SnapshotKey;)Z
+	public final fun forget (Ljava/lang/String;)V
+	public final fun getCount ()I
+	public final fun getDecodedBytes ()J
+	public final fun getDecodedCount ()I
+	public final fun getDecodedMaxBytes ()J
+	public final fun getMaxBytes ()J
+	public final fun getSizeBytes ()J
+	public final fun put (Ldev/supermux/webview/runtime/SnapshotKey;[BLandroidx/compose/ui/graphics/ImageBitmap;)Z
+	public static synthetic fun put$default (Ldev/supermux/webview/runtime/SnapshotCache;Ldev/supermux/webview/runtime/SnapshotKey;[BLandroidx/compose/ui/graphics/ImageBitmap;ILjava/lang/Object;)Z
+	public final fun remove (Ldev/supermux/webview/runtime/SnapshotKey;)V
+	public final fun request (Ldev/supermux/webview/runtime/SnapshotKey;Lkotlin/jvm/functions/Function2;)Landroidx/compose/ui/graphics/ImageBitmap;
+	public static synthetic fun request$default (Ldev/supermux/webview/runtime/SnapshotCache;Ldev/supermux/webview/runtime/SnapshotKey;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Landroidx/compose/ui/graphics/ImageBitmap;
+	public final fun trimTo (J)V
+}
+
+public final class dev/supermux/webview/runtime/SnapshotKey {
+	public static final field $stable I
+	public fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFF)V
+	public synthetic fun <init> (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFFILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ldev/supermux/webview/WebProfile;
+	public final fun component3 ()I
+	public final fun component4 ()I
+	public final fun component5 ()Z
+	public final fun component6 ()F
+	public final fun component7 ()F
+	public final fun copy (Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFF)Ldev/supermux/webview/runtime/SnapshotKey;
+	public static synthetic fun copy$default (Ldev/supermux/webview/runtime/SnapshotKey;Ljava/lang/String;Ldev/supermux/webview/WebProfile;IIZFFILjava/lang/Object;)Ldev/supermux/webview/runtime/SnapshotKey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContentKey ()Ljava/lang/String;
+	public final fun getDark ()Z
+	public final fun getDensity ()F
+	public final fun getHeight ()I
+	public final fun getPixelsPerDp ()F
+	public final fun getProfile ()Ldev/supermux/webview/WebProfile;
+	public final fun getWidth ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/runtime/WebViewRuntime {
+	public static final field $stable I
+	public static final field Companion Ldev/supermux/webview/runtime/WebViewRuntime$Companion;
+	public fun <init> ()V
+	public fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;Ldev/supermux/webview/runtime/RuntimeConfig;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (Ldev/supermux/webview/engine/WebEngineFactory;Ldev/supermux/webview/runtime/RuntimeConfig;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear ()V
+	public final fun forget (Ldev/supermux/webview/WebContent;)V
+	public final fun getClock ()Lkotlin/jvm/functions/Function0;
+	public final fun getConfig ()Ldev/supermux/webview/runtime/RuntimeConfig;
+	public final fun getCoverBytes ()J
+	public final fun getCoverCount ()I
+	public final fun getFactory ()Ldev/supermux/webview/engine/WebEngineFactory;
+	public final fun getOnError ()Lkotlin/jvm/functions/Function1;
+	public final fun getOverlays ()Ldev/supermux/webview/runtime/OverlayRegistry;
+	public final fun getPages ()Ldev/supermux/webview/runtime/PageMemoryStore;
+	public final fun getPool ()Ldev/supermux/webview/runtime/EnginePool;
+	public final fun getScope ()Lkotlinx/coroutines/CoroutineScope;
+	public final fun getSnapshots ()Ldev/supermux/webview/runtime/SnapshotCache;
+	public final fun onBackgroundTrim ()V
+	public final fun onMemoryPressure ()V
+	public final fun onMemoryRecovered ()V
+	public final fun setOnError (Lkotlin/jvm/functions/Function1;)V
+}
+
+public final class dev/supermux/webview/runtime/WebViewRuntime$Companion {
+	public final fun getDefault ()Ldev/supermux/webview/runtime/WebViewRuntime;
+}
+
+public final class dev/supermux/webview/runtime/WebViewRuntimeKt {
+	public static final fun ProvideWebViewRuntime (Ldev/supermux/webview/runtime/WebViewRuntime;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;I)V
+	public static final fun getLocalWebViewRuntime ()Landroidx/compose/runtime/ProvidableCompositionLocal;
+}
+
+public final class dev/supermux/webview/testing/FakeEngineBehavior {
+	public static final field $stable I
+	public synthetic fun <init> (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun colorOf-vNxB06k (Ldev/supermux/webview/WebContent;)J
+	public final fun component1 ()Z
+	public final fun component2 ()Lkotlin/jvm/functions/Function1;
+	public final fun component3 ()Lkotlin/jvm/functions/Function2;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component5-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun component8 ()Z
+	public final fun copy-M8YrEPQ (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZ)Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public static synthetic fun copy-M8YrEPQ$default (Ldev/supermux/webview/testing/FakeEngineBehavior;ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZILjava/lang/Object;)Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getColor-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
+	public final fun getContentHeight ()Lkotlin/jvm/functions/Function1;
+	public final fun getContentHeightInViewport ()Lkotlin/jvm/functions/Function2;
+	public final fun getNeedsCutouts ()Z
+	public final fun getPageState ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getPaintsOnLoad ()Z
+	public final fun getReplayPaintsAtOnce ()Z
+	public final fun getResetSucceeds ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/webview/engine/WebEngine {
+	public static final field $stable I
+	public fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;)V
+	public synthetic fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
+	public fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public fun configure (Ldev/supermux/webview/engine/PageSetup;)V
+	public final fun emit (Ldev/supermux/webview/engine/EngineEvent;)V
+	public fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public final fun getCalls ()Ljava/util/List;
+	public fun getClient ()Ldev/supermux/webview/engine/EngineClient;
+	public final fun getConfig ()Ldev/supermux/webview/engine/EngineConfig;
+	public final fun getCutouts ()Ldev/supermux/webview/runtime/OverlayCutouts;
+	public final fun getDocumentsStarted ()I
+	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getId ()I
+	public final fun getLastSetup ()Ldev/supermux/webview/engine/PageSetup;
+	public fun getMode ()Ldev/supermux/webview/engine/EmbeddingMode;
+	public fun getNeedsCutouts ()Z
+	public fun getOnUnusable ()Lkotlin/jvm/functions/Function0;
+	public final fun getPainted ()Z
+	public final fun getReleased ()Z
+	public final fun getResetGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getSaveStateGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getSurfaceSize-YbymL2g ()J
+	public final fun getViolations ()Ljava/util/List;
+	public fun goBack ()V
+	public fun goForward ()V
+	public fun isUsable ()Z
+	public fun load (Ldev/supermux/webview/WebContent;)V
+	public fun overlaysAtSnapshot (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public final fun postFromPage (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Z
+	public static synthetic fun postFromPage$default (Ldev/supermux/webview/testing/FakeWebEngine;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Z
+	public fun postMessage (Ljava/lang/String;Ljava/lang/String;)V
+	public fun release ()V
+	public fun reload ()V
+	public fun replayState ()V
+	public fun requestFocus ()V
+	public fun reset (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun restoreState ([BLdev/supermux/webview/WebContent;)Z
+	public fun saveState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setBehavior (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public fun setClient (Ldev/supermux/webview/engine/EngineClient;)V
+	public fun setOnUnusable (Lkotlin/jvm/functions/Function0;)V
+	public final fun setResetGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public final fun setSaveStateGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public fun setVisible (Z)V
+	public fun snapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stop ()V
+}
+
+public final class dev/supermux/webview/testing/FakeWebEngineFactory : dev/supermux/webview/engine/WebEngineFactory {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public synthetic fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun create (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public final fun getCreateGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getCreated ()Ljava/util/List;
+	public final fun getFailCreate ()Z
+	public fun getNamedProfilesPersist ()Z
+	public final fun getUnavailable ()Ldev/supermux/webview/UnavailableReason;
+	public final fun setBehavior (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public final fun setCreateGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public final fun setFailCreate (Z)V
+	public final fun setUnavailable (Ldev/supermux/webview/UnavailableReason;)V
+}
+
