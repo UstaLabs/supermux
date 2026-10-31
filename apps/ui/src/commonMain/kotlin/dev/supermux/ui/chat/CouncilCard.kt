@@ -589,6 +589,8 @@ private fun Verdict(c: CouncilView) {
         Modifier
             .fillMaxWidth()
             .padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+            // Read as one: "Verdict" and the text.
+            .semantics(mergeDescendants = true) {}
             .testTag("council-verdict:${c.id}"),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {

@@ -177,7 +177,7 @@ export type SessionManagerPorts = {
     /** delegate (spec §3): start a child session for parentId and hand it the task. */
     delegate(args: { parentId: string; task: string; agent: AgentKind; model?: string; effort?: string; access: string; checkout: "shared" | "worktree"; title?: string; callId?: string }): Promise<{ session: string; agent: AgentKind; model: string | null; access: string }>
     /** council (spec §5): start the members and send them the question. */
-    council(args: { callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree"; callId?: string }): Promise<{ council: string; name: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>
+    council(args: { callerId: string; question: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree"; callId?: string }): Promise<{ council: string; name: string; note?: string; members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>
     councilRound(args: { callerId: string; council: string; focus: string }): Promise<{ round: number }>
     /** council_add / council_remove / council_end (design 2026-10-31 §2): the caller runs its council. */
     councilAdd(args: { callerId: string; council: string; members: Array<{ agent: AgentKind; model?: string; effort?: string; access: string }>; checkout: "shared" | "worktree" }): Promise<{ added: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }> }>

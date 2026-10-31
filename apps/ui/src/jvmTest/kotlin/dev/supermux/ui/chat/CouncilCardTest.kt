@@ -193,8 +193,8 @@ class CouncilCardTest {
                 CouncilCard(TimelineItem.CouncilCard(council.copy(id = "c-6", status = "ended", endedBy = "user")))
             }
         }
-        onNodeWithTag("council-verdict:c-5", useUnmergedTree = true).assertTextContains("Whisper Small wins.")
-        onNodeWithTag("council-verdict:c-6", useUnmergedTree = true).assertTextContains("Stopped by you")
+        onNodeWithTag("council-verdict:c-5").assertTextContains("Whisper Small wins.")
+        onNodeWithTag("council-verdict:c-6").assertTextContains("Stopped by you")
         onNodeWithTag("council-verdict:c-3").assertDoesNotExist()
     }
 

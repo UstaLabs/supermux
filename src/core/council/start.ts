@@ -18,6 +18,8 @@ export type StartCouncilArgs = {
 export type StartedCouncil = {
   council: string
   name: string
+  /** What the caller should do now, in the result it reads right after calling (the tool description alone was skimmed). */
+  note?: string
   members: Array<{ letter: string; session: string; agent: AgentKind; model: string | null }>
 }
 
@@ -68,6 +70,14 @@ export type CreatedCouncil = {
   run(): Promise<void>
 }
 
+/**
+ * Seen 2026-10-31: with the rule only in the tool description, a caller still told the user each answer as
+ * it arrived; the user already sees them live on the council card.
+ */
+export const CALLER_NOTE = "The members are starting. Their answers arrive in your inbox and the user sees them live on the " +
+  "council card, so don't tell the user about each answer. Replace a member that fails (council_remove, council_add); " +
+  "when you have what you need, call council_end with your verdict and tell the user the verdict once."
+
 export type AddMembersArgs = {
   callerId: string
   council: string
@@ -89,7 +99,7 @@ export async function createCouncil(deps: StartCouncilDeps, args: StartCouncilAr
   const council = deps.store.create({ callerSessionId: caller.id, question: args.question, callId: args.callId })
   const created = launch(deps, { councilId: council.id, councilName: council.name, caller, repo, members: args.members, firstIndex: 0 })
   deps.opened(council.id)
-  return { started: { council: council.id, name: council.name, members: created.members }, run: created.run }
+  return { started: { council: council.id, name: council.name, members: created.members, note: CALLER_NOTE }, run: created.run }
 }
 
 /**

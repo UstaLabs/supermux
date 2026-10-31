@@ -5,7 +5,7 @@ import { Registry } from "../session-manager/registry"
 import type { RepoInfo } from "../git/repo-info"
 import type { WorktreeHandle } from "../worktree/manager"
 import { CouncilStore } from "./store"
-import { addCouncilMembers, createCouncil, type StartCouncilArgs, type StartCouncilDeps } from "./start"
+import { addCouncilMembers, CALLER_NOTE, createCouncil, type StartCouncilArgs, type StartCouncilDeps } from "./start"
 
 const NOTHING = { councils: 0, council_members: 0, council_rounds: 0, council_reports: 0, council_member_status: 0 }
 
@@ -104,6 +104,7 @@ test("the council is saved and returned before any member starts", async () => {
   expect(created.started).toEqual({
     council: created.started.council,
     name: "council-1",
+    note: CALLER_NOTE,
     members: [
       { letter: "A", session: "m1", agent: "codex", model: "gpt-6" },
       { letter: "B", session: "m2", agent: "grok", model: null },
