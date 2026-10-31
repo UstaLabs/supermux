@@ -182,6 +182,12 @@ internal object WinGlue {
     @JvmStatic external fun setMemoryTarget(page: Long, low: Boolean)
     @JvmStatic external fun pullFrame(page: Long, dst: Long, rowBytes: Int, width: Int, height: Int, full: Boolean, out: LongArray): Int
     @JvmStatic external fun frameSeq(page: Long): Long
+    /**
+     * The perf lab's frame times (Task 31), in nanoseconds, every page's, moved into [out]; their count. [kind] 0: the
+     * capture thread's copy of each frame (arrival → published); 1: the EDT's pull of each. The first call turns the
+     * timing on (before it, nothing is kept); nothing in the engine calls this.
+     */
+    @JvmStatic external fun frameTimes(kind: Int, out: LongArray): Int
     @JvmStatic external fun mouse(page: Long, kind: Int, keys: Int, data: Int, x: Int, y: Int)
     @JvmStatic external fun moveFocus(page: Long, reason: Int)
     @JvmStatic external fun answer(page: Long, question: Long, verdict: Int, text: String?)

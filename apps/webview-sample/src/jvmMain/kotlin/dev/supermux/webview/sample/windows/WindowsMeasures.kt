@@ -71,7 +71,10 @@ internal class MeasureHost(private val scope: CoroutineScope) {
     /** The engines on screen, in the window's grid: rows of four, [CELL] each. */
     val engines = mutableStateListOf<WebEngine>()
     var scene: (@Composable () -> Unit)? by mutableStateOf(null)
+    /** The engine the screen-sized window shows (LAB copy's 1080p), out of the grid; null: no such window. */
+    var fullScreen: WebEngine? by mutableStateOf(null)
     var window: ComposeWindow? = null
+    var fullScreenWindow: ComposeWindow? = null
     private val recorders = mutableMapOf<WebEngine, Recorder>()
     private val robot = Robot().apply { autoDelay = 0 }
 
@@ -118,11 +121,26 @@ internal class MeasureHost(private val scope: CoroutineScope) {
         robot.waitForIdle()
     }
 
+    /** The screen-sized window's content, in the screen's pixels: the frames' size. */
+    fun fullScreenSize(): String {
+        val window = checkNotNull(fullScreenWindow) { "no screen-sized window" }
+        val scale = window.graphicsConfiguration.defaultTransform
+        return "${(window.contentPane.width * scale.scaleX).roundToInt()}x${(window.contentPane.height * scale.scaleY).roundToInt()}"
+    }
+
+    /** [engine] out of the grid, alone in a window the size of the screen (undecorated, at its corner). */
+    fun showFullScreen(engine: WebEngine) {
+        engines -= engine
+        fullScreen = engine
+    }
+
     /** Every engine and scene gone. */
     fun releaseAll() {
         recorders.values.forEach { it.stop() }
         recorders.clear()
         scene = null
+        fullScreen?.let { runCatching { it.release() } }
+        fullScreen = null
         engines.toList().forEach { runCatching { it.release() } }
         engines.clear()
     }
@@ -134,16 +152,20 @@ internal class MeasureHost(private val scope: CoroutineScope) {
  * supermux-windows.
  */
 internal class WindowsMeasures(private val host: MeasureHost, private val app: String, private val memoryScript: String) {
-    data class Memory(val privateMb: Double, val workingSetMb: Double, val processes: Int)
+    data class Memory(val privateMb: Double, val workingSetMb: Double, val processes: Int, val gpuPrivateMb: Double, val gpuWorkingSetMb: Double)
 
-    /** The app's WebView2 processes, as `webview2-memory.ps1` adds them up. */
+    /** The app's WebView2 processes, as `webview2-memory.ps1` adds them up, and the GPU process's share of them. */
     suspend fun webView2Memory(): Memory = withContext(Dispatchers.IO) {
         val process = ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", memoryScript, "-App", app)
             .redirectErrorStream(true).start()
         val line = process.inputStream.bufferedReader().readText().trim().lines().last()
         check(process.waitFor() == 0) { "webview2-memory.ps1: $line" }
-        val (privateBytes, workingSet, count) = line.split(' ')
-        Memory(privateBytes.toLong() / MB, workingSet.toLong() / MB, count.toInt())
+        val columns = line.split(' ')
+        val (privateBytes, workingSet, count) = columns
+        Memory(
+            privateBytes.toLong() / MB, workingSet.toLong() / MB, count.toInt(),
+            columns.getOrNull(3)?.toLong()?.div(MB) ?: 0.0, columns.getOrNull(4)?.toLong()?.div(MB) ?: 0.0,
+        )
     }
 
     /**
@@ -161,15 +183,22 @@ internal class WindowsMeasures(private val host: MeasureHost, private val app: S
             }
             delay(5_000)
             val m = webView2Memory().also { seen[target] = it }
-            println("LAB memory views=$target private_mb=${"%.1f".format(m.privateMb)} working_set_mb=${"%.1f".format(m.workingSetMb)} processes=${m.processes}")
+            println(
+                "LAB memory views=$target private_mb=${"%.1f".format(m.privateMb)} working_set_mb=${"%.1f".format(m.workingSetMb)} " +
+                    "processes=${m.processes} gpu_private_mb=${"%.1f".format(m.gpuPrivateMb)} gpu_working_set_mb=${"%.1f".format(m.gpuWorkingSetMb)}",
+            )
         }
         val one = seen.getValue(1)
         val eight = seen.getValue(8)
         val perView = (eight.privateMb - one.privateMb) / 7
         val perViewWs = (eight.workingSetMb - one.workingSetMb) / 7
+        // The GPU process's part of the slope: what a view adds there (its textures, its compositor's).
+        val perViewGpu = (eight.gpuPrivateMb - one.gpuPrivateMb) / 7
+        val perViewGpuWs = (eight.gpuWorkingSetMb - one.gpuWorkingSetMb) / 7
         println(
             "LAB memory per_view_mb=${"%.1f".format(perView)} base_mb=${"%.1f".format(one.privateMb - perView)} " +
-                "per_view_ws_mb=${"%.1f".format(perViewWs)} base_ws_mb=${"%.1f".format(one.workingSetMb - perViewWs)}",
+                "per_view_ws_mb=${"%.1f".format(perViewWs)} base_ws_mb=${"%.1f".format(one.workingSetMb - perViewWs)} " +
+                "per_view_gpu_mb=${"%.1f".format(perViewGpu)} per_view_gpu_ws_mb=${"%.1f".format(perViewGpuWs)}",
         )
         host.releaseAll()
     }
@@ -212,6 +241,44 @@ internal class WindowsMeasures(private val host: MeasureHost, private val app: S
         }
         println("LAB bridge n=200 p50=${times.p(0.5)} p95=${times.p(0.95)}")
         engine.release()
+    }
+
+    /**
+     * LAB copy: copy + upload on the engine's own chain (the GPU gate measured it on the test module's, W22): a page that
+     * repaints all of itself every frame, alone in a window the size of the screen (1920 × 1080 on the GPU VM), three
+     * runs of [COPY_RUN_MS]. Per frame, as the glue times them (`WinGlue.frameTimes`, reached by reflection: the lab's
+     * only hook): the capture thread's copy (arrival → published: the GPU copy into a staging texture, waited for) and the
+     * EDT's pull (locks, Map, the rows into the store's memory, Unmap). Copy + upload is the gate's: p95 + p95. The draw
+     * call (an image over that memory, W17) and skiko's upload on its render thread are outside both, as in the gate.
+     */
+    suspend fun copy() {
+        val glue = Class.forName("dev.supermux.webview.engine.windows.WinGlue")
+            .getMethod("frameTimes", Int::class.javaPrimitiveType, LongArray::class.java)
+        val buffer = LongArray(16_384)
+        fun take(kind: Int): List<Double> {
+            val n = glue.invoke(null, kind, buffer) as Int
+            return (0 until n).map { buffer[it] / 1e6 }
+        }
+        val engine = host.create(WebProfile.Ephemeral)
+        host.showFullScreen(engine)
+        host.paint(engine, WebContent.Html(ANIMATION_PAGE, WebOrigin("copy")))
+        delay(2_000)
+        val size = host.fullScreenSize()
+        repeat(3) { run ->
+            take(0)
+            take(1)   // the first calls turn the timing on; what came before isn't this run's
+            delay(COPY_RUN_MS)
+            val capture = take(0)
+            val pull = take(1)
+            if (capture.isEmpty() || pull.isEmpty()) throw AssertionError("no frame times in run $run: ${capture.size} copies, ${pull.size} pulls")
+            println(
+                "LAB copy run=${run + 1} size=$size seconds=${COPY_RUN_MS / 1000} copied=${capture.size} pulled=${pull.size} " +
+                    "capture_p50=${capture.p2(0.5)} capture_p95=${capture.p2(0.95)} capture_max=${capture.p2(1.0)} " +
+                    "pull_p50=${pull.p2(0.5)} pull_p95=${pull.p2(0.95)} pull_max=${pull.p2(1.0)} " +
+                    "copy_upload_p95=${"%.2f".format(capture.at(0.95) + pull.at(0.95))}",
+            )
+        }
+        host.releaseAll()
     }
 
     /**
@@ -272,10 +339,27 @@ internal class WindowsMeasures(private val host: MeasureHost, private val app: S
         throw AssertionError("the screen at $at never became ${"%06x".format(rgb)}")
     }
 
-    private fun List<Double>.p(q: Double): String = "%.1f".format(sorted()[((size - 1) * q).roundToInt()])
+    private fun List<Double>.at(q: Double): Double = sorted()[((size - 1) * q).roundToInt()]
+    private fun List<Double>.p(q: Double): String = "%.1f".format(at(q))
+    private fun List<Double>.p2(q: Double): String = "%.2f".format(at(q))
 
     companion object {
         private const val MB = 1_048_576.0
+        private const val COPY_RUN_MS = 10_000L
+        /** All of the page changes every frame (a hue, and a line of text moving), as the gate's 1080p animation did. */
+        private const val ANIMATION_PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;overflow:hidden}</style></head>
+<body><canvas id="c"></canvas><script>
+var c = document.getElementById('c'), g = c.getContext('2d'), t = 0;
+function size() { c.width = innerWidth; c.height = innerHeight; }
+addEventListener('resize', size); size();
+function frame() {
+  t++;
+  g.fillStyle = 'hsl(' + (t * 3 % 360) + ',60%,45%)'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#fff'; g.font = '48px sans-serif'; g.fillText('frame ' + t, 40 + (t * 9) % Math.max(1, c.width - 400), 120 + (t * 5) % Math.max(1, c.height - 200));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>"""
         private const val PRESS_SCRIPT =
             "addEventListener('pointerdown', function () { window.__down = performance.timeOrigin + performance.now(); " +
                 "document.body.style.background = '#000'; }, true);"
@@ -290,8 +374,9 @@ internal class WindowsMeasures(private val host: MeasureHost, private val app: S
 private val CELL = DpSize(256.dp, 192.dp)
 
 /**
- * `-Dwebview.sample.lab=<measures>` (winvm.sh lab): [steps] of `memory`, `firstpaint`, `bridge`, `press`, in that order,
- * in a decorated window at the screen's corner; their `LAB` lines, then `LAB DONE`, or `LAB FAIL <why>` and exit 1.
+ * `-Dwebview.sample.lab=<measures>` (winvm.sh lab): [steps] of `memory`, `firstpaint`, `bridge`, `press`, `copy`, in that
+ * order, in a decorated window at the screen's corner (`copy`: in one the size of the screen); their `LAB` lines, then
+ * `LAB DONE`, or `LAB FAIL <why>` and exit 1.
  */
 internal fun windowsMeasuresMain(steps: List<String>) {
     val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
@@ -317,6 +402,7 @@ internal fun windowsMeasuresMain(steps: List<String>) {
                             "firstpaint" -> measures.firstPaint()
                             "bridge" -> measures.bridge()
                             "press" -> measures.press()
+                            "copy" -> measures.copy()
                             else -> throw IllegalArgumentException("no measure '$step'")
                         }
                         System.out.flush()
@@ -341,6 +427,22 @@ internal fun windowsMeasuresMain(steps: List<String>) {
                     ) {
                         for (engine in host.engines) key(engine) { engine.Surface(Modifier.size(CELL)) }
                     }
+                }
+            }
+        }
+        // LAB copy's: one engine alone, at the screen's size (1920 x 1080 on the GPU VM), over everything.
+        host.fullScreen?.let { engine ->
+            val bounds = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration.bounds
+            key(engine) {
+                Window(
+                    onCloseRequest = {},
+                    title = "webview-sample · WebView2 screen-sized",
+                    undecorated = true,
+                    alwaysOnTop = true,
+                    state = rememberWindowState(position = WindowPosition(0.dp, 0.dp), size = DpSize(bounds.width.dp, bounds.height.dp)),
+                ) {
+                    host.fullScreenWindow = window
+                    engine.Surface(Modifier.fillMaxSize())
                 }
             }
         }

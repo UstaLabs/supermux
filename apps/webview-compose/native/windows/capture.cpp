@@ -197,6 +197,43 @@ constexpr DWORD kCopyWaitMs = 500;   // a staging copy takes ~1–5 ms (W22): pa
 
 namespace {
 /**
+ * The perf lab's frame times (Task 31's copy + upload, on the engine's own chain): the capture thread's copy of every
+ * frame (arrival → published: the GPU copy issued and waited for) and the EDT's every pull (locks, Map, rows, Unmap),
+ * in nanoseconds, for every page. Off until the first takeFrameTimes, so an app never pays for it; then at most
+ * kTimesKept of each, until taken.
+ */
+struct FrameTimes {
+    static constexpr size_t kTimesKept = 8192;
+    std::atomic<bool> on{false};
+    std::mutex mutex;
+    std::vector<int64_t> kept[2];   // kFrameTimeCapture, kFrameTimePull
+};
+FrameTimes& frameTimes() {
+    static FrameTimes* instance = new FrameTimes();
+    return *instance;
+}
+void addFrameTime(int kind, int64_t ns) {
+    auto& t = frameTimes();
+    if (!t.on.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lock(t.mutex);
+    if (t.kept[kind].size() < FrameTimes::kTimesKept) t.kept[kind].push_back(ns);
+}
+}  // namespace
+
+int takeFrameTimes(int kind, int64_t* out, int capacity) {
+    auto& t = frameTimes();
+    t.on = true;
+    if (kind != kFrameTimeCapture && kind != kFrameTimePull) return 0;
+    std::lock_guard<std::mutex> lock(t.mutex);
+    auto& kept = t.kept[kind];
+    const size_t n = std::min(kept.size(), static_cast<size_t>(std::max(0, capacity)));
+    std::copy(kept.begin(), kept.begin() + static_cast<std::ptrdiff_t>(n), out);
+    kept.erase(kept.begin(), kept.begin() + static_cast<std::ptrdiff_t>(n));
+    return static_cast<int>(n);
+}
+
+namespace {
+/**
  * The capture thread's wait for its own copy (W23): an ID3D11Fence signalled right after the copy and waited on without
  * the context lock; on a driver without D3D11.4's fences, an event query polled, as the gate's prototype did.
  */
@@ -315,6 +352,7 @@ bool removed(GpuDevice& gpu) { return FAILED(gpu.device()->GetDeviceRemovedReaso
 /** One frame, on WGC's thread pool (W23): copied into the texture being written, waited for, then published. */
 void onArrived(std::shared_ptr<FrameCapture::State> const& s, wgc::Direct3D11CaptureFramePool const& sender) {
     std::wstring note;   // logged after the locks
+    int64_t copyNs = -1;   // arrival → published, for the perf lab (FrameTimes)
     {
         std::lock_guard<std::mutex> frameLock(s->frameMutex);
         if (!s->started) return;
@@ -395,8 +433,10 @@ void onArrived(std::shared_ptr<FrameCapture::State> const& s, wgc::Direct3D11Cap
             s->arrivedNs = arrived;
             s->composedNs = frame.SystemRelativeTime().count() * 100;   // 100 ns units of the QPC clock
             ++s->seq;
+            copyNs = qpcNanos() - arrived;
         }
     }
+    if (copyNs >= 0) addFrameTime(kFrameTimeCapture, copyNs);
     if (!note.empty()) logLine(note);
     else postSignal(s);
 }
@@ -541,6 +581,7 @@ int64_t FrameCapture::seq() const { return state_->seq.load(); }
  * lock keeps the capture thread from publishing or writing that texture meanwhile.
  */
 int FrameCapture::pull(uint8_t* dst, int rowBytes, int width, int height, bool full, int64_t* out) {
+    const int64_t entered = qpcNanos();   // the pull's whole cost on the EDT, for the perf lab (FrameTimes)
     auto s = state_;
     std::shared_ptr<GpuDevice> gpu;
     {
@@ -601,6 +642,7 @@ int FrameCapture::pull(uint8_t* dst, int rowBytes, int width, int height, bool f
     }
     if (lost) gpu->lost();
     if (!note.empty()) logLine(note);
+    if (result == 1) addFrameTime(kFrameTimePull, qpcNanos() - entered);
     return result;
 }
 

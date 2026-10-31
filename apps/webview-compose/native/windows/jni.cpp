@@ -329,6 +329,14 @@ WV_JNI(jlong, frameSeq)(JNIEnv*, jclass, jlong token) {
     auto page = wv::Pages::find(token);
     return page ? page->frameSeq() : -1;
 }
+// The perf lab's (Task 31): the frame times kept since the last call, every page's; the first call turns them on.
+WV_JNI(jint, frameTimes)(JNIEnv* e, jclass, jint kind, jlongArray out) {
+    if (!out) return 0;
+    std::vector<int64_t> values(static_cast<size_t>(e->GetArrayLength(out)));
+    const int n = wv::takeFrameTimes(kind, values.data(), static_cast<int>(values.size()));
+    if (n > 0) e->SetLongArrayRegion(out, 0, n, reinterpret_cast<const jlong*>(values.data()));
+    return n;
+}
 
 // --- Input and the page's questions (Task 11) ---
 

@@ -54,6 +54,15 @@ private:
     static std::shared_ptr<GpuDevice> make(IDXGIAdapter1* adapter);
 };
 
+/** The perf lab's frame times (Task 31): the capture thread's copy of each frame, or the EDT's pull of each. */
+constexpr int kFrameTimeCapture = 0;
+constexpr int kFrameTimePull = 1;
+/**
+ * Moves up to [capacity] of [kind]'s frame times (nanoseconds, every page's, oldest first) into [out]; their count.
+ * The first call turns the timing on: before it nothing is kept (WinGlue.frameTimes, for the perf lab only).
+ */
+int takeFrameTimes(int kind, int64_t* out, int capacity);
+
 /**
  * One page's frames (D3): Windows.Graphics.Capture on its root visual, on its window's monitor's adapter (D24). On WGC's
  * thread pool each frame is copied on the GPU into one of two staging textures by turns; the capture thread waits for

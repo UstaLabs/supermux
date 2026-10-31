@@ -29,7 +29,7 @@ fun webview2PerfLab(): PerfLabState = wpePerfLab()
  * The sample on WebView2 engines (`-Dwebview.sample.engine=webview2`): by hand without [out]; with it, unattended
  * (winvm.sh lab), as Linux's lab: the perf lab's scroll and reading runs (`perf-lab` lines), a screenshot of each screen
  * into [out] (`SHOT` lines), then `LAB DONE` and exit 0, or `LAB FAIL <why>` and exit 1. With
- * `-Dwebview.sample.lab=<measures>` (comma-separated: memory, firstpaint, bridge, press), those measures instead
+ * `-Dwebview.sample.lab=<measures>` (comma-separated: memory, firstpaint, bridge, press, copy), those measures instead
  * ([windowsMeasuresMain], Task 31); with `-Dwebview.sample.labImages=true`, the runs on the lab's images (its baseline,
  * what the web views' runs are judged against).
  */
