@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { checkSessionRename, createAgent, createAgentFromTool, CreateAgentError, updateAgent, validateAgentName, type CreateAgentDeps, type UpdateAgentDeps } from "./create-agent"
+import { agentGreetingPrompt, checkSessionRename, createAgent, createAgentFromTool, CreateAgentError, updateAgent, validateAgentName, type CreateAgentDeps, type UpdateAgentDeps } from "./create-agent"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -200,4 +200,29 @@ test("checkSessionRename: an Agent's rename runs validateAgentName; a worker's d
 test("CreateAgentError carries the refusal's status and code", () => {
   const e = new CreateAgentError("bad", 400, "name_invalid")
   expect([e.status, e.code]).toEqual([400, "name_invalid"])
+})
+
+test("createAgent greets the new Agent once, after it is announced", async () => {
+  const order: string[] = []
+  const { d } = deps({
+    announce: async (id) => { order.push(`announce:${id}`) },
+    greet: (id, name) => { order.push(`greet:${id}:${name}`) },
+  })
+  const r = await createAgent(d, { name: "Muxi", provider: "claude" })
+  expect(order).toEqual([`announce:${r.id}`, `greet:${r.id}:Muxi`])
+})
+
+test("a failed spawn never greets", async () => {
+  const greeted: string[] = []
+  const { d } = deps({ spawn: async () => { throw new Error("boom") }, greet: (id) => { greeted.push(id) } })
+  await expect(createAgent(d, { name: "Muxi", provider: "claude" })).rejects.toThrow("boom")
+  expect(greeted).toEqual([])
+})
+
+test("agentGreetingPrompt names the Agent, offers rename/tone/avatar and reads the language from the user's messages", () => {
+  const p = agentGreetingPrompt("Muxi", ["merhaba,   bunu\nkontrol eder misin", "x".repeat(500)])
+  expect(p).toContain(`named "Muxi"`)
+  for (const w of ["rename", "avatar", "how you should talk", "Do not default to English", "- merhaba, bunu kontrol eder misin"]) expect(p).toContain(w)
+  expect(p).not.toContain("x".repeat(201))
+  expect(agentGreetingPrompt("Muxi")).toContain("no messages from the user yet")
 })

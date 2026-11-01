@@ -111,7 +111,7 @@ import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
-import { checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
+import { agentGreetingPrompt, checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -2231,6 +2231,19 @@ const createAgentDeps: CreateAgentDeps = {
     await refreshTelegramMenu()
     if (entry) announceCreatedSession(entry)
   },
+  greet: (id, name) => { void greetNewAgent(id, name) },
+}
+
+/** A new Agent's first turn: it says hello in the user's language. Not in the message log, so the
+ *  chat opens with the Agent's own greeting. chat_id "web" routes the answer to its visible chat. */
+async function greetNewAgent(id: string, name: string): Promise<void> {
+  try {
+    if (!(await sessionManager.waitDeliverable(id, 60_000))) return
+    const r = await sessionManager.deliver(id, agentGreetingPrompt(name, messageLog.recentUserTexts(8)), { channel: "web", chat_id: "web", message_id: `greet-${id}` })
+    if (!r.ok) log.warn("agent_greet_not_delivered", { id, reason: (r as { reason?: string }).reason })
+  } catch (err: any) {
+    log.warn("agent_greet_failed", { id, err: err?.message ?? String(err) })
+  }
 }
 
 function spawnLoginProc(kind: string) {

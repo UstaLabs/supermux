@@ -232,6 +232,22 @@ export class MessageStore {
     return row?.ts ?? undefined
   }
 
+  /** The texts of the newest messages the user typed or dictated, in any session, newest first.
+   *  Broker-made inbound rows (broker-*, review-*, greet-*) are not the user's words and are left out. */
+  recentUserTexts(limit: number): string[] {
+    const rows = this.db.prepare(`
+      SELECT text FROM messages
+       WHERE direction = 'inbound' AND channel IN ('web', 'telegram')
+         AND trim(coalesce(text, '')) <> ''
+         AND coalesce(message_id, '') NOT LIKE 'broker-%'
+         AND coalesce(message_id, '') NOT LIKE 'review-%'
+         AND coalesce(message_id, '') NOT LIKE 'greet-%'
+       ORDER BY ts DESC, rowid DESC
+       LIMIT ?
+    `).all(limit) as Array<{ text: string }>
+    return rows.map((r) => r.text)
+  }
+
   /** ISO timestamp of the newest message in a session, or null if it has none. */
   newestTs(sessionId: string): string | null {
     const row = this.db.prepare(

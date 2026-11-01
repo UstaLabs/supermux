@@ -19,6 +19,8 @@ export type CreateAgentDeps = {
   spawn(args: { id: string; name: string; provider: AgentKind; workdir: string; model?: string; reasoningLevel?: string }): Promise<{ id: string; name: string }>
   /** Workspace + workspace_added + full session_added (role, isDefault) + Telegram menu. */
   announce(id: string): Promise<void>
+  /** Hands the new Agent its first turn so it introduces itself (see agentGreetingPrompt). Fire-and-forget. */
+  greet?(id: string, name: string): void
 }
 
 export class CreateAgentError extends Error {
@@ -76,7 +78,25 @@ export async function createAgent(deps: CreateAgentDeps, args: CreateAgentArgs):
     throw err
   }
   await deps.announce(id)
+  deps.greet?.(id, v.name)
   return { id, name: v.name, workdir, provider }
+}
+
+/** The hidden first turn of a new Agent: the broker sends it, the user only sees the Agent's answer.
+ *  [recentUserMessages] are the user's own latest messages (any session, newest first): settings are
+ *  rarely filled in, but what they actually write shows their language. */
+export function agentGreetingPrompt(name: string, recentUserMessages: string[] = []): string {
+  const samples = recentUserMessages.map((t) => t.replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean)
+  const language = samples.length
+    ? [`Write it in the language most of these messages are in (look at the words they are written in, not at what they talk about: "add Turkish translations" is written in English; ignore code words and product names). These are their latest messages to other sessions, newest first — use them ONLY to tell their language. They override anything else you believe about the user's language. Never mention, answer or hint at what they are about:`, ...samples.map((t) => `- ${t}`)].join("\n")
+    : `You have no messages from the user yet: keep the greeting very short, and from their first answer on, talk in whatever language they write in.`
+  return [
+    `[supermux] You were just created as a new Agent named "${name}". The user has not written to you yet; this note comes from the broker, not from them.`,
+    `Introduce yourself to the user in a short, warm first message: say you are ${name}, their new agent, and ask how you can help.`,
+    `Tell them, in a sentence or two, that they can rename you, tell you how you should talk to them (tone, style, what to call them), or give you an avatar.`,
+    language,
+    `Match their language exactly: if they write English, write English; if they write Turkish, write Turkish. Do not default to English when they write another language, and never pick a language they do not write in. Sound like a person, not a template: no bullet lists, no "As an AI", no stiff textbook phrasing. Do not mention this note.`,
+  ].join("\n")
 }
 
 /** The create_agent tool's gate: only Agents create Agents. */
