@@ -531,6 +531,8 @@ fun SessionListScreen(
     }
 
     fun wsScopeOf(workspaceId: String): String? {
+        // The Agents are one scope of their own, in either view.
+        if (workspaceId in paWorkspaceIds) return PA_GROUP_KEY
         if (!groupByProject) {
             return if (workspaceId in wsFlatIds) WORKSPACE_FLAT_SCOPE else null
         }
@@ -580,11 +582,9 @@ fun SessionListScreen(
         val fromKey = from.key as? String ?: return@rememberReorderableListState false
         val toKey = to.key as? String ?: return@rememberReorderableListState false
         if (useWorkspaces) {
-            if (!fromKey.startsWith("ws:") || !toKey.startsWith("ws:")) {
-                return@rememberReorderableListState false
-            }
-            val fromId = fromKey.removePrefix("ws:")
-            val toId = toKey.removePrefix("ws:")
+            // Workspace rows and Agent rows move the same way, each inside its own scope.
+            val fromId = workspaceRowId(fromKey) ?: return@rememberReorderableListState false
+            val toId = workspaceRowId(toKey) ?: return@rememberReorderableListState false
             val scopeKey = wsScopeOf(fromId) ?: return@rememberReorderableListState false
             if (wsScopeOf(toId) != scopeKey) return@rememberReorderableListState false
             val rows = wsRowsForScope(scopeKey)
@@ -1542,26 +1542,29 @@ fun SessionListScreen(
             Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
         }
     }
-    // Agents are always on, so they get their own zone at the very top — above the new-session
-    // card and the Workspaces header, outside the scrolling list on wide hosts so they never
-    // scroll away. They are not a project and never get a project header.
+    // Agents are always on, so they get their own zone at the very top — above the Workspaces
+    // header. They are not a project and never get a project header, but they sort like workspace
+    // rows: the same drag and the same saved order, in a scope of their own (PA_GROUP_KEY).
     val agentWorkspaces = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
-    val agentsZone: @Composable () -> Unit = {
+    fun LazyListScope.agentsItems() {
         // With Agent actions the zone always shows: its "+" creates the first Agent and its
         // Archived fold brings one back even when none is live.
         // Hidden while selecting, so that bar sits at the top of the list. (Search instead scrolls
         // the zone out of view — see openedSearchFrom — so no row is re-placed under it.)
-        if (useWorkspaces && (agentWorkspaces.isNotEmpty() || agentsActions != null) && !selecting) {
-            AgentsBlock(
-                agents = agentWorkspaces.map(::agentEntry),
-                onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
-                contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
-                onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
-                archiveActions = agentsActions,
-                archived = archivedAgents,
-                avatars = agentAvatars,
-            )
-        }
+        if (!useWorkspaces || (agentWorkspaces.isEmpty() && agentsActions == null) || selecting) return
+        agentsZone(
+            // A drag in progress shows live, as in a project group.
+            agents = applyWorkspaceWorkingOrder(agentWorkspaces, wsWorkingOrders[PA_GROUP_KEY]).map(::agentEntry),
+            reorder = reorderableState,
+            onDragStarted = { a -> agentWorkspaces.firstOrNull { it.id == a.id }?.let(::beginWorkspaceDrag) },
+            onDragStopped = ::finishDrag,
+            onOpen = { a -> openAgent(agentWorkspaces.first { it.id == a.id }) },
+            contextEntries = { a -> agentContextEntries(agentWorkspaces.first { it.id == a.id }) },
+            onNewAgent = agentsActions?.let { { agentDialog = AgentDialog.Create } },
+            archiveActions = agentsActions,
+            archived = archivedAgents,
+            avatars = agentAvatars,
+        )
     }
     val newSessionCard: @Composable () -> Unit = {
         NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
@@ -1654,14 +1657,14 @@ fun SessionListScreen(
             item(key = "chrome:new_session") { newSessionCard() }
             // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }
-            item(key = "chrome:agents") { agentsZone() }
+            agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
         } else {
             // Wide hosts: the Agents scroll with the list, and the Workspaces header pins once
             // they have scrolled away (search, select and the menu stay reachable).
-            item(key = "chrome:agents") { agentsZone() }
+            agentsItems()
             stickyHeader(key = "chrome:section") {
                 Box(Modifier.fillMaxWidth().background(cs.surfaceContainerHigh)) { sectionHeader() }
             }
@@ -2439,6 +2442,13 @@ private fun SessionGroup.allSessions(): List<SessionInfo> =
 /** The collapse key of a project-group header's lazy key (both list modes), or null. */
 private fun collapsedGroupOfHeader(key: String): String? =
     key.removePrefix("h:").takeIf { it != key } ?: key.removePrefix("group:header:").takeIf { it != key }
+
+/** The workspace behind a reorderable row's lazy key (a workspace row or an Agent), or null. */
+private fun workspaceRowId(key: String): String? = when {
+    key.startsWith("ws:") -> key.removePrefix("ws:")
+    key.startsWith(AGENT_ROW_PREFIX) -> key.removePrefix(AGENT_ROW_PREFIX)
+    else -> null
+}
 
 private val UNREAD_SESSION_KEY_PREFIXES =
     listOf("flat:pa:", "flat:", "task:", "group:pa:", "group:settled:", "f:draft:")

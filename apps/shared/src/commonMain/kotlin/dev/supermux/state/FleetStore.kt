@@ -1455,9 +1455,15 @@ class FleetStore(
     suspend fun patchWorkspaceLayout(workspaceId: String, layout: LayoutNodeDto) {
         appForWorkspace(workspaceId)?.patchWorkspaceLayout(workspaceId, layout)
     }
+    /**
+     * A reorder scope can span hosts (the Agents, the flat list), so every host that owns one of
+     * the rows gets the WHOLE order: its broker renumbers only the rows it has, each to its index in
+     * the merged list, and the merged sidebar keeps exactly the order that was dropped.
+     */
     fun reorderWorkspaces(orderedIds: List<String>) {
-        val app = orderedIds.firstOrNull()?.let(::appForWorkspace) ?: activeApp()
-        app?.reorderWorkspaces(orderedIds)
+        val ids = orderedIds.toSet()
+        val owners = conns.values.map { it.app }.filter { app -> app.workspaces.value.any { it.id in ids } }
+        owners.ifEmpty { listOfNotNull(activeApp()) }.forEach { it.reorderWorkspaces(orderedIds) }
     }
     fun reorderSessions(orderedIds: List<String>) {
         val app = orderedIds.firstOrNull()?.let(::appFor) ?: activeApp()
