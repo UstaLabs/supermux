@@ -29,7 +29,7 @@ class NativePageGlueTest {
      */
     @Test fun aReleasedGlueRefusesEveryCall() {
         val glue = NativePageGlue(token = 1, handle = 0)
-        glue.place(Rect(0f, 0f, 10f, 10f), Rect(0f, 0f, 10f, 10f), 2f, hidden = false)
+        glue.place(7L, Rect(0f, 0f, 10f, 10f), Rect(0f, 0f, 10f, 10f), 2f, hidden = false)
         glue.loadUrl(1, "https://a.test/", mapOf("Accept" to "text/html"))
         glue.setMediaSuspended(false)
         glue.answerDialog(3, confirmed = true, text = null)

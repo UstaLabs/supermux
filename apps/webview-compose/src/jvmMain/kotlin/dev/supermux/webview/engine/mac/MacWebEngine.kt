@@ -83,8 +83,9 @@ import kotlin.coroutines.resume
  *   [motionCover], at its true size, and stops input, until the settle has the page drawn in place again: its content
  *   trails inside its view until then. A page that only moves (a list's scroll, a new clip), and an embed that only
  *   grows or shrinks in height (its page shows more or less of itself), stays live and takes input throughout. While
- *   it moves, skiko's frame moves the hole up to a few frames after AppKit has moved the view: the glue's backdrop, in
- *   the page's background, lies where it was a moment ago ([updateBackdrop]).
+ *   it moves, its view moves in the transaction that presents Compose's frame of that layout ([MacFrameSync]), so it
+ *   stays in its hole; where that can't be, skiko's frame moves the hole up to a few frames after AppKit has moved the
+ *   view, and the glue's backdrop, in the page's background, lies where it was a moment ago ([updateBackdrop]).
  *   [shown] is false while the runtime covers the page itself, and once it has crashed.
  * - **The handoff (D6).** `FirstPaint` once the document has content, the surface is placed and still, and two display
  *   ticks have passed with the view in its window.
@@ -97,6 +98,8 @@ internal class MacWebEngine(
     private val clock: () -> Long = monotonicClock(),
     private val windowHandle: (java.awt.Window?) -> Long = ::composeWindowHandle,
     private val onReleased: (MacWebEngine) -> Unit = {},
+    /** Asks for a window's page views to move with skiko's frames ([MacFrameSync]); tests record it. */
+    private val frameSync: (java.awt.Window?, Long) -> Unit = MacFrameSync::ensure,
 ) : WebEngine, SurfaceHost {
     /** A question the engine asked its client for WebKit: answered once, by the client or by default. */
     private inner class Pending(private val byDefault: () -> Unit) {
@@ -558,7 +561,9 @@ internal class MacWebEngine(
 
     // --- The surface (SurfaceHost) ---
 
-    override fun windowHandleOf(window: java.awt.Window?): Long = windowHandle(window)
+    /** The window's handle; the window's views move with skiko's frames from its first page on, where they can (D2). */
+    override fun windowHandleOf(window: java.awt.Window?): Long =
+        windowHandle(window).also { if (it != 0L && !released) frameSync(window, it) }
 
     override fun scaleOf(window: java.awt.Window?): Float = backingScaleOf(window)
 
@@ -617,7 +622,7 @@ internal class MacWebEngine(
         if (redraw) needsRepaint = true
         placed = nowPlaced
         updateBackdrop()
-        glue.place(bounds, visible, scale, hidden = !nowPlaced)
+        glue.place(window, bounds, visible, scale, hidden = !nowPlaced)
         moved(reflows)
         if (!reflows && newHeight && drawnHeight > 0f) {
             if (bounds.height > drawnHeight) followGrowth() else drawnHeight = bounds.height
@@ -648,7 +653,7 @@ internal class MacWebEngine(
         if (released || surface !== node || !placed) return false
         placed = false
         val slot = bounds ?: return true
-        glue.place(slot, visible ?: slot, scale, hidden = true)
+        glue.place(window, slot, visible ?: slot, scale, hidden = true)
         moved(reflows = false)
         return true
     }

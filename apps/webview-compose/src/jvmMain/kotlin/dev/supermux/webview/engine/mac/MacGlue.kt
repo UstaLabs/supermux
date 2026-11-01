@@ -8,8 +8,11 @@ package dev.supermux.webview.engine.mac
  * - Lengths are Compose window pixels unless named otherwise.
  */
 internal object MacGlue {
-    /** The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. */
-    const val ABI: Int = 3
+    /**
+     * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
+     * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync].
+     */
+    const val ABI: Int = 4
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -127,9 +130,13 @@ internal object MacGlue {
 
     @JvmStatic external fun detach(page: Long, window: Long)
 
-    /** The slot, and the part of it that shows (I2), window px; [scale]: the window's backing scale, window px a point. */
+    /**
+     * The slot, and the part of it that shows (I2), window px; [scale]: the window's backing scale, window px a point. In a
+     * [window] in sync ([syncFrames]), the view moves with the frame skiko draws of this layout, in its transaction.
+     */
     @JvmStatic external fun place(
         page: Long,
+        window: Long,
         x: Float,
         y: Float,
         width: Float,
@@ -147,6 +154,18 @@ internal object MacGlue {
 
     /** The page's own background, ARGB, which shows where the page was a moment ago while its slot moves; 0: none. */
     @JvmStatic external fun setBackdrop(page: Long, argb: Int)
+
+    /**
+     * Whether [window]'s page views move with skiko's frames ([MacFrameSync]): [on], if skiko's layer there is what the
+     * glue knows (else they move at their layout, and the glue says why once in the process's log).
+     */
+    @JvmStatic external fun syncFrames(window: Long, on: Boolean)
+
+    /**
+     * Compose has recorded a frame in [window] ([MacFrameSync]'s render delegate, on the EDT): the placements made so far
+     * go with the drawable skiko draws that frame into.
+     */
+    @JvmStatic external fun frameRecorded(window: Long)
 
     @JvmStatic external fun tick(page: Long, request: Long)
 
@@ -193,6 +212,9 @@ internal object MacGlue {
 
     /** Waits: the window's number, for `screencapture -l`. */
     @JvmStatic external fun testWindowNumber(window: Long): Long
+
+    /** Waits: the window's frame sync ([syncFrames]): `"on …"`, `"arming …"`, `"off …"` with its counts, or `"none …"`. */
+    @JvmStatic external fun testFrameSync(window: Long): String
 
     /** Waits: an upcall the library drops, from [count] threads of the glue's own, each ending after it (Minor 3). */
     @JvmStatic external fun testPostFromThreads(count: Int)

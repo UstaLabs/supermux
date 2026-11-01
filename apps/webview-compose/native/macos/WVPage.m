@@ -1058,14 +1058,18 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_detach(JNIEn
 }
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_place(
-    JNIEnv *env, jclass type, jlong handle, jfloat x, jfloat y, jfloat width, jfloat height, jfloat shownX, jfloat shownY,
-    jfloat shownWidth, jfloat shownHeight, jfloat scale, jboolean hidden) {
+    JNIEnv *env, jclass type, jlong handle, jlong window, jfloat x, jfloat y, jfloat width, jfloat height, jfloat shownX,
+    jfloat shownY, jfloat shownWidth, jfloat shownHeight, jfloat scale, jboolean hidden) {
     WVPage *page = WVPageOf(handle);
     BOOL hide = hidden == JNI_TRUE;
     NSRect slot = NSMakeRect(x, y, width, height), shown = NSMakeRect(shownX, shownY, shownWidth, shownHeight);
-    WVOnMain(NO, ^{
-        [page.view placeSlot:slot shown:shown scale:scale hidden:hide];
-    });
+    long long turn = WVNextPlacement();
+    [page.view placementSent];
+    dispatch_block_t placement = ^{
+        [page.view placeSlot:slot shown:shown scale:scale hidden:hide turn:turn];
+    };
+    // In a window in sync, the view moves in the transaction that presents the frame of this layout (WVFrameSync.m).
+    if (!WVFrameSyncEnqueue(window, placement)) WVOnMain(NO, placement);
 }
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setInput(

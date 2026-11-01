@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 3
+#define WV_ABI_VERSION 4
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).
@@ -41,6 +41,16 @@ typedef NS_ENUM(int, WVEvent) {
 
 /** Runs block on AppKit's main thread in AWT's run loop modes (M10), at once if already there; waits for it if wait. */
 void WVOnMain(BOOL wait, dispatch_block_t block);
+
+/** A placement's turn (WVFrameSync.m): of two placements of a page, the later wins, whichever way each reaches AppKit. */
+long long WVNextPlacement(void);
+
+/**
+ * Frame sync (WVFrameSync.m): YES if window's page views move with skiko's frames, and placement (a block for AppKit's
+ * thread) then goes with the next frame skiko draws there; NO if they don't, and the caller sends it there itself. Any
+ * thread.
+ */
+BOOL WVFrameSyncEnqueue(jlong window, dispatch_block_t placement);
 
 /** One upcall to MacGlue.onEvent, from any thread. page is the engine's token (0 for the process). */
 void WVPost(jlong page, WVEvent type, int epoch, jlong ident, int flags, double x, double y,
@@ -97,9 +107,20 @@ static inline NSWindow *WVWindow(jlong handle) {
 /**
  * The slot and the part of it that shows (I2), window px from the content's top-left, at the window's backing scale
  * (window px a point, I3); hidden while not placed. The view is the part that shows, clipped; the web view inside it is
- * the slot. Placed again whenever the content view's frame changes (C1).
+ * the slot. Placed again whenever the content view's frame changes (C1). A view attached to a window stays hidden until
+ * it is placed there.
  */
 - (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden;
+/**
+ * A placement of turn (WVNextPlacement) that placementSent announced: placed as placeSlot:… does, unless a later turn
+ * was placed already.
+ */
+- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden turn:(long long)turn;
+/**
+ * Any thread: a placement is on its way to AppKit's thread (with a frame of skiko's, perhaps a few frames away). While
+ * one is and the view is hidden, its ticks wait for it.
+ */
+- (void)placementSent;
 /**
  * The page's own background, or nil for none (a transparent page). While the slot moves, a backdrop of it lies under
  * every page view, over where this page showed in the last moments: the band of its hole that skiko's frame still has

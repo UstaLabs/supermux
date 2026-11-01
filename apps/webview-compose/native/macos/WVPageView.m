@@ -1,4 +1,5 @@
 #import "WVGlue.h"
+#import <stdatomic.h>
 
 /** The cubic Bézier control-point factor for a quarter ellipse. */
 static const CGFloat WVKappa = 0.5522847498;
@@ -90,9 +91,16 @@ static BOOL WVIsGesture(NSEventType type) {
 
 /**
  * How long a place the page showed at stays under its backdrop: longer than skiko's frame trails AppKit's view by (two
- * or three frames while WebGL pages keep the GPU busy, more under heavy load).
+ * or three frames while WebGL pages keep the GPU busy, more under heavy load) when the view doesn't move with skiko's
+ * frames (WVFrameSync.m).
  */
 static const CFTimeInterval WVTrailSeconds = 0.25;
+
+/**
+ * The most display ticks a tick waits, while the view is hidden, for a placement on its way (WVFrameSync.m: it comes
+ * with the frame skiko draws for it).
+ */
+static const int WVTicksForPlacement = 30;
 
 /** AWT's run loop modes (WVOnMain's): the trail is trimmed in them, as every call of the glue runs in them. */
 static NSArray<NSString *> *WVTrailModes(void) {
@@ -145,8 +153,12 @@ static NSArray<NSString *> *WVTrailModes(void) {
     NSRect _shownPart;                   // the part of it that shows, the same
     CGFloat _scale;                  // window px a point; 0 until placed
     BOOL _hiddenWanted;
+    BOOL _unplaced;                  // attached to a window, and not placed there since
+    long long _turn;                 // the last placement's (WVNextPlacement)
+    atomic_int _onTheWay;            // placements sent from another thread, not here yet
     CADisplayLink *_link;            // runs only while ticks wait
     NSMutableArray<NSNumber *> *_waiting;
+    int _ticksWaited;                // display ticks the waiting ticks waited for a placement on its way
     WVBackdropView *_backdrop;       // a sibling under every page view, in its superview while this view is
     NSColor *_backdropColor;         // nil: no backdrop (a transparent page)
     NSRect _shownNow;                // where the page shows, points from the content's top-left; empty: nowhere yet
@@ -190,8 +202,16 @@ static NSArray<NSString *> *WVTrailModes(void) {
     if (!content) return;
     if (self.superview != content) {
         [self removeFromSuperview];
+        // Hidden until it is placed in this window: the place it kept may be another window's, or a slot left long ago
+        // (a new view has none: it would cover the window), and its placement can come a few frames after (with skiko's
+        // frame, WVFrameSync.m).
+        _unplaced = YES;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        self.hidden = YES;
         // A subview of AWT's content view: its layer joins skiko's AWTMetalLayer in one sublayer list (M1).
         [content addSubview:self];
+        [CATransaction commit];
     }
     [self applyOrder];
     WVInstallInputMonitors();
@@ -242,7 +262,20 @@ static NSArray<NSString *> *WVTrailModes(void) {
     _shownPart = NSIsEmptyRect(shown) ? NSMakeRect(slot.origin.x, slot.origin.y, 0, 0) : shown;
     _scale = scale;
     _hiddenWanted = hidden;
+    _unplaced = NO;
     [self applyPlacement];
+}
+
+- (void)placementSent {
+    atomic_fetch_add(&_onTheWay, 1);
+}
+
+- (void)placeSlot:(NSRect)slot shown:(NSRect)shown scale:(CGFloat)scale hidden:(BOOL)hidden turn:(long long)turn {
+    atomic_fetch_sub(&_onTheWay, 1);
+    // A later placement got here first (it took the other way): this one is stale.
+    if (turn <= _turn) return;
+    _turn = turn;
+    [self placeSlot:slot shown:shown scale:scale hidden:hidden];
 }
 
 /**
@@ -260,15 +293,17 @@ static NSArray<NSString *> *WVTrailModes(void) {
     NSRect inner = NSMakeRect((_slot.origin.x - _shownPart.origin.x) / s, (_slot.origin.y - _shownPart.origin.y) / s,
                               _slot.size.width / s, _slot.size.height / s);
     BOOL moved = !NSEqualPoints(inner.origin, _webView.frame.origin);
+    // Hidden only while the slot isn't placed (D1), or isn't placed in this window yet: a stale view never shows through
+    // another page's hole.
+    BOOL hide = _hiddenWanted || _unplaced;
     // Where the page shows now: nowhere while it is hidden.
-    NSRect current = _hiddenWanted ? NSZeroRect : shown;
+    NSRect current = hide ? NSZeroRect : shown;
     NSRect trail = [self trailWith:current];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     if (!NSEqualRects(frame, self.frame)) self.frame = frame;
     if (!NSEqualRects(inner, _webView.frame)) _webView.frame = inner;
-    // Hidden only while the slot isn't placed (D1): a stale view never shows through another page's hole.
-    if (self.hidden != _hiddenWanted) self.hidden = _hiddenWanted;
+    if (self.hidden != hide) self.hidden = hide;
     self.layer.zPosition = -1;
     // In the same transaction as the view: where the page was a moment ago, in its colour.
     [self placeBackdrop:trail over:current in:content];
@@ -380,20 +415,31 @@ static NSArray<NSString *> *WVTrailModes(void) {
     return [super hitTest:point];
 }
 
+/** Hidden, with a placement on its way that may show it: ticks wait for it rather than answer "not shown". */
+- (BOOL)awaitingPlacement {
+    return self.hidden && atomic_load(&_onTheWay) > 0;
+}
+
 - (void)tickFor:(jlong)request {
     jlong token = self.owner.token;
-    if (!self.window || self.hidden) {
+    if (!self.window || (self.hidden && ![self awaitingPlacement])) {
         WVPost(token, WVEventTick, 0, request, 0, 0, 0, nil, nil, nil, nil, nil);
         return;
     }
     [_waiting addObject:@(request)];
     if (_link) return;
+    _ticksWaited = 0;
     _link = [self displayLinkWithTarget:self selector:@selector(onTick:)];
     [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:@"AWTRunLoopMode"];
 }
 
 - (void)onTick:(CADisplayLink *)link {
+    if (self.window && [self awaitingPlacement] && _ticksWaited < WVTicksForPlacement) {
+        _ticksWaited++;
+        return;
+    }
+    _ticksWaited = 0;
     NSArray<NSNumber *> *due = [_waiting copy];
     [_waiting removeAllObjects];
     int shown = self.window != nil && !self.hidden ? 1 : 0;

@@ -117,7 +117,9 @@ public final class dev/supermux/webview/testing/MacEngineTesting {
 	public final fun copyPoints (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
 	public final fun describePage (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun firstResponder (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun frameSyncState (Ljava/awt/Window;)Ljava/lang/String;
 	public final fun getBackdrop ()Z
+	public final fun getFrameSync ()Z
 	public final fun getMotionCover ()Z
 	public final fun getMotionCoverDraws ()I
 	public final fun isAvailable ()Z
@@ -125,6 +127,7 @@ public final class dev/supermux/webview/testing/MacEngineTesting {
 	public final fun routes (Ljava/awt/Window;FFZ)Ljava/lang/String;
 	public final fun scroll (Ljava/awt/Window;FFFII)V
 	public final fun setBackdrop (Z)V
+	public final fun setFrameSync (Z)V
 	public final fun setMotionCover (Z)V
 	public final fun simulateMemoryPressure ()V
 	public final fun type (Ljava/awt/Window;Ljava/lang/String;)V

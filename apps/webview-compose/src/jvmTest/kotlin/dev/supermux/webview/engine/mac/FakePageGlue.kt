@@ -16,6 +16,9 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
     var lastWheelToPage = false
     var released = false
 
+    /** The window each placement named, in order: frame sync moves the view with that window's frames. */
+    val placedIn = mutableListOf<Long>()
+
     /** The ids of the calls named [kind] that carry one, in order (`"evaluate"` → its requests). */
     fun ids(kind: String): List<Long> = calls.filter { it.startsWith("$kind ") }.map { it.split(' ')[1].toLong() }
 
@@ -133,7 +136,8 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
         calls += "detach $window"
     }
 
-    override fun place(slot: Rect, visible: Rect, scale: Float, hidden: Boolean) {
+    override fun place(window: Long, slot: Rect, visible: Rect, scale: Float, hidden: Boolean) {
+        placedIn += window
         calls += "place ${slot.left} ${slot.top} ${slot.width} ${slot.height} in ${visible.left} ${visible.top} " +
             "${visible.width} ${visible.height} at $scale hidden=$hidden"
     }

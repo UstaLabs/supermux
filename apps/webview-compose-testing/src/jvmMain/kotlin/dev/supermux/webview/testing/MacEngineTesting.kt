@@ -1,5 +1,6 @@
 package dev.supermux.webview.testing
 
+import dev.supermux.webview.engine.mac.MacFrameSync
 import dev.supermux.webview.engine.mac.MacGlue
 import dev.supermux.webview.engine.mac.MacNativeLibrary
 import dev.supermux.webview.engine.mac.MacPlatform
@@ -118,14 +119,31 @@ public object MacEngineTesting {
 
     /**
      * Whether a page that moves has its backdrop, its own background where it was a moment ago, under the band of its
-     * hole that Compose's frame moves later than AppKit moves the view. Off shows the window's backing there: the
-     * trackpad check's baseline. Pages take it at their next placement.
+     * hole that Compose's frame moves later than AppKit moves the view, where views move at their layout ([frameSync]
+     * off). Off shows the window's backing there: the trackpad check's baseline. Pages take it at their next placement.
      */
     public var backdrop: Boolean
         get() = MacWebEngine.backdropEnabled
         set(value) {
             MacWebEngine.backdropEnabled = value
         }
+
+    /**
+     * Whether page views move with skiko's frames, in the transaction that presents Compose's frame of their layout
+     * (frame sync), wherever the engine can. Off moves them at their layout, ahead of their holes while the GPU is busy,
+     * in every window at once: the skew check's baseline. Main thread.
+     */
+    public var frameSync: Boolean
+        get() = MacFrameSync.enabled
+        set(value) {
+            MacFrameSync.enabled = value
+        }
+
+    /**
+     * [window]'s frame sync in a few words: `"on …"` (or `"arming …"`, `"off …"`) with what it did (frames presented in
+     * sync, directly, late; drawables dropped; placements applied without a frame), or `"none …"` where it has none.
+     */
+    public fun frameSyncState(window: Window): String = handle(window)?.let { MacGlue.testFrameSync(it) } ?: "unavailable"
 
     /** The glue's copy: 8 bytes of width and height (big-endian), then RGBA; null if short. */
     internal fun copiedOf(bytes: ByteArray): Copied? {

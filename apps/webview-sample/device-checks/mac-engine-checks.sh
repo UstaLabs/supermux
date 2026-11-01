@@ -2,7 +2,9 @@
 # The macOS engine's checks, in the desktop sample, in a real window. Runs ON THE MAC, after
 # `webview-mac-gradle :webview-sample:installMacApp`:
 #   bash apps/webview-sample/device-checks/mac-engine-checks.sh [check name]
-#   MEASURE=1 runs the measurements instead, LAB=1 the perf lab's runs.
+#   MEASURE=1 runs the measurements instead, LAB=1 the perf lab's runs, SKEW=1 the chat scrolled by trackpad gestures
+#   with its pages measured against their cards (-chat-skew); SKEW=off the same with page views moving at their layout,
+#   not with skiko's frames (-no-frame-sync), its baseline.
 #   APP=<path to a packaged .app> runs that app's own launcher instead of java on the classpath (the release check).
 #   OUT=<dir> for the log and frames (default: this run's own directory, <copy>/runs/checks-<time>-<pid>/).
 # An SSH session has no window server (AWT throws HeadlessException): the app starts in the logged-in user's GUI
@@ -35,8 +37,10 @@ LOG="$OUT/checks.log"
 MODE=-engine-checks
 if [[ -n "${MEASURE:-}" ]]; then MODE=-engine-measure; fi
 if [[ -n "${LAB:-}" ]]; then MODE=-perf-lab; fi
+if [[ -n "${SKEW:-}" ]]; then MODE=-chat-skew; fi
 EXTRA="<string>$MODE</string><string>-out</string><string>$OUT</string>"
 if [[ -n "$ONLY" ]]; then EXTRA="$EXTRA<string>-only</string><string>$ONLY</string>"; fi
+if [[ "${SKEW:-}" == off ]]; then EXTRA="$EXTRA<string>-no-frame-sync</string>"; fi
 MORE=""
 if [[ -n "$APP" ]]; then
   # The packaged app's launcher runs its bundled runtime with the app's own options; the glue still goes to this run.

@@ -87,17 +87,26 @@ class MacWebEngineTest {
      * An engine on [scope]'s virtual clock, its events collected, played by hand as WebKit would play it. [inList]: its
      * surface is an embed in a scrolling list, not a pane.
      */
-    private inner class Rig(val scope: TestScope, profile: WebProfile = WebProfile.Ephemeral, inList: Boolean = false) {
+    private inner class Rig(
+        val scope: TestScope,
+        profile: WebProfile = WebProfile.Ephemeral,
+        inList: Boolean = false,
+        handle: Long = 7L,
+    ) {
         val glue = FakePageGlue()
         val released = mutableListOf<MacWebEngine>()
+
+        /** The windows the engine asked to move their views with skiko's frames ([MacFrameSync]), by handle. */
+        val synced = mutableListOf<Long>()
         val engine = MacWebEngine(
             config = EngineConfig(profile),
             glue = glue,
             scripts = WebKitScripts("webview", "out-1", "in-1"),
             scope = scope.backgroundScope,
             clock = { scope.testScheduler.currentTime },
-            windowHandle = { 7L },
+            windowHandle = { handle },
             onReleased = { released += it },
+            frameSync = { _, it -> synced += it },
         )
         val node = MacSurfaceNode(engine, inList = inList)
         val events = mutableListOf<EngineEvent>()
@@ -533,6 +542,34 @@ class MacWebEngineTest {
         assertTrue(reset.await())
         rig.engine.configure(setup)
         assertEquals("setBackdrop ffffffff", rig.glue.last("setBackdrop"), "the next lease's theme, not the last page's colour")
+    }
+
+    /**
+     * The page ran ahead of its card while the chat scrolled, and snapped back when it stopped (the user's report,
+     * 2026-11-01): each placement names its window, whose views move with the frame skiko draws of that layout, and the
+     * window is asked for that as its page's surface finds it.
+     */
+    @Test fun aPlacementNamesItsWindowAndTheWindowIsAskedToMoveItsViewsWithItsFrames() = runTest {
+        val rig = Rig(this, inList = true)
+        assertEquals(7L, rig.engine.windowHandleOf(null))
+        assertEquals(listOf(7L), rig.synced, "asked as the surface looks its window up")
+        rig.live()
+        rig.place(y = 40f)
+        assertTrue(rig.glue.placedIn.isNotEmpty() && rig.glue.placedIn.all { it == 7L }, "${rig.glue.placedIn}")
+        val count = rig.glue.placedIn.size
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        assertEquals(count + 1, rig.glue.placedIn.size)
+        assertEquals(7L, rig.glue.placedIn.last(), "hidden in the window it was placed in")
+    }
+
+    @Test fun noWindowAndAReleasedEngineAskNothing() = runTest {
+        val none = Rig(this, handle = 0L)
+        assertEquals(0L, none.engine.windowHandleOf(null))
+        assertTrue(none.synced.isEmpty())
+        val gone = Rig(this)
+        gone.engine.release()
+        gone.engine.windowHandleOf(null)
+        assertTrue(gone.synced.isEmpty(), "${gone.synced}")
     }
 
     /** A pane's new height reflows its page (a footer, 100vh): it is covered meanwhile, and so is an embed's new width. */

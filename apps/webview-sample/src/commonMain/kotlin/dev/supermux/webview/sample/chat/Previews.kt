@@ -11,6 +11,7 @@ import dev.supermux.webview.WebResourceProvider
 import dev.supermux.webview.sample.resources.Res
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 /**
  * Where every preview is served: `https://previews.invalid`, one origin for all of them. They are one bundle each (a
@@ -102,11 +103,43 @@ class PreviewFiles(private val spec: PreviewSpec) : WebResourceProvider {
     private suspend fun page(): WebResource? {
         val template = PreviewAssets.bytes("${spec.template}.html")?.decodeToString() ?: return null
         val html = template.replaceFirst("<head>", "<head><script>window.PREVIEW_VARIANT=\"${spec.variant}\";</script>")
-        return WebResource(html.encodeToByteArray(), HTML)
+        return WebResource(PreviewMarkers.into(html).encodeToByteArray(), HTML)
     }
 
     private companion object {
         const val HTML = "text/html; charset=utf-8"
+    }
+}
+
+/**
+ * Lines that show where a preview's page is against its card, for the macOS checks and runs that measure it (the
+ * trackpad checks, `-chat-skew`): while [enabled], every preview page draws a magenta line [MAGENTA] points above its
+ * bottom and a yellow one [YELLOW] points above it, over everything it draws, and every preview's caption a line along
+ * its top, which is the bottom of the page's slot: cyan while the page itself shows, blue while Compose draws a picture
+ * of it. In its place, the page's lines are exactly that far above the cyan one. Each line is [THICKNESS] points thick,
+ * across the whole width. Off for people.
+ */
+object PreviewMarkers {
+    @Volatile
+    var enabled: Boolean = false
+
+    /** From the page's bottom to its magenta line's top, CSS px (points). */
+    const val MAGENTA: Int = 40
+
+    /** From the page's bottom to its yellow line's top: seen when the page is too far off for the magenta one. */
+    const val YELLOW: Int = 150
+
+    const val THICKNESS: Int = 3
+
+    /** [html] with the page's lines, before its `</body>`, when [enabled]. */
+    fun into(html: String): String {
+        if (!enabled) return html
+        val end = html.lastIndexOf("</body>")
+        if (end < 0) return html
+        fun line(fromBottom: Int, colour: String) =
+            "<div style=\"position:fixed;left:0;right:0;bottom:${fromBottom - THICKNESS}px;height:${THICKNESS}px;" +
+                "background:$colour;z-index:2147483647;pointer-events:none\"></div>"
+        return html.substring(0, end) + line(MAGENTA, "#ff00ff") + line(YELLOW, "#ffff00") + html.substring(end)
     }
 }
 

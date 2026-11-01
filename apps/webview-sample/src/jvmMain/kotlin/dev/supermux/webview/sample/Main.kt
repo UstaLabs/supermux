@@ -14,6 +14,8 @@ import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
 import dev.supermux.webview.sample.chat.ChatRun
+import dev.supermux.webview.sample.chat.ChatState
+import dev.supermux.webview.sample.chat.PreviewMarkers
 import dev.supermux.webview.sample.checks.ReviewChecks
 import dev.supermux.webview.sample.checks.TrackpadChecks
 import dev.supermux.webview.sample.linux.linuxChecksMain
@@ -43,6 +45,9 @@ import java.io.File
  * - `-screen chat|perflab|overlays|checks` opens that screen (the chat demo unless told otherwise); with `-shots <dir>`
  *   the app asks for one screenshot of it and exits.
  * - `-chat-run read|scroll|fling` starts that run of the chat 3 s after launch; it prints a `chat-perf:` line.
+ * - `-chat-skew` scrolls the chat by trackpad gestures and measures how far its live previews' pages are from their
+ *   cards (ChatSkewRun): a `MEASURE chat-skew` line, then it exits. `-no-frame-sync` moves page views at their layout,
+ *   not with skiko's frames: its baseline.
  */
 fun main(args: Array<String>) {
     when (System.getProperty("webview.sample.checks")) {
@@ -61,6 +66,11 @@ fun main(args: Array<String>) {
     val checks = "-engine-checks" in args
     val measure = "-engine-measure" in args
     val perfLab = "-perf-lab" in args
+    val chatSkew = "-chat-skew" in args
+    // The previews draw their lines from their first load on (PreviewMarkers).
+    if (chatSkew) PreviewMarkers.enabled = true
+    // Page views that move at their layout, not with skiko's frames: the skew runs' baseline.
+    if ("-no-frame-sync" in args) MacEngineTesting.frameSync = false
     val only = argument(args, "-only")
     val out = File(argument(args, "-out") ?: System.getProperty("java.io.tmpdir"))
     val real = MacEngineTesting.isAvailable
@@ -89,6 +99,11 @@ fun main(args: Array<String>) {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
                 SampleApp(lab, engineLabel = label, initialScreen = Screen.PerfLab)
                 LabRuns(lab)
+            } else if (chatSkew) {
+                val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
+                val chat = remember(lab) { ChatState(lab) }
+                SampleApp(lab, engineLabel = label, initialScreen = Screen.Chat, chatState = chat)
+                ChatSkewRun(window, chat, out)
             } else {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
                 SampleApp(

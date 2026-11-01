@@ -69,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -123,6 +124,10 @@ private val USER_SHAPE = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
 private val AGENT_SHAPE = RoundedCornerShape(6.dp, 20.dp, 20.dp, 20.dp)
 private val CARD_SHAPE = RoundedCornerShape(18.dp)
 private val PILL = RoundedCornerShape(50)
+
+/** The caption's lines in the measuring runs ([PreviewMarkers]): pure cyan and pure blue, which nothing else in the chat is. */
+private val MARKER_CYAN = Color(0xFF00FFFF)
+private val MARKER_BLUE = Color(0xFF0000FF)
 
 /** An embed: a drag that starts on its page scrolls the chat (iOS), the wheel scrolls the chat (macOS). */
 private val EMBED = WebSurfaceHints(inScrollingList = true)
@@ -495,8 +500,16 @@ private fun PreviewPlaceholder(spec: PreviewSpec) {
 @Composable
 private fun Caption(spec: PreviewSpec, state: WebViewState, chat: ChatState) {
     val cs = MaterialTheme.colorScheme
+    // The measuring runs' line along the page's bottom (PreviewMarkers): cyan while the page itself shows, blue while a
+    // picture of it does, which Compose draws in its card.
+    val marker = if (PreviewMarkers.enabled) {
+        val ink = if (state.phase == WebViewPhase.Live) MARKER_CYAN else MARKER_BLUE
+        Modifier.drawBehind { drawRect(ink, size = Size(size.width, PreviewMarkers.THICKNESS.dp.toPx())) }
+    } else {
+        Modifier
+    }
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 9.dp),
+        marker.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(

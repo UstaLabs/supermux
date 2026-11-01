@@ -18,7 +18,7 @@ JDK="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
   { echo "build.sh: no JNI headers under $JDK/include: set JAVA_HOME to a JDK 17" >&2; exit 1; }
 
 SOURCES=()
-for name in WVMain WVJson WVPageView WVInput WVPage WVTesting; do
+for name in WVMain WVJson WVPageView WVInput WVPage WVFrameSync WVTesting; do
   if [[ -f "$HERE/$name.m" ]]; then SOURCES+=("$HERE/$name.m"); fi
 done
 
