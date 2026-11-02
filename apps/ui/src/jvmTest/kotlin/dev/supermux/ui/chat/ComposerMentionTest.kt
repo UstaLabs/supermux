@@ -17,6 +17,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.TextRange
 import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.files.GoToFileDebounceMs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -84,8 +85,14 @@ class ComposerMentionTest {
     private fun ComposeUiTest.awaitRow(rel: String) =
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("chat_mention_item_$rel").fetchSemanticsNodes().isNotEmpty() }
 
-    private fun ComposeUiTest.assertNoMenu() {
+    /** Past the search debounce, so a lookup that should not happen has had every chance to. */
+    private fun ComposeUiTest.settle() {
+        mainClock.advanceTimeBy(GoToFileDebounceMs * 4)
         waitForIdle()
+    }
+
+    private fun ComposeUiTest.assertNoMenu() {
+        settle()
         onNodeWithTag("chat_mention_menu").assertDoesNotExist()
     }
 
@@ -165,13 +172,14 @@ class ComposerMentionTest {
         assertEquals("@src @", h.draft)
     }
 
-    @Test fun anEmailNeverOpensIt() = runComposeUiTest {
+    @Test fun anAtInsideAWordNeverOpensIt() = runComposeUiTest {
         val h = composer()
-        type("mail me@example.com")
+        // "src" would match two files, so a menu opened here could not hide behind an empty result.
+        type("mail me@src")
         assertNoMenu()
         assertEquals(emptyList(), h.project.asked)
         press(Key.Enter)
-        assertEquals(listOf("mail me@example.com"), h.sent)
+        assertEquals(listOf("mail me@src"), h.sent)
     }
 
     @Test fun aMentionGoesWhereTheCaretIs() = runComposeUiTest {
