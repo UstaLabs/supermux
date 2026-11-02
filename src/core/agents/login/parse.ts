@@ -8,11 +8,14 @@ const CODE_RE = /\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/
 // BEFORE pattern-matching, otherwise the URL match swallows a trailing reset
 // escape and the device code loses the word boundary against the "…m" prefix —
 // which made codex device-auth silently fail to surface (no url/code parsed).
-const ANSI_RE = /\x1b\[[0-9;]*m/g
+// Also the cursor/mode sequences a ConPTY adds (\x1b[?25l, \x1b[2J, \x1b[H).
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
 // Claude renders its OAuth URL as an OSC 8 terminal hyperlink. The hyperlink
 // target appears inside an escape sequence before the visible URL, so matching
 // before removing OSC sequences returns a corrupt URL containing BEL/ESC bytes.
-const OSC_RE = /\x1b\][^\x07]*(?:\x07|\x1b\\)/g
+// An OSC ends at BEL or at ESC \ (Claude on Windows): stop at the first ESC, or
+// an ESC-\-terminated link would swallow the visible URL up to the closing one.
+const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
 function stripAnsi(s: string): string {
   return s.replace(OSC_RE, "").replace(ANSI_RE, "")
 }
