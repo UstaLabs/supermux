@@ -158,6 +158,7 @@ test("formatUsageTelegram renders Grok credits", () => {
 })
 
 test("formatUsageTelegram reports a locked Codex model and stays quiet about available ones", () => {
+  const now = Date.UTC(2026, 10, 3, 12, 0, 0) // fixed: the reset text is measured from it
   const codex: CodexUsage = {
     ...codexFixture(0),
     models: [
@@ -165,8 +166,8 @@ test("formatUsageTelegram reports a locked Codex model and stays quiet about ava
         id: "gpt-6-astra",
         label: "GPT-6 Astra",
         available: false,
-        availableAt: Math.floor((Date.now() + 3 * 3_600_000) / 1000),
-        availableAtIso: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+        availableAt: Math.floor((now + 3 * 3_600_000) / 1000),
+        availableAtIso: new Date(now + 3 * 3_600_000).toISOString(),
         creditsWouldEnable: true,
       },
       {
@@ -180,7 +181,7 @@ test("formatUsageTelegram reports a locked Codex model and stays quiet about ava
     ],
   }
   const out = formatUsageTelegram({ claude: null, codex, cursor: null, opencode: null,
-    grok: null, errors: {} })
+    grok: null, errors: {} }, now)
   expect(out).toContain("GPT-6 Astra: locked · back in 3h")
   expect(out).not.toContain("GPT-6 Codex")
 })
