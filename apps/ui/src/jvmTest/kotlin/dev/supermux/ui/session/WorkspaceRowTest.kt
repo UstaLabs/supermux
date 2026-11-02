@@ -172,7 +172,7 @@ class WorkspaceRowTest {
         assertTrue(more.right <= 360.dp, "⋮ ends at ${more.right}, past the 360dp row")
     }
 
-    // ── Pointer branch    // ── Pointer branch ───────────────────────────────────────────────────────────────────────
+    // ── Pointer branch ───────────────────────────────────────────────────────────────────────
 
     @Test fun pointerRow_hasNoSwipeActionsAndNoPreview() = runComposeUiTest {
         var muted = 0
