@@ -139,6 +139,44 @@ class ChatMediaTest {
         assertEquals("0:00", formatClipDuration(400))
     }
 
+    // ── Frames the viewer grabbed ───────────────────────────────────────────────────
+
+    private fun filled(color: androidx.compose.ui.graphics.Color, w: Int = 8, h: Int = 8): androidx.compose.ui.graphics.ImageBitmap {
+        val bmp = androidx.compose.ui.graphics.ImageBitmap(w, h)
+        androidx.compose.ui.graphics.Canvas(bmp).drawRect(
+            0f, 0f, w.toFloat(), h.toFloat(),
+            androidx.compose.ui.graphics.Paint().apply { this.color = color },
+        )
+        return bmp
+    }
+
+    @Test fun a_black_or_empty_capture_is_no_poster() {
+        // A player that draws outside Compose (a platform view) leaves the capture empty or black.
+        assertTrue(looksBlank(androidx.compose.ui.graphics.ImageBitmap(8, 8)))
+        assertTrue(looksBlank(filled(androidx.compose.ui.graphics.Color.Black)))
+        assertFalse(looksBlank(filled(androidx.compose.ui.graphics.Color(0xFF3366CC))))
+    }
+
+    @Test fun a_clips_first_kept_frame_wins_and_the_frames_stay_bounded() {
+        ClipFrames.clear()
+        val first = filled(androidx.compose.ui.graphics.Color.Red)
+        ClipFrames.keep("v", first)
+        ClipFrames.keep("v", filled(androidx.compose.ui.graphics.Color.Green))
+        assertTrue(ClipFrames.of("v") === first, "the poster does not change under the user once it is shown")
+        repeat(ClipFrames.MAX + 5) { ClipFrames.keep("c$it", first) }
+        assertNull(ClipFrames.of("v"), "the oldest frames go first")
+        assertTrue(ClipFrames.of("c${ClipFrames.MAX + 4}") != null)
+        ClipFrames.clear()
+    }
+
+    @Test fun a_kept_frame_is_scaled_down_to_a_poster() {
+        val big = filled(androidx.compose.ui.graphics.Color.Blue, w = 1920, h = 1080)
+        val small = posterSized(big)
+        assertEquals(ClipFrames.POSTER_EDGE, small.width)
+        assertEquals(ClipFrames.POSTER_EDGE * 1080 / 1920, small.height)
+        assertTrue(posterSized(filled(androidx.compose.ui.graphics.Color.Blue, w = 100, h = 60)).width == 100, "never upscaled")
+    }
+
     // ── Collage geometry ────────────────────────────────────────────────────────────
 
     @Test fun fewer_than_two_is_not_a_collage() {

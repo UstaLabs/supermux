@@ -414,6 +414,9 @@ data class DraftAttachmentDto(
 data class ReorderSessionsBody(val orderedIds: List<String>)
 
 @Serializable
+data class LinkPosterBody(val poster_file_id: String)
+
+@Serializable
 data class WorkspacesResponse(val workspaces: List<WorkspaceDto> = emptyList())
 
 @Serializable
@@ -2959,6 +2962,19 @@ class BrokerApi(
             authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
+    /**
+     * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
+     * device's own uploads). False when the broker refused it, or is older than posters.
+     */
+    suspend fun linkPoster(clipFileId: String, posterFileId: String): Boolean {
+        val resp = http.post("$httpBase/files/${urlEncode(clipFileId)}/poster") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(LinkPosterBody(posterFileId)))
+        }
+        return resp.status.isSuccess()
     }
 
     /**

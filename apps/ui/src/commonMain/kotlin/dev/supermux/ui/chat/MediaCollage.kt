@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
@@ -140,11 +141,16 @@ private fun CollagePicture(item: ChatMediaItem.FromAttachment, media: Attachment
 internal fun ClipPoster(att: Attachment, media: AttachmentMedia, index: Int, tagPrefix: String, glyph: Dp) {
     Box(Modifier.fillMaxSize()) {
         val poster = att.poster_file_id
+        // No phone poster: the frame the viewer kept when this clip last played, if it has.
+        val frame = if (poster == null) ClipFrames.of(att.file_id) else null
         if (poster != null) PosterPicture(poster, media, Modifier.fillMaxSize().testTag("${tagPrefix}_poster:$index"))
+        if (frame != null) {
+            Image(BitmapPainter(frame), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().testTag("${tagPrefix}_frame:$index"))
+        }
         VideoPosterTile(
             Modifier.testTag("${tagPrefix}_video:$index"),
             glyph = glyph,
-            background = if (poster != null) Color.Transparent else VideoPoster.Background,
+            background = if (poster != null || frame != null) Color.Transparent else VideoPoster.Background,
         )
         att.duration_ms?.let {
             ClipDurationBadge(it, Modifier.align(Alignment.BottomEnd).padding(Space.xs).testTag("${tagPrefix}_duration:$index"))

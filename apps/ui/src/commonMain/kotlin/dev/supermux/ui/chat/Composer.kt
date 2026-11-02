@@ -256,6 +256,8 @@ class ComposerActions(
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
+    /** Make an uploaded picture an uploaded clip's poster (`POST /files/:clip/poster`); null = never. */
+    val linkPoster: (suspend (clipFileId: String, posterFileId: String) -> Unit)? = null,
 )
 
 /** A `?partial=1` answer as the dictation controller reads it. */
@@ -291,6 +293,7 @@ fun rememberComposerActions(
         gitPull = { app.gitPull(sessionId) },
         gitPush = { app.gitPush(sessionId) },
         gitPublish = { app.gitPublish(sessionId) },
+        linkPoster = { clip, poster -> app.linkPoster(clip, poster) },
     )
 }
 
@@ -700,6 +703,18 @@ fun Composer(
         if (idx >= 0 && attachments[idx].runSeq == seq) attachments[idx] = transform(attachments[idx])
     }
 
+    suspend fun uploadPoster(
+        up: suspend (dev.supermux.net.ChunkSource, String, String, String?, (Long, Long) -> Unit) -> String?,
+        clipFileId: String,
+        att: ComposerAttachment,
+    ) {
+        val link = actions.linkPoster ?: return
+        val jpeg = runCatching { platform.files.posterJpeg(att.preview) }.getOrNull() ?: return
+        val name = att.name.substringBeforeLast('.', att.name) + ".jpg"
+        val posterId = runCatching { up(ByteArrayChunkSource(jpeg), name, "image/jpeg", null) { _, _ -> } }.getOrNull() ?: return
+        runCatching { link(clipFileId, posterId) }
+    }
+
     // Start (or restart, on Retry) the resumable upload for one chip, driving Uploading(pct) →
     // Done(fileId) | Failed. Each run gets a fresh [seq] so an older run's callbacks can't win.
     fun launchUpload(id: String) {
@@ -725,6 +740,10 @@ fun Composer(
                     }
                 }
             }
+            // A clip from a phone goes up with its poster — the frame its picker grabbed for the
+            // chip — linked BEFORE the chip is done, so the message names it when it is sent.
+            // Best effort: a poster that fails leaves the clip as it is.
+            if (fileId != null && att.mime.startsWith("video/")) uploadPoster(up, fileId, att)
             updateAtt(id, seq) {
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
                 else it.copy(state = UploadState.Failed)

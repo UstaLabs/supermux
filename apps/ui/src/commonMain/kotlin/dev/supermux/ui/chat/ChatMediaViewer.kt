@@ -62,6 +62,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -398,7 +399,13 @@ private fun ViewerClip(
         failed -> ViewerNotice("Couldn't play this video here. Save it to watch it.")
         located == null -> ViewerSpinner()
         // The controls sit at the bottom of the frame: keep them clear of a phone's gesture bar.
-        else -> Box(Modifier.fillMaxSize().navigationBarsPadding()) { renderPlayer(located, { failed = true }, onTransport) }
+        else -> Box(Modifier.fillMaxSize().navigationBarsPadding()) {
+            // A clip with no phone poster: let the player keep a frame of it for its tiles.
+            val keep = handle.att.file_id.takeIf { handle.att.poster_file_id == null }
+            androidx.compose.runtime.CompositionLocalProvider(LocalViewerClip provides keep) {
+                renderPlayer(located, { failed = true }, onTransport)
+            }
+        }
     }
 }
 
@@ -541,8 +548,11 @@ private fun ViewerStrip(
                     FilePreviewKind.Video -> {
                         val handle = remember(item.key) { resolve(item) }
                         Box(Modifier.fillMaxSize()) {
-                            handle.att.poster_file_id?.let { PosterPicture(it, handle.media, Modifier.fillMaxSize()) }
-                            VideoPosterTile(glyph = 18.dp, background = if (handle.att.poster_file_id != null) Color.Transparent else VideoPoster.Background)
+                            val poster = handle.att.poster_file_id
+                            val frame = if (poster == null) ClipFrames.of(handle.att.file_id) else null
+                            poster?.let { PosterPicture(it, handle.media, Modifier.fillMaxSize()) }
+                            frame?.let { Image(BitmapPainter(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                            VideoPosterTile(glyph = 18.dp, background = if (poster != null || frame != null) Color.Transparent else VideoPoster.Background)
                         }
                     }
                 }

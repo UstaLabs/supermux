@@ -117,6 +117,20 @@ class MediaCollageTest {
         assertEquals(listOf("pv1"), read.distinct(), "only the poster is fetched, never a clip")
     }
 
+    @Test fun a_clip_once_played_in_the_viewer_shows_that_frame_on_its_tile() = runComposeUiTest {
+        // The viewer kept a frame when the clip played; no phone poster exists.
+        ClipFrames.clear()
+        val frame = androidx.compose.ui.graphics.ImageBitmap(4, 4)
+        ClipFrames.keep("v1", frame)
+        val media = CountingMedia()
+        setPlatformContent {
+            AttachmentList(listOf(clip("v1"), photo("a")), alignEnd = false, media = media, entryId = "m1")
+        }
+        onNodeWithTag("media_collage_frame:0", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(0, media.videoReads.get(), "a kept frame costs no download")
+        ClipFrames.clear()
+    }
+
     @Test fun a_tap_opens_the_chat_viewer_at_that_item() = runComposeUiTest {
         val opened = mutableListOf<String>()
         setPlatformContent {

@@ -86,6 +86,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1459,8 +1466,14 @@ internal fun InlineVideo(
                 .testTag("attachment_video_poster"),
             contentAlignment = Alignment.Center,
         ) {
-            // The phone's poster when it sent one (a small picture — the clip is still not fetched).
+            // The phone's poster when it sent one (a small picture — the clip is still not fetched),
+            // else the frame the viewer kept when this clip last played.
             att.poster_file_id?.let { PosterPicture(it, media, Modifier.fillMaxSize().testTag("attachment_video_poster_picture")) }
+            if (att.poster_file_id == null) {
+                ClipFrames.of(att.file_id)?.let {
+                    Image(BitmapPainter(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+            }
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
                 contentDescription = att.name ?: "Play video",
@@ -1587,6 +1600,19 @@ internal fun MountedVideoPlayer(
     val external by rememberUpdatedState(onExternal)
     val expands by rememberUpdatedState(expandsInViewer)
     val player = rememberVideoPlayerState()
+    // The viewer's page keeps a frame of a clip it plays (one with no poster from its phone), and
+    // the clip's tiles show it from then on. Grabbed off this surface once the clip really plays.
+    val keepFrameOf = if (fill) LocalViewerClip.current?.takeIf { ClipFrames.of(it) == null } else null
+    val frameLayer = rememberGraphicsLayer()
+    var grabbing by remember(keepFrameOf) { mutableStateOf(keepFrameOf != null) }
+    LaunchedEffect(keepFrameOf) {
+        val id = keepFrameOf ?: return@LaunchedEffect
+        snapshotFlow { player.isPlaying && !player.isLoading && player.currentTime >= POSTER_AFTER_SECONDS }.first { it }
+        withFrameNanos { }
+        val frame = runCatching { frameLayer.toImageBitmap() }.getOrNull()
+        if (frame != null && !looksBlank(frame)) ClipFrames.keep(id, posterSized(frame))
+        grabbing = false
+    }
     // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
     // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
     // the main thread that parks the EDT waiting for the EDT and freezes the entire app. A
@@ -1652,9 +1678,23 @@ internal fun MountedVideoPlayer(
         else -> VideoTrailing.External
     }
     VideoPlayerFrame(transport, fill = fill, trailing = trailing) { modifier ->
-        VideoPlayerSurface(playerState = player, modifier = modifier)
+        val surface = if (!grabbing) {
+            modifier
+        } else {
+            modifier.drawWithContent {
+                frameLayer.record { this@drawWithContent.drawContent() }
+                drawLayer(frameLayer)
+            }
+        }
+        VideoPlayerSurface(playerState = player, modifier = surface)
     }
 }
+
+/** How far into a clip its kept frame is taken: past a first black frame or a fade-in. */
+private const val POSTER_AFTER_SECONDS = 0.5
+
+/** The clip a viewer page is playing (its file id), so the player can keep a frame of it. */
+internal val LocalViewerClip = androidx.compose.runtime.staticCompositionLocalOf<String?> { null }
 
 /** What the control bar's last button does. */
 internal enum class VideoTrailing { External, OpenViewer, Fullscreen, None }

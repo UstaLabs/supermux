@@ -3,7 +3,14 @@
 // navigation, keys and swipe-to-close. Pure, so each rule is tested without a UI.
 package dev.supermux.ui.chat
 
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.key.KeyEventType
 import dev.supermux.chat.TimelineItem
 import dev.supermux.proto.Attachment
@@ -214,4 +221,75 @@ fun formatClipDuration(ms: Long): String {
     val minutes = (total % 3600) / 60
     val seconds = (total % 60).toString().padStart(2, '0')
     return if (hours > 0) "$hours:${minutes.toString().padStart(2, '0')}:$seconds" else "$minutes:$seconds"
+}
+
+/**
+ * Frames the viewer grabbed from clips as they played: a clip with no poster from its phone shows
+ * its own picture on its tiles from then on (while the app runs). Keyed by the clip's file id. The
+ * first frame kept stays — a poster must not change under the user — and the oldest go once [MAX]
+ * are kept; each is at most [POSTER_EDGE] px on its long side, so all of them stay a few MB.
+ */
+internal object ClipFrames {
+    const val MAX = 64
+    const val POSTER_EDGE = 480
+
+    private val frames = mutableStateMapOf<String, ImageBitmap>()
+    private val order = ArrayDeque<String>()
+
+    fun of(fileId: String): ImageBitmap? = frames[fileId]
+
+    fun keep(fileId: String, frame: ImageBitmap) {
+        if (fileId in frames) return
+        frames[fileId] = frame
+        order.addLast(fileId)
+        while (order.size > MAX) frames.remove(order.removeFirst())
+    }
+
+    fun clear() {
+        frames.clear()
+        order.clear()
+    }
+}
+
+/**
+ * True when a capture has nothing to show: a player that draws outside Compose (a platform view)
+ * leaves it empty or black, and that must not become a clip's poster. Samples an 8×8 grid.
+ */
+internal fun looksBlank(frame: ImageBitmap): Boolean {
+    if (frame.width <= 0 || frame.height <= 0) return true
+    val px = IntArray(1)
+    val stepX = maxOf(1, frame.width / 8)
+    val stepY = maxOf(1, frame.height / 8)
+    var y = stepY / 2
+    while (y < frame.height) {
+        var x = stepX / 2
+        while (x < frame.width) {
+            frame.readPixels(px, startX = x, startY = y, width = 1, height = 1)
+            val c = px[0]
+            val alpha = (c ushr 24) and 0xff
+            val light = ((c shr 16) and 0xff) + ((c shr 8) and 0xff) + (c and 0xff)
+            if (alpha > 16 && light > 24) return false
+            x += stepX
+        }
+        y += stepY
+    }
+    return true
+}
+
+/** [frame] scaled down so its long side is at most [ClipFrames.POSTER_EDGE] px; never scaled up. */
+internal fun posterSized(frame: ImageBitmap): ImageBitmap {
+    val edge = maxOf(frame.width, frame.height)
+    if (edge <= ClipFrames.POSTER_EDGE) return frame
+    val width = frame.width * ClipFrames.POSTER_EDGE / edge
+    val height = frame.height * ClipFrames.POSTER_EDGE / edge
+    val out = ImageBitmap(width, height)
+    Canvas(out).drawImageRect(
+        frame,
+        srcOffset = IntOffset.Zero,
+        srcSize = IntSize(frame.width, frame.height),
+        dstOffset = IntOffset.Zero,
+        dstSize = IntSize(width, height),
+        paint = Paint().apply { filterQuality = FilterQuality.Medium },
+    )
+    return out
 }
