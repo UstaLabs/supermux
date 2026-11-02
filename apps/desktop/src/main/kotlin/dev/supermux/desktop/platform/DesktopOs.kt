@@ -2,7 +2,9 @@
 // (docs/superpowers/specs/2026-11-03-platform-layer-design.md §3.4, §5): `os.name` is read here, and
 // no command built here carries an untrusted value inside text that a shell or an interpreter
 // parses. Card #40 is why: read-aloud spliced agent text into a PowerShell script, and opening an
-// attachment handed its name to `cmd /c start`.
+// attachment handed its name to `cmd /c start`. Still to merge in step 9: `OsCommand.start` beside
+// `host/OsEnv` (the audit's one process runner), `which` beside `OsEnv.hasCommand`, and this enum
+// with `OsEnv.Os`, whose `OTHER` `LINUX` stands in for here.
 package dev.supermux.desktop.platform
 
 import java.util.Locale
@@ -74,10 +76,14 @@ private const val OPEN_TARGET = "SUPERMUX_OPEN_TARGET"
 private const val SPEAK_SCRIPT = "Add-Type -AssemblyName System.Speech; " +
     "(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak(\$env:$SPEAK_TEXT)"
 
-/** ShellExecute with the default verb, through .NET. */
+/**
+ * ShellExecute with the default verb, through .NET. `ErrorDialog` lets the shell show its own UI:
+ * "How do you want to open this file?" for a type with no app, which is the usual reason
+ * `Desktop.open` failed and this runs at all, as `cmd /c start` did before.
+ */
 private const val OPEN_SCRIPT =
     "\$i = New-Object System.Diagnostics.ProcessStartInfo \$env:$OPEN_TARGET; \$i.UseShellExecute = \$true; " +
-        "[void][System.Diagnostics.Process]::Start(\$i)"
+        "\$i.ErrorDialog = \$true; [void][System.Diagnostics.Process]::Start(\$i)"
 
 /**
  * Open [target], an absolute path or a URL, with the OS default handler: ShellExecute through
@@ -107,14 +113,18 @@ internal fun openCommand(
  * argument after `--` everywhere else (`say --output-file=…` would write a file). `spd-say` is never
  * in pipe mode (`-e`): that ignores the argument and sends any stdin line starting with `!-!` to
  * speech-dispatcher as a command.
+ *
+ * Killing `spd-say` does not silence it: speech-dispatcher finishes a message whose client
+ * disconnects, and only an SSIP `CANCEL` stops it (`spd-say -C` cancels every client's speech).
  */
 internal fun speechCommand(
     plain: String,
     os: DesktopOs = DesktopOs.current,
+    systemRoot: String? = System.getenv("SystemRoot"),
     has: (String) -> Boolean = ::which,
 ): OsCommand? = when (os) {
     DesktopOs.MACOS -> OsCommand(listOf("say", "--", plain))
-    DesktopOs.WINDOWS -> windowsPowerShellScript(SPEAK_SCRIPT, mapOf(SPEAK_TEXT to plain), System.getenv("SystemRoot"))
+    DesktopOs.WINDOWS -> windowsPowerShellScript(SPEAK_SCRIPT, mapOf(SPEAK_TEXT to plain), systemRoot)
     DesktopOs.LINUX -> when {
         has("spd-say") -> OsCommand(listOf("spd-say", "-w", "--", plain))
         has("espeak-ng") -> OsCommand(listOf("espeak-ng", "--", plain))

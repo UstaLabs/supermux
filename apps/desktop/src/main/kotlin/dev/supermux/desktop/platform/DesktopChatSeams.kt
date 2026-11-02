@@ -198,7 +198,8 @@ internal class DesktopMicCapture(
  * playback prefers `ffplay`, then `mpv`, then `afplay`.
  *
  * One child process at a time: [stop] kills it, which is what makes a second tap on a speaking
- * message stop it. A machine with none of the binaries silently speaks nothing — [speak] returns
+ * message stop it — except under `spd-say`, whose message speech-dispatcher finishes anyway (see
+ * [speechCommand]). A machine with none of the binaries silently speaks nothing — [speak] returns
  * immediately, and the caller's speaking marker clears on its own.
  */
 internal class DesktopTtsEngine : TtsEngine {

@@ -66,12 +66,25 @@ class DesktopOsTest {
         )
         assertTrue(cmd.argv.none { "calc" in it }, "the path reached the command line: ${cmd.argv}")
         assertEquals(listOf(ampersandPath), cmd.env.values.toList())
+        assertTrue(cmd.argv.none { '"' in it }, "a double quote would break Java's Windows quoting: ${cmd.argv}")
+    }
+
+    /**
+     * This fallback mostly runs because `Desktop.open` found no app for the file's type, and
+     * `cmd /c start` then showed Windows' "How do you want to open this file?". .NET hides the
+     * shell's UI unless `ErrorDialog` is set.
+     */
+    @Test
+    fun `windows opener lets the shell ask which app to use`() {
+        val script = openCommand(ampersandPath, DesktopOs.WINDOWS).argv.last()
+        assertTrue("\$i.ErrorDialog = \$true" in script, script)
     }
 
     @Test
     fun `windows commands run System32 PowerShell, never whatever the search path finds`() {
         val expected = "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         assertEquals(expected, openCommand(ampersandPath, DesktopOs.WINDOWS, systemRoot = "D:\\Win\\").argv.first())
+        assertEquals(expected, speechCommand("hello", DesktopOs.WINDOWS, systemRoot = "D:\\Win") { false }?.argv?.first())
         assertEquals(expected, windowsPowerShell(systemRoot = "D:\\Win"))
         assertEquals("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", windowsPowerShell(systemRoot = null))
     }
@@ -87,8 +100,8 @@ class DesktopOsTest {
 
     /**
      * Pipe mode (`-e`) ignores the argument and reads stdin, where a line starting with `!-!` is sent
-     * to speech-dispatcher as a command. `-w` keeps the process alive until the text is spoken, like
-     * `say` and espeak, so stopping it still means something.
+     * to speech-dispatcher as a command. `-w` keeps the process alive until the text is spoken, as
+     * `say` and espeak are, so the speaking state lasts as long as the speech.
      */
     @Test
     fun `spd-say gets the text as one argument and waits for it to be spoken`() {
@@ -171,14 +184,17 @@ class DesktopOsTest {
         val dir = Files.createTempDirectory("desktop-os-ps").toFile()
         try {
             val received = File(dir, "received.txt")
+            val log = File(dir, "output.txt")
             val argv = listOf(ps) + cmd.argv.drop(1).dropLast(1) + "$shim; ${cmd.argv.last()}"
-            val p = ProcessBuilder(argv).directory(dir).redirectErrorStream(true).apply {
+            val p = ProcessBuilder(argv).directory(dir).redirectErrorStream(true).redirectOutput(log).apply {
                 environment().putAll(cmd.env)
                 environment()["DESKTOP_OS_OUT"] = received.path
             }.start()
             p.outputStream.close()
-            val output = p.inputStream.bufferedReader().readText()
-            assertTrue(p.waitFor(60, TimeUnit.SECONDS), "PowerShell did not exit:\n$output")
+            val exited = p.waitFor(60, TimeUnit.SECONDS)
+            if (!exited) p.destroyForcibly()
+            val output = log.readText()
+            assertTrue(exited, "PowerShell did not exit:\n$output")
             return PowerShellRun(received.takeIf { it.exists() }?.readText(), File(dir, "pwned").exists(), output)
         } finally {
             dir.deleteRecursively()
