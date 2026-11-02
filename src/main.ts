@@ -215,6 +215,7 @@ import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
 import { CoreAdapter } from "./core/agents/core-bridge/core-adapter"
 import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
+import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
@@ -2265,11 +2266,13 @@ function spawnLoginProc(kind: string) {
     cleaned = true
     try { spec.cleanup?.() } catch (err: any) { log.warn("login_cleanup_failed", { kind, err: err?.message ?? String(err) }) }
   }
+  // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
+  if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
   let child: ReturnType<typeof nodeSpawn>
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
-    // met inside the descriptor's own command line (claude wraps `script`).
+    // met inside the descriptor's own command line (`script`; a ConPTY above on Windows).
     child = spawnCommand(cmd, args, { env, detached, ...(cwd ? { cwd } : {}) })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.

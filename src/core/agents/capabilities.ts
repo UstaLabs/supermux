@@ -42,9 +42,8 @@ export function sessionCapabilities(agent: AgentKind): SessionCapabilities {
 export function agentAuthCapabilities(kind: AgentKind, platform: NodeJS.Platform = process.platform): AgentAuthCapabilities {
   return {
     // opencode authenticates through its own multi-provider connect UI, not a
-    // broker-driven device login. agy's login reads the pasted code from a
-    // pseudo-terminal, which Windows lacks (antigravity/auth.ts returns null there).
-    supportsDeviceLogin: kind !== AgentKind.OpenCode && !(kind === AgentKind.Antigravity && platform === "win32"),
+    // broker-driven device login.
+    supportsDeviceLogin: kind !== AgentKind.OpenCode,
     // Only these kinds have a paste-a-key app-config field (see main.ts
     // getAgentStatuses hasCredential wiring).
     acceptsPastedKey:
