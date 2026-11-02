@@ -58,7 +58,7 @@ describe("shim tools", () => {
   })
 })
 
-test("with the broker's choices, delegate / council / council_add give access and effort as enums described per agent", () => {
+test("with the broker's choices, spawn_session / delegate / council / council_add give access and effort as enums described per agent", () => {
   const choices = {
     claude: { access: [{ id: "bypass", level: "full", description: "Skip approval." }, { id: "plan", level: "read-only", description: "Plan mode." }], efforts: ["low", "high"] },
     cursor: { access: [{ id: "ask", level: "ask", description: "Ask first." }], efforts: [] },
@@ -77,6 +77,12 @@ test("with the broker's choices, delegate / council / council_add give access an
   const delegate = tools.find((t) => t.name === "delegate")!.inputSchema as any
   expect(delegate.properties.access.enum).toEqual(["bypass", "plan", "ask"])
   expect(delegate.required).toEqual((listTools().find((t) => t.name === "delegate")!.inputSchema as any).required)
+  // spawn_session takes effort (same enum) and model, but no access.
+  const spawn = tools.find((t) => t.name === "spawn_session")!.inputSchema as any
+  expect(spawn.properties.effort).toEqual(delegate.properties.effort)
+  expect(spawn.properties.model).toEqual({ type: "string" })
+  expect(spawn.properties.access).toBeUndefined()
+  expect(spawn.required).toEqual(["workdir"])
   // Other tools, and the list without choices, are unchanged.
   expect(tools.find((t) => t.name === "attach")).toEqual(listTools().find((t) => t.name === "attach"))
   expect((listTools().find((t) => t.name === "council")!.inputSchema as any).properties.members.items.properties.access).toEqual({ type: "string" })

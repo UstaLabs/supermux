@@ -1160,7 +1160,7 @@ const sessionManager = new SessionManager(registry, {
   orchestration: {
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
-      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent })
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel })
       return { name: created.name, session_id: created.id }
     },
     refreshTelegramMenu,
