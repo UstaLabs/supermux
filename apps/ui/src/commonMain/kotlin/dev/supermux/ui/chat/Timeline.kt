@@ -1114,7 +1114,25 @@ private fun InlineImageAttachment(
 ) {
     when (val image = rememberAttachmentImage(att, media)) {
         AttachmentImage.Failed -> AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
-        AttachmentImage.Loading -> MdImageLoadingBox("attachment_image_loading", Radii.md)
+        AttachmentImage.Loading -> {
+            val width = att.width
+            val height = att.height
+            if (width != null && height != null && width > 0 && height > 0) {
+                // The broker read the header: the placeholder takes the picture's own box, so the
+                // row does not jump when the bitmap lands.
+                ShrinkOnlyImage(width, height, tag = "attachment_image_loading", radius = Radii.md, alignEnd = alignEnd) { modifier ->
+                    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            Modifier.size(MdImageDimens.SpinnerSize),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            strokeWidth = MdImageDimens.SpinnerStroke,
+                        )
+                    }
+                }
+            } else {
+                MdImageLoadingBox("attachment_image_loading", Radii.md)
+            }
+        }
         is AttachmentImage.Ready -> ShrinkOnlyImage(
             width = image.decoded.width,
             height = image.decoded.height,
@@ -1441,12 +1459,17 @@ internal fun InlineVideo(
                 .testTag("attachment_video_poster"),
             contentAlignment = Alignment.Center,
         ) {
+            // The phone's poster when it sent one (a small picture — the clip is still not fetched).
+            att.poster_file_id?.let { PosterPicture(it, media, Modifier.fillMaxSize().testTag("attachment_video_poster_picture")) }
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
                 contentDescription = att.name ?: "Play video",
-                tint = cs.onSurface,
+                tint = if (att.poster_file_id != null) VideoControls.Foreground else cs.onSurface,
                 modifier = Modifier.size(Sizes.videoPlayGlyph),
             )
+            att.duration_ms?.let {
+                ClipDurationBadge(it, Modifier.align(Alignment.BottomEnd).padding(Space.sm).testTag("attachment_video_duration"))
+            }
         }
         located == null -> Box(
             modifier = surface

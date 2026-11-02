@@ -381,7 +381,9 @@ private fun ViewerClip(
     onTransport: (VideoTransport?) -> Unit,
 ) {
     if (!active) {
-        VideoPosterTile(Modifier.testTag("chat_media_viewer_poster"), glyph = Sizes.videoPlayGlyph)
+        Box(Modifier.fillMaxSize().testTag("chat_media_viewer_poster")) {
+            ClipPoster(handle.att, handle.media, 0, "chat_media_viewer", Sizes.videoPlayGlyph)
+        }
         return
     }
     val platform = LocalPlatform.current
@@ -536,7 +538,13 @@ private fun ViewerStrip(
             ) {
                 when (item.kind) {
                     FilePreviewKind.Image -> StripPicture(remember(item.key) { resolve(item) })
-                    FilePreviewKind.Video -> VideoPosterTile(glyph = 18.dp)
+                    FilePreviewKind.Video -> {
+                        val handle = remember(item.key) { resolve(item) }
+                        Box(Modifier.fillMaxSize()) {
+                            handle.att.poster_file_id?.let { PosterPicture(it, handle.media, Modifier.fillMaxSize()) }
+                            VideoPosterTile(glyph = 18.dp, background = if (handle.att.poster_file_id != null) Color.Transparent else VideoPoster.Background)
+                        }
+                    }
                 }
             }
         }

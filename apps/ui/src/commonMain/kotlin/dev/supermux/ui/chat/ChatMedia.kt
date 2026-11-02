@@ -206,3 +206,12 @@ const val DISMISS_DISTANCE_FRACTION = 0.22f
 /** Touch swipe-down-to-close: let go far enough down, or flung down fast enough. Up never closes. */
 fun shouldDismissOnRelease(offsetY: Float, velocityY: Float, heightPx: Float, flingPxPerSecond: Float): Boolean =
     offsetY > 0f && (offsetY > heightPx * DISMISS_DISTANCE_FRACTION || velocityY > flingPxPerSecond)
+
+/** A clip's length the way a player shows it: `0:07`, `1:02`, `1:02:03`. */
+fun formatClipDuration(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val seconds = (total % 60).toString().padStart(2, '0')
+    return if (hours > 0) "$hours:${minutes.toString().padStart(2, '0')}:$seconds" else "$minutes:$seconds"
+}

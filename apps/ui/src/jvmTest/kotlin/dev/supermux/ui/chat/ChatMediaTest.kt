@@ -129,6 +129,16 @@ class ChatMediaTest {
         assertEquals(listOf(markdownMediaKey("m1", "/repo/a.png")), keys(chatMediaItems(items, hostFiles = true, baseDir = null)))
     }
 
+    // ── A clip's length ─────────────────────────────────────────────────────────────
+
+    @Test fun a_clips_length_reads_like_a_player() {
+        assertEquals("0:07", formatClipDuration(7_000))
+        assertEquals("0:59", formatClipDuration(59_999), "a clip shorter than a minute never shows 1:00")
+        assertEquals("1:02", formatClipDuration(62_000))
+        assertEquals("1:02:03", formatClipDuration(3_723_000))
+        assertEquals("0:00", formatClipDuration(400))
+    }
+
     // ── Collage geometry ────────────────────────────────────────────────────────────
 
     @Test fun fewer_than_two_is_not_a_collage() {

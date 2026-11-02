@@ -1,6 +1,8 @@
 package dev.supermux.ui.chat
 
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -125,6 +127,25 @@ class AttachmentImageTest {
         }
         onNodeWithTag("attachment_image_loading").assertIsDisplayed()
         assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size)
+    }
+
+    @Test fun a_picture_whose_size_is_known_reserves_its_exact_box_before_it_loads() = runComposeUiTest {
+        // The broker read the header: 800×400. The row must not jump when the bitmap lands, so
+        // the placeholder already has the picture's own shrink-only box.
+        setPlatformContent {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.requiredWidth(400.dp)) {
+                AttachmentList(
+                    attachments = listOf(imageAtt().copy(width = 800, height = 400)),
+                    alignEnd = false,
+                    media = AttachmentMedia.fromBytes { kotlinx.coroutines.awaitCancellation() },
+                )
+            }
+        }
+        val box = onNodeWithTag("attachment_image_loading").fetchSemanticsNode().boundsInRoot
+        with(density) {
+            assertEquals(400f, box.width.toDp().value, 1f, "shrunk to the column")
+            assertEquals(200f, box.height.toDp().value, 1f, "at the picture's own 2:1")
+        }
     }
 
     // ── The fullscreen viewer, on both hosts ──────────────────────────────────────────

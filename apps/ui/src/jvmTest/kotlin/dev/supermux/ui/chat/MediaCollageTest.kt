@@ -91,6 +91,32 @@ class MediaCollageTest {
         assertEquals(0, media.videoReads.get(), "a transcript must not eagerly download every clip")
     }
 
+    @Test fun a_clips_tile_shows_its_length_and_its_poster_and_still_never_reads_the_clip() = runComposeUiTest {
+        // The length comes from the broker (the file's header); the poster is a small picture of
+        // its own. Neither is the clip.
+        val read = mutableListOf<String>()
+        val media = object : AttachmentMedia {
+            override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? {
+                read += att.file_id
+                return TINY_PNG_BYTES
+            }
+
+            override suspend fun playableUri(att: Attachment): String? {
+                read += att.file_id
+                return null
+            }
+        }
+        val withPoster = clip("v1").copy(duration_ms = 42_000, poster_file_id = "pv1")
+        val bare = clip("v2").copy(duration_ms = 3_723_000)
+        setPlatformContent {
+            AttachmentList(listOf(withPoster, bare), alignEnd = false, media = media, entryId = "m1")
+        }
+        onNodeWithTag("media_collage_duration:0", useUnmergedTree = true).assertTextEquals("0:42")
+        onNodeWithTag("media_collage_duration:1", useUnmergedTree = true).assertTextEquals("1:02:03")
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("media_collage_poster:0", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(listOf("pv1"), read.distinct(), "only the poster is fetched, never a clip")
+    }
+
     @Test fun a_tap_opens_the_chat_viewer_at_that_item() = runComposeUiTest {
         val opened = mutableListOf<String>()
         setPlatformContent {

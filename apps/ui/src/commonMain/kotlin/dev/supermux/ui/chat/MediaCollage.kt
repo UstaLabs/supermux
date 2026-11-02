@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.media.AttachmentMedia
+import dev.supermux.proto.Attachment
+import androidx.compose.foundation.layout.padding
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.Radii
@@ -76,7 +78,7 @@ internal fun MediaCollage(
             ) {
                 when (item.kind) {
                     FilePreviewKind.Image -> CollagePicture(item, media)
-                    FilePreviewKind.Video -> VideoPosterTile(Modifier.testTag("media_collage_video:${tile.index}"), glyph = Media.collagePlayGlyph)
+                    FilePreviewKind.Video -> ClipPoster(item.att, media, tile.index, "media_collage", Media.collagePlayGlyph)
                 }
                 if (last) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
@@ -129,12 +131,58 @@ private fun CollagePicture(item: ChatMediaItem.FromAttachment, media: Attachment
 }
 
 /**
- * A clip that has not been opened: a dark frame with a ▶ on a translucent disc. Fetches nothing.
- * Shared by the collage, the viewer's not-yet-current page and its thumbnail strip.
+ * A clip that has not been opened, as a tile: the picture the sending phone made of it when there
+ * is one (a small picture of its own — the clip itself is never fetched), the ▶, and its length
+ * when the broker read it from the file's header. Tags are `<tagPrefix>_video:<index>`,
+ * `<tagPrefix>_poster:<index>` (once painted) and `<tagPrefix>_duration:<index>`.
  */
 @Composable
-internal fun VideoPosterTile(modifier: Modifier = Modifier, glyph: Dp = 30.dp) {
-    Box(modifier.fillMaxSize().background(VideoPoster.Background), contentAlignment = Alignment.Center) {
+internal fun ClipPoster(att: Attachment, media: AttachmentMedia, index: Int, tagPrefix: String, glyph: Dp) {
+    Box(Modifier.fillMaxSize()) {
+        val poster = att.poster_file_id
+        if (poster != null) PosterPicture(poster, media, Modifier.fillMaxSize().testTag("${tagPrefix}_poster:$index"))
+        VideoPosterTile(
+            Modifier.testTag("${tagPrefix}_video:$index"),
+            glyph = glyph,
+            background = if (poster != null) Color.Transparent else VideoPoster.Background,
+        )
+        att.duration_ms?.let {
+            ClipDurationBadge(it, Modifier.align(Alignment.BottomEnd).padding(Space.xs).testTag("${tagPrefix}_duration:$index"))
+        }
+    }
+}
+
+/** A clip's poster picture, cropped to fill; nothing until it is painted. */
+@Composable
+internal fun PosterPicture(posterFileId: String, media: AttachmentMedia, modifier: Modifier) {
+    val image = rememberAttachmentImage(Attachment(file_id = posterFileId, kind = "photo"), media)
+    if (image is AttachmentImage.Ready) {
+        Image(image.decoded.painter, contentDescription = null, contentScale = ContentScale.Crop, modifier = modifier)
+    }
+}
+
+/** `1:02` on a translucent pill, readable over any frame. */
+@Composable
+internal fun ClipDurationBadge(durationMs: Long, modifier: Modifier = Modifier) {
+    Text(
+        formatClipDuration(durationMs),
+        color = VideoControls.Foreground,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = modifier
+            .clip(RoundedCornerShape(Radii.sm))
+            .background(Color.Black.copy(alpha = VideoControls.DiscAlpha))
+            .padding(horizontal = Space.xs + 2.dp, vertical = 1.dp),
+    )
+}
+
+/**
+ * A clip that has not been opened: a dark frame (or none, over a poster) with a ▶ on a
+ * translucent disc. Fetches nothing.
+ */
+@Composable
+internal fun VideoPosterTile(modifier: Modifier = Modifier, glyph: Dp = 30.dp, background: Color = VideoPoster.Background) {
+    Box(modifier.fillMaxSize().background(background), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(glyph + Space.md)
