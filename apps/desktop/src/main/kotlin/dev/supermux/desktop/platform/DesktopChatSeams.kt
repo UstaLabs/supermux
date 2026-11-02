@@ -20,7 +20,6 @@ import java.awt.GraphicsEnvironment
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
@@ -129,9 +128,10 @@ internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching
  * Open a local file with the OS default handler (viewer / player / folder).
  *
  * Fallback ORDER is the contract: `java.awt.Desktop.open` first (it is the only path that reports
- * failure), then the per-OS shell opener — `start` on Windows, `open` on macOS, `xdg-open`
- * everywhere else. Returns false when neither took it (a headless CI box with no `xdg-open`), so a
- * caller can show a notice instead of silently doing nothing.
+ * failure), then [openCommand] — ShellExecute through PowerShell on Windows, `open` on macOS,
+ * `xdg-open` everywhere else, the name never parsed by a shell. Returns false when neither took it
+ * (a headless CI box with no `xdg-open`), so a caller can show a notice instead of silently doing
+ * nothing.
  */
 internal fun openLocalFile(file: File): Boolean {
     val viaDesktop = runCatching {
@@ -143,13 +143,7 @@ internal fun openLocalFile(file: File): Boolean {
         }
     }.getOrDefault(false)
     if (viaDesktop) return true
-    val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
-    val cmd = when {
-        os.contains("win") -> arrayOf("cmd", "/c", "start", "", file.absolutePath)
-        os.contains("mac") || os.contains("darwin") -> arrayOf("open", file.absolutePath)
-        else -> arrayOf("xdg-open", file.absolutePath)
-    }
-    return runCatching { ProcessBuilder(*cmd).inheritIO().start(); true }.getOrDefault(false)
+    return runCatching { openCommand(file.absolutePath).start(ProcessBuilder.Redirect.INHERIT); true }.getOrDefault(false)
 }
 
 // ── mic ──────────────────────────────────────────────────────────────────────
@@ -199,8 +193,9 @@ internal class DesktopMicCapture(
 
 /**
  * Desktop read-aloud: shell out to whatever speech/playback binary the machine has. The `which`
- * probe order IS the behaviour — `say` on macOS, PowerShell's `SpeechSynthesizer` on Windows, then
- * `spd-say`/`espeak-ng`/`espeak` on Linux; playback prefers `ffplay`, then `mpv`, then `afplay`.
+ * probe order IS the behaviour — [speechCommand]'s `say` on macOS, PowerShell's `SpeechSynthesizer`
+ * on Windows, then `spd-say`/`espeak-ng`/`espeak` on Linux, each given the agent's text as data;
+ * playback prefers `ffplay`, then `mpv`, then `afplay`.
  *
  * One child process at a time: [stop] kills it, which is what makes a second tap on a speaking
  * message stop it. A machine with none of the binaries silently speaks nothing — [speak] returns
@@ -220,7 +215,7 @@ internal class DesktopTtsEngine : TtsEngine {
         }.getOrNull() ?: return
         try {
             val cmd = playCommand(file.absolutePath) ?: return
-            runProcess(cmd)
+            runProcess(OsCommand(cmd))
         } finally {
             runCatching { file.delete() }
         }
@@ -231,7 +226,7 @@ internal class DesktopTtsEngine : TtsEngine {
 
     override suspend fun playUrl(url: String) {
         val cmd = playUrlCommand(url) ?: return
-        runProcess(cmd)
+        runProcess(OsCommand(cmd))
     }
 
     override fun stop() {
@@ -241,9 +236,9 @@ internal class DesktopTtsEngine : TtsEngine {
     /** Nothing process-global to release: [stop] already kills the only child. */
     override fun shutdown() = stop()
 
-    private suspend fun runProcess(cmd: List<String>) = withContext(Dispatchers.IO) {
+    private suspend fun runProcess(cmd: OsCommand) = withContext(Dispatchers.IO) {
         runCatching {
-            val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
+            val p = cmd.start()
             process.set(p)
             p.waitFor()
         }
@@ -261,28 +256,6 @@ internal class DesktopTtsEngine : TtsEngine {
  */
 internal val SharedDesktopTts: DesktopTtsEngine by lazy { DesktopTtsEngine() }
 
-/** OS speech command for [plain], or null when this machine has no synthesiser we know of. */
-internal fun speechCommand(plain: String): List<String>? {
-    val os = System.getProperty("os.name").orEmpty().lowercase()
-    return when {
-        os.contains("mac") || os.contains("darwin") -> listOf("say", plain)
-        os.contains("win") -> {
-            val escaped = plain.replace("'", "''")
-            listOf(
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Add-Type -AssemblyName System.Speech; " +
-                    "(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('$escaped')",
-            )
-        }
-        which("spd-say") -> listOf("spd-say", "-e", plain)
-        which("espeak-ng") -> listOf("espeak-ng", plain)
-        which("espeak") -> listOf("espeak", plain)
-        else -> null
-    }
-}
-
 /** Audio playback command for [path], or null when no player is installed. */
 internal fun playCommand(path: String): List<String>? = when {
     which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path)
@@ -297,9 +270,6 @@ internal fun playUrlCommand(url: String): List<String>? = when {
     which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", url)
     else -> null
 }
-
-private fun which(bin: String): Boolean =
-    runCatching { ProcessBuilder("which", bin).start().waitFor() == 0 }.getOrDefault(false)
 
 // ── notices ──────────────────────────────────────────────────────────────────
 
