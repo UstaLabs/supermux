@@ -69,6 +69,7 @@ import dev.supermux.session.SectionKey
 import dev.supermux.session.effectiveUserStatus
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.inferHomeDir
+import dev.supermux.session.pathLeaf
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.ui.TestIds
@@ -229,7 +230,7 @@ fun PathGroupHeader(
 }
 
 private fun groupHeaderLeaf(label: String, fullLabel: Boolean): String =
-    if (fullLabel) label else label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+    if (fullLabel) label else pathLeaf(label).ifEmpty { label }
 
 /** [PathGroupHeader]'s default leading tile: the leaf's first letter on a label-hashed colour. */
 @Composable

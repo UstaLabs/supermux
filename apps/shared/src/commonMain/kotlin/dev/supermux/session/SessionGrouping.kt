@@ -149,7 +149,7 @@ fun buildTaskSections(
 fun projectLabel(session: SessionInfo, home: String?): String {
     val path = session.repo_root ?: session.workdir
     val label = formatWorkdir(path, home)
-    val leaf = label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+    val leaf = pathLeaf(label).ifEmpty { label }
     return if (leaf == "~" || leaf == "…") "home" else leaf.removePrefix("…")
 }
 
@@ -213,18 +213,39 @@ fun groupSessions(
  *  - `~` for home itself, `~/leaf` one level under home
  *  - `…/parent/leaf` when deeper (whether under home or not)
  *  - `parent/leaf` for a shallow two-segment absolute path; a single segment is unchanged
+ *
+ * A Windows host's path (`C:\Users\me\x`) keeps its own `\` and its drive counts as the root,
+ * so `D:\a\b` shortens like `/a/b`.
  */
 fun formatWorkdir(workdir: String, home: String?): String {
     val h = if (!home.isNullOrEmpty()) home else inferHomeDir(workdir)
-    if (!h.isNullOrEmpty() && workdir == h) return "~"
-    val segments = workdir.split("/").filter { it.isNotEmpty() }
+    val homeSegments = h?.takeIf { it.isNotEmpty() }?.let(::pathSegments)
+    val all = pathSegments(workdir)
+    if (homeSegments != null && sameSegments(all, homeSegments)) return "~"
+    val segments = if (all.firstOrNull()?.let(::isDrive) == true) all.drop(1) else all
     if (segments.size <= 1) return workdir
+    val sep = if ('\\' in workdir) '\\' else '/'
     val leaf = segments[segments.size - 1]
     val parent = segments[segments.size - 2]
-    val parentPath = "/" + segments.dropLast(1).joinToString("/")
-    if (!h.isNullOrEmpty() && parentPath == h) return "~/$leaf"
-    val base = "$parent/$leaf"
-    return if (segments.size > 2) "…/$base" else base
+    if (homeSegments != null && sameSegments(all.dropLast(1), homeSegments)) return "~$sep$leaf"
+    val base = "$parent$sep$leaf"
+    return if (segments.size > 2) "…$sep$base" else base
+}
+
+/** The last segment of [path] on either separator: `/a/b` and `C:\a\b` both give `b`. */
+fun pathLeaf(path: String): String {
+    val trimmed = path.trimEnd('/', '\\')
+    return trimmed.substring(trimmed.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
+}
+
+private fun pathSegments(path: String): List<String> = path.split('/', '\\').filter { it.isNotEmpty() }
+
+private fun isDrive(segment: String): Boolean = segment.length == 2 && segment[1] == ':' && segment[0].isLetter()
+
+/** Windows paths compare case-insensitively (`C:\Users` is `c:\users`), POSIX ones exactly. */
+private fun sameSegments(a: List<String>, b: List<String>): Boolean {
+    val windows = a.firstOrNull()?.let(::isDrive) == true
+    return a.size == b.size && a.indices.all { a[it].equals(b[it], ignoreCase = windows) }
 }
 
 /**
@@ -232,9 +253,9 @@ fun formatWorkdir(workdir: String, home: String?): String {
  * [formatWorkdir]); compiling the pattern inside the function made every one of those pay for a
  * fresh regex.
  */
-private val HOME_DIR_RE = Regex("^(/(?:home|Users)/[^/]+)")
+private val HOME_DIR_RE = Regex("^(/(?:home|Users)/[^/]+|[A-Za-z]:[\\\\/][Uu]sers[\\\\/][^\\\\/]+)")
 
-/** Best-effort home dir (/home/<user> or /Users/<user>) when none was supplied. */
+/** Best-effort home dir (/home/<user>, /Users/<user> or C:\Users\<user>) when none was supplied. */
 fun inferHomeDir(workdir: String?): String? {
     val probe = workdir ?: ""
     val m = HOME_DIR_RE.find(probe)
