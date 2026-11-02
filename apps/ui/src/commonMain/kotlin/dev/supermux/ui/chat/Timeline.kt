@@ -1607,7 +1607,14 @@ internal fun MountedVideoPlayer(
     var grabbing by remember(keepFrameOf) { mutableStateOf(keepFrameOf != null) }
     LaunchedEffect(keepFrameOf) {
         val id = keepFrameOf ?: return@LaunchedEffect
-        snapshotFlow { player.isPlaying && !player.isLoading && player.currentTime >= POSTER_AFTER_SECONDS }.first { it }
+        // Only observable state here: `currentTime` is a blocking native call on Linux (runBlocking),
+        // which must never run on the main thread.
+        snapshotFlow { player.isPlaying && !player.isLoading }.first { it }
+        delay(POSTER_AFTER_MS)
+        if (!player.isPlaying) {
+            grabbing = false
+            return@LaunchedEffect
+        }
         withFrameNanos { }
         val frame = runCatching { frameLayer.toImageBitmap() }.getOrNull()
         if (frame != null && !looksBlank(frame)) ClipFrames.keep(id, posterSized(frame))
@@ -1690,8 +1697,8 @@ internal fun MountedVideoPlayer(
     }
 }
 
-/** How far into a clip its kept frame is taken: past a first black frame or a fade-in. */
-private const val POSTER_AFTER_SECONDS = 0.5
+/** How long into playing a clip its kept frame is taken: past a first black frame or a fade-in. */
+private const val POSTER_AFTER_MS = 600L
 
 /** The clip a viewer page is playing (its file id), so the player can keep a frame of it. */
 internal val LocalViewerClip = androidx.compose.runtime.staticCompositionLocalOf<String?> { null }

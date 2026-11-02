@@ -87,7 +87,7 @@ class ChatMediaShots {
         LogEntry(
             id = "out:1", ts = "2026-11-02T09:12:30Z", direction = "outbound", op = "reply",
             text = "Thanks. Here is the same flow on desktop, plus the recording:",
-            attachments = listOf(photo("p3"), clip("v1"), photo("p4")),
+            attachments = listOf(photo("p3"), clip("v1").copy(duration_ms = 62_000, poster_file_id = "p6"), photo("p4")),
         ),
         LogEntry(
             id = "in:2", ts = "2026-11-02T09:13:10Z", direction = "inbound", channel = "web",
@@ -96,7 +96,7 @@ class ChatMediaShots {
         LogEntry(
             id = "out:2", ts = "2026-11-02T09:14:00Z", direction = "outbound", op = "reply",
             text = "All seven from the audit:",
-            attachments = listOf(photo("p1"), photo("p2"), clip("v2"), photo("p3"), photo("p4"), photo("p5"), photo("p6")),
+            attachments = listOf(photo("p1"), photo("p2"), clip("v2").copy(duration_ms = 9_000), photo("p3"), photo("p4"), photo("p5"), photo("p6")),
         ),
     )
 
