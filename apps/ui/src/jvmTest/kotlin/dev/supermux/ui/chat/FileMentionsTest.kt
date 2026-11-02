@@ -122,9 +122,9 @@ class FileMentionsTest {
         assertEquals(MentionEdit("@src/bar.ts rest", 12), applyMention("@src/foo.ts rest", token, "src/bar.ts", isDir = false))
     }
 
-    @Test fun pickingAFolderMentionsIt() {
+    @Test fun pickingAFolderLeavesTheWordOpenOnIt() {
         val token = activeMentionToken("@sr", 3)!!
-        assertEquals(MentionEdit("@src/ ", 6), applyMention("@sr", token, "src", isDir = true))
+        assertEquals(MentionEdit("@src/", 5), applyMention("@sr", token, "src", isDir = true))
     }
 
     @Test fun openingAFolderKeepsTheTokenOpenOnItsListing() {

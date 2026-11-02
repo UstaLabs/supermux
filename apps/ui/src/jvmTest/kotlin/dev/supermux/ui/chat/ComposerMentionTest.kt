@@ -139,14 +139,14 @@ class ComposerMentionTest {
         assertEquals("@src/Main.kt ", h.draft)
     }
 
-    @Test fun enterOnAFolderMentionsIt() = runComposeUiTest {
+    @Test fun enterOnAFolderOpensItToo() = runComposeUiTest {
         val h = composer()
         type("@")
         awaitRow("src")
         press(Key.DirectionDown)
         press(Key.Enter)
-        assertEquals("@src/ ", h.draft)
-        assertNoMenu()
+        assertEquals("@src/", h.draft)
+        awaitRow("src/Composer.kt")
     }
 
     @Test fun clickingARowPicksIt() = runComposeUiTest {

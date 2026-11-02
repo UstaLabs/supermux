@@ -1075,8 +1075,8 @@ fun Composer(
     val mentionMenuOpen = mentionToken != null && mentionRows.isNotEmpty() && mentionDismissedAt != mentionToken.start
     val safeMentionIndex = selectedMentionIndex.coerceIn(0, (mentionRows.size - 1).coerceAtLeast(0))
 
-    // A pick (Enter, a click) mentions the row; [intoFolder] (Tab, a folder's chevron) opens a folder
-    // instead, so the menu lists it next.
+    // A pick (Enter, Tab, a click, a folder's chevron) writes the row's mention; a folder stays open,
+    // so the menu lists it next and a file in it can be picked.
     fun pickMention(row: GoToEntry, intoFolder: Boolean) {
         val token = mentionToken ?: return
         haptic.perform(HapticKind.Tick)

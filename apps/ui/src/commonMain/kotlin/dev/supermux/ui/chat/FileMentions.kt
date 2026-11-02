@@ -67,9 +67,9 @@ fun mentionText(relativePath: String, isDir: Boolean, open: Boolean = false): St
 }
 
 /**
- * [token] in [text] replaced by the mention of [relativePath]. A pick closes the word with a space
- * (the one already after it, else a new one), which closes the menu. [intoFolder] (Tab on a folder)
- * writes `@dir/` and leaves the word open, so the menu lists that folder next.
+ * [token] in [text] replaced by the mention of [relativePath]. A file closes the word with a space
+ * (the one already after it, else a new one), which closes the menu. A folder writes `@dir/` and
+ * leaves the word open, so the menu lists that folder next and a file in it can be picked.
  */
 fun applyMention(
     text: String,
@@ -78,7 +78,7 @@ fun applyMention(
     isDir: Boolean,
     intoFolder: Boolean = false,
 ): MentionEdit {
-    val open = isDir && intoFolder
+    val open = isDir
     val mention = mentionText(relativePath, isDir, open)
     val before = text.substring(0, token.start)
     val after = text.substring(token.end)

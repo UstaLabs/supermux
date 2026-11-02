@@ -40,7 +40,7 @@ import dev.supermux.ui.files.highlighted
  * The `@` file menu, drawn in the composer's menu strip where the `/` commands sit. One row per file
  * or folder: its badge, the name with the matched letters in bold, and (for a search) the folder it
  * is in, dimmed. Stateless like [SlashMenu]: the composer owns the rows, the highlight and the keys.
- * A row mentions its file or folder; a folder's chevron opens it instead, which is what Tab does.
+ * Picking a folder opens it (the menu lists it next); its chevron says so.
  */
 @Composable
 fun FileMentionMenu(
