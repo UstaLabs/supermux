@@ -262,7 +262,7 @@ fun rememberChatActions(
     loadProxies: (suspend () -> List<ProxyDto>)? = null,
     openAccounts: (() -> Unit)? = null,
 ): ChatActions {
-    val composerActions = rememberComposerActions(app, session.id)
+    val composerActions = rememberComposerActions(app, session.id, session.workdir)
     return remember(app, session.id, composerActions, loadProxies, openAccounts) {
         ChatActions(
             send = { text, fileIds -> app.sendMessage(session.id, text, fileIds) },

@@ -4,7 +4,7 @@
 // panel, see `ComposerControls.kt` / `RunSettingsPanel.kt`) and, only when the mode is not the
 // agent's default, a tinted mode chip; mic · send/stop on the right. An optional `tray` sits under
 // the card as quiet captions (chat's branch + detail footer). Above the card sit the `/command`
-// menu, the "Transcribing…" strip and (while dictating) the RecordingBar takeover.
+// and `@file` menus, the "Transcribing…" strip and (while dictating) the RecordingBar takeover.
 //
 // TWO screens render it: the chat panel and the New Session launcher, whose capsule card, staged
 // chips, field, key policy, attach/mic/send and slash menu used to be a hand-copy of this file's
@@ -94,6 +94,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -135,6 +136,8 @@ import dev.supermux.proto.PermissionModeInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.files.GoToFileDebounceMs
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
@@ -256,6 +259,11 @@ class ComposerActions(
     val gitPull: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPush: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
     val gitPublish: (suspend () -> dev.supermux.net.GitOpResult?)? = null,
+    /**
+     * The `@` menu's rows: one folder of the session's workdir, or a fuzzy search across it (see
+     * [MentionLookup]); null rows = the host could not answer. Null = no `@` menu at all.
+     */
+    val mentionFiles: (suspend (MentionLookup) -> List<GoToEntry>?)? = null,
 )
 
 /** A `?partial=1` answer as the dictation controller reads it. */
@@ -275,7 +283,9 @@ fun dev.supermux.net.AppConfigDto.toVoiceCaps(): VoiceCaps =
 fun rememberComposerActions(
     app: dev.supermux.state.HostStore,
     sessionId: String,
-): ComposerActions = remember(app, sessionId) {
+    /** The session's own workdir (its worktree, for a worktree session): what `@` lists and searches. */
+    workdir: String? = null,
+): ComposerActions = remember(app, sessionId, workdir) {
     ComposerActions(
         transcribeDraft = { draft -> app.transcribeDraft(sessionId, draft)?.text },
         loadGlossary = { app.fetchGlossary().orEmpty() },
@@ -291,6 +301,9 @@ fun rememberComposerActions(
         gitPull = { app.gitPull(sessionId) },
         gitPush = { app.gitPush(sessionId) },
         gitPublish = { app.gitPublish(sessionId) },
+        mentionFiles = workdir?.takeIf { it.isNotBlank() }?.let { dir ->
+            { lookup -> lookupMentionFiles(app.fileSystem, dir, lookup) }
+        },
     )
 }
 
@@ -317,6 +330,9 @@ data class ComposerTags(
     val micError: String = "composer-mic-error",
     /** Slash rows are tagged `"$slashItemPrefix${command.name}"`. */
     val slashItemPrefix: String = "chat_slash_item_",
+    /** `@` file rows are tagged `"$mentionItemPrefix${relativePath}"`; the menu itself [mentionMenu]. */
+    val mentionItemPrefix: String = "chat_mention_item_",
+    val mentionMenu: String = "chat_mention_menu",
     /** Staged (pre-spawn) chips are tagged `"$stagedChipPrefix${file.name}"`. */
     val stagedChipPrefix: String = "composer_staged_",
 )
@@ -671,10 +687,42 @@ fun Composer(
     val tags = chrome.tags
     // The field's text, whichever of the two value APIs the caller bound.
     val text = value?.text ?: draft
+    // A caller bound to the plain [draft] still has a caret, and the `@` menu reads it. It lives here
+    // under BasicTextField's own String-overload rule: the hoisted text wins, the selection and the
+    // IME composition carry over, and the caller hears only about TEXT changes.
+    var draftField by remember(sessionKey) { mutableStateOf(TextFieldValue(draft, TextRange(draft.length))) }
+    val field = value ?: draftField.copy(text = draft)
+    if (value == null) {
+        SideEffect {
+            if (field.selection != draftField.selection || field.composition != draftField.composition) draftField = field
+        }
+    }
+    var lastDraft by remember(draft) { mutableStateOf(draft) }
+    val onFieldChange: (TextFieldValue) -> Unit = { v ->
+        if (value != null) {
+            onValueChange(v)
+        } else {
+            draftField = v
+            val changed = v.text != lastDraft
+            lastDraft = v.text
+            if (changed) onDraftChange(v.text)
+        }
+    }
     // Every PROGRAMMATIC edit (slash insert, dictation append, external hooks) goes through here,
     // so a caret-aware caller lands the cursor at the end instead of wherever it happened to be.
     val setText: (String) -> Unit = { t ->
         if (value != null) onValueChange(TextFieldValue(t, TextRange(t.length))) else onDraftChange(t)
+    }
+    // An edit that places the caret itself, on either binding: an `@` pick lands it after the mention.
+    val setField: (String, Int) -> Unit = { t, caret ->
+        val v = TextFieldValue(t, TextRange(caret))
+        if (value != null) {
+            onValueChange(v)
+        } else {
+            draftField = v
+            lastDraft = t
+            onDraftChange(t)
+        }
     }
     val haptic = rememberHaptics()
     val scope = rememberCoroutineScope()
@@ -1002,6 +1050,40 @@ fun Composer(
         }
     }
 
+    // ── `@` file mentions: the word the CARET is in (start-of-line or after whitespace), looked up
+    //    through the host's [ComposerActions.mentionFiles] — a folder's listing, or the same fuzzy
+    //    search "Go to file…" runs. Token, lookup and insertion live in FileMentions.kt. ──
+    val mentionFiles = actions.mentionFiles
+    val fieldCaret = field.selection.takeIf { it.collapsed }?.start
+    val mentionToken = if (mentionFiles != null && fieldCaret != null) activeMentionToken(text, fieldCaret) else null
+    val mentionRequest = mentionToken?.let { mentionLookup(it.query) }
+    var mentionRows by remember(sessionKey) { mutableStateOf(emptyList<GoToEntry>()) }
+    var selectedMentionIndex by remember(sessionKey) { mutableIntStateOf(0) }
+    // Esc closes the menu for THAT word: typing on in it (an email, an @handle) does not reopen it.
+    var mentionDismissedAt by remember(sessionKey) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(mentionToken == null) { if (mentionToken == null) mentionDismissedAt = null }
+    LaunchedEffect(mentionRequest, mentionFiles) {
+        if (mentionRequest == null || mentionFiles == null) {
+            mentionRows = emptyList()
+            return@LaunchedEffect
+        }
+        // A new key restarts the effect, which cancels the pending search: debounce + cancel in one.
+        if (mentionRequest is MentionLookup.Search) delay(GoToFileDebounceMs)
+        mentionRows = mentionFiles(mentionRequest).orEmpty()
+        selectedMentionIndex = 0
+    }
+    val mentionMenuOpen = mentionToken != null && mentionRows.isNotEmpty() && mentionDismissedAt != mentionToken.start
+    val safeMentionIndex = selectedMentionIndex.coerceIn(0, (mentionRows.size - 1).coerceAtLeast(0))
+
+    // A pick (Enter, a click) mentions the row; [intoFolder] (Tab, a folder's chevron) opens a folder
+    // instead, so the menu lists it next.
+    fun pickMention(row: GoToEntry, intoFolder: Boolean) {
+        val token = mentionToken ?: return
+        haptic.perform(HapticKind.Tick)
+        val edit = applyMention(text, token, row.relativePath, row.isDir, intoFolder)
+        setField(edit.text, edit.caret)
+    }
+
     // Letting go of a hold stops the dictation it started, like Stop. The mic may not be open yet
     // (the permission round-trip of [DictationController.onMicClick] is asynchronous): then the stop
     // waits for it, briefly, rather than leave a recording running that the user already ended.
@@ -1065,7 +1147,7 @@ fun Composer(
                 anyModifier = e.isCtrlPressed || e.isMetaPressed || e.isAltPressed || e.isShiftPressed,
                 micShown = onTranscribeAudio != null,
                 micBusy = dictation.active || dictation.transcribing || dictation.micUnavailable,
-                slashMenuOpen = slashMenuOpen,
+                slashMenuOpen = slashMenuOpen || mentionMenuOpen,
             )
         val step = spaceHold.onKey(kind, eligible)
         applySpaceHold(step)
@@ -1220,24 +1302,39 @@ fun Composer(
         }
     }
 
-    val slashMenuBlock: @Composable () -> Unit = {
-        SlashMenu(
-            matches = slashMatches,
-            selectedIndex = safeSlashIndex,
-            onSelect = { selectSlashCommand(it) },
-            modifier = if (chrome.slashInsideCard) {
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(cs.surfaceContainerHigh)
-            } else {
-                Modifier
-                    .fillMaxWidth()
-                    .background(cs.surfaceContainer)
-            },
-            testTagPrefix = tags.slashItemPrefix,
-            showActionGlyph = !chrome.slashInsertOnly,
-        )
+    // The `/` and `@` menus share one strip: above the card in chat, inside it in the launcher.
+    val menuModifier = if (chrome.slashInsideCard) {
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(cs.surfaceContainerHigh)
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .background(cs.surfaceContainer)
+    }
+    val menuOpen = mentionMenuOpen || slashMenuOpen
+    val menuBlock: @Composable () -> Unit = {
+        if (mentionMenuOpen) {
+            FileMentionMenu(
+                rows = mentionRows,
+                selectedIndex = safeMentionIndex,
+                onPick = { pickMention(it, intoFolder = false) },
+                onOpenFolder = { pickMention(it, intoFolder = true) },
+                modifier = menuModifier.testTag(tags.mentionMenu),
+                showFolders = mentionRequest is MentionLookup.Search,
+                itemTagPrefix = tags.mentionItemPrefix,
+            )
+        } else {
+            SlashMenu(
+                matches = slashMatches,
+                selectedIndex = safeSlashIndex,
+                onSelect = { selectSlashCommand(it) },
+                modifier = menuModifier,
+                testTagPrefix = tags.slashItemPrefix,
+                showActionGlyph = !chrome.slashInsertOnly,
+            )
+        }
     }
 
     val card: @Composable () -> Unit = {
@@ -1353,24 +1450,29 @@ fun Composer(
                         // First, but it consumes only Space's own repeats and release while a hold is
                         // under way; every other key falls through to the handlers below unchanged.
                         if (handleSpaceHoldKey(e)) return@onPreviewKeyEvent true
+                        // An open menu (`@` files first, else `/` commands) owns ↑ ↓ Enter Esc, and
+                        // the `@` menu Tab. Enter picks whether it is soft or hardware: the menu is on
+                        // screen, and picking is what Enter obviously means there.
+                        val menuKey = if (mentionMenuOpen || slashMenuOpen) composerMenuKey(e.key, e.type, e.isShiftPressed) else null
                         when {
-                            // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
-                                selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                            mentionMenuOpen && menuKey != null -> {
+                                when (menuKey) {
+                                    ComposerMenuKey.Down -> selectedMentionIndex = (safeMentionIndex + 1).coerceAtMost(mentionRows.size - 1)
+                                    ComposerMenuKey.Up -> selectedMentionIndex = (safeMentionIndex - 1).coerceAtLeast(0)
+                                    ComposerMenuKey.Pick -> mentionRows.getOrNull(safeMentionIndex)?.let { pickMention(it, intoFolder = false) }
+                                    ComposerMenuKey.Complete -> mentionRows.getOrNull(safeMentionIndex)?.let { pickMention(it, intoFolder = true) }
+                                    ComposerMenuKey.Dismiss -> mentionDismissedAt = mentionToken?.start
+                                }
                                 true
                             }
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
-                                selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                true
-                            }
-                            // Enter picks a slash command — soft OR hardware, since the menu is
-                            // on screen and picking is what Enter obviously means there.
-                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
-                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                true
-                            }
-                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
-                                slashMenuDismissed = true
+                            slashMenuOpen && menuKey != null && menuKey != ComposerMenuKey.Complete -> {
+                                when (menuKey) {
+                                    ComposerMenuKey.Down -> selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                    ComposerMenuKey.Up -> selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                    ComposerMenuKey.Pick -> slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                    ComposerMenuKey.Dismiss -> slashMenuDismissed = true
+                                    ComposerMenuKey.Complete -> Unit
+                                }
                                 true
                             }
                             // Per EVENT, not per window: a phone with a keyboard paired still
@@ -1425,35 +1527,21 @@ fun Composer(
                         inner()
                     }
                 }
-                if (value != null) {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = onValueChange,
-                        modifier = fieldModifier,
-                        textStyle = fieldTextStyle,
-                        cursorBrush = SolidColor(cs.primary),
-                        maxLines = chrome.fieldMaxLines,
-                        keyboardOptions = fieldKeyboardOptions,
-                        interactionSource = inputInteraction,
-                        decorationBox = fieldDecoration,
-                    )
-                } else {
-                    BasicTextField(
-                        value = draft,
-                        onValueChange = onDraftChange,
-                        modifier = fieldModifier,
-                        textStyle = fieldTextStyle,
-                        cursorBrush = SolidColor(cs.primary),
-                        maxLines = chrome.fieldMaxLines,
-                        keyboardOptions = fieldKeyboardOptions,
-                        interactionSource = inputInteraction,
-                        decorationBox = fieldDecoration,
-                    )
-                }
+                BasicTextField(
+                    value = field,
+                    onValueChange = onFieldChange,
+                    modifier = fieldModifier,
+                    textStyle = fieldTextStyle,
+                    cursorBrush = SolidColor(cs.primary),
+                    maxLines = chrome.fieldMaxLines,
+                    keyboardOptions = fieldKeyboardOptions,
+                    interactionSource = inputInteraction,
+                    decorationBox = fieldDecoration,
+                )
 
-                if (chrome.slashInsideCard && slashMenuOpen) {
+                if (chrome.slashInsideCard && menuOpen) {
                     Spacer(Modifier.height(8.dp))
-                    slashMenuBlock()
+                    menuBlock()
                 }
 
                 if (toolbar != null) {
@@ -1544,8 +1632,8 @@ fun Composer(
             ),
     ) {
         if (!chrome.slashInsideCard) {
-            if (slashMenuOpen) {
-                slashMenuBlock()
+            if (menuOpen) {
+                menuBlock()
                 Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
             } else if (slashQuery != null && !commandsResolved) {
                 // A fresh session whose command set hasn't resolved yet.

@@ -344,7 +344,7 @@ private fun GoToResults(
     }
 }
 
-private fun highlighted(text: String, hits: List<Int>): AnnotatedString = buildAnnotatedString {
+internal fun highlighted(text: String, hits: List<Int>): AnnotatedString = buildAnnotatedString {
     for ((range, hit) in highlightRuns(text, hits)) {
         val part = text.substring(range.first, range.last + 1)
         if (hit) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(part) } else append(part)
