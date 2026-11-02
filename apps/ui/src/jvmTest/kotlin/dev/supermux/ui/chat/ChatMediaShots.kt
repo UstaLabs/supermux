@@ -68,7 +68,15 @@ class ChatMediaShots {
         "p8" to scene(800, 800, 0xFF5C6BC0.toInt(), 0xFF2E7D32.toInt(), 0xFFFFF176.toInt()),
     )
 
-    private fun photo(id: String) = Attachment(file_id = id, kind = "photo", mime = "image/png", name = "$id.png")
+    /** The broker's header read of each picture, as a real chat carries it. */
+    private val sizes = mapOf(
+        "p1" to (1200 to 800), "p2" to (800 to 1200), "p3" to (1000 to 1000), "p4" to (1200 to 700),
+        "p5" to (900 to 1100), "p6" to (1100 to 900), "p7" to (1000 to 800), "p8" to (800 to 800),
+    )
+
+    private fun photo(id: String) = Attachment(
+        file_id = id, kind = "photo", mime = "image/png", name = "$id.png", width = sizes[id]?.first, height = sizes[id]?.second,
+    )
     private fun clip(id: String) = Attachment(file_id = id, kind = "video", mime = "video/mp4", name = "$id.mp4")
 
     private val media = object : AttachmentMedia {
@@ -82,12 +90,12 @@ class ChatMediaShots {
     private val conversation = listOf(
         LogEntry(
             id = "in:1", ts = "2026-11-02T09:12:00Z", direction = "inbound", channel = "web",
-            text = "Two shots from the phone run", attachments = listOf(photo("p1"), photo("p2")),
+            text = "Two shots from the phone run", attachments = listOf(photo("p1"), photo("p4")),
         ),
         LogEntry(
             id = "out:1", ts = "2026-11-02T09:12:30Z", direction = "outbound", op = "reply",
             text = "Thanks. Here is the same flow on desktop, plus the recording:",
-            attachments = listOf(photo("p3"), clip("v1").copy(duration_ms = 62_000, poster_file_id = "p6"), photo("p4")),
+            attachments = listOf(photo("p4"), clip("v1").copy(duration_ms = 62_000, poster_file_id = "p6"), photo("p3")),
         ),
         LogEntry(
             id = "in:2", ts = "2026-11-02T09:13:10Z", direction = "inbound", channel = "web",
