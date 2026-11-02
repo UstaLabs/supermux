@@ -8,7 +8,7 @@ export { ensureHome, homePath, claudeLayout, codexLayout, claudeRoot, codexRoot 
 export { AccountRegistry, systemAccountId, sameIdentity, REFRESH_MARGIN_MS } from "./registry.js"
 export { RefreshCoordinator } from "./refresh.js"
 export { UsageStore } from "./usage-store.js"
-export { defaultLoginRunner, parseDeviceAuth, parseLoginUrl, stripAnsi, ptyCommand, windowsLoginArgv, findCommand, parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, ANTIGRAVITY_CODE_WINDOW_MS, LOGIN_STRIPPED_ENV } from "./login.js"
+export { defaultLoginRunner, parseDeviceAuth, parseLoginUrl, stripAnsi, ptyCommand, windowsLoginArgv, spawnConptyLogin, findCommand, parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, ANTIGRAVITY_CODE_WINDOW_MS, LOGIN_STRIPPED_ENV } from "./login.js"
 export { score, limited, pickAccount, switchable, accountHttpStatus, ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW } from "./policy.js"
 export {
   adapterFor, genericAdapter, claudeAdapter, codexAdapter, cursorAdapter, grokAdapter, opencodeAdapter,

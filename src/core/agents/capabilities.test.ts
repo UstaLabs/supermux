@@ -41,9 +41,9 @@ test("auth capabilities per kind match today's login panel behavior", () => {
   expect(agentAuthCapabilities("antigravity", "darwin").supportsDeviceLogin).toBe(true)
 })
 
-test("antigravity has no device login on Windows (agy's login needs a pty)", () => {
+test("antigravity has a device login on Windows too (a ConPTY stands in for script)", () => {
   expect(agentAuthCapabilities("antigravity", "win32")).toEqual({
-    supportsDeviceLogin: false, acceptsPastedKey: true, usableWithoutAuth: false,
+    supportsDeviceLogin: true, acceptsPastedKey: true, usableWithoutAuth: false,
   })
   expect(agentAuthCapabilities("grok", "win32").supportsDeviceLogin).toBe(true)
 })

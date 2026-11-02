@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { accessSync, constants } from "node:fs"
-import { access, lstat, mkdir, readdir, readFile, rm, chmod, symlink, writeFile } from "node:fs/promises"
+import { access, lstat, mkdir, readdir, readFile, rm, rmdir, chmod, symlink, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
@@ -88,6 +88,16 @@ export async function removeAntigravityLoginLeftovers(directory: string): Promis
 
 /** No-op stand-ins for the browser openers agy calls (xdg-open on Linux, open on macOS): the login URL is opened by the user's client, never on the broker host. */
 const BROWSER_OPENERS = ["xdg-open", "open"]
+
+/**
+ * Removes a symlink or junction itself, never what it points at (the link to the login directory
+ * must go before the recursive rm of its parent). Does not trust lstat to call a junction a link:
+ * unlink, else rmdir, which takes a junction but refuses a real non-empty directory. Absent is fine.
+ */
+export async function unlinkLink(path: string): Promise<void> {
+  try { await lstat(path) } catch { return }
+  try { await unlink(path) } catch { await rmdir(path).catch(() => {}) }
+}
 
 /** What one agent's login looks like. */
 type Plan = {
@@ -179,11 +189,14 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
         userWindowMs: ANTIGRAVITY_CODE_WINDOW_MS,
         prepare: async dir => {
           await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
-          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), "dir")
+          // A junction needs no privilege on Windows (a "dir" symlink needs Developer Mode or admin).
+          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), process.platform === "win32" ? "junction" : "dir")
           await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
-          for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+          // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
+          if (process.platform !== "win32") for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
         },
         finalize: async dir => {
+          await unlinkLink(join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await rm(join(dir, ".login-home"), { recursive: true, force: true })
           await removeAntigravityLoginLeftovers(dir)
         },
@@ -195,7 +208,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
 /**
  * The command line that gives `spawn` a pseudo-terminal through `script` (util-linux on Linux,
  * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`: the default
- * runner gives it a ConPTY through Bun instead (conptyLoginRunner).
+ * runner gives it a ConPTY through Bun instead (spawnConptyLogin).
  */
 export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform = process.platform): { command: string; args: string[] } {
   const shell = `stty cols 600; exec ${[spawn.command, ...spawn.args].map(quote).join(" ")}`
@@ -240,13 +253,14 @@ export function windowsLoginArgv(resolved: string, args: string[]): string[] {
 }
 
 /**
- * Windows PTY logins: Bun's `terminal` spawn option is a ConPTY. Not under Bun (plain Node) there is
+ * Windows PTY logins: Bun's `terminal` spawn option is a ConPTY (a POSIX pty elsewhere, which is how the
+ * tests run it). Not under Bun (plain Node) there is
  * no pseudo-terminal to give the CLI. Kill takes the whole tree (taskkill /T) since a .cmd shim's
- * cmd.exe is the root, not the CLI.
+ * cmd.exe is the root, not the CLI. Shared with the broker's agent login (src/main.ts spawnLoginProc).
  */
-function conptyLoginRunner(input: LoginSpawn): LoginProcess {
+export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "env" | "cwd">): LoginProcess {
   const bun = (globalThis as { Bun?: { spawn: BunTerminalSpawn; which(command: string, options: { PATH?: string }): string | null } }).Bun
-  if (!bun) throw new CoreError("unsupported_operation", "Guided Claude login on Windows needs a pseudo-terminal, which only the Bun runtime provides here")
+  if (!bun) throw new CoreError("unsupported_operation", "A guided login on Windows needs a pseudo-terminal, which only the Bun runtime provides here")
   const resolved = bun.which(input.command, { PATH: input.env.PATH ?? input.env.Path }) ?? input.command
   const output: Array<(chunk: string) => void> = []
   const exits: Array<(code: number | null) => void> = []
@@ -281,6 +295,7 @@ function conptyLoginRunner(input: LoginSpawn): LoginProcess {
     write: data => { try { terminal?.write(data) } catch { /* closed */ } },
     kill: () => {
       if (exited) return
+      if (process.platform !== "win32") { try { child.kill() } catch { /* gone */ } return }
       try {
         spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true }).on("error", () => { try { child.kill() } catch { /* gone */ } })
       } catch { try { child.kill() } catch { /* gone */ } }
@@ -290,7 +305,7 @@ function conptyLoginRunner(input: LoginSpawn): LoginProcess {
 
 /** Default runner: its own process group (killed as a whole); PTY logins go through `script`, or a ConPTY on Windows. */
 export const defaultLoginRunner: LoginRunner = input => {
-  if (input.pty && process.platform === "win32") return conptyLoginRunner(input)
+  if (input.pty && process.platform === "win32") return spawnConptyLogin(input)
   const { command, args } = input.pty ? ptyCommand(input) : input
   const child = spawn(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
   const output: Array<(chunk: string) => void> = []

@@ -3,7 +3,8 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
-import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv } from "../src/accounts/index.js"
+import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
+import { unlinkLink } from "../src/accounts/login.js"
 import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -70,6 +71,37 @@ test("parsers strip ANSI/OSC 8 and find URLs and device codes", () => {
   expect(ptyCommand({ command: "/x/claude", args: ["auth", "login", "--email", "a'b@x"] }, "linux")).toEqual({ command: "script", args: ["-qec", `stty cols 600; exec '/x/claude' 'auth' 'login' '--email' 'a'\\''b@x'`, "/dev/null"] })
   expect(ptyCommand({ command: "claude", args: [] }, "darwin").command).toBe("/bin/sh")
   expect(() => ptyCommand({ command: "claude", args: [] }, "win32")).toThrow()
+})
+
+test("spawnConptyLogin: the CLI gets a terminal, its output, the typed input and its exit code (a pty here, a ConPTY on Windows)", async () => {
+  const base = await mkdtemp(join(tmpdir(), "conpty-login-"))
+  dirs.push(base)
+  const script = join(base, "cli.mjs")
+  await writeFile(script, `process.stdout.write("tty=" + process.stdin.isTTY + " cols=" + process.stdout.columns + " cwd=" + process.cwd() + " arg=" + process.argv[2] + "\\n")
+process.stdin.setEncoding("utf8")
+process.stdin.once("data", d => { process.stdout.write("got=" + d.trim() + "\\n"); process.exit(3) })
+`)
+  const proc = spawnConptyLogin({ command: process.execPath, args: [script, "a b"], env: { ...process.env } as Record<string, string>, cwd: base })
+  let out = ""
+  proc.onOutput(chunk => { out += chunk })
+  const exited = new Promise<number | null>(resolve => proc.onExit(resolve))
+  for (let i = 0; i < 100 && !out.includes("arg="); i++) await Bun.sleep(50)
+  expect(out).toContain(`tty=true cols=600 cwd=${base} arg=a b`)
+  proc.write("the-code\r")
+  expect(await exited).toBe(3)
+  expect(out).toContain("got=the-code")
+})
+
+test("unlinkLink removes the link to the login directory, never the directory's contents", async () => {
+  const base = await mkdtemp(join(tmpdir(), "unlink-link-"))
+  dirs.push(base)
+  await writeFile(join(base, "token"), "secret")
+  await mkdir(join(base, "home"))
+  await symlink(base, join(base, "home", "link"), "dir")
+  await unlinkLink(join(base, "home", "link"))
+  await unlinkLink(join(base, "home", "absent"))
+  expect(await readdir(join(base, "home"))).toEqual([])
+  expect(await readFile(join(base, "token"), "utf8")).toBe("secret")
 })
 
 test("windows login argv: an .exe runs directly, a .cmd shim through cmd.exe with every word quoted", () => {
