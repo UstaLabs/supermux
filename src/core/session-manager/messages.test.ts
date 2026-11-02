@@ -113,3 +113,31 @@ test("recentUserTexts: the user's own words across sessions, newest first, witho
   expect(store.recentUserTexts(5)).toEqual(["nasılsın", "selam"])
   expect(store.recentUserTexts(1)).toEqual(["nasılsın"])
 })
+
+// ── Media fields on attachments (migration 045) ─────────────────────────────────────────────────
+
+test("an appended message's attachments carry their file's size, length and poster; the poster is kept from GC", async () => {
+  const { mkdtempSync, readFileSync } = await import("fs")
+  const { join } = await import("path")
+  const { tmpdir } = await import("os")
+  const { FileStore } = await import("../files/store")
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  new SessionStore(db).register({ id: "s1", name: "s1", workdir: "/wt", pid: 1, agent: "claude" })
+  const files = new FileStore(db, mkdtempSync(join(tmpdir(), "mux-msg-media-")))
+  const fix = (n: string) => readFileSync(join(import.meta.dir, "../../../tests/fixtures/media", n))
+  const clip = await files.put({ kind: "video", mime: "video/mp4", name: "c.mp4", origin: "web-upload", device: "phone", bytes: fix("mp4-faststart-64x48.mp4") })
+  const poster = await files.put({ kind: "photo", mime: "image/jpeg", name: "p.jpg", origin: "web-upload", device: "phone", bytes: fix("jpeg-64x48.jpg") })
+  expect(await files.setPoster(clip.file_id, poster.file_id, "phone")).toBe(true)
+  const store = new MessageStore(db, files)
+  const entry = { id: "m1", ts: "2026-11-02T10:00:00.000Z", ...base, attachments: [{ file_id: clip.file_id, kind: "video", mime: "video/mp4", name: "c.mp4" }] }
+  store.append("s1", entry)
+  const [att] = store.get("s1")[0]!.attachments!
+  expect(att).toMatchObject({ file_id: clip.file_id, width: 64, height: 48, poster_file_id: poster.file_id })
+  // The same object the channels send on (WebChannel.send gets `entry` right after append).
+  expect(entry.attachments[0]).toMatchObject({ width: 64, poster_file_id: poster.file_id })
+  const refs = (id: string) => (db.prepare("SELECT ref_count FROM attachments WHERE file_id = ?").get(id) as { ref_count: number }).ref_count
+  expect(refs(poster.file_id)).toBe(1)
+  store.removeSession("s1")
+  expect(refs(poster.file_id)).toBe(0)
+})

@@ -6,6 +6,7 @@ import type { Db } from "../storage/db"
 import { makeLogger } from "../../shared/log"
 import { extFromMime } from "./mime"
 import type { AttachmentKind } from "./kinds"
+import { probeFileMeta, type MediaMeta } from "./media-meta"
 
 const log = makeLogger("core/files/store")
 
@@ -31,13 +32,30 @@ export interface FileStorePutInput {
   bytes: Uint8Array | Buffer
 }
 
-export interface FileMeta {
+export interface FileMeta extends MediaFields {
   file_id: string
   kind: AttachmentKind
   path: string
   mime?: string
   name?: string
   size: number
+}
+
+/**
+ * What a message's attachment says about its file beyond the name: the DISPLAYED size and a clip's
+ * length (read from the file's own header), and the picture the sending phone made of a clip. All
+ * optional — older files, files that are not media, and older brokers have none of them.
+ */
+export interface MediaFields {
+  width?: number
+  height?: number
+  duration_ms?: number
+  poster_file_id?: string
+}
+
+export interface FileStoreOptions {
+  /** Reads a stored file's header. A seam so a test can count the reads. */
+  probe?: (path: string) => Promise<MediaMeta | null>
 }
 
 /**
@@ -99,8 +117,11 @@ export class UploadOverflowError extends Error {
 }
 
 export class FileStore {
-  constructor(private readonly db: Db, private readonly rootDir: string) {
+  private readonly probe: (path: string) => Promise<MediaMeta | null>
+
+  constructor(private readonly db: Db, private readonly rootDir: string, opts: FileStoreOptions = {}) {
     mkdirSync(rootDir, { recursive: true, mode: 0o700 })
+    this.probe = opts.probe ?? probeFileMeta
   }
 
   async put(input: FileStorePutInput): Promise<{ file_id: string; size: number }> {
@@ -154,6 +175,7 @@ export class FileStore {
       throw err
     }
 
+    await this.readMediaMeta(file_id, finalPath)
     return { file_id, size: bytes.length }
   }
 
@@ -242,6 +264,7 @@ export class FileStore {
       throw err
     }
 
+    await this.readMediaMeta(file_id, finalPath)
     return { file_id, size: total }
   }
 
@@ -366,6 +389,7 @@ export class FileStore {
       throw err
     }
     this.db.prepare("DELETE FROM pending_uploads WHERE upload_id = ?").run(upload_id)
+    await this.readMediaMeta(upload_id, finalPath)
     return { file_id: upload_id, size, mime: row.mime ?? undefined, name: row.name ?? undefined, kind: row.kind }
   }
 
@@ -397,7 +421,9 @@ export class FileStore {
   }
 
   async get(file_id: string): Promise<FileMeta | null> {
-    const row = this.db.prepare("SELECT file_id, kind, mime, name, path, size FROM attachments WHERE file_id = ?").get(file_id) as any
+    const row = this.db.prepare(
+      "SELECT file_id, kind, mime, name, path, size, width, height, duration_ms, poster_file_id FROM attachments WHERE file_id = ?",
+    ).get(file_id) as any
     if (!row) return null
     return {
       file_id: row.file_id,
@@ -406,7 +432,63 @@ export class FileStore {
       mime: row.mime ?? undefined,
       name: row.name ?? undefined,
       size: row.size,
+      ...mediaFields(row),
     }
+  }
+
+  /**
+   * Read a stored file's header once and remember what it said — or that it said nothing, so a
+   * file that is not media is never read again. Never throws: a size is a nicety, not a reason
+   * for an upload to fail.
+   */
+  private async readMediaMeta(file_id: string, path: string): Promise<void> {
+    let meta: MediaMeta | null = null
+    try {
+      meta = await this.probe(path)
+    } catch (err: any) {
+      log.warn("filestore_media_meta_failed", { file_id, err: err?.message ?? String(err) })
+    }
+    this.db.prepare("UPDATE attachments SET width = ?, height = ?, duration_ms = ?, media_probed = 1 WHERE file_id = ?")
+      .run(meta?.width ?? null, meta?.height ?? null, meta?.duration_ms ?? null, file_id)
+  }
+
+  /**
+   * Read the header of each listed file that has never been read — a file stored before sizes
+   * existed, on its first request. Unknown ids are skipped.
+   */
+  async ensureMediaMeta(fileIds: readonly string[]): Promise<void> {
+    const unread = [...new Set(fileIds)].flatMap((id) => {
+      const row = this.db.prepare("SELECT path FROM attachments WHERE file_id = ? AND media_probed = 0").get(id) as { path: string } | undefined
+      return row ? [{ id, path: row.path }] : []
+    })
+    // A few at a time: a first snapshot after the upgrade can name many old files at once.
+    for (let i = 0; i < unread.length; i += MEDIA_META_BATCH) {
+      await Promise.all(unread.slice(i, i + MEDIA_META_BATCH).map((f) => this.readMediaMeta(f.id, f.path)))
+    }
+  }
+
+  /**
+   * [atts] with what is known about each one's file added (size, length, poster) — from the table
+   * only, no file is read. Every field an attachment already has is kept.
+   */
+  withMediaMeta<T extends { file_id: string }>(atts: readonly T[]): Array<T & MediaFields> {
+    const stmt = this.db.prepare("SELECT width, height, duration_ms, poster_file_id FROM attachments WHERE file_id = ?")
+    return atts.map((a) => {
+      const row = stmt.get(a.file_id) as Record<string, unknown> | undefined
+      return row ? { ...a, ...mediaFields(row) } : { ...a }
+    })
+  }
+
+  /**
+   * Make [poster] the clip [clip]'s poster — the frame the sending phone made of it. Both must be
+   * uploads of [device], the clip a clip and the poster a picture; anything else is refused.
+   */
+  async setPoster(clip: string, poster: string, device: string): Promise<boolean> {
+    const c = await this.resolveOwnedWebUpload(clip, device)
+    const p = await this.resolveOwnedWebUpload(poster, device)
+    if (!c || !p || !isVideoFile(c) || !isImageFile(p)) return false
+    this.db.prepare("UPDATE attachments SET poster_file_id = ? WHERE file_id = ?").run(poster, clip)
+    return true
   }
 
   /**
@@ -475,4 +557,30 @@ export class FileStore {
     }
     return rows.length
   }
+}
+
+/** How many old files' headers are read at once. */
+const MEDIA_META_BATCH = 8
+
+function mediaFields(row: Record<string, unknown>): MediaFields {
+  const num = (v: unknown) => (typeof v === "number" && v > 0 ? v : undefined)
+  const out: MediaFields = {}
+  const width = num(row.width)
+  const height = num(row.height)
+  const duration = num(row.duration_ms)
+  if (width !== undefined && height !== undefined) {
+    out.width = width
+    out.height = height
+  }
+  if (duration !== undefined) out.duration_ms = duration
+  if (typeof row.poster_file_id === "string" && row.poster_file_id) out.poster_file_id = row.poster_file_id
+  return out
+}
+
+function isVideoFile(f: { kind: string; mime?: string }): boolean {
+  return f.kind === "video" || f.kind === "video_note" || !!f.mime?.startsWith("video/")
+}
+
+function isImageFile(f: { kind: string; mime?: string }): boolean {
+  return f.kind === "photo" || f.kind === "image" || !!f.mime?.startsWith("image/")
 }

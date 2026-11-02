@@ -10,6 +10,12 @@ export interface AttachmentRef {
   mime?: string
   size?: number
   name?: string
+  /** The DISPLAYED size and a clip's length, from the file's header (FileStore). */
+  width?: number
+  height?: number
+  duration_ms?: number
+  /** The picture the sending phone made of a clip — its own file, kept alive with this message. */
+  poster_file_id?: string
 }
 
 export interface Message {
@@ -66,6 +72,9 @@ export class MessageStore {
   }
 
   append(sessionId: string, entry: Message): void {
+    // Each attachment carries what its file's header said (size, length, poster), read when the
+    // file was stored. In place: the channels send this same `entry` right after the append.
+    if (this.fileStore && entry.attachments?.length) entry.attachments = this.fileStore.withMediaMeta(entry.attachments)
     this.db.prepare(`
       INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter)
       VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -98,9 +107,9 @@ export class MessageStore {
     // UPDATE has already landed by the time the promise settles, so .catch()
     // is just promise-rejection bookkeeping, not an ordering concern.
     if (this.fileStore && entry.attachments?.length) {
-      for (const a of entry.attachments) {
-        this.fileStore.bumpRef(a.file_id).catch((err) =>
-          log.error("messages_bumpref_failed", { file_id: a.file_id, err: err?.message ?? String(err) }),
+      for (const file_id of referencedFiles(entry.attachments)) {
+        this.fileStore.bumpRef(file_id).catch((err) =>
+          log.error("messages_bumpref_failed", { file_id, err: err?.message ?? String(err) }),
         )
       }
     }
@@ -187,8 +196,7 @@ export class MessageStore {
       for (const row of rows) {
         if (!row.attachments) continue
         try {
-          const arr = JSON.parse(row.attachments) as AttachmentRef[]
-          for (const a of arr) if (a?.file_id) referencedFileIds.push(a.file_id)
+          referencedFileIds.push(...referencedFiles(JSON.parse(row.attachments) as AttachmentRef[]))
         } catch (err: any) {
           log.warn("messages_remove_parse_attachments_failed", { sessionId, err: err?.message ?? String(err) })
         }
@@ -255,6 +263,11 @@ export class MessageStore {
     ).get(sessionId) as { ts: string } | undefined
     return row?.ts ?? null
   }
+}
+
+/** Every file a message keeps alive: each attachment's own, and a clip's poster. */
+function referencedFiles(atts: readonly AttachmentRef[]): string[] {
+  return atts.flatMap((a) => [a?.file_id, a?.poster_file_id].filter((id): id is string => typeof id === "string" && id.length > 0))
 }
 
 function rowToMessage(row: any): Message {

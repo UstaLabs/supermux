@@ -2624,6 +2624,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return messageLog.get(s?.id ?? id, limit)
     },
+    // A message stored before attachments carried sizes gets them on its first request: the
+    // file's header is read once (FileStore remembers it) and the answer carries it.
+    enrichAttachments: async (entries) => {
+      const withFiles = entries as Array<{ attachments?: Array<{ file_id: string }> }>
+      await fileStore.ensureMediaMeta(withFiles.flatMap((e) => e.attachments?.map((a) => a.file_id) ?? []))
+      for (const e of withFiles) if (e.attachments?.length) e.attachments = fileStore.withMediaMeta(e.attachments)
+    },
     getSessionActivity: (id) => {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
