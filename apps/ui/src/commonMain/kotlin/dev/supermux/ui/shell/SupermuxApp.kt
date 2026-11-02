@@ -1539,6 +1539,26 @@ private fun ShellDetailForeground(
 ) {
     val cs = MaterialTheme.colorScheme
     when {
+        // The launcher first: it opens over whatever is selected, an archived workspace as much as
+        // a live one, and closing it goes back there. Below the archived notice it never showed.
+        ui.launcherOpen -> {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(2f)
+                    .testTag("launcher_overlay")
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                            ui.closeLauncher()
+                            true
+                        } else {
+                            false
+                        }
+                    },
+            ) {
+                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null)
+            }
+        }
         ui.selectedArchivedWorkspaceId != null -> {
             val archived = archivedWorkspaces.firstOrNull { it.id == ui.selectedArchivedWorkspaceId }
             Box(
@@ -1557,24 +1577,6 @@ private fun ShellDetailForeground(
                     },
                     color = cs.onSurfaceVariant,
                 )
-            }
-        }
-        ui.launcherOpen -> {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .zIndex(2f)
-                    .testTag("launcher_overlay")
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                            ui.closeLauncher()
-                            true
-                        } else {
-                            false
-                        }
-                    },
-            ) {
-                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null)
             }
         }
         selectedSession == null -> {
