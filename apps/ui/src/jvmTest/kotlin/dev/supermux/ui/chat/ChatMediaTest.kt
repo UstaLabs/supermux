@@ -219,6 +219,54 @@ class ChatMediaTest {
         }
     }
 
+    // ── Collage orientation from the real sizes (his ruling: orientation only) ──────
+
+    @Test fun a_size_reads_as_landscape_portrait_or_square() {
+        assertEquals(MediaShape.Landscape, mediaShape(1920, 1080))
+        assertEquals(MediaShape.Portrait, mediaShape(1080, 1920))
+        assertEquals(MediaShape.Square, mediaShape(1000, 1000))
+        assertEquals(MediaShape.Square, mediaShape(1000, 900), "nearly square is square")
+        assertEquals(MediaShape.Square, mediaShape(null, null), "an unknown size keeps the plain grid")
+        assertEquals(MediaShape.Square, mediaShape(640, 0))
+    }
+
+    @Test fun two_wide_items_stack_as_two_wide_tiles() {
+        val l = collageLayout(listOf(MediaShape.Landscape, MediaShape.Landscape))!!
+        assertEquals(1 to 2, l.columns to l.rows)
+        assertEquals(2f, l.cellAspect)
+        assertEquals(listOf(CollageTile(0, 0, 0), CollageTile(1, 0, 1)), l.tiles)
+    }
+
+    @Test fun two_tall_mixed_or_square_items_keep_sitting_side_by_side() {
+        for (pair in listOf(
+            listOf(MediaShape.Portrait, MediaShape.Portrait),
+            listOf(MediaShape.Landscape, MediaShape.Portrait),
+            listOf(MediaShape.Square, MediaShape.Landscape),
+        )) {
+            assertEquals(collageLayout(2), collageLayout(pair), "$pair")
+        }
+    }
+
+    @Test fun three_with_a_wide_first_put_it_big_on_top() {
+        val l = collageLayout(listOf(MediaShape.Landscape, MediaShape.Portrait, MediaShape.Square))!!
+        assertEquals(2 to 2, l.columns to l.rows)
+        assertEquals(
+            listOf(CollageTile(0, column = 0, row = 0, columnSpan = 2), CollageTile(1, 0, 1), CollageTile(2, 1, 1)),
+            l.tiles,
+        )
+    }
+
+    @Test fun three_with_a_tall_or_square_first_keep_it_big_on_the_left() {
+        assertEquals(collageLayout(3), collageLayout(listOf(MediaShape.Portrait, MediaShape.Landscape, MediaShape.Landscape)))
+        assertEquals(collageLayout(3), collageLayout(listOf(MediaShape.Square, MediaShape.Landscape, MediaShape.Landscape)))
+    }
+
+    @Test fun four_and_more_keep_the_grid_whatever_their_shapes() {
+        val wide = List(6) { MediaShape.Landscape }
+        assertEquals(collageLayout(4), collageLayout(wide.take(4)))
+        assertEquals(collageLayout(6), collageLayout(wide))
+    }
+
     // ── Viewer navigation ───────────────────────────────────────────────────────────
 
     @Test fun the_counter_reads_position_of_total() {

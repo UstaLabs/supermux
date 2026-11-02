@@ -146,7 +146,45 @@ data class CollageLayout(
     val rows: Int,
     val tiles: List<CollageTile>,
     val overflow: Int = 0,
+    /** A cell's width over its height. */
+    val cellAspect: Float = 1f,
 )
+
+/** A picture's or a clip's orientation, from its displayed size. */
+enum class MediaShape { Landscape, Portrait, Square }
+
+/** Within this ratio either way a size reads as square (a 1000×900 photo is square). */
+private const val SQUARE_TOLERANCE = 1.15f
+
+/** The orientation of a [width]×[height] item; an unknown size reads as square, the plain grid. */
+fun mediaShape(width: Int?, height: Int?): MediaShape {
+    if (width == null || height == null || width <= 0 || height <= 0) return MediaShape.Square
+    val aspect = width.toFloat() / height
+    return when {
+        aspect > SQUARE_TOLERANCE -> MediaShape.Landscape
+        aspect < 1f / SQUARE_TOLERANCE -> MediaShape.Portrait
+        else -> MediaShape.Square
+    }
+}
+
+/**
+ * The grid for media of these [shapes]. Orientation only: a shape picks among the fixed
+ * arrangements and never sizes a tile. Two wide items stack as two 2:1 tiles; three with a wide
+ * first one put it big across the top; everything else is [collageLayout] by count.
+ */
+fun collageLayout(shapes: List<MediaShape>): CollageLayout? {
+    if (shapes.size == 2 && shapes.all { it == MediaShape.Landscape }) {
+        return CollageLayout(columns = 1, rows = 2, tiles = listOf(CollageTile(0, 0, 0), CollageTile(1, 0, 1)), cellAspect = 2f)
+    }
+    if (shapes.size == 3 && shapes[0] == MediaShape.Landscape) {
+        return CollageLayout(
+            columns = 2,
+            rows = 2,
+            tiles = listOf(CollageTile(0, column = 0, row = 0, columnSpan = 2), CollageTile(1, 0, 1), CollageTile(2, 1, 1)),
+        )
+    }
+    return collageLayout(shapes.size)
+}
 
 /**
  * The grid for [count] media, or null when one (or none) is not a collage: 2 side by side, 3 as one

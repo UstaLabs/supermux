@@ -19,6 +19,7 @@ import dev.supermux.proto.Attachment
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Two or more pictures/clips in one message are ONE collage: 2 side by side, 3 as one big + two
@@ -171,6 +172,23 @@ class MediaCollageTest {
             assertEquals(Media.collageMaxWidth.value, wide.width.toDp().value, 1f, "capped, however wide the column")
             assertEquals(wide.width / 2f, wide.height, 2f, "two side by side: twice as wide as tall")
         }
+    }
+
+    @Test fun two_wide_pictures_are_drawn_one_above_the_other() = runComposeUiTest {
+        // The broker read their headers: both are 16:9.
+        setPlatformContent {
+            AttachmentList(
+                listOf(photo("a").copy(width = 1920, height = 1080), photo("b").copy(width = 1600, height = 900)),
+                alignEnd = false,
+                media = CountingMedia(),
+                entryId = "m1",
+            )
+        }
+        val top = onNodeWithTag("media_collage_tile:0").fetchSemanticsNode().boundsInRoot
+        val bottom = onNodeWithTag("media_collage_tile:1").fetchSemanticsNode().boundsInRoot
+        assertEquals(top.left, bottom.left, 1f, "one column")
+        assertTrue(bottom.top >= top.bottom, "the second below the first")
+        assertEquals(2f, top.width / top.height, 0.05f, "each a wide tile")
     }
 
     @Test fun one_media_keeps_the_single_view() = runComposeUiTest {

@@ -44,7 +44,8 @@ import dev.supermux.ui.theme.Space
 import kotlin.math.roundToInt
 
 /**
- * One message's media as a grid ([collageLayout]): square cells, a thin gap, the message's rounded
+ * One message's media as a grid ([collageLayout], picked by each item's orientation from the
+ * broker's size): equal cells, a thin gap, the message's rounded
  * corners on the outside. A picture is cropped to its tile; a clip's tile is a dark ▶ frame that
  * downloads nothing — a transcript must never eagerly fetch every clip. A tap opens the viewer at
  * that item ([onOpen]); the "+N" tile opens at the first item it covers.
@@ -55,11 +56,11 @@ internal fun MediaCollage(
     media: AttachmentMedia,
     onOpen: (ChatMediaItem) -> Unit,
 ) {
-    val layout = collageLayout(items.size) ?: return
+    val layout = collageLayout(items.map { mediaShape(it.att.width, it.att.height) }) ?: return
     val gap = Media.collageGap
     BoxWithConstraints(
         Modifier
-            .collageSize(Media.inlineVideoWidthFraction, Media.collageMaxWidth, layout.columns.toFloat() / layout.rows)
+            .collageSize(Media.inlineVideoWidthFraction, Media.collageMaxWidth, layout.columns * layout.cellAspect / layout.rows)
             .clip(RoundedCornerShape(Radii.md))
             .testTag("media_collage"),
     ) {
