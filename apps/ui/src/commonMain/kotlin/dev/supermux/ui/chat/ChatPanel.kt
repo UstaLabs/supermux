@@ -495,6 +495,19 @@ fun ChatPanel(
     val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
     val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
 
+    // ── Media: every picture and clip in this chat — the fullscreen viewer's swipe set ──────────
+    // Markdown host media join only where this chat reads host files, resolved against the same
+    // base folder its markdown images use.
+    val markdownFiles = LocalMarkdownFiles.current
+    val mediaItems = remember(timelineItems, markdownFiles) {
+        chatMediaItems(timelineItems, hostFiles = markdownFiles != null, baseDir = markdownFiles?.baseDir)
+    }
+    val latestMedia by androidx.compose.runtime.rememberUpdatedState(mediaItems)
+    var viewerKey by remember(session.id) { mutableStateOf<String?>(null) }
+    val mediaOpener = remember(session.id) {
+        ChatMediaOpener { key -> latestMedia.any { it.key == key }.also { found -> if (found) viewerKey = key } }
+    }
+
     // The live agent state is carried by the header status line when there IS a header, and by the
     // transcript's own rows when there is not (Android's phone/tablet chat, which owns its header).
     val showStatusRows = !showHeader
@@ -921,7 +934,10 @@ fun ChatPanel(
         }
 
         val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
-            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalCouncilActivity provides state.councilActivity,
+                LocalChatMediaViewer provides mediaOpener,
+            ) {
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
@@ -1024,6 +1040,15 @@ fun ChatPanel(
                         }
                     }
             }
+        }
+
+        viewerKey?.let { key ->
+            ChatMediaViewer(
+                items = mediaItems,
+                startKey = key,
+                resolve = { item -> chatMediaHandle(item, actions.media, markdownFiles, platform.files::probeMime) },
+                onDismiss = { viewerKey = null },
+            )
         }
 
         // Body: transcript + composer.

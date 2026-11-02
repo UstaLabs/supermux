@@ -93,6 +93,18 @@ object Media {
 
     /** Fraction of the message column an inline video poster/player occupies. */
     const val inlineVideoWidthFraction = 0.7f
+
+    /** A message's collage: [inlineVideoWidthFraction] of the column, up to this wide. */
+    val collageMaxWidth = 360.dp
+
+    /** The seam between collage tiles. */
+    val collageGap = 2.dp
+
+    /** ▶ on a collage tile. */
+    val collagePlayGlyph = 30.dp
+
+    /** One tile of the fullscreen viewer's thumbnail strip. */
+    val viewerThumbSize = 56.dp
 }
 
 /**

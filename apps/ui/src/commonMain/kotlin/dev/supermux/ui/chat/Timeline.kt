@@ -53,8 +53,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -69,6 +71,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -76,6 +80,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,6 +124,7 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.resolveBashParts
 import dev.supermux.ui.resolveEditParts
 import dev.supermux.ui.toolDiffDoc
+import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.editor.rememberAppEditorTheme
 import dev.supermux.editor.compose.EditorTheme
 import dev.supermux.editor.compose.packagedEditorFontFamily
@@ -794,46 +800,45 @@ fun TimelineItemRow(
             // Another session (or supermux, or a council) sent it: inbound, but not the user's (decision #19).
             val inbox = item.entry.channel == "inbox"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
-                Column(
-                    // The row container carries the tag so the text and any attachments are INSIDE
-                    // it: on Compose-for-Web the tag becomes this element's DOM `id`, and a journey
-                    // asserts `[id^="chat-message:outbound:"]` has the reply's text within it.
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = Space.sm)
-                        .testTag(TestIds.chatMessage(item.entry.direction, item.entry.id)),
-                    horizontalAlignment = if (isUser && !inbox) Alignment.End else Alignment.Start,
-                ) {
-                    if (!text.isNullOrBlank()) {
-                        val toSubagent = item.entry.subagent_id
-                        // The walkthrough notice is stored inbound: it is checked before anything
-                        // that would draw an inbound row as the user's.
-                        if (text.startsWith("📖 Walkthrough ready")) {
-                            WalkthroughReadyCard(text, onOpenWalkthrough)
-                        } else if (inbox && item.entry.from_session_id == SUPERMUX_SENDER_ID) {
-                            SupermuxNoticeRow(item.entry.id, text)
-                        } else if (inbox) {
-                            InboxMessageCard(item.entry, onOpenFile = onOpenFile, subagentUi = subagentUi, canOpenChat = canOpenChat)
-                        } else if (isUser && toSubagent != null) {
-                            // A message to a subagent: a compact marker that opens its card.
-                            SubagentMarker(
-                                entryId = item.entry.id,
-                                text = text,
-                                name = subagentUi?.nameOf?.invoke(toSubagent),
-                                onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
-                            )
-                        } else if (isUser) {
-                            UserMessage(text)
-                        } else if (dev.supermux.ui.accounts.isAccountNotice(text)) {
-                            dev.supermux.ui.accounts.AccountNoticeRow(text)
-                        } else if (item.entry.error) {
-                            AgentErrorMessage(item.entry.id, text, onOpenFile = onOpenFile, ts = item.entry.ts)
-                        } else {
-                            AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
+                // Media drawn anywhere in this row (attachments, a reply's `![](…)`) name themselves
+                // in the chat's viewer by this entry.
+                CompositionLocalProvider(LocalChatMediaEntry provides item.entry.id) {
+                    Column(
+                        // The row container carries the tag so the text and any attachments are INSIDE
+                        // it: on Compose-for-Web the tag becomes this element's DOM `id`, and a journey
+                        // asserts `[id^="chat-message:outbound:"]` has the reply's text within it.
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = Space.sm)
+                            .testTag(TestIds.chatMessage(item.entry.direction, item.entry.id)),
+                        horizontalAlignment = if (isUser && !inbox) Alignment.End else Alignment.Start,
+                    ) {
+                        if (!text.isNullOrBlank()) {
+                            when (messageBody(item.entry)) {
+                                MessageBody.Walkthrough -> WalkthroughReadyCard(text, onOpenWalkthrough)
+                                MessageBody.SupermuxNotice -> SupermuxNoticeRow(item.entry.id, text)
+                                MessageBody.Inbox ->
+                                    InboxMessageCard(item.entry, onOpenFile = onOpenFile, subagentUi = subagentUi, canOpenChat = canOpenChat)
+                                MessageBody.ToSubagent -> {
+                                    // A message to a subagent: a compact marker that opens its card.
+                                    val toSubagent = item.entry.subagent_id.orEmpty()
+                                    SubagentMarker(
+                                        entryId = item.entry.id,
+                                        text = text,
+                                        name = subagentUi?.nameOf?.invoke(toSubagent),
+                                        onOpen = subagentUi?.let { ui -> { ui.open(toSubagent) } },
+                                    )
+                                }
+                                MessageBody.User -> UserMessage(text)
+                                MessageBody.AccountNotice -> dev.supermux.ui.accounts.AccountNoticeRow(text)
+                                MessageBody.AgentError ->
+                                    AgentErrorMessage(item.entry.id, text, onOpenFile = onOpenFile, ts = item.entry.ts)
+                                MessageBody.AgentReply -> AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
+                            }
                         }
-                    }
-                    if (!atts.isNullOrEmpty()) {
-                        AttachmentList(atts, alignEnd = isUser && !inbox, media = media)
+                        if (!atts.isNullOrEmpty()) {
+                            AttachmentList(atts, alignEnd = isUser && !inbox, media = media, entryId = item.entry.id)
+                        }
                     }
                 }
             }
@@ -1002,19 +1007,61 @@ private fun WalkthroughReadyCard(text: String, onOpen: () -> Unit) {
 // Attachments
 // ---------------------------------------------------------------------------
 
-/** Renders a message's attachments below its text, aligned to the sender side. */
+/**
+ * Renders a message's attachments below its text, aligned to the sender side. Two or more
+ * pictures/clips become one [MediaCollage] (the message's other files still follow, as chips); one
+ * keeps the single inline view. [entryId] names the message, so a tap opens the chat's viewer at
+ * the right item.
+ */
 @Composable
 fun AttachmentList(
     attachments: List<Attachment>,
     alignEnd: Boolean,
     media: AttachmentMedia,
+    entryId: String = "",
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(top = Space.xs),
-        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(Space.xs),
-    ) {
-        for (att in attachments) AttachmentItem(att, alignEnd, media)
+    val mediaItems = remember(attachments, entryId) {
+        attachments
+            .mapNotNull { att -> attachmentMediaKind(att)?.let { ChatMediaItem.FromAttachment(entryId, att, it) } }
+            .distinctBy { it.key }
+    }
+    WithMessageViewer(mediaItems, media) { open ->
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = Space.xs),
+            horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
+            if (mediaItems.size >= 2) {
+                MediaCollage(mediaItems, media, onOpen = open)
+                for (att in attachments) if (attachmentMediaKind(att) == null) AttachmentItem(att, alignEnd, media, entryId, open)
+            } else {
+                for (att in attachments) AttachmentItem(att, alignEnd, media, entryId, open)
+            }
+        }
+    }
+}
+
+/**
+ * How a message's media open: the chat's viewer when this row sits in a chat whose set holds them,
+ * else a viewer over just this message's [items] (an archived transcript, a preview) — the same
+ * viewer either way.
+ */
+@Composable
+private fun WithMessageViewer(
+    items: List<ChatMediaItem.FromAttachment>,
+    media: AttachmentMedia,
+    content: @Composable (open: (ChatMediaItem) -> Unit) -> Unit,
+) {
+    val chat = LocalChatMediaViewer.current
+    var localKey by remember(items) { mutableStateOf<String?>(null) }
+    content { item -> if (chat?.open(item.key) != true) localKey = item.key }
+    localKey?.let { key ->
+        ChatMediaViewer(
+            items = items,
+            startKey = key,
+            resolve = { attachmentHandle(it as ChatMediaItem.FromAttachment, media) },
+            onDismiss = { localKey = null },
+        )
     }
 }
 
@@ -1023,19 +1070,21 @@ private fun AttachmentItem(
     att: Attachment,
     alignEnd: Boolean,
     media: AttachmentMedia,
+    entryId: String,
+    open: (ChatMediaItem) -> Unit,
 ) {
-    val mime = att.mime ?: ""
-    val isImage = att.kind == "photo" || att.kind == "image" || mime.startsWith("image/")
-    val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
-    val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
-    if (isImage) {
-        InlineImageAttachment(att, alignEnd, media)
-        return
+    when (attachmentMediaKind(att)) {
+        FilePreviewKind.Image -> {
+            InlineImageAttachment(att, alignEnd, media, onOpen = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Image)) })
+            return
+        }
+        FilePreviewKind.Video -> {
+            InlineVideo(att, media, onOpenViewer = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Video)); true })
+            return
+        }
+        null -> Unit
     }
-    if (isVideo) {
-        InlineVideo(att, media)
-        return
-    }
+    val isAudio = att.kind == "voice" || att.kind == "audio" || (att.mime ?: "").startsWith("audio/")
     val label = when {
         isAudio -> att.name ?: "voice message"
         else -> att.name ?: att.file_id
@@ -1048,87 +1097,95 @@ private fun AttachmentItem(
 }
 
 /**
- * Inline preview for image attachments. Bytes come from the [media] seam (the broker file
- * fetch, through the media cache) and decode through Coil, so the same path runs on every host.
- *
- * A row scrolled back into view paints in its first frame: the bytes come from the cache's memory
- * tier synchronously ([AttachmentMedia.peek]) and the decoded bitmap from Coil's memory cache under
- * [attachmentImageKey] — no spinner, no jump.
+ * Inline preview for image attachments, loaded and decoded by [rememberAttachmentImage].
  *
  * Painted at natural size, shrunk-only to fit the column and [MdImageDimens.MaxHeight] — the same
- * rule as markdown images, so a 32×32 icon is not blown up to a 280 dp blob. A tap opens the
- * fullscreen [ImageLightbox] (pinch-zoom, pan, save) on BOTH hosts — desktop's old
- * open-in-OS-viewer became the lightbox's secondary action. A cached copy that will not decode is
- * fetched again once; a load or decode failure after that falls back to the ordinary
- * [AttachmentChip] so the user keeps the retry + save path.
+ * rule as markdown images, so a 32×32 icon is not blown up to a 280 dp blob. A tap opens the chat's
+ * fullscreen viewer at this picture ([onOpen]), whose picture page is the lightbox's zoom/pan/save.
+ * A load or decode failure falls back to the ordinary [AttachmentChip] so the user keeps the
+ * retry + save path.
  */
 @Composable
 private fun InlineImageAttachment(
     att: Attachment,
     alignEnd: Boolean,
     media: AttachmentMedia,
+    onOpen: () -> Unit,
 ) {
-    var bytes by remember(att.file_id) { mutableStateOf(media.peek(att)) }
-    var fetchFailed by remember(att.file_id) { mutableStateOf(false) }
-    var refetched by remember(att.file_id) { mutableStateOf(false) }
-    var showLightbox by remember(att.file_id) { mutableStateOf(false) }
-    LaunchedEffect(att.file_id, refetched) {
-        if (bytes != null) return@LaunchedEffect
-        val loaded = runCatching { media.bytes(att, refresh = refetched) }.getOrNull()
-        if (loaded == null) fetchFailed = true else bytes = loaded
-    }
-    if (fetchFailed) {
-        AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
-        return
-    }
-    val data = bytes
-    if (data == null) {
-        MdImageLoadingBox("attachment_image_loading", Radii.md)
-        return
-    }
-    when (val decoded = rememberDecodedImage(data, memoryCacheKey = attachmentImageKey(att))) {
-        DecodedImage.Loading -> MdImageLoadingBox("attachment_image_loading", Radii.md)
-        DecodedImage.Failed -> if (refetched) {
-            AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
-        } else {
-            // A cached copy that no longer decodes: fetch a fresh one once before giving up.
-            LaunchedEffect(data) {
-                bytes = null
-                refetched = true
-            }
-            MdImageLoadingBox("attachment_image_loading", Radii.md)
-        }
-        is DecodedImage.Ready -> {
-            ShrinkOnlyImage(
-                width = decoded.width,
-                height = decoded.height,
-                tag = "attachment_image",
-                radius = Radii.md,
-                alignEnd = alignEnd,
-                onClick = { showLightbox = true },
-            ) { modifier ->
-                Image(
-                    painter = decoded.painter,
-                    contentDescription = att.name ?: "image",
-                    contentScale = ContentScale.Fit,
-                    modifier = modifier,
-                )
-            }
-            if (showLightbox) {
-                ImageLightbox(
-                    painter = decoded.painter,
-                    name = att.name ?: att.file_id,
-                    mime = att.mime,
-                    bytes = data,
-                    onDismiss = { showLightbox = false },
-                )
-            }
+    when (val image = rememberAttachmentImage(att, media)) {
+        AttachmentImage.Failed -> AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, media)
+        AttachmentImage.Loading -> MdImageLoadingBox("attachment_image_loading", Radii.md)
+        is AttachmentImage.Ready -> ShrinkOnlyImage(
+            width = image.decoded.width,
+            height = image.decoded.height,
+            tag = "attachment_image",
+            radius = Radii.md,
+            alignEnd = alignEnd,
+            onClick = onOpen,
+        ) { modifier ->
+            Image(
+                painter = image.decoded.painter,
+                contentDescription = att.name ?: "image",
+                contentScale = ContentScale.Fit,
+                modifier = modifier,
+            )
         }
     }
 }
 
 /** Coil memory-cache key of an attachment's decode. File ids are unique and never rewritten. */
 internal fun attachmentImageKey(att: Attachment): String = "att:${att.file_id}"
+
+/** A picture attachment on its way to the screen. */
+internal sealed interface AttachmentImage {
+    data object Loading : AttachmentImage
+
+    data object Failed : AttachmentImage
+
+    class Ready(val decoded: DecodedImage.Ready, val bytes: ByteArray) : AttachmentImage
+}
+
+/**
+ * Load and decode a picture attachment — the ONE path the timeline row, the collage tile, the
+ * viewer's page and its strip all take. Bytes come from the [media] seam (the broker file fetch,
+ * through the media cache) and decode through Coil, so the same path runs on every host.
+ *
+ * A row scrolled back into view paints in its first frame: the bytes come from the cache's memory
+ * tier synchronously ([AttachmentMedia.peek]) and the decoded bitmap from Coil's memory cache under
+ * [memoryCacheKey] — no spinner, no jump. A cached copy that will not decode is fetched again once
+ * before this reports [AttachmentImage.Failed].
+ */
+@Composable
+internal fun rememberAttachmentImage(
+    att: Attachment,
+    media: AttachmentMedia,
+    memoryCacheKey: String? = attachmentImageKey(att),
+): AttachmentImage {
+    var bytes by remember(att.file_id) { mutableStateOf(media.peek(att)) }
+    var fetchFailed by remember(att.file_id) { mutableStateOf(false) }
+    var refetched by remember(att.file_id) { mutableStateOf(false) }
+    LaunchedEffect(att.file_id, refetched) {
+        if (bytes != null) return@LaunchedEffect
+        val loaded = runCatching { media.bytes(att, refresh = refetched) }.getOrNull()
+        if (loaded == null) fetchFailed = true else bytes = loaded
+    }
+    if (fetchFailed) return AttachmentImage.Failed
+    val data = bytes ?: return AttachmentImage.Loading
+    return when (val decoded = rememberDecodedImage(data, memoryCacheKey = memoryCacheKey)) {
+        DecodedImage.Loading -> AttachmentImage.Loading
+        DecodedImage.Failed -> if (refetched) {
+            AttachmentImage.Failed
+        } else {
+            // A cached copy that no longer decodes: fetch a fresh one once before giving up.
+            LaunchedEffect(data) {
+                bytes = null
+                refetched = true
+            }
+            AttachmentImage.Loading
+        }
+        is DecodedImage.Ready -> AttachmentImage.Ready(decoded, data)
+    }
+}
 
 /**
  * The lightbox's zoom/pan state, hoisted out of the composable so the clamping rules are unit
@@ -1243,19 +1300,7 @@ internal fun ImageLightbox(
                 .onSizeChanged { transform.viewport = androidx.compose.ui.geometry.Size(it.width.toFloat(), it.height.toFloat()) }
                 // Separate pointerInput blocks, not one: a single detector cannot both consume the
                 // scroll wheel and arbitrate taps against drags.
-                .pointerInput(Unit) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            if (event.type != PointerEventType.Scroll) continue
-                            val dy = event.changes.fold(0f) { acc, c -> acc + c.scrollDelta.y }
-                            if (dy == 0f) continue
-                            // Scrolling DOWN (positive) zooms out, as every image viewer does.
-                            transform.zoomBy(if (dy < 0f) LightboxTransform.STEP else 1f / LightboxTransform.STEP)
-                            event.changes.forEach { it.consume() }
-                        }
-                    }
-                }
+                .lightboxWheelZoom(transform)
                 .pointerInput(Unit) {
                     detectTapGestures(onDoubleTap = { transform.toggleZoom() })
                 }
@@ -1344,6 +1389,9 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
  * native backend can open them by URI. A failed download, or a backend error, falls back to the
  * ordinary [AttachmentChip] so save + the OS player stay reachable.
  *
+ * [onOpenViewer] opens the clip in the chat's fullscreen viewer (the ⤢ button; the inline player
+ * pauses first); false — or no viewer at all — keeps the old "open in the system player".
+ *
  * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
  * libraries in a headless worker.
  */
@@ -1351,8 +1399,11 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
 internal fun InlineVideo(
     att: Attachment,
     media: AttachmentMedia,
+    onOpenViewer: (() -> Boolean)? = null,
     renderPlayer: @Composable (uri: String, onExternal: () -> Unit, onError: () -> Unit) -> Unit =
-        { uri, onExternal, onError -> InlineVideoPlayer(uri, onExternal, onError) },
+        { uri, onExternal, onError ->
+            MountedVideoPlayer(uri, onError = onError, onExternal = onExternal, expandsInViewer = onOpenViewer != null)
+        },
 ) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
@@ -1365,26 +1416,12 @@ internal fun InlineVideo(
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
-        // The media cache's own file first: downloaded straight to disk, played in place.
-        val cached = runCatching { media.playableUri(att) }.getOrNull()
-        if (cached != null) {
-            uri = cached
-            return@LaunchedEffect
-        }
-        val bytes = runCatching { media.bytes(att) }.getOrNull()
-        if (bytes == null) {
+        val clip = resolvePlayableClip(att, media, platform)
+        if (clip == null) {
             failed = true
-            return@LaunchedEffect
-        }
-        // Name by the unique file_id so two clips never collide in the staging dir, and keep the
-        // original extension — the native backends pick their demuxer from it.
-        val name = attachmentTempName("video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
-        val located = runCatching { platform.files.stageTemp(name, bytes) }.getOrNull()
-        if (located != null) {
-            staged = bytes
-            uri = located
         } else {
-            failed = true
+            staged = clip.staged
+            uri = clip.uri
         }
     }
 
@@ -1429,16 +1466,36 @@ internal fun InlineVideo(
             renderPlayer(
                 located,
                 {
-                    scope.launch {
-                        // A clip played from the cache's file was never read into memory: read it now.
-                        val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
-                        if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
+                    if (onOpenViewer?.invoke() != true) {
+                        scope.launch {
+                            // A clip played from the cache's file was never read into memory: read it now.
+                            val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
+                            if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
+                        }
                     }
                 },
                 { failed = true },
             )
         }
     }
+}
+
+/** A URI the platform's player opens, and the bytes behind it when they had to be staged. */
+internal class PlayableClip(val uri: String, val staged: ByteArray?)
+
+/**
+ * Where a clip plays from: the media cache's own file first (downloaded straight to disk, played in
+ * place — a long clip never passes through memory); without one (the web, a memory-only cache) the
+ * bytes are staged through `Platform.files.stageTemp`. Null when neither works.
+ */
+internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia, platform: Platform): PlayableClip? {
+    runCatching { media.playableUri(att) }.getOrNull()?.let { return PlayableClip(it, staged = null) }
+    val bytes = runCatching { media.bytes(att) }.getOrNull() ?: return null
+    // Name by the unique file_id so two clips never collide in the staging dir, and keep the
+    // original extension — the native backends pick their demuxer from it.
+    val name = attachmentTempName("video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
+    val located = runCatching { platform.files.stageTemp(name, bytes) }.getOrNull() ?: return null
+    return PlayableClip(located, staged = bytes)
 }
 
 /**
@@ -1478,17 +1535,34 @@ internal interface VideoTransport {
 
     /** Hand the clip to the OS player — full screen, system controls, scrubbing a long file. */
     fun openExternally()
+
+    /** The viewer's F key: the clip alone, full screen. */
+    fun toggleFullscreen() = Unit
 }
 
 /**
  * The mounted player: the video surface with its controls overlaid.
  *
- * Autoplays, because the user already opted in by clicking the poster. A backend error is reported
- * through [onError] so [InlineVideo] can fall back to the download chip rather than leave a black
- * rectangle in the transcript.
+ * Autoplays, because the user already opted in (the poster, or the viewer's page). A backend error
+ * is reported through [onError] so the caller can fall back (the download chip, the viewer's
+ * "couldn't play") rather than leave a black rectangle.
+ *
+ * Inline, the bar's last button is [onExternal]: the system player, or with [expandsInViewer] the
+ * chat's viewer (pausing here first, or the clip would play twice). [fill] is the viewer's page:
+ * the frame fills it, and the last button is full screen. [onTransport] hands the transport to the
+ * viewer while mounted, for its Space and F keys.
  */
 @Composable
-private fun InlineVideoPlayer(uri: String, onExternal: () -> Unit, onError: () -> Unit) {
+internal fun MountedVideoPlayer(
+    uri: String,
+    onError: () -> Unit,
+    fill: Boolean = false,
+    onExternal: () -> Unit = {},
+    expandsInViewer: Boolean = false,
+    onTransport: (VideoTransport?) -> Unit = {},
+) {
+    val external by rememberUpdatedState(onExternal)
+    val expands by rememberUpdatedState(expandsInViewer)
     val player = rememberVideoPlayerState()
     // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
     // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
@@ -1536,13 +1610,31 @@ private fun InlineVideoPlayer(uri: String, onExternal: () -> Unit, onError: () -
                 }
             }
 
-            override fun openExternally() = onExternal()
+            override fun openExternally() {
+                if (expands && player.isPlaying) player.pause()
+                external()
+            }
+
+            override fun toggleFullscreen() = player.toggleFullscreen()
         }
     }
-    VideoPlayerFrame(transport) { modifier ->
+    DisposableEffect(transport) {
+        onTransport(transport)
+        onDispose { onTransport(null) }
+    }
+    val pointer = LocalPointerAvailable.current
+    val trailing = when {
+        fill -> if (pointer) VideoTrailing.Fullscreen else VideoTrailing.None
+        expandsInViewer -> VideoTrailing.OpenViewer
+        else -> VideoTrailing.External
+    }
+    VideoPlayerFrame(transport, fill = fill, trailing = trailing) { modifier ->
         VideoPlayerSurface(playerState = player, modifier = modifier)
     }
 }
+
+/** What the control bar's last button does. */
+internal enum class VideoTrailing { External, OpenViewer, Fullscreen, None }
 
 /**
  * Video frame + overlaid controls. [surface] paints the actual frames (the library's
@@ -1559,6 +1651,8 @@ private fun InlineVideoPlayer(uri: String, onExternal: () -> Unit, onError: () -
 @Composable
 internal fun VideoPlayerFrame(
     transport: VideoTransport,
+    fill: Boolean = false,
+    trailing: VideoTrailing = VideoTrailing.External,
     surface: @Composable (Modifier) -> Unit,
 ) {
     val pointer = LocalPointerAvailable.current
@@ -1580,9 +1674,8 @@ internal fun VideoPlayerFrame(
         scrubbing || !transport.isPlaying || (if (pointer) hovered else revealed)
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(Media.inlineVideoMaxHeight)
-            .clip(RoundedCornerShape(Radii.md))
+            // In the viewer the frame is the page; in the transcript it is a fixed, rounded box.
+            .then(if (fill) Modifier.fillMaxSize() else Modifier.fillMaxWidth().height(Media.inlineVideoMaxHeight).clip(RoundedCornerShape(Radii.md)))
             .background(Color.Black)
             .hoverable(interaction)
             .pointerHoverIcon(PointerIcon.Hand)
@@ -1594,7 +1687,7 @@ internal fun VideoPlayerFrame(
             .testTag("attachment_video_player"),
         contentAlignment = Alignment.Center,
     ) {
-        surface(Modifier.fillMaxWidth())
+        surface(if (fill) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
 
         if (transport.isLoading) {
             CircularProgressIndicator(
@@ -1628,16 +1721,18 @@ internal fun VideoPlayerFrame(
         ) {
             VideoTransportBar(
                 transport = transport,
+                trailing = trailing,
                 onScrubbingChange = { scrubbing = it },
             )
         }
     }
 }
 
-/** Bottom control bar: play/pause · elapsed · scrubber · total · mute · open externally. */
+/** Bottom control bar: play/pause · elapsed · scrubber · total · mute · [trailing]. */
 @Composable
 private fun VideoTransportBar(
     transport: VideoTransport,
+    trailing: VideoTrailing,
     onScrubbingChange: (Boolean) -> Unit,
 ) {
     Row(
@@ -1687,12 +1782,27 @@ private fun VideoTransportBar(
             tag = "attachment_video_mute",
             onClick = transport::toggleMute,
         )
-        VideoControlButton(
-            icon = Icons.Filled.OpenInNew,
-            label = "Open in system player",
-            tag = "attachment_video_external",
-            onClick = transport::openExternally,
-        )
+        when (trailing) {
+            VideoTrailing.External -> VideoControlButton(
+                icon = Icons.Filled.OpenInNew,
+                label = "Open in system player",
+                tag = "attachment_video_external",
+                onClick = transport::openExternally,
+            )
+            VideoTrailing.OpenViewer -> VideoControlButton(
+                icon = Icons.Filled.OpenInFull,
+                label = "Open in viewer",
+                tag = "attachment_video_expand",
+                onClick = transport::openExternally,
+            )
+            VideoTrailing.Fullscreen -> VideoControlButton(
+                icon = Icons.Filled.Fullscreen,
+                label = "Full screen",
+                tag = "chat_media_viewer_fullscreen",
+                onClick = transport::toggleFullscreen,
+            )
+            VideoTrailing.None -> Unit
+        }
     }
 }
 

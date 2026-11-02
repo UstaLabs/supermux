@@ -57,9 +57,43 @@ internal fun Modifier.diagramGestures(transform: LightboxTransform): Modifier = 
             }
         }
     }
+    .trackpadMagnifyTarget(transform)
+    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom(it) }) }
+    .pinchOrPanWhenZoomed(transform)
+
+/**
+ * The viewer's picture page: the lightbox's own wheel (a plain notch zooms) and double-tap, the
+ * macOS trackpad pinch, and the drag rule that lets it live in a pager — at fit a one-finger drag
+ * is left to the pager's swipe (and the swipe-down close), two fingers zoom, a zoomed picture pans.
+ */
+internal fun Modifier.viewerImageGestures(transform: LightboxTransform): Modifier = this
+    .onSizeChanged { transform.viewport = Size(it.width.toFloat(), it.height.toFloat()) }
+    .lightboxWheelZoom(transform)
+    .trackpadMagnifyTarget(transform)
+    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom() }) }
+    .pinchOrPanWhenZoomed(transform)
+
+/** The lightbox's wheel: a notch up zooms in, a notch down zooms out, about the centre. */
+internal fun Modifier.lightboxWheelZoom(transform: LightboxTransform): Modifier = pointerInput(transform) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.type != PointerEventType.Scroll) continue
+            val dy = event.changes.fold(0f) { acc, c -> acc + c.scrollDelta.y }
+            if (dy == 0f) continue
+            // Scrolling DOWN (positive) zooms out, as every image viewer does.
+            transform.zoomBy(if (dy < 0f) LightboxTransform.STEP else 1f / LightboxTransform.STEP)
+            event.changes.forEach { it.consume() }
+        }
+    }
+}
+
+/**
+ * Hovering makes [transform] the target of a host-delivered trackpad pinch ([TrackpadMagnify]); the
+ * cursor position doubles as the zoom focus, so no window→local coordinate mapping is needed.
+ */
+internal fun Modifier.trackpadMagnifyTarget(transform: LightboxTransform): Modifier = this
     .pointerInput(transform) {
-        // Hovering makes this diagram the target of a host-delivered trackpad pinch; the cursor
-        // position doubles as the zoom focus, so no window→local coordinate mapping is needed.
         var hover = Offset.Zero
         val target: (Float) -> Unit = { magnification -> transform.zoomBy(1f + magnification, hover) }
         try {
@@ -79,7 +113,13 @@ internal fun Modifier.diagramGestures(transform: LightboxTransform): Modifier = 
             if (TrackpadMagnify.target === target) TrackpadMagnify.target = null
         }
     }
-    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom(it) }) }
+
+/**
+ * Drags for content that lives inside a scroller (the chat, the viewer's pager): two fingers always
+ * zoom; one finger (or the mouse) pans only once there is something to pan, so at fit the scroller
+ * keeps its scroll; and a gesture someone else claimed first is left to them.
+ */
+internal fun Modifier.pinchOrPanWhenZoomed(transform: LightboxTransform): Modifier = this
     .pointerInput(transform) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)

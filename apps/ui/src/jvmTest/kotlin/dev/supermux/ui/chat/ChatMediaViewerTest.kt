@@ -1,0 +1,229 @@
+package dev.supermux.ui.chat
+
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ComposeUiTest
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.swipeLeft
+import dev.supermux.media.AttachmentMedia
+import dev.supermux.proto.Attachment
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.editor.FilePreviewKind
+import dev.supermux.ui.platform.FakePlatform
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * The ONE fullscreen viewer: every picture and clip of the chat in a row, opened at the tapped
+ * one. Moves by swipe, ←/→ and the on-screen arrows, says where it is ("2 / 3"), closes on Esc or
+ * a swipe down, plays a clip in place only once its page is the current one, and keeps the
+ * picture's save. The player is a stub here: a headless worker must never load a native backend.
+ */
+@OptIn(ExperimentalTestApi::class)
+class ChatMediaViewerTest {
+
+    private val imgA = ChatMediaItem.FromAttachment(
+        "m1", Attachment(file_id = "a", kind = "photo", mime = "image/png", name = "a.png"), FilePreviewKind.Image,
+    )
+    private val clip = ChatMediaItem.FromAttachment(
+        "m1", Attachment(file_id = "v", kind = "video", mime = "video/mp4", name = "v.mp4"), FilePreviewKind.Video,
+    )
+    private val imgB = ChatMediaItem.FromAttachment(
+        "m2", Attachment(file_id = "b", kind = "photo", mime = "image/png", name = "b.png"), FilePreviewKind.Image,
+    )
+    private val items = listOf(imgA, clip, imgB)
+
+    private class Media : AttachmentMedia {
+        val clipReads = AtomicInteger(0)
+
+        override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? {
+            if (att.kind == "video") {
+                clipReads.incrementAndGet()
+                return ByteArray(16)
+            }
+            return TINY_PNG_BYTES
+        }
+
+        override suspend fun playableUri(att: Attachment): String? {
+            if (att.kind != "video") return null
+            clipReads.incrementAndGet()
+            return "file:///cache/${att.file_id}.mp4"
+        }
+    }
+
+    private class FakeTransport : VideoTransport {
+        val toggles = AtomicInteger(0)
+        val fullscreens = AtomicInteger(0)
+        override val isPlaying = false
+        override val isLoading = false
+        override val sliderPos = 0f
+        override val positionText = "0:00"
+        override val durationText = "0:10"
+        override val muted = false
+        override fun togglePlay() { toggles.incrementAndGet() }
+        override fun seekStart(value: Float) = Unit
+        override fun seekFinished() = Unit
+        override fun toggleMute() = Unit
+        override fun openExternally() = Unit
+        override fun toggleFullscreen() { fullscreens.incrementAndGet() }
+    }
+
+    @Composable
+    private fun Viewer(
+        start: ChatMediaItem,
+        media: Media = Media(),
+        transport: FakeTransport = FakeTransport(),
+        onDismiss: () -> Unit = {},
+    ) {
+        ChatMediaViewer(
+            items = items,
+            startKey = start.key,
+            resolve = { item -> MediaHandle((item as ChatMediaItem.FromAttachment).att, media, attachmentImageKey(item.att)) },
+            onDismiss = onDismiss,
+            renderPlayer = { uri, _, onTransport ->
+                DisposableEffect(uri) {
+                    onTransport(transport)
+                    onDispose { onTransport(null) }
+                }
+                Text("player $uri", modifier = Modifier.testTag("stub_player"))
+            },
+        )
+    }
+
+    private fun ComposeUiTest.counter() = onNodeWithTag("chat_media_viewer_counter", useUnmergedTree = true)
+
+    @Test fun it_opens_at_the_tapped_item() = runComposeUiTest {
+        setPlatformContent { Viewer(start = imgB) }
+        onNodeWithTag("chat_media_viewer").assertIsDisplayed()
+        counter().assertTextEquals("3 / 3")
+    }
+
+    @Test fun arrow_keys_move_and_stop_at_the_ends() = runComposeUiTest {
+        setPlatformContent { Viewer(start = imgA) }
+        val root = onNodeWithTag("chat_media_viewer")
+        root.performKeyInput { pressKey(Key.DirectionRight) }
+        waitForIdle()
+        counter().assertTextEquals("2 / 3")
+        root.performKeyInput { pressKey(Key.DirectionRight) }
+        root.performKeyInput { pressKey(Key.DirectionRight) }
+        waitForIdle()
+        counter().assertTextEquals("3 / 3")
+        root.performKeyInput { pressKey(Key.DirectionLeft) }
+        waitForIdle()
+        counter().assertTextEquals("2 / 3")
+    }
+
+    @Test fun escape_closes_it() = runComposeUiTest {
+        var closed = false
+        setPlatformContent { Viewer(start = imgA, onDismiss = { closed = true }) }
+        onNodeWithTag("chat_media_viewer").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+        assertTrue(closed)
+    }
+
+    @Test fun the_side_arrows_move_under_a_pointer() = runComposeUiTest {
+        setPlatformContent(pointer = true) { Viewer(start = clip) }
+        onNodeWithTag("chat_media_viewer_next").performClick()
+        waitForIdle()
+        counter().assertTextEquals("3 / 3")
+        onNodeWithTag("chat_media_viewer_prev").performClick()
+        onNodeWithTag("chat_media_viewer_prev").performClick()
+        waitForIdle()
+        counter().assertTextEquals("1 / 3")
+    }
+
+    @Test fun a_clip_downloads_only_once_its_page_is_the_current_one() = runComposeUiTest {
+        val media = Media()
+        setPlatformContent { Viewer(start = imgA, media = media) }
+        waitForIdle()
+        assertEquals(0, media.clipReads.get(), "the clip next door is not opened yet")
+        assertEquals(0, onAllNodesWithTag("stub_player").fetchSemanticsNodes().size)
+        onNodeWithTag("chat_media_viewer").performKeyInput { pressKey(Key.DirectionRight) }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(media.clipReads.get() >= 1, "opening the clip's page fetches it")
+        // Moving on takes the player down with the page.
+        onNodeWithTag("chat_media_viewer").performKeyInput { pressKey(Key.DirectionRight) }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test fun a_clip_dragged_halfway_into_view_downloads_nothing() = runComposeUiTest {
+        // Mid-swipe the clip's page is composed and on screen, but nobody opened it yet.
+        val media = Media()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { Viewer(start = imgA, media = media) }
+        onNodeWithTag("chat_media_viewer_pager").performTouchInput {
+            down(center)
+            moveBy(Offset(-width * 0.4f, 0f))
+        }
+        waitForIdle()
+        onNodeWithTag("chat_media_viewer_poster", useUnmergedTree = true).assertExists("the clip's page is on screen")
+        assertEquals(0, media.clipReads.get(), "a clip swiped past is never fetched")
+    }
+
+    @Test fun space_and_f_reach_the_current_clip_only() = runComposeUiTest {
+        val transport = FakeTransport()
+        setPlatformContent { Viewer(start = imgA, transport = transport) }
+        val root = onNodeWithTag("chat_media_viewer")
+        root.performKeyInput { pressKey(Key.Spacebar) }
+        waitForIdle()
+        assertEquals(0, transport.toggles.get(), "a picture has nothing to play")
+        root.performKeyInput { pressKey(Key.DirectionRight) }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+        root.performKeyInput { pressKey(Key.Spacebar) }
+        root.performKeyInput { pressKey(Key.F) }
+        waitForIdle()
+        assertEquals(1, transport.toggles.get())
+        assertEquals(1, transport.fullscreens.get())
+    }
+
+    @Test fun the_strip_shows_under_a_pointer_and_jumps() = runComposeUiTest {
+        setPlatformContent(pointer = true) { Viewer(start = imgA) }
+        onNodeWithTag("chat_media_viewer_strip").assertIsDisplayed()
+        onNodeWithTag("chat_media_viewer_thumb:2").performClick()
+        waitForIdle()
+        counter().assertTextEquals("3 / 3")
+    }
+
+    @Test fun touch_has_no_strip_and_swipes_between_items() = runComposeUiTest {
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { Viewer(start = imgA) }
+        assertEquals(0, onAllNodesWithTag("chat_media_viewer_strip").fetchSemanticsNodes().size)
+        onNodeWithTag("chat_media_viewer_pager").performTouchInput { swipeLeft() }
+        waitForIdle()
+        counter().assertTextEquals("2 / 3")
+    }
+
+    @Test fun a_swipe_down_closes_it_on_touch() = runComposeUiTest {
+        var closed = false
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            Viewer(start = imgA, onDismiss = { closed = true })
+        }
+        onNodeWithTag("chat_media_viewer_pager").performTouchInput { swipeDown() }
+        waitForIdle()
+        assertTrue(closed)
+    }
+
+    @Test fun save_on_a_picture_uses_the_hosts_save_rule() = runComposeUiTest {
+        val platform = FakePlatform()
+        setPlatformContent(platform, pointer = true) { Viewer(start = imgA) }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("chat_media_viewer_image").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("chat_media_viewer_save").performClick()
+        waitUntil(timeoutMillis = 5_000L) { platform.files.openedSaved.isNotEmpty() }
+        assertEquals(listOf("a.png|image/png|${TINY_PNG_BYTES.size}"), platform.files.saved)
+    }
+}
