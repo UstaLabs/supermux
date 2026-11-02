@@ -76,6 +76,23 @@ class FileSearchTest {
         assertFalse(e.isDir)
     }
 
+    @Test fun aWindowsWorkdirSpelledInAnotherCaseStillFindsItsFiles() {
+        // The session's workdir is c:\users\me\app; the host answers under its real path.
+        // "C:\Users\me\app/src/Main.kt": the workdir = 0..14, "/" = 15, "src" = 16..18, "/" = 19, "Main.kt" = 20..26
+        val hit = SearchHit(path = "C:\\Users\\me\\app/src/Main.kt", name = "Main.kt", type = "file", score = 1.0, hits = listOf(16, 20))
+        val e = toGoToEntry("c:\\users\\me\\app", hit)!!
+        assertEquals("src/Main.kt", e.relativePath)
+        assertEquals("Main.kt", e.name)
+        assertEquals("src", e.folder)
+        assertEquals(listOf(0), e.nameHits)
+        assertEquals(listOf(0), e.folderHits)
+    }
+
+    @Test fun aWindowsWorkdirWithForwardSlashesStillFindsItsFiles() {
+        val hit = SearchHit(path = "C:\\Users\\me\\app/src/Main.kt", name = "Main.kt", type = "file", score = 1.0)
+        assertEquals("src/Main.kt", toGoToEntry("C:/Users/me/app", hit)?.relativePath)
+    }
+
     @Test fun topLevelFilesHaveNoFolderAndHitsOutsideTheWorkdirAreDropped() {
         val top = toGoToEntry("/w/", SearchHit("/w/a.kt", "a.kt", "file", 1.0, listOf(3)))!!
         assertEquals("", top.folder)

@@ -114,9 +114,10 @@ fun hitsWithin(hits: List<Int>, start: Int, length: Int): List<Int> =
 /** A broker hit as a list entry, or null when it is not inside [workdir] (or is the workdir). */
 fun toGoToEntry(workdir: String, hit: SearchHit): GoToEntry? {
     val rel = relativeToWorkdir(workdir, hit.path)?.takeIf { it != "." && it.isNotEmpty() } ?: return null
-    val path = hit.path.trimEnd('/').ifEmpty { hit.path }
+    val path = hit.path.trimEnd('/', '\\').ifEmpty { hit.path }
     val relStart = path.length - rel.length
-    if (relStart < 0 || !path.endsWith(rel)) return null
+    // [rel] is `/`-separated; the hit's own tail may use the host's other separator.
+    if (relStart < 0 || !path.replace('\\', '/').endsWith(rel)) return null
     val name = rel.substringAfterLast('/')
     val folder = rel.substringBeforeLast('/', "")
     return GoToEntry(

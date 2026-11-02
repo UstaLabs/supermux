@@ -1,5 +1,9 @@
 package dev.supermux.session
 
+import dev.supermux.fs.hostPathSegments
+import dev.supermux.fs.isDriveSegment
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.sameHostSegments
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
 
@@ -219,15 +223,16 @@ fun groupSessions(
  */
 fun formatWorkdir(workdir: String, home: String?): String {
     val h = if (!home.isNullOrEmpty()) home else inferHomeDir(workdir)
-    val homeSegments = h?.takeIf { it.isNotEmpty() }?.let(::pathSegments)
-    val all = pathSegments(workdir)
-    if (homeSegments != null && sameSegments(all, homeSegments)) return "~"
-    val segments = if (all.firstOrNull()?.let(::isDrive) == true) all.drop(1) else all
+    val homeSegments = h?.takeIf { it.isNotEmpty() }?.let(::hostPathSegments)
+    val all = hostPathSegments(workdir)
+    val windows = isWindowsHostPath(workdir)
+    if (homeSegments != null && sameHostSegments(all, homeSegments, windows)) return "~"
+    val segments = if (all.firstOrNull()?.let(::isDriveSegment) == true) all.drop(1) else all
     if (segments.size <= 1) return workdir
     val sep = if ('\\' in workdir) '\\' else '/'
     val leaf = segments[segments.size - 1]
     val parent = segments[segments.size - 2]
-    if (homeSegments != null && sameSegments(all.dropLast(1), homeSegments)) return "~$sep$leaf"
+    if (homeSegments != null && sameHostSegments(all.dropLast(1), homeSegments, windows)) return "~$sep$leaf"
     val base = "$parent$sep$leaf"
     return if (segments.size > 2) "…$sep$base" else base
 }
@@ -236,16 +241,6 @@ fun formatWorkdir(workdir: String, home: String?): String {
 fun pathLeaf(path: String): String {
     val trimmed = path.trimEnd('/', '\\')
     return trimmed.substring(trimmed.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
-}
-
-private fun pathSegments(path: String): List<String> = path.split('/', '\\').filter { it.isNotEmpty() }
-
-private fun isDrive(segment: String): Boolean = segment.length == 2 && segment[1] == ':' && segment[0].isLetter()
-
-/** Windows paths compare case-insensitively (`C:\Users` is `c:\users`), POSIX ones exactly. */
-private fun sameSegments(a: List<String>, b: List<String>): Boolean {
-    val windows = a.firstOrNull()?.let(::isDrive) == true
-    return a.size == b.size && a.indices.all { a[it].equals(b[it], ignoreCase = windows) }
 }
 
 /**

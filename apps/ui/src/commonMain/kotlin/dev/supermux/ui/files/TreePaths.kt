@@ -2,6 +2,8 @@
 // everything handed to the workdir-relative editor code goes through [relativeToWorkdir].
 package dev.supermux.ui.files
 
+import dev.supermux.fs.hostRelativePath
+
 private fun trimEnd(p: String): String = if (p.length > 1) p.trimEnd('/') else p
 
 fun parentOf(path: String): String? {
@@ -33,17 +35,13 @@ fun ancestorsWithin(root: String, path: String): List<String> {
     return out
 }
 
-/** Workdir-relative form of [path] ("." for the workdir itself), or null when outside it. */
-fun relativeToWorkdir(workdir: String, path: String): String? {
-    val w = trimEnd(workdir)
-    val p = trimEnd(path)
-    return when {
-        p == w -> "."
-        w == "/" -> p.removePrefix("/")
-        p.startsWith("$w/") -> p.substring(w.length + 1)
-        else -> null
-    }
-}
+/**
+ * Workdir-relative form of [path] ("." for the workdir itself), or null when outside it — by the
+ * host's own path rule ([hostRelativePath]), so a Windows workdir spelled `c:\users\me\app` still
+ * owns the `C:\Users\me\app/src/a.kt` the host's search answers with.
+ */
+fun relativeToWorkdir(workdir: String, path: String): String? =
+    hostRelativePath(workdir, path)?.ifEmpty { "." }
 
 /**
  * The editor's key for the absolute [abs]: workdir-relative inside [workdir], [abs] itself outside

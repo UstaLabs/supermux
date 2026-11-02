@@ -64,6 +64,13 @@ class FileMentionLookupTest {
         assertEquals("/w", urls.single().parameters["path"])
     }
 
+    @Test fun aWindowsWorkdirSpelledInAnotherCaseStillFindsItsFiles() = runTest {
+        // The session says c:\users\me\app; the host's search answers under its real path.
+        val body = """[{"path":"C:\\Users\\me\\app/src/Main.kt","name":"Main.kt","type":"file","score":1,"hits":[20]}]"""
+        val rows = lookupMentionFiles(fs(mutableListOf(), body), "c:\\users\\me\\app", MentionLookup.Search("main"))!!
+        assertEquals(listOf("src/Main.kt"), rows.map { it.relativePath })
+    }
+
     @Test fun aFailedLookupIsNull() = runTest {
         val failing = fs(mutableListOf(), """{"error":"EIO"}""", HttpStatusCode.InternalServerError)
         assertNull(lookupMentionFiles(failing, "/w", MentionLookup.Search("x")))
