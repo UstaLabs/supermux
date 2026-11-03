@@ -183,7 +183,7 @@ internal fun ChatMediaViewer(
     caption: (ChatMediaItem) -> String? = { null },
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit = ViewerPlayer,
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onDismiss, properties = viewerDialogProperties()) {
         ChatMediaViewerContent(items, startKey, resolve, onDismiss, caption = caption, renderPlayer = renderPlayer)
     }
 }
