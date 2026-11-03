@@ -561,6 +561,15 @@ export class Session {
     for (const body of bodies) this.emitNormalized(body, update)
   }
 
+  /**
+   * A command list the agent reported while this session was opening, which Core passed on raw: only its
+   * commands-update is emitted (state, not turn content). See Core's held updates.
+   */
+  reportHeldCommands(update: AgentUpdate): void {
+    if (this.state === "closed") return
+    for (const body of this.runtime.normalize?.(update) ?? []) if (body.kind === "commands-update") this.emitNormalized(body, update)
+  }
+
   /** Native activity is independent of owned receipts. Duplicate start for an id is a no-op. */
   reportActivity(notice: ActivityNotice): void {
     if (this.state === "closed" || this.state === "closing" || this.state === "failed") return

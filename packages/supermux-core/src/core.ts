@@ -897,6 +897,12 @@ export class Core {
     const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
     /** Index just past the last buffered turn content. */
     let afterUpdate = 0
+    /**
+     * The last command list the agent reported while opening (Claude's initialize reply, an ACP push during
+     * session/new). It is state, not turn content, so it is normalized once the Session exists even when its
+     * raw update went out unnormalized.
+     */
+    let heldCommands: AgentUpdate | undefined
     let earlyBytes = 0
     let holding = true
     let attachSession!: (value: Session | null) => void
@@ -950,6 +956,7 @@ export class Core {
         onUpdate: update => {
           if (session) session.update(update)
           else if (!discarded) {
+            if (carriesCommands(update)) heldCommands = update
             if (holding) {
               earlyBytes += jsonBytes(update.value)
               if (earlyBytes > EARLY_UPDATE_BYTES) {
@@ -1046,9 +1053,13 @@ export class Core {
       // Before session.created/resumed, in arrival order (see `early`).
       for (const item of early.splice(0)) {
         if ("activity" in item) session.reportActivity(item.activity)
-        else if (item.normalize) session.update(item.update)
+        else if (item.normalize) {
+          session.update(item.update)
+          if (item.update === heldCommands) heldCommands = undefined
+        }
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
+      if (heldCommands) session.reportHeldCommands(heldCommands)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -1598,6 +1609,18 @@ const MAX_TIMER_MS = 2 ** 31 - 1
  * supermux() defaults) would be held as parsed objects and normalized in one synchronous burst.
  */
 const EARLY_UPDATE_BYTES = 4 * 1024 * 1024
+
+/**
+ * An update that carries the agent's command list: an ACP `available_commands_update`, or Claude's
+ * `commands_changed` push or a control reply listing `commands` (initialize, reload_plugins).
+ */
+function carriesCommands(update: AgentUpdate): boolean {
+  const value = update.value as { sessionUpdate?: unknown; type?: unknown; subtype?: unknown; response?: { response?: { commands?: unknown } } } | null | undefined
+  if (!value || typeof value !== "object") return false
+  if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
+  if (value.type === "system") return value.subtype === "commands_changed"
+  return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
 
 /** An update's size as JSON; one that cannot be measured counts as too big to hold. */
 function jsonBytes(value: unknown): number {
