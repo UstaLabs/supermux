@@ -8,6 +8,7 @@ import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -29,7 +30,7 @@ class ReconnectPolicy(private val baseMs: Long, private val maxMs: Long) {
 // synced and must not assume any session state. Mirrors the broker's
 // seekToEnd/re-snapshot reconnect semantics.
 class ConnectionSyncState {
-    var synced: Boolean = false; private set
+    @Volatile var synced: Boolean = false; private set
     fun onFrame(isSnapshot: Boolean) { if (isSnapshot) synced = true }
     fun onDisconnect() { synced = false }
 }
@@ -54,7 +55,8 @@ class BrokerClient(
     private val _frames = MutableSharedFlow<ServerFrame>(extraBufferCapacity = 256)
     val frames: SharedFlow<ServerFrame> = _frames
     val sync = ConnectionSyncState()
-    private var liveSession: DefaultClientWebSocketSession? = null
+    // Written by [run] (a background dispatcher), read by [trySend] from any thread.
+    @Volatile private var liveSession: DefaultClientWebSocketSession? = null
 
     suspend fun run() {
         var attempt = 0

@@ -659,6 +659,7 @@ class FleetStore(
         if (seedHolds) return@publishing
         sessionsByHost[recordId] = sessions
         stageSessions(pub)
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.once("fleet.sessions.published", "sessions" to sessions.size)
     }
 
     private fun onHostMessages(recordId: String, messages: Map<String, List<LogEntry>>) = publishing { pub ->

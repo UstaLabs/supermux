@@ -16,6 +16,8 @@ object PerfReport {
         "ws.snapshot.arrived" to "snapshot in",
         "ws.snapshot.decoded" to "decoded",
         "state.snapshot.reduced" to "reduced",
+        "fleet.sessions.published" to "fleet merged",
+        "ui.shell.composed" to "shell composed",
         "ui.sessions.drawn" to "sessions drawn",
         "ui.workspaces.drawn" to "workspaces drawn",
         "ui.agents.drawn" to "Agents drawn",

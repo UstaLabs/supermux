@@ -289,7 +289,7 @@ class HostStore(
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
     /** Session ids of chats currently on screen (one per visible group), or empty. */
-    private var viewingSessionIds: List<String> = emptyList()
+    @Volatile private var viewingSessionIds: List<String> = emptyList()
     /** True when the window is foregrounded on the session list (no chat selected). */
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
@@ -507,7 +507,10 @@ class HostStore(
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
             stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
-            stateScope.launch { client.run() }
+            // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the first,
+            // heavy frame to finish (~0.9 s at launch on desktop, card #54), and every frame —
+            // the 2.3 MB snapshot included — was decoded there. Frames still reduce in [stateScope].
+            stateScope.launch(Dispatchers.Default) { client.run() }
             ensureViewingHeartbeat()
         }
     }

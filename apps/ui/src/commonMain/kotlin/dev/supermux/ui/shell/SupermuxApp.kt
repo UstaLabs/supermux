@@ -299,7 +299,11 @@ fun SupermuxApp(
 
     val sessions by fleet.sessions.collectAsState()
     // Card #54: how often the whole shell recomposes (every live frame for any session can).
-    SideEffect { dev.supermux.util.PerfTrace.countRecompose("shell") }
+    SideEffect {
+        dev.supermux.util.PerfTrace.countRecompose("shell")
+        // The first composition that has live sessions, applied (drawing comes after: ui.sessions.drawn).
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.firstMilestone("ui.shell.composed", "sessions" to sessions.size)
+    }
     // First frame that draws real sessions — the end of the cold-start path ([PerfTrace]) —
     // and the frames after the next session-list changes (the cache, then the live snapshot).
     var sessionFrames by remember { mutableStateOf(0) }
