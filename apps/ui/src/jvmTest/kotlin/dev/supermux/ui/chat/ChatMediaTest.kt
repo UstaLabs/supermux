@@ -5,10 +5,12 @@ import androidx.compose.ui.input.key.KeyEventType
 import dev.supermux.chat.TimelineItem
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
+import androidx.compose.ui.unit.dp
 import dev.supermux.ui.editor.FilePreviewKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -314,5 +316,59 @@ class ChatMediaTest {
         assertFalse(shouldDismissOnRelease(offsetY = 100f, velocityY = 200f, heightPx = h, flingPxPerSecond = fling))
         assertTrue(shouldDismissOnRelease(offsetY = 100f, velocityY = 2000f, heightPx = h, flingPxPerSecond = fling))
         assertFalse(shouldDismissOnRelease(offsetY = -300f, velocityY = -3000f, heightPx = h, flingPxPerSecond = fling), "only DOWN closes")
+    }
+
+    // ── A file and a single picture in a message ──────────────────────────────────────────────
+
+    @Test fun a_picture_is_framed_in_the_media_column_and_never_blown_up() {
+        val photo = pictureFrame(1600, 900, maxWidth = 360.dp, maxHeight = 280.dp, density = 2f)
+        assertEquals(360f, photo.width.value, 0.5f)
+        assertEquals(202.5f, photo.height.value, 0.5f)
+        assertNull(photo.crop, "16:9 shows whole")
+        val icon = pictureFrame(64, 64, maxWidth = 360.dp, maxHeight = 280.dp, density = 2f)
+        assertEquals(32f, icon.width.value, 0.01f, "a small picture keeps its own size")
+        assertEquals(32f, icon.height.value, 0.01f)
+    }
+
+    @Test fun a_long_screenshot_is_cut_to_its_top_at_one_to_two() {
+        val shot = pictureFrame(780, 5800, maxWidth = 360.dp, maxHeight = 280.dp, density = 2f)
+        assertEquals(PictureCrop.Top, shot.crop)
+        assertEquals(140f, shot.width.value, 0.5f)
+        assertEquals(280f, shot.height.value, 0.5f)
+    }
+
+    @Test fun a_panorama_is_cut_to_its_middle_at_five_to_two() {
+        val pano = pictureFrame(1920, 320, maxWidth = 360.dp, maxHeight = 280.dp, density = 2f)
+        assertEquals(PictureCrop.Center, pano.crop)
+        assertEquals(360f, pano.width.value, 0.5f)
+        assertEquals(144f, pano.height.value, 0.5f)
+    }
+
+    @Test fun a_file_card_says_its_type_and_size() {
+        assertEquals("PDF", fileBadgeLabel("Tahoe trip notes.pdf"))
+        assertEquals("PDF · 28.2 KB", fileMetaLine("Tahoe trip notes.pdf", "application/pdf", 28_831))
+        assertNull(fileBadgeLabel("voice message"), "no extension: the kind's glyph instead")
+        assertEquals("Audio · 12 B", fileMetaLine("voice message", "audio/ogg", 12))
+        assertEquals("", fileMetaLine("README", null, null))
+        assertNull(fileExtension(".env"), "a leading dot is a name, not an extension")
+    }
+
+    @Test fun a_file_badge_takes_its_colour_from_the_extension_then_the_type() {
+        assertEquals(FileFamily.Pdf, fileFamily("pdf", null))
+        assertEquals(FileFamily.Archive, fileFamily("zip", null))
+        assertEquals(FileFamily.Sheet, fileFamily("csv", "text/csv"), "the extension wins over a text/* type")
+        assertEquals(FileFamily.Audio, fileFamily(null, "audio/mp4"))
+        assertEquals(FileFamily.Other, fileFamily("xyz", "application/octet-stream"))
+    }
+
+    @Test fun the_viewer_caption_says_who_sent_it_and_when() {
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        val ts = "2026-11-03T13:53:00Z"
+        fun entry(direction: String, channel: String, from: String? = null) =
+            LogEntry(id = "e", ts = ts, direction = direction, channel = channel, from_session_name = from)
+        assertTrue(assertNotNull(mediaCaption(entry("inbound", "web"), "Claude", now)).startsWith("You · "))
+        assertTrue(assertNotNull(mediaCaption(entry("outbound", "web"), "Claude", now)).startsWith("Claude · "))
+        assertTrue(assertNotNull(mediaCaption(entry("inbound", "inbox", from = "Tally the TPM"), "Claude", now)).startsWith("Tally the TPM · "))
+        assertNull(mediaCaption(LogEntry(id = "e", ts = "not a time", direction = "inbound", channel = "web"), "Claude", now))
     }
 }

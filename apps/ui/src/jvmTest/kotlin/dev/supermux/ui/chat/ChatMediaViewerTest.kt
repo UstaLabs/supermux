@@ -12,6 +12,8 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -368,6 +370,59 @@ class ChatMediaViewerTest {
         counter().assertTextEquals("1 / 3")
         val after = pictureCorner()
         assertTrue(after.x < before.x && after.y < before.y, "⌘ + scroll up zooms in about the middle; $before -> $after")
+    }
+
+    // ── A click or tap on the picture hides the bars ──────────────────────────────────────
+
+    /** Long enough for a single tap to tell itself from the first half of a double tap. */
+    private fun ComposeUiTest.pastDoubleTap() {
+        mainClock.advanceTimeBy(600)
+        waitForIdle()
+    }
+
+    private fun ComposeUiTest.barsShown(): Boolean =
+        onAllNodesWithTag("chat_media_viewer_counter", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    @Test fun a_click_on_the_picture_hides_the_bars_and_another_brings_them_back() = runComposeUiTest {
+        setPlatformContent(pointer = true) { Viewer(start = imgA) }
+        awaitPicture()
+        assertTrue(barsShown())
+        onNodeWithTag("chat_media_viewer_image").performMouseInput { click(center) }
+        pastDoubleTap()
+        assertFalse(barsShown(), "the top bar and its counter are gone")
+        assertEquals(0, onAllNodesWithTag("chat_media_viewer_strip").fetchSemanticsNodes().size, "the strip too")
+        assertEquals(0, onAllNodesWithTag("chat_media_viewer_next").fetchSemanticsNodes().size, "and the side arrows")
+        onNodeWithTag("chat_media_viewer_image").performMouseInput { click(center) }
+        pastDoubleTap()
+        assertTrue(barsShown(), "the next click brings them back")
+        onNodeWithTag("chat_media_viewer_strip").assertExists()
+    }
+
+    @Test fun a_tap_on_the_picture_hides_the_bars_on_a_phone_too() = runComposeUiTest {
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { Viewer(start = imgA) }
+        awaitPicture()
+        onNodeWithTag("chat_media_viewer_image").performTouchInput { click(center) }
+        pastDoubleTap()
+        assertFalse(barsShown())
+    }
+
+    @Test fun a_double_click_zooms_and_leaves_the_bars() = runComposeUiTest {
+        setPlatformContent(pointer = true) { Viewer(start = imgA) }
+        awaitPicture()
+        val before = pictureCorner()
+        onNodeWithTag("chat_media_viewer_image").performMouseInput { doubleClick(center) }
+        pastDoubleTap()
+        assertTrue(pictureCorner().x < before.x, "zoomed in")
+        assertTrue(barsShown(), "a double click is a zoom, not a hide")
+    }
+
+    @Test fun a_swipe_between_items_leaves_the_bars() = runComposeUiTest {
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { Viewer(start = imgA) }
+        awaitPicture()
+        onNodeWithTag("chat_media_viewer_pager").performTouchInput { swipeLeft() }
+        pastDoubleTap()
+        counter().assertTextEquals("2 / 3")
+        assertTrue(barsShown(), "a swipe moves on; it hides nothing")
     }
 
     @Test fun a_zoomed_picture_pans_under_two_fingers_and_turns_no_page() = runComposeUiTest {

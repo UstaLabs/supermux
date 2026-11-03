@@ -4,7 +4,12 @@
 // and swipe down to close.
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -196,6 +201,7 @@ internal fun ChatMediaViewer(
  *    is the settled one — never before, so swiping past a clip downloads nothing.
  *  - "3 / 7" and who sent it when ([caption]), zoom −/+ for a picture, Save, Close across the top.
  *    Under a pointer the top bar and the side arrows fade after a still moment, back on a move.
+ *  - A click or tap on a picture hides the bars (top bar, side arrows, strip) until the next one.
  *  - A pointer adds ‹ › at the sides and a thumbnail strip along the bottom; keys ←/→, Space
  *    (play/pause), F (the clip full screen) and Esc work everywhere a keyboard does.
  *  - Touch swipes between items and closes on a swipe down; so does a Mac trackpad's two-finger
@@ -315,6 +321,11 @@ internal fun ChatMediaViewerContent(
     val chromeAlpha by animateFloatAsState(if (chromeShown) 1f else 0f, animationSpec = tween(CHROME_FADE_MS), label = "viewer chrome")
     val chrome = Modifier.graphicsLayer { alpha = chromeAlpha }.hoverable(chromeHover)
 
+    // A click or tap on a picture hides the bars until the next one, as photo viewers do: the top
+    // bar, the side arrows and the strip. A double click still zooms and a swipe still moves on.
+    var barsHidden by remember { mutableStateOf(false) }
+    val toggleBars = remember { { barsHidden = !barsHidden } }
+
     val trackpad = platform.caps.trackpadMomentum
     // A Mac trackpad's two-finger swipes, which the stock pager judges by the momentum's dying tail.
     val trackpadSwipes = if (!trackpad) Modifier else {
@@ -419,7 +430,7 @@ internal fun ChatMediaViewerContent(
                     val item = items.getOrNull(index) ?: return@HorizontalPager
                     val handle = remember(item.key) { resolve(item) }
                     when (item.kind) {
-                        FilePreviewKind.Image -> ViewerPicture(handle, item.name, transformOf(item.key), trackpad)
+                        FilePreviewKind.Image -> ViewerPicture(handle, item.name, transformOf(item.key), trackpad, onTap = toggleBars)
                         FilePreviewKind.Video -> ViewerClip(
                             handle = handle,
                             active = index == pager.settledPage,
@@ -431,46 +442,48 @@ internal fun ChatMediaViewerContent(
                 val counter = if (items.size > 1) viewerCounter(page, items.size) else null
                 val onZoomOut = { transformOf(current.key).zoomBy(1f / LightboxTransform.STEP) }
                 val onZoomIn = { transformOf(current.key).zoomBy(LightboxTransform.STEP) }
-                if (windowControls.band > 0.dp) {
-                    ViewerTitleBar(
-                        controls = windowControls,
-                        counter = counter,
-                        caption = caption(current),
-                        picture = current.kind == FilePreviewKind.Image,
-                        onZoomOut = onZoomOut,
-                        onZoomIn = onZoomIn,
-                        onSave = ::save,
-                        onClose = { dismiss() },
-                        modifier = Modifier.align(Alignment.TopCenter).then(chrome),
-                    )
-                } else {
-                    ViewerTopBar(
-                        counter = counter,
-                        caption = caption(current),
-                        picture = current.kind == FilePreviewKind.Image,
-                        onZoomOut = onZoomOut,
-                        onZoomIn = onZoomIn,
-                        onSave = ::save,
-                        onClose = { dismiss() },
-                        modifier = Modifier.align(Alignment.TopCenter).then(chrome),
-                    )
-                }
-                if (pointer && items.size > 1) {
-                    if (page > 0) {
-                        SideArrow(
-                            MediaIcons.ChevronLeft, "Previous", "chat_media_viewer_prev", { go(-1) },
-                            Modifier.align(Alignment.CenterStart).then(chrome),
+                // The general overload: inside this Box the Column's own one would be picked.
+                androidx.compose.animation.AnimatedVisibility(!barsHidden, Modifier.align(Alignment.TopCenter), enter = fadeIn(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS))) {
+                    if (windowControls.band > 0.dp) {
+                        ViewerTitleBar(
+                            controls = windowControls,
+                            counter = counter,
+                            caption = caption(current),
+                            picture = current.kind == FilePreviewKind.Image,
+                            onZoomOut = onZoomOut,
+                            onZoomIn = onZoomIn,
+                            onSave = ::save,
+                            onClose = { dismiss() },
+                            modifier = chrome,
+                        )
+                    } else {
+                        ViewerTopBar(
+                            counter = counter,
+                            caption = caption(current),
+                            picture = current.kind == FilePreviewKind.Image,
+                            onZoomOut = onZoomOut,
+                            onZoomIn = onZoomIn,
+                            onSave = ::save,
+                            onClose = { dismiss() },
+                            modifier = chrome,
                         )
                     }
-                    if (page < items.lastIndex) {
-                        SideArrow(
-                            MediaIcons.ChevronRight, "Next", "chat_media_viewer_next", { go(+1) },
-                            Modifier.align(Alignment.CenterEnd).then(chrome),
-                        )
+                }
+                if (pointer && items.size > 1) {
+                    androidx.compose.animation.AnimatedVisibility(!barsHidden && page > 0, Modifier.align(Alignment.CenterStart), enter = fadeIn(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS))) {
+                        SideArrow(MediaIcons.ChevronLeft, "Previous", "chat_media_viewer_prev", { go(-1) }, chrome)
+                    }
+                    androidx.compose.animation.AnimatedVisibility(!barsHidden && page < items.lastIndex, Modifier.align(Alignment.CenterEnd), enter = fadeIn(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS))) {
+                        SideArrow(MediaIcons.ChevronRight, "Next", "chat_media_viewer_next", { go(+1) }, chrome)
                     }
                 }
             }
-            if (pointer && items.size > 1) ViewerStrip(items, page, resolve, ::jump)
+            if (pointer && items.size > 1) {
+                // The strip folds away with the bars, and the picture grows into its room.
+                AnimatedVisibility(!barsHidden, enter = fadeIn(tween(BARS_MS)) + expandVertically(tween(BARS_MS)), exit = fadeOut(tween(BARS_MS)) + shrinkVertically(tween(BARS_MS))) {
+                    ViewerStrip(items, page, resolve, ::jump)
+                }
+            }
         }
     }
     LaunchedEffect(Unit) { focus.requestFocus() }
@@ -481,6 +494,9 @@ private val DismissFling = 1200.dp
 
 /** A still pointer for this long fades the viewer's chrome. */
 private const val CHROME_IDLE_MS = 2_500L
+
+/** The bars' fade (and the strip's fold) when a click hides or brings them back. */
+private const val BARS_MS = 200
 private const val CHROME_FADE_MS = 220
 
 /** A pull that closes the viewer slides it out over this long. */
@@ -491,8 +507,8 @@ private const val LEAVE_QUIET_TIMEOUT_MS = 1_500L
 
 /** A picture page: the lightbox's transform and gestures, through the timeline's load + decode. */
 @Composable
-private fun ViewerPicture(handle: MediaHandle, name: String, transform: LightboxTransform, trackpad: Boolean) {
-    Box(Modifier.fillMaxSize().viewerImageGestures(transform, trackpad), contentAlignment = Alignment.Center) {
+private fun ViewerPicture(handle: MediaHandle, name: String, transform: LightboxTransform, trackpad: Boolean, onTap: () -> Unit) {
+    Box(Modifier.fillMaxSize().viewerImageGestures(transform, trackpad, onTap), contentAlignment = Alignment.Center) {
         when (val image = rememberAttachmentImage(handle.att, handle.media, handle.memoryCacheKey)) {
             is AttachmentImage.Ready -> Image(
                 painter = image.decoded.painter,

@@ -48,13 +48,16 @@ internal fun Modifier.diagramGestures(transform: LightboxTransform): Modifier = 
  * is left to the pager's swipe (and the swipe-down close), two fingers zoom, a zoomed picture pans.
  * With [trackpad] ([dev.supermux.ui.platform.Caps.trackpadMomentum]) a plain two-finger scroll at
  * fit belongs to the viewer's swipes instead, so the wheel is the diagram's: ⌘/Ctrl zooms, a
- * zoomed picture pans with the fingers.
+ * zoomed picture pans with the fingers. [onTap] is a single click or tap, told from a double one:
+ * it comes only once the double-tap window has passed, so a double click zooms and nothing else.
  */
-internal fun Modifier.viewerImageGestures(transform: LightboxTransform, trackpad: Boolean = false): Modifier = this
+internal fun Modifier.viewerImageGestures(transform: LightboxTransform, trackpad: Boolean = false, onTap: (() -> Unit)? = null): Modifier = this
     .onSizeChanged { transform.viewport = Size(it.width.toFloat(), it.height.toFloat()) }
     .then(if (trackpad) Modifier.zoomOrPanWheel(transform, TrackpadScrollUnit) else Modifier.lightboxWheelZoom(transform))
     .trackpadMagnifyTarget(transform)
-    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom() }) }
+    .pointerInput(transform, onTap) {
+        detectTapGestures(onDoubleTap = { transform.toggleZoom() }, onTap = onTap?.let { tap -> { tap() } })
+    }
     .pinchOrPanWhenZoomed(transform)
 
 /**
