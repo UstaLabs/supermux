@@ -75,7 +75,11 @@ kotlin {
 
         val nonAppleMain by creating { dependsOn(nonWatchMain) }
         val nonAppleTest by creating { dependsOn(nonWatchTest) }
-        nonAppleMain.dependencies { implementation(libs.ktor.client.cio) }
+        nonAppleMain.dependencies {
+            implementation(libs.ktor.client.cio)
+            // gzip for the broker's big JSON answers (card #54); browsers and NSURLSession do it themselves.
+            implementation(libs.ktor.client.encoding)
+        }
 
         // iosMain is the default hierarchy's intermediate over iosArm64 + iosSimulatorArm64; both
         // get the parser. watchosArm64/watchosSimulatorArm64 deliberately do not.

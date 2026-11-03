@@ -523,6 +523,11 @@ sealed interface ServerFrame {
         val partialExtras: List<String>? = null,
         /** The broker is tracing load times (card #54): ship ours (`client_logs`, category "perf"). */
         val perf: Boolean = false,
+        /**
+         * The `subscribe` asked for `lazyArchived` and the broker left [archivedWorkspaces] (and
+         * their [projectMembership]) out; fetch `GET /archived-workspaces?slim=1` (card #54).
+         */
+        val archivedLazy: Boolean = false,
     ) : ServerFrame
 
     /**

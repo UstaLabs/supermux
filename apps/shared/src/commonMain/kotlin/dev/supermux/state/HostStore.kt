@@ -304,6 +304,9 @@ class HostStore(
         _state.map { it.sessions }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val workspaces: StateFlow<List<WorkspaceDto>> =
         _state.map { it.workspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
+    /** See [HostState.archivedPending]. */
+    val archivedPending: StateFlow<Boolean> =
+        _state.map { it.archivedPending }.stateIn(projectionScope, SharingStarted.Eagerly, false)
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> =
         _state.map { it.archivedWorkspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val messages: StateFlow<Map<String, List<LogEntry>>> =
@@ -633,6 +636,7 @@ class HostStore(
                 // Anything may have been archived or resumed while we were away (card #54: this
                 // replaced the shell's refetch on every change to the live list).
                 refreshArchived("snapshot")
+                if (frame.archivedLazy) refreshArchivedWorkspaces()
                 fileSystem.onReconnect()
                 flushOutbox()
                 _resynced.tryEmit(Unit)
@@ -928,6 +932,18 @@ class HostStore(
     }
 
     private var archivedJob: Job? = null
+    private var archivedWorkspacesJob: Job? = null
+
+    /** GET /archived-workspaces?slim=1 after a `lazyArchived` snapshot (card #54). */
+    private fun refreshArchivedWorkspaces() {
+        archivedWorkspacesJob?.cancel()
+        archivedWorkspacesJob = stateScope.launch {
+            val rows = runApi("archivedWorkspaces") { api.listArchivedWorkspaces(slim = true) }
+            // A failed fetch must not hide empty projects for good: stop waiting either way.
+            _state.update { it.copy(archivedWorkspaces = rows ?: it.archivedWorkspaces, archivedPending = false) }
+            PerfTrace.event("archived.workspaces.loaded", "rows" to (rows?.size ?: -1), "host" to baseUrl)
+        }
+    }
 
     /** GET /archived-sessions; a newer refresh supersedes one still in flight. */
     fun refreshArchived(reason: String = "asked") {
@@ -1888,6 +1904,10 @@ class HostStore(
                     (sessionId to mergeFetchedActivity(fetched.activity, it.activity[sessionId].orEmpty())),
                 commands = it.commands + (sessionId to fetched.commands),
                 commandsResolved = it.commandsResolved + (sessionId to fetched.commandsResolved),
+                // A `slimSubagents` snapshot sent only the running ones; null from an older broker.
+                subagents = fetched.subagents?.let { full ->
+                    it.subagents + (sessionId to mergeFetchedSubagents(full, it.subagents[sessionId].orEmpty()))
+                } ?: it.subagents,
                 completeExtras = it.completeExtras + sessionId,
             )
         }
@@ -2783,4 +2803,8 @@ internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = n
     // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
     put("trimExtras", true)
     put("slimArchived", true)
+    // Card #54: only running subagents for chats not on screen (the rest come with chat-extras),
+    // and no archived workspaces (fetched right after the snapshot, off the first screen's path).
+    put("slimSubagents", true)
+    put("lazyArchived", true)
 }.toString()

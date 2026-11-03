@@ -2335,7 +2335,8 @@ private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.
     combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
         .sample(20_000)
         .collect { (sessions, workspaces, projects) ->
-            if (sessions.isEmpty()) return@collect
+            // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
+            if (sessions.isEmpty() || fleet.archivedPending.value) return@collect
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 val owners = fleet.sessionHost.value
                 val wsOwners = fleet.workspaceHost.value

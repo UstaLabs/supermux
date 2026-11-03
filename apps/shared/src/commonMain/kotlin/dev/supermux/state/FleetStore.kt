@@ -295,6 +295,9 @@ class FleetStore(
 
     val workspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.workspaces }
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.archivedWorkspaces }
+    /** Some host's archived list is still on its way after a `lazyArchived` snapshot (card #54). */
+    val archivedPending: StateFlow<Boolean> =
+        eachHost { it.archivedPending }.map { pending -> pending.any { it } }.stateIn(fleetScope, SharingStarted.Eagerly, false)
     val displays: StateFlow<List<DisplayStream>> = mergedList { it.displays }
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }

@@ -225,6 +225,8 @@ fun SessionListScreen(
     /** Archived sessions folded into Settled (web task-list parity) — [SessionListMode.Fleet]. */
     archived: List<ArchivedDto> = emptyList(),
     archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+    /** The archived rows are still loading (card #54): no empty project groups until they land. */
+    archivedPending: Boolean = false,
     archivedActiveId: String? = null,
     /** Every broker call this screen makes (cluster F1). */
     actions: SessionListActions = SessionListActions(),
@@ -360,9 +362,9 @@ fun SessionListScreen(
             locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> (loc.path.trimEnd('/') + "/").startsWith(root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces) {
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces) { w ->
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }

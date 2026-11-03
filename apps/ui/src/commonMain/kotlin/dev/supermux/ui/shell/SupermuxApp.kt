@@ -316,6 +316,7 @@ fun SupermuxApp(
     val archivedSessions by fleet.archivedSessions.collectAsState()
     val workspaces by fleet.workspaces.collectAsState()
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
+    val archivedPending by fleet.archivedPending.collectAsState()
     val messages by fleet.messages.collectAsState()
     val agentState by fleet.agentState.collectAsState()
     val subagentsBySession by fleet.subagents.collectAsState()
@@ -842,6 +843,7 @@ fun SupermuxApp(
                                 onNewChatInWorkspace = onNewChatInWorkspace,
                                 archived = archivedSessions,
                                 archivedWorkspaces = archivedWorkspaces,
+                                archivedPending = archivedPending,
                                 archivedActiveId = ui.selectedArchivedWorkspaceId,
                                 onSelectArchived = { ui.selectArchivedWorkspace(it) },
                                 onOpenDraft = { id -> ui.openLauncher(draftId = id) },

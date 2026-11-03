@@ -2143,9 +2143,9 @@ class BrokerApi(
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
         decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
 
-    /** GET /archived-workspaces */
-    suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =
-        getJson<WorkspacesResponse>("$httpBase/archived-workspaces").workspaces
+    /** GET /archived-workspaces; [slim] = without views and layout (card #54). */
+    suspend fun listArchivedWorkspaces(slim: Boolean = false): List<WorkspaceDto> =
+        getJson<WorkspacesResponse>("$httpBase/archived-workspaces${if (slim) "?slim=1" else ""}").workspaces
 
     /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
     suspend fun restoreWorkspace(id: String): WorkspaceDto =
@@ -3599,4 +3599,6 @@ data class ChatExtras(
     val activity: List<dev.supermux.proto.ActivityEvent> = emptyList(),
     val commands: List<dev.supermux.proto.SlashCommand> = emptyList(),
     val commandsResolved: Boolean = false,
+    /** The session's full subagent list (card #54); null from an older broker. */
+    val subagents: List<dev.supermux.proto.Subagent>? = null,
 )
