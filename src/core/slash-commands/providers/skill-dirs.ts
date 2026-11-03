@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "fs"
-import { join } from "path"
-import { agentCommand, type SlashCommand } from "../types"
+import { basename, dirname, join } from "path"
+import { agentCommand, type CommandOrigin, type SlashCommand } from "../types"
 
 type SkillFrontmatter = { name?: string; description?: string; hidden: boolean }
 
@@ -35,15 +35,30 @@ function readSkillFrontmatter(skillMd: string): SkillFrontmatter {
 }
 
 /**
+ * The plugin a `<plugin>/skills` dir belongs to: the name in its `.claude-plugin/plugin.json` (supermux's
+ * "mux-core" folder is the "mux" plugin), else the plugin folder's own name.
+ */
+export function pluginOfSkillsDir(skillsDir: string): string {
+  const pluginDir = dirname(skillsDir)
+  try {
+    const name = JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"))?.name
+    if (typeof name === "string" && name) return name
+  } catch {}
+  return basename(pluginDir)
+}
+
+/**
  * Read-only scan of skills dirs (`<dir>/<name>/SKILL.md`): name and description from the frontmatter (the
  * folder name when it has none), a skill marked `disable-slash-command: true` left out, the first of a name
- * kept. Only for an agent that reports no list of its own (Antigravity).
+ * kept. [origin] says where each dir's skills come from. Only for an agent that reports no list of its own
+ * (Antigravity).
  */
-export function scanSkillDirs(skillsDirs: string[]): SlashCommand[] {
+export function scanSkillDirs(skillsDirs: string[], origin?: (dir: string) => CommandOrigin | undefined): SlashCommand[] {
   const names = new Set<string>()
   const out: SlashCommand[] = []
   for (const dir of skillsDirs) {
     if (!existsSync(dir)) continue
+    const from = origin?.(dir)
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       const skillMd = join(dir, entry.name, "SKILL.md")
@@ -52,7 +67,7 @@ export function scanSkillDirs(skillsDirs: string[]): SlashCommand[] {
       const name = meta.name ?? entry.name
       if (meta.hidden || !name || names.has(name)) continue
       names.add(name)
-      out.push(agentCommand({ name, sigil: "/", description: meta.description }))
+      out.push(agentCommand({ name, sigil: "/", description: meta.description, origin: from }))
     }
   }
   return out

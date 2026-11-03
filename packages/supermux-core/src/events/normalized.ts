@@ -32,6 +32,8 @@ export type AgentCommandEntry = {
   description?: string
   /** Claude `argumentHint`; ACP `input.hint`. */
   argumentHint?: string
+  /** Claude: other names the command answers to ("review" for "code-review"). */
+  aliases?: string[]
   /** Claude: a built-in command rather than a skill, plugin or custom command. */
   builtin?: boolean
   /** ACP `_meta` as sent (Grok: `scope` and the SKILL.md `path`). */

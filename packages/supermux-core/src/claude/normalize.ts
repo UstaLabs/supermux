@@ -29,10 +29,12 @@ function claudeCommands(value: unknown): AgentCommandEntry[] | undefined {
     const name = str(row?.name)
     if (!row || !name) continue
     const hint = str(row.argumentHint)
+    const aliases = Array.isArray(row.aliases) ? row.aliases.filter((a): a is string => typeof a === "string" && a !== "") : []
     out.push({
       name,
       ...(typeof row.description === "string" ? { description: row.description } : {}),
       ...(hint ? { argumentHint: hint } : {}),
+      ...(aliases.length ? { aliases } : {}),
       ...(row.builtin === true ? { builtin: true } : {}),
     })
   }
