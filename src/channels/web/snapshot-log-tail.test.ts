@@ -118,5 +118,6 @@ test("GET /sessions/:id/chat-extras returns a session's activity and commands", 
     activity: [{ kind: "tool", seq: 1, session: "a" }],
     commands: [{ name: "cmd-a" }],
     commandsResolved: true,
+    subagents: [],
   })
 })

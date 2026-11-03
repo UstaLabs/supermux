@@ -378,12 +378,14 @@ export interface WebChannelOpts {
     => import("../../core/workspace/dto").WorkspaceDto
   archiveWorkspace?: (id: string) => Promise<void>
   restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
-  listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  /** `slim`: rows without views/layout (no views query per workspace) — the app's lazy fetch, card #54. */
+  listArchivedWorkspaces?: (opts?: { slim?: boolean }) => ArchivedWorkspaceRow[]
   // Persistent project catalog (plan 2026-09-21). Mutations throw
   // ProjectNotFoundError (→ 404), ProjectConflictError (→ 409) or Error (→ 400).
   listProjectCatalog?: () => unknown[]
   /** workspaceId → projectId over active AND archived workspaces. */
-  getProjectMembership?: () => Record<string, string>
+  /** `includeArchived: false` leaves archived workspaces out (a `lazyArchived` snapshot, card #54). */
+  getProjectMembership?: (opts?: { includeArchived?: boolean }) => Record<string, string>
   createProject?: (name: string) => unknown
   renameProject?: (id: string, name: string) => unknown
   reorderProjects?: (ids: string[]) => void
@@ -577,6 +579,14 @@ export interface WebChannelOpts {
 
 /** What [WebChannel.json] put in a response body, for the perf trace (set on the Response). */
 const PERF_BYTES = Symbol("perfBytes")
+/** The JSON text itself, so a big answer can be gzipped on the way out ([WebChannel.gzipped]). */
+const PERF_TEXT = Symbol("perfText")
+/** JSON answers this long or longer are gzipped for a client that accepts it (card #54). */
+const GZIP_MIN_CHARS = 8_192
+
+/** An archived workspace as listed: the full DTO, or (slim) the DTO without views and layout. */
+export type ArchivedWorkspaceRow = Omit<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout"> &
+  Partial<Pick<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout">>
 
 /** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
 export const WEB_CAPABILITIES: ChannelCapabilities = {
@@ -880,16 +890,35 @@ export class WebChannel implements Channel {
   }
 
   /**
+   * A JSON answer of [GZIP_MIN_CHARS] or more, gzipped for a client that accepts it (card #54: a
+   * chat open's history and extras and the archive list crossed the relay at 4–5× their gzipped
+   * size). Anything else — small, already encoded, not JSON from [json] — passes through.
+   */
+  private gzipped(req: Request, res: Response): Response {
+    const text = (res as unknown as Record<symbol, unknown>)[PERF_TEXT]
+    if (typeof text !== "string" || text.length < GZIP_MIN_CHARS) return res
+    if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "") || res.headers.has("content-encoding")) return res
+    const body = Bun.gzipSync(text, { level: 4 })
+    const headers = new Headers(res.headers)
+    headers.set("content-encoding", "gzip")
+    headers.append("vary", "accept-encoding")
+    const out = new Response(body, { status: res.status, statusText: res.statusText, headers })
+    ;(out as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    return out
+  }
+
+  /**
    * Every HTTP request goes through here. With tracing on, an API response records how long the
    * broker took to build it (to the Response; the transfer is not in it), its size, and the
    * caller's `x-mux-trace: <trace>/<req>` header, and tells the caller in `server-timing`.
    */
   private async serveTraced(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
-    const perf = this.opts.perf
-    if (!perf?.enabled()) return this.routeRequestOrUpgrade(req, server)
-    const t0 = performance.now()
-    const res = await this.routeRequestOrUpgrade(req, server)
-    if (!res) return res
+    const perf = this.opts.perf?.enabled() ? this.opts.perf : undefined
+    const t0 = perf ? performance.now() : 0
+    const routed = await this.routeRequestOrUpgrade(req, server)
+    if (!routed) return routed
+    const res = this.gzipped(req, routed)
+    if (!perf) return res
     const path = new URL(req.url).pathname
     if (!isApiPath(path)) return res
     const ms = Math.round((performance.now() - t0) * 10) / 10
@@ -904,6 +933,7 @@ export class WebChannel implements Channel {
       route: perfPath(path),
       status: res.status,
       bytes: (res as unknown as Record<symbol, number | undefined>)[PERF_BYTES],
+      gzipBytes: res === routed ? undefined : Number(res.headers.get("content-length")) || undefined,
       ms,
       device: this.perfReqDevice.get(req),
       ...this.perfNotes.get(req),
@@ -1683,6 +1713,13 @@ export class WebChannel implements Channel {
       // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
       const trimExtras = logTail !== undefined && frame.trimExtras === true
       const partialExtras: string[] = []
+      // `slimSubagents` (with `trimExtras`, card #54): a chat not on screen gets only its RUNNING
+      // subagents — the sidebar shows a running count — and its full list over chat-extras when
+      // opened. Finished ones carried up to 8,000-char prompts and results: ~860 KB of 2.3 MB.
+      const slimSubagents = trimExtras && frame.slimSubagents === true
+      // `lazyArchived` (card #54): no archived workspaces (or their project links) here; the app
+      // fetches `/archived-workspaces?slim=1` after the snapshot, off its first screen's path.
+      const lazyArchived = frame.lazyArchived === true
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1694,7 +1731,10 @@ export class WebChannel implements Channel {
         }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         // Small and needed by the session list (running badges), so never trimmed.
-        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        const sessionSubagents = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        subagents[sessionKey] = slimSubagents && !fullLogs.has(sessionKey)
+          ? sessionSubagents.filter((s) => (s as { status?: unknown }).status === "running")
+          : sessionSubagents
         councils[sessionKey] = this.opts.getSessionCouncils?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
@@ -1714,14 +1754,14 @@ export class WebChannel implements Channel {
       laps.lap("workspaces")
       // `slimArchived`: an archived workspace's views and layout are only needed once it is
       // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
-      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+      const archivedWorkspaces = lazyArchived ? undefined : (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
         if (frame.slimArchived !== true) return w
         const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
         return rest
       })
       laps.lap("archivedWorkspaces")
       const projects = this.opts.listProjectCatalog?.() ?? []
-      const projectMembership = this.opts.getProjectMembership?.() ?? {}
+      const projectMembership = this.opts.getProjectMembership?.(lazyArchived ? { includeArchived: false } : undefined) ?? {}
       laps.lap("projects")
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
@@ -1733,7 +1773,7 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       laps.lap("rest")
-      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(perf ? { perf: true } : {}) }
+      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(perf ? { perf: true } : {}) }
       const text = JSON.stringify(snapshot)
       laps.lap("stringify")
       const sent = ws.send(text)
@@ -1754,7 +1794,7 @@ export class WebChannel implements Channel {
           surface: ws.data.surface,
           sessions: sessions.length,
           workspaces: workspaces.length,
-          archivedWorkspaces: archivedWorkspaces.length,
+          archivedWorkspaces: archivedWorkspaces?.length ?? "lazy",
           trimmed: logTail !== undefined,
           bytes: text.length,
           sent,
@@ -2122,7 +2162,8 @@ export class WebChannel implements Channel {
   private json(body: unknown, status = 200): Response {
     const text = JSON.stringify(body)
     const res = new Response(text, { status, headers: { "content-type": "application/json" } })
-    ;(res as unknown as Record<symbol, number>)[PERF_BYTES] = text.length
+    ;(res as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    ;(res as unknown as Record<symbol, unknown>)[PERF_TEXT] = text
     return res
   }
 
@@ -3529,11 +3570,14 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const activity = this.opts.getSessionActivity?.(id) ?? []
       const commands = this.opts.getSessionCommands?.(id) ?? []
-      if (this.opts.perf) this.perfNotes.set(req, { activity: activity.length, commands: commands.length })
+      // The full subagent list, finished ones included: a `slimSubagents` snapshot sent only running ones.
+      const subagents = this.opts.getSessionSubagents?.(id) ?? []
+      if (this.opts.perf) this.perfNotes.set(req, { activity: activity.length, commands: commands.length, subagents: subagents.length })
       return this.json({
         activity,
         commands,
         commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+        subagents,
       })
     }
     if (method === "GET" && path === "/search/messages") {
@@ -4082,7 +4126,8 @@ export class WebChannel implements Channel {
       return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
     }
     if (method === "GET" && path === "/archived-workspaces") {
-      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.() ?? [] })
+      const slim = url.searchParams.get("slim") === "1"
+      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.(slim ? { slim: true } : undefined) ?? [] })
     }
     if (method === "POST" && path === "/workspaces") {
       if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
