@@ -325,7 +325,9 @@ export const defaultLoginRunner: LoginRunner = input => {
     for (const listener of output) listener(`${command}: ${error.message}\n`)
     exit(null)
   })
-  child.on("exit", code => exit(code))
+  // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
+  // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
+  child.on("close", code => exit(code))
   const signal = (name: NodeJS.Signals) => {
     try {
       if (child.pid && process.platform !== "win32") process.kill(-child.pid, name)

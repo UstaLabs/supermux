@@ -194,6 +194,7 @@ export type LoginSpawn = { command: string; args: string[]; env: Record<string, 
 
 export interface LoginProcess {
   onOutput(listener: (chunk: string) => void): void
+  /** Once the process has exited and all of its output has gone to onOutput (a failed login reports its end). */
   onExit(listener: (code: number | null) => void): void
   write(data: string): void
   /** Terminates the whole process group. */
