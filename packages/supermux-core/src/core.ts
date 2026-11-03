@@ -1077,7 +1077,8 @@ export class Core {
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
       if (heldCommands) session.reportHeldCommands(heldCommands)
-      if (reset) session.conversationReset(reset)
+      // The latest one: a replay can report it after open() returned, while the record was being saved.
+      if (openingReset) session.conversationReset(openingReset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -1267,7 +1268,10 @@ export class Core {
     const persist = async (context: SessionContext) => {
       // Re-read: other fields (permissions, configuration) may have been saved meanwhile.
       const { context: _context, ...rest } = await this.store.get(id) ?? record
-      const saved: SessionRecord = { ...rest, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
+      // A conversation reset's own save may not have landed yet: the live session names the conversation it runs.
+      const running = this.live.get(id)?.snapshot()
+      const identity = running ? { agentSessionId: running.agentSessionId, ...(running.previousAgentSessionId ? { previousAgentSessionId: running.previousAgentSessionId } : {}) } : {}
+      const saved: SessionRecord = { ...rest, ...identity, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
       await this.store.put(saved)
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context)

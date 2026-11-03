@@ -132,6 +132,22 @@ test('/clear as the very first message: no system/init under the launch id, stil
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('a conversation_reset that keeps the id ends with its turn: a later foreign id is still not this session', async () => {
+  const resets: unknown[] = []
+  const updates: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset), onUpdate: u => updates.push(u) }))
+  try {
+    const id = r.agentSessionId
+    expect(await r.prompt(input('reset-same-id'), signal())).toEqual({stopReason: 'end_turn'})
+    // The fixture's normal reply starts with frames of 'other-session'.
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(r.agentSessionId).toBe(id)
+    expect(resets).toEqual([])
+    expect(updates.some(u => u.value?.session_id === 'other-session')).toBe(false)
+    expect(updates.some(u => u.value?.session_id === id && u.value?.message?.content?.[0]?.text === 'héllo')).toBe(true)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('interrupt cancels the in-flight turn via control_request', async () => {
   const r = await driver().open(ctx())
   try {

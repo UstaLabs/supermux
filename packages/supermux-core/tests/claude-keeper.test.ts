@@ -478,11 +478,14 @@ test('a /clear that ran while no host was attached: Core resumes into the new co
   core2.subscribe(e => { events.push(e) })
   try {
     const s2 = await core2.sessions.resume('cleared')
+    // The replay reaches the driver after its open() returned: the reset may come in after the resume.
+    const resets = () => events.flatMap(e => e.type === 'session.event' && e.event.kind === 'conversation-reset' ? [e.event] : [])
+    await until(() => resets().length > 0)
     const after = s2.snapshot().agentSessionId
     expect(after).not.toBe(before)
+    expect(resets()).toMatchObject([{ agentSessionId: after, previousAgentSessionId: before, trigger: 'clear' }])
+    // Sent once saved.
     expect(await core2.sessions.get('cleared')).toMatchObject({ agentSessionId: after, previousAgentSessionId: before })
-    expect(events.flatMap(e => e.type === 'session.event' && e.event.kind === 'conversation-reset' ? [e.event] : []))
-      .toMatchObject([{ agentSessionId: after, previousAgentSessionId: before, trigger: 'clear' }])
     await until(() => s2.snapshot().state === 'idle')
     const receipt = await s2.send({ content: [{ type: 'text', text: 'hello' }], whenBusy: 'queue' })
     expect((await receipt.completed).status).toBe('completed')

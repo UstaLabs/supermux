@@ -203,7 +203,7 @@ Every `CoreError` has a `code`. These are all the codes a caller can see, from a
 - `idempotency_conflict`: an `idempotencyKey` was used again with different input.
 - `request_not_found`: no pending request has that id.
 - `core_closed`: a new operation after the core began closing.
-- `resume_identity_changed`: a resume came back on another native conversation than the saved one.
+- `resume_identity_changed`: a resume came back on another native conversation than the saved one (except the one the driver reported, while opening, as the conversation it went on in: `conversation-reset`).
 - `session_identity`: a driver re-attached to, or resumed, an agent whose native session is not the one the record names (ACP, Grok, Antigravity).
 - `fork_identity_unchanged`: the agent reused the source conversation instead of forking.
 - `activity_overflow`: more distinct outstanding native activities than the limit (see `ActivityNotice`); the session fails.

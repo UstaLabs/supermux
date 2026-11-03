@@ -232,7 +232,8 @@ if (process.env.MODE === 'setup-hang') {
     const uuid = m.uuid
     turn++
     if (text === '/clear' || text === '/reset' || text === '/new') { clearConversation(uuid); return }
-    // A /clear that happens only once the RELEASE file exists (while no host is attached).
+    // A /clear that happens only once the RELEASE file exists (while no host is attached), after frames of the old
+    // conversation: a re-attach replays them all, so the reset reaches the driver well after its open() returned.
     if (text === 'clear-when-released') {
       const target = {session, uuid}
       hanging = target
@@ -241,8 +242,17 @@ if (process.env.MODE === 'setup-hang') {
         if (!existsSync(process.env.RELEASE)) return
         clearInterval(wait)
         hanging = undefined
+        for (let i = 0; i < 20; i++) send({type: 'command_lifecycle', session_id: session, uuid: randomUUID()})
         clearConversation(uuid)
       }, 10)
+      return
+    }
+    // A conversation_reset after which Claude keeps its session id (no such CLI behaviour is known; the driver must not
+    // stay ready to take the next foreign id for the new conversation).
+    if (text === 'reset-same-id') {
+      const reset = randomUUID()
+      send({type: 'conversation_reset', new_conversation_id: reset, uuid: reset, trigger: 'clear', user_message_uuid: uuid, timestamp: new Date().toISOString(), session_id: session})
+      send({type: 'result', subtype: 'success', is_error: false, session_id: session, uuid, user_message_uuid: uuid, stop_reason: null, result: '', duration_ms: 1, duration_api_ms: 0, num_turns: 0, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
       return
     }
     if (turn === 1) {

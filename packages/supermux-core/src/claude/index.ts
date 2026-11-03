@@ -186,7 +186,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let unsolicited: string | undefined
     /** Re-attached during an owned turn: ask for the command list once that turn is over. */
     let commandsAfterTurn = false
-    /** Claude announced a new conversation (conversation_reset): the next session id it uses is the new one's. */
+    /**
+     * Claude announced a new conversation (conversation_reset) in the turn that runs: the next id its own frames carry
+     * is the new one's. Kept in the keeper meta too, so a host that re-attaches before that id arrives still follows it.
+     */
     let resetting: { trigger?: string } | undefined
     let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
@@ -227,8 +230,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
      */
     function followConversation(next: string, previous: string, trigger?: string) {
       agentSessionId = next
-      try { rpc.setMeta({ agentSessionId: next, previousAgentSessionId: previous }) } catch { /* */ }
+      resetting = undefined
+      try { rpc.setMeta({ agentSessionId: next, previousAgentSessionId: previous, conversationReset: null }) } catch { /* */ }
       try { context.onConversationReset?.({ agentSessionId: next, previousAgentSessionId: previous, ...(trigger ? { trigger } : {}) }) } catch { /* */ }
+    }
+    function expectReset(next: { trigger?: string } | undefined) {
+      resetting = next
+      try { rpc.setMeta({ conversationReset: next ?? null }) } catch { /* */ }
     }
     function fail(error: Error) {
       if (fatal) return
@@ -450,12 +458,15 @@ export function claude(options: ClaudeOptions): AgentDriver {
       }
       if (plumbing.has(message?.type)) return
       const sessionId = message?.session_id
+      // Only Claude's own main-thread frames name its conversation (a subagent's frames carry a parent_tool_use_id).
+      const ownFrame = !message?.parent_tool_use_id
       if (message?.type === 'conversation_reset') {
-        if (typeof sessionId !== 'string' || sessionId === agentSessionId) resetting = { ...(typeof message.trigger === 'string' && message.trigger ? { trigger: message.trigger } : {}) }
-      } else if (resetting && typeof sessionId === 'string' && sessionId && sessionId !== agentSessionId) {
-        const { trigger } = resetting
-        resetting = undefined
-        followConversation(sessionId, agentSessionId, trigger)
+        if (ownFrame && (typeof sessionId !== 'string' || sessionId === agentSessionId)) expectReset({ ...(typeof message.trigger === 'string' && message.trigger ? { trigger: message.trigger } : {}) })
+      } else if (resetting && ownFrame && (message?.type === 'system' || message?.type === 'result') && typeof sessionId === 'string' && sessionId && sessionId !== agentSessionId) {
+        followConversation(sessionId, agentSessionId, resetting.trigger)
+      } else if (resetting && ownFrame && message?.type === 'result') {
+        // The reset's turn ended in the conversation it had: the next foreign id is not a new conversation.
+        expectReset(undefined)
       }
       // An id change Claude did not announce is still a failure.
       if (message?.type === 'system' && message.subtype === 'init') {
@@ -541,6 +552,9 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (behind) {
           try { context.onConversationReset?.({ agentSessionId: sid, previousAgentSessionId: context.resumeId! }) } catch { /* */ }
         }
+        // The old host heard conversation_reset but not yet the new id: the replay follows it.
+        const pending = rpc.welcome.meta.conversationReset as { trigger?: unknown } | null | undefined
+        if (pending && typeof pending === 'object' && !Array.isArray(pending)) resetting = { ...(typeof pending.trigger === 'string' && pending.trigger ? { trigger: pending.trigger } : {}) }
         identityConfirmed = true
         const owned = rpc.welcome.meta.ownedTurn
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {

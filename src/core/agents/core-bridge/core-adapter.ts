@@ -1134,11 +1134,12 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       // message.started): the FIRST event of the turn proves the agent is on
       // it, so disarm for good. Re-arming per event cut every quiet stretch —
       // a subagent working for minutes, a long tool run — at 90 s.
-      if (this.stallTimer) this.disarmStall()
+      // Session state, not turn content: it says nothing about whether the agent took the prompt.
       if (event.event.kind === "conversation-reset") {
         void this.followConversation(event.event.agentSessionId, event.event.trigger)
         return
       }
+      if (this.stallTimer) this.disarmStall()
       this.bridge.handle(event.event)
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
