@@ -10,6 +10,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -41,12 +42,18 @@ class HostStoreLogTailTest {
         }
     }
 
-    /** A HostStore whose GET /sessions/<id>/messages answers [status] with entries "1" and "2". */
-    private fun harness(status: HttpStatusCode = HttpStatusCode.OK): Harness {
+    /**
+     * A HostStore whose GET /sessions/<id>/messages answers [status] with entries "1" and "2".
+     *
+     * [held], when given, keeps every answer back until it completes, so a fetch is in flight for
+     * exactly as long as the test says rather than for however long the mock's IO thread takes.
+     */
+    private fun harness(status: HttpStatusCode = HttpStatusCode.OK, held: CompletableDeferred<Unit>? = null): Harness {
         val fetched = Collections.synchronizedList(mutableListOf<String>())
         val engine = MockEngine { req ->
             // Only history fetches: a snapshot also refreshes the launcher's model catalog.
             if (req.url.encodedPath.startsWith("/sessions/")) fetched.add(req.url.encodedPath)
+            held?.await()
             val body = if (req.url.encodedPath.endsWith("/chat-extras")) {
                 """{"activity":[{"ts":"1","kind":"tool","seq":7}],"commands":[{"id":"c","family":"agent","name":"review"}],"commandsResolved":true}"""
             } else {
@@ -67,11 +74,17 @@ class HostStoreLogTailTest {
     }
 
     @Test fun openingATrimmedSessionFetchesItsHistoryOnce() {
-        val h = harness()
+        // The answer is held until both opens are in, so the second really lands while the first
+        // fetch is in flight. Left to the mock's IO thread, that fetch could finish between the
+        // second open reading the state and claiming the fetch, and the second open fetched again
+        // (on CI, now and then): a gap of a few instructions deciding the very thing under test.
+        val answer = CompletableDeferred<Unit>()
+        val h = harness(held = answer)
         h.app.reduce(ServerFrame.Snapshot(logs = mapOf("a" to listOf(e("2"))), partialLogs = listOf("a")))
 
         h.app.ensureMessagesLoaded("a")
         h.app.ensureMessagesLoaded("a")
+        answer.complete(Unit)
         h.awaitState { "a" in it.completeLogs }
         h.app.ensureMessagesLoaded("a")
 
