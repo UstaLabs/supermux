@@ -57,6 +57,18 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('the initialize reply reaches the host as a native update carrying the command list', async () => {
+  // Claude 2.1.308 lists its slash commands in the initialize reply; no prompt is needed (card #13).
+  const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
+  const updates: any[] = []
+  const r = await driver({COMMANDS: JSON.stringify(commands)}).open(ctx({onUpdate: u => updates.push(u)}))
+  try {
+    const replies = updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
+    expect(replies).toHaveLength(1)
+    expect(replies[0].value.response.response.commands).toEqual(commands)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('resuming a conversation that was never sent to starts it fresh under the same id', async () => {
   // Restarted before its first message: Claude has no conversation file and says "No conversation found".
   const r = await driver().open(ctx({resumeId: 'never-sent'}))

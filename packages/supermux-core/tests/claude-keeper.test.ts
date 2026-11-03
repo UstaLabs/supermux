@@ -82,7 +82,7 @@ async function runAttach(env: Record<string, string>) {
   return JSON.parse(out.trim().split('\n').filter(Boolean).at(-1)!)
 }
 
-test('process death leaves keeper; reattach skips initialize and seeds owned turn', async () => {
+test('process death leaves keeper; reattach seeds owned turn and asks for the commands only after it', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-reattach-'))
   dirs.push(stateDirectory)
   const trace = join(stateDirectory, 'trace')
@@ -92,12 +92,14 @@ test('process death leaves keeper; reattach skips initialize and seeds owned tur
     KEEPER_PROMPT: 'hang-then-result',
     CLAUDE_FIXTURE: fixture,
     TRACE: trace,
+    COMMANDS: JSON.stringify([{ name: 'verify', description: 'Check work' }]),
   })
   expect(typeof info.ackedSeq).toBe('number')
   expect(alive(info.keeperPid)).toBe(true)
   expect(alive(info.agentPid)).toBe(true)
 
   const activity: Array<{ id: string; phase: string }> = []
+  const updates: any[] = []
   const r = await libraryClaude({
     env: { TRACE: trace },
     keeper: { stateDirectory, limits: keeperLimits() },
@@ -105,6 +107,7 @@ test('process death leaves keeper; reattach skips initialize and seeds owned tur
     sessionId: 'k1',
     resumeId: info.sessionId,
     onActivity: n => activity.push({ ...n }),
+    onUpdate: u => updates.push(u),
   }))
   try {
     const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => {
@@ -119,6 +122,12 @@ test('process death leaves keeper; reattach skips initialize and seeds owned tur
       await new Promise(x => setTimeout(x, 30))
     }
     expect(activity.some(a => a.phase === 'completed')).toBe(true)
+    // The host that heard the first initialize is gone: once the owned turn is over, ask again.
+    const commandReplies = () => updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
+    for (let i = 0; i < 100 && commandReplies().length === 0; i++) await new Promise(x => setTimeout(x, 20))
+    expect(commandReplies().map(u => u.value.response.response.commands)).toEqual([[{ name: 'verify', description: 'Check work' }]])
+    const after = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return l } })
+    expect(after.filter((x: any) => x?.type === 'control_request' && x.request?.subtype === 'initialize')).toHaveLength(2)
     expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
   } finally {
     await r.close({ mode: 'shutdown' })
@@ -244,10 +253,14 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await r.close({ mode: 'detach' })
   expect(alive(status.keeperPid)).toBe(true)
   expect(alive(status.agentPid)).toBe(true)
+  const updates: any[] = []
   const r2 = await libraryClaude({
     keeper: { stateDirectory, limits: keeperLimits() },
-  }).open(ctx({ sessionId: 'k-detach', resumeId: sid }))
+  }).open(ctx({ sessionId: 'k-detach', resumeId: sid, onUpdate: u => updates.push(u) }))
   expect(r2.agentSessionId).toBe(sid)
+  // Idle on re-attach: the command list is asked for at once (a second initialize).
+  for (let i = 0; i < 100 && !updates.some(u => u.value?.type === 'control_response'); i++) await new Promise(x => setTimeout(x, 20))
+  expect(updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')).toHaveLength(1)
   await r2.close({ mode: 'shutdown' })
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)

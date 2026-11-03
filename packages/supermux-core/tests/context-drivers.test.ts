@@ -11,7 +11,7 @@ import { stripInstructionsEcho } from "../src/context/agents.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import type { ContextDrop, LaunchContext } from "../src/context/types.js"
-import type { AgentDriver, AuthProfile, DriverContext } from "../src/types.js"
+import type { AgentDriver, AgentUpdate, AuthProfile, DriverContext } from "../src/types.js"
 import { TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
@@ -395,13 +395,13 @@ test("generic acp: mcpServers only (unverified); collisions with driver servers 
 
 // ------------------------------------------------------------ in flight (C1b): live control on the running process
 
-async function openLive(agent: "claude" | "codex", sessionContext: LaunchContext, env: Record<string, string> = {}) {
+async function openLive(agent: "claude" | "codex", sessionContext: LaunchContext, env: Record<string, string> = {}, onUpdate: (update: AgentUpdate) => void = () => {}) {
   const dir = scratch()
   const control = join(dir, "control.jsonl"), trace = join(dir, "trace.jsonl")
   const driver = AGENTS[agent]!({ CONTROL_TRACE: control, TRACE: trace, ...env })
   const runtime = await driver.open({
     sessionId: "ctx-live", cwd: process.cwd(), signal: new AbortController().signal, sessionContext,
-    onUpdate() {}, onExit() {},
+    onUpdate, onExit() {},
     requestPermission: async () => ({ outcome: { outcome: "cancelled" } }), requestAnswers: async () => ({ outcome: "cancelled" as const }),
   })
   const lines = (file: string) => existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : []
@@ -431,6 +431,22 @@ test("claude live: skills/plugins edit the launched folder + reload_plugins; MCP
     await live.apply(after, [{ kind: "skills", op: "remove", item: f.skills }, { kind: "mcpServers", op: "remove", item: "dyn" }], {})
     expect(readdirSync(plugins).sort()).toEqual(["01-my-plugin", "supermux-skills-2"])
     expect(control().slice(2)).toEqual([{ subtype: "reload_plugins" }, { subtype: "mcp_set_servers", servers: {} }])
+  } finally { await runtime.close({ mode: "shutdown" }) }
+})
+
+test("claude live: the reload_plugins reply, which lists the commands, reaches the host", async () => {
+  const f = contextFixture()
+  const extra = join(f.root, "skills-3"); mkdirSync(join(extra, "delta"), { recursive: true })
+  const launched = f.launch({ instructions: undefined })
+  const commands = [{ name: "delta", description: "A skill" }]
+  const updates: AgentUpdate[] = []
+  const { runtime } = await openLive("claude", launched, { COMMANDS: JSON.stringify(commands) }, u => updates.push(u))
+  try {
+    const replies = () => updates.filter(u => u.protocol === "native" && (u.value as { type?: string }).type === "control_response")
+    expect(replies()).toHaveLength(1) // initialize
+    await runtime.context!.apply({ ...launched, skills: [f.skills, extra] }, [{ kind: "skills", op: "add", item: extra }], {})
+    expect(replies()).toHaveLength(2)
+    expect((replies()[1]!.value as { response: { response: { commands: unknown } } }).response.response.commands).toEqual(commands)
   } finally { await runtime.close({ mode: "shutdown" }) }
 })
 
