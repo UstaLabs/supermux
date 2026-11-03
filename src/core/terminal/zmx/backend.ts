@@ -467,6 +467,18 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
     return target
   }
 
+  /**
+   * Has this target been closed — or has it ended — since `target` was looked up?
+   *
+   * `close()` marks the state it finds and registers `#closing` in the same
+   * synchronous turn, BEFORE its kill is sent, so any kill an in-flight attach
+   * can run into is one this already answers true for. `noteExit` marks the
+   * state too: a target whose process ended is just as gone.
+   */
+  #closeDecided(key: WorkspaceTerminalKey, target: TargetState): boolean {
+    return target.closing || this.#closing.has(keyOf(key))
+  }
+
   #forget(target: TargetState): void {
     if (target.viewers.size > 0) return
     const id = keyOf(target.key)
@@ -533,11 +545,22 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
       await helper.send({ op: "attach", name, socket, cols: ATTACH_COLS, rows: ATTACH_ROWS })
     } catch (error) {
       viewer.discard()
+      // A CLOSE THAT LANDED MID-HANDSHAKE IS WHAT THIS ATTACH RAN INTO, whatever
+      // the helper called it. The helper connects, then reads the daemon's
+      // `mux.target` label; a kill that arrives in between makes the daemon hang
+      // up on it, and from inside the helper a closed target and a crashed one
+      // look alike — so it says `backend-unavailable`, recoverable, and a client
+      // retries a terminal that no longer exists. The close is OURS and it is
+      // recorded before its kill is sent, so the answer is the one the contract
+      // gives for it, exactly as when the same race is won by the attach below.
+      if (this.#closeDecided(key, target)) {
+        throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} was closed while attaching`)
+      }
       throw asWorkspaceError(error, `cannot attach to workspace terminal ${name}`)
     }
     // Attaching is not instant. A close may have landed while we were in
     // flight; the target is gone and this viewer must not outlive it.
-    if (target.closing || this.#closing.has(keyOf(key)) || this.#targets.get(keyOf(key)) !== target) {
+    if (this.#closeDecided(key, target) || this.#targets.get(keyOf(key)) !== target) {
       viewer.discard()
       throw new WorkspaceTerminalError("target-not-found", `workspace terminal ${name} was closed while attaching`)
     }

@@ -12,6 +12,7 @@ import {
   type WorkspaceBackendWorld,
 } from "../workspace-backend.contract"
 import {
+  isWorkspaceTerminalError,
   WorkspaceTerminalError,
   type WorkspaceTerminalEvent,
   type WorkspaceTerminalKey,
@@ -72,6 +73,10 @@ class FakeZmx {
   createGate?: Promise<void>
   attachGate?: Promise<void>
   killGate?: Promise<void>
+  /** Hold an attach AFTER its connect and BEFORE its label handshake — the
+   * window in which the real helper is reading `mux.target` from a daemon it
+   * has already connected to. `reached` fires once an attach is in it. */
+  handshake?: { reached: () => void; gate: Promise<void> }
   /** Every command any helper was asked to run, for order assertions. */
   readonly commands: HelperCommandBody[] = []
   readonly launched: FakeHelper[] = []
@@ -174,6 +179,17 @@ class FakeHelper implements ZmxHelperFacade {
     await this.world.attachGate
     const target = this.world.targets.get(command.socket)
     if (!target) throw new WorkspaceTerminalError("target-not-found", "ConnectionRefused")
+    const handshake = this.world.handshake
+    if (handshake) {
+      handshake.reached()
+      await handshake.gate
+      // The daemon hung up while the label was being read: the helper's
+      // `verifyTarget` says `Disconnected`, which it maps to
+      // `backend-unavailable` — it cannot tell a closed target from a crash.
+      if (!this.world.targets.has(command.socket)) {
+        throw new WorkspaceTerminalError("backend-unavailable", "Disconnected", true)
+      }
+    }
     this.#verify(target, command.name)
     this.#attached = target
     target.viewers.push(this)
@@ -713,6 +729,51 @@ describe("ZmxWorkspaceBackend", () => {
     expect((failure as { message: string }).message).toContain("daemon closed the connection")
     expect((failure as { message: string }).message).toContain("restore was still streaming")
     expect(events.some(event => event.type === "exit")).toBe(false)
+  })
+
+  test("a close that hangs up on an attach mid-handshake is target-not-found, not a retryable failure", async () => {
+    // The real helper CONNECTS first and reads the daemon's `mux.target` label
+    // second. A kill landing between the two makes the daemon hang up on it,
+    // and the helper reports that as `backend-unavailable`, recoverable — from
+    // where it stands a closed target and a crashed one look alike. Passed
+    // through, a client would retry a terminal that no longer exists. This is
+    // the order tests/integration/zmx-workspace.test.ts kept losing on CI.
+    const { fake, backend } = harness()
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const inHandshake = deferred()
+    const hangUp = deferred()
+    fake.handshake = { reached: inHandshake.resolve, gate: hangUp.promise }
+
+    const { events, emit } = recorder()
+    const attaching = backend.attachExisting(CONTRACT_A, "racer", emit)
+    await inHandshake.promise // connected, reading the label
+    await backend.close(CONTRACT_A) // the kill lands: the daemon is gone
+    hangUp.resolve()
+
+    const error = await attaching.then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
+    expect((error as { recoverable: boolean }).recoverable).toBe(false)
+    expect(events).toEqual([])
+    expect(await backend.exists(CONTRACT_A)).toBe(false)
+  })
+
+  test("an attach the daemon hangs up on with NO close in flight stays a retryable failure", async () => {
+    // The other side of the same line: without a close of ours, a hang-up is
+    // exactly what `backend-unavailable` is for, and it is not dressed up.
+    const { fake, backend } = harness()
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const inHandshake = deferred()
+    const hangUp = deferred()
+    fake.handshake = { reached: inHandshake.resolve, gate: hangUp.promise }
+
+    const attaching = backend.attachExisting(CONTRACT_A, "unlucky", recorder().emit)
+    await inHandshake.promise
+    fake.targets.delete(fake.target(CONTRACT_A)!.socket) // the daemon crashed
+    hangUp.resolve()
+
+    const error = await attaching.then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "backend-unavailable")).toBe(true)
+    expect((error as { recoverable: boolean }).recoverable).toBe(true)
   })
 
   test("a close the broker asked for is not reported to the client as a failure", async () => {
