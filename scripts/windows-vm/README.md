@@ -15,6 +15,10 @@ cd apps
 .\gradlew.bat :desktop:packageMsi --console=plain --no-daemon
 $msi = Get-ChildItem .\desktop\build\compose\binaries\main\msi\*.msi |
   Select-Object -First 1
+# Before the app first starts its broker: mark this install as an agent test install, so its
+# telemetry is tagged env:"dev" and stays out of real-user numbers (TELEMETRY.md).
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.mux\state" | Out-Null
+Add-Content "$env:USERPROFILE\.mux\state\.env" "MUX_TELEMETRY_ENV=dev"
 Start-Process msiexec.exe -Wait -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart"
 ..\scripts\windows-vm\assert-msi.ps1 -MsiPath $msi.FullName
 ```

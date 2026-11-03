@@ -42,7 +42,11 @@ function freePort(): number {
   return p
 }
 
-async function runBroker(extraEnv: Record<string, string>, whileUp: (base: string, token: string) => Promise<void>) {
+async function runBroker(
+  extraEnv: Record<string, string>,
+  whileUp: (base: string, token: string) => Promise<void>,
+  stateDotEnv?: string,
+) {
   const dir = mkdtempSync(join(tmpdir(), "mux-telemetry-e2e-"))
   dirs.push(dir)
   const state = join(dir, "state")
@@ -63,6 +67,8 @@ async function runBroker(extraEnv: Record<string, string>, whileUp: (base: strin
   env.PATH = `${stub}:${env.PATH}`
   const seed = Bun.spawnSync(["bun", "scripts/test-broker-seed.ts"], { cwd: REPO, env: env as Record<string, string> })
   const { token } = JSON.parse(seed.stdout.toString()) as { token: string }
+  // What a test recipe writes before first boot (the broker loads <state>/.env itself).
+  if (stateDotEnv !== undefined) writeFileSync(join(state, ".env"), stateDotEnv)
   const port = freePort()
   const base = `http://127.0.0.1:${port}`
   const broker = Bun.spawn(["bun", "src/main.ts"], {
@@ -150,4 +156,22 @@ test("DO_NOT_TRACK=1 sends nothing even when forced", async () => {
   const before = store.count()
   await runBroker({ MUX_TELEMETRY_FORCE: "1", DO_NOT_TRACK: "1" }, async () => {})
   expect(store.count()).toBe(before)
+}, 120_000)
+
+// SUPERMUX_BUILD_VERSION makes a source broker report a release version, like a real release binary.
+const asRelease = { MUX_TELEMETRY_FORCE: "1", SUPERMUX_BUILD_VERSION: "0.17.0" }
+const envOf = () => store.all().map((e) => ({ version: e.version, env: e.env }))
+
+test("a release build reports env:release", async () => {
+  const before = store.count()
+  await runBroker(asRelease, async () => {})
+  expect(envOf().slice(before)).toContainEqual({ version: "0.17.0", env: "release" })
+}, 120_000)
+
+test("MUX_TELEMETRY_ENV=dev in the install's state/.env marks a release build as dev", async () => {
+  const before = store.count()
+  await runBroker(asRelease, async () => {}, "MUX_TELEMETRY_ENV=dev\n")
+  const fresh = envOf().slice(before)
+  expect(fresh.length).toBeGreaterThan(0)
+  expect(fresh.every((e) => e.version === "0.17.0" && e.env === "dev")).toBe(true)
 }, 120_000)

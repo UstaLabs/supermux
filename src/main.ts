@@ -453,7 +453,7 @@ const telemetry = new TelemetryService({
   settings,
   url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
   isEnabled: () => telemetryState().enabled,
-  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION), os: process.platform, arch: process.arch },
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: process.platform, arch: process.arch },
   heartbeat: () => {
     const since = Date.now() - 24 * 3600 * 1000
     return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }

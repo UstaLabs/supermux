@@ -55,6 +55,8 @@ function Start-Broker {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.Environment['MUX_HOME'] = $MuxHome
+  # A test boot is not an install: no telemetry (TELEMETRY.md).
+  $psi.Environment['DO_NOT_TRACK'] = '1'
   $psi.Environment['MUX_STATE_DIR'] = $state
   $psi.Environment['MUX_WEB_PORT'] = "$Port"
   $psi.Environment['MUX_WEB_PUBLIC_URL'] = $Base

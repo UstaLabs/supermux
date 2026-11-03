@@ -41,7 +41,7 @@ isn't on this page, supermux doesn't send it.
 | `version` | `0.14.0` | supermux version |
 | `commit` | `2e3ca970` | Build commit |
 | `installMode` | `binary` | How supermux is installed: `binary`, `docker`, `source`, or `managed` (run by the desktop app) |
-| `env` | `release` | `release` for a released version, `dev` for a build run from source |
+| `env` | `release` | `release` for a released version (a plain number like `0.16.0`); `dev` for a build run from source, a test build or a prerelease |
 | `os` | `linux` | `linux`, `darwin` or `win32` |
 | `arch` | `x64` | `x64` or `arm64` |
 
@@ -344,8 +344,12 @@ deletes every unsent event right away.
 Our server checks every event against this page. An event or field that isn't listed
 here is rejected, not stored.
 
-Builds run from source send telemetry too, marked `env: "dev"` so they can be told apart from
-releases. Automated test brokers never send telemetry.
+Builds run from source, test builds and prereleases send telemetry too, marked `env: "dev"` so
+they can be told apart from releases. Automated test brokers never send telemetry.
+
+A test install of a released version (a fresh-install VM, a Docker trial, a demo) is marked
+`env: "dev"` too: set `MUX_TELEMETRY_ENV=dev` in its environment or in its `~/.mux/state/.env`
+before it first starts. This can only mark an install as `dev`; nothing can mark one as `release`.
 
 ## Turning it off
 
