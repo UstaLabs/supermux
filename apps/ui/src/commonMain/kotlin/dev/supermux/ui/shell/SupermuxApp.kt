@@ -360,11 +360,10 @@ fun SupermuxApp(
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
     val setHostFilter: (String?) -> Unit = { hostFilter = it; fleet.saveHostFilter(it) }
 
-    // Refresh the settled fold when the live list changes (settle / resume / snapshot).
-    LaunchedEffect(sessions) {
-        dev.supermux.util.PerfTrace.event("archived.refresh", "reason" to "sessions changed", "sessions" to sessions.size)
-        fleet.refreshArchived()
-    }
+    // The archived list (the Agents ▸ Archived fold, the archive) is refreshed by each host's store
+    // when it can change: a (re)connect, an archive (session_removed), a resume. It used to be
+    // re-downloaded here on EVERY change to the live list — a model switch, a git status, a
+    // rename — ~420 KB each time (card #54).
 
     val selectedSession = ui.selectedId?.let { selectedId ->
         sessions.firstOrNull { it.id == selectedId }

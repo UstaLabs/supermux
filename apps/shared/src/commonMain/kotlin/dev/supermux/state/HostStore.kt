@@ -630,6 +630,9 @@ class HostStore(
                 refreshAgentModels()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
+                // Anything may have been archived or resumed while we were away (card #54: this
+                // replaced the shell's refetch on every change to the live list).
+                refreshArchived("snapshot")
                 fileSystem.onReconnect()
                 flushOutbox()
                 _resynced.tryEmit(Unit)
@@ -638,8 +641,10 @@ class HostStore(
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
-                refreshArchived()
+                refreshArchived("session_removed")
             }
+            // A resumed session leaves the archive.
+            is ServerFrame.SessionAdded -> if (_archivedSessions.value.any { it.id == frame.session.id }) refreshArchived("resumed")
             is ServerFrame.MessageAppend -> {
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
@@ -922,8 +927,13 @@ class HostStore(
         }
     }
 
-    fun refreshArchived() {
-        stateScope.launch {
+    private var archivedJob: Job? = null
+
+    /** GET /archived-sessions; a newer refresh supersedes one still in flight. */
+    fun refreshArchived(reason: String = "asked") {
+        PerfTrace.event("archived.refresh", "reason" to reason, "host" to baseUrl)
+        archivedJob?.cancel()
+        archivedJob = stateScope.launch {
             _archivedSessions.value = runApi("archived") { api.archived() } ?: emptyList()
         }
     }
