@@ -21,8 +21,12 @@ fun rememberAgentAvatars(
     val wanted = sessions.filter { it.role == "personal_assistant" && it.avatar != null }.associate { it.id to it.avatar!! } + extra
     LaunchedEffect(wanted) {
         cache.keys.retainAll(wanted.keys)
+        // Card #54: the launch trace's "Agents have their pictures" mark — fetched one at a time.
+        val start = dev.supermux.util.PerfTrace.elapsedMs()
+        var fetched = 0
         for ((id, rev) in wanted) {
             if (cache[id]?.first == rev) continue
+            fetched++
             val text = try {
                 apiFor(id)?.getAgentAvatar(id)
             } catch (c: CancellationException) {
@@ -31,6 +35,15 @@ fun rememberAgentAvatars(
                 null
             }
             text?.let(::parseAvatarRig)?.let { cache[id] = rev to it }
+        }
+        if (fetched > 0) {
+            dev.supermux.util.PerfTrace.milestone(
+                "avatars.loaded",
+                "fetched" to fetched,
+                "shown" to cache.size,
+                "wanted" to wanted.size,
+                "ms" to dev.supermux.util.PerfTrace.elapsedMs() - start,
+            )
         }
     }
     return cache.mapValues { it.value.second }

@@ -366,6 +366,17 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
+    // Card #54: the launch trace starts here; SUPERMUX_PERF=1 also opens the Load Timings panel
+    // and prints every trace event as it happens.
+    run {
+        val perfOn = System.getenv("SUPERMUX_PERF") == "1"
+        dev.supermux.util.PerfTrace.echo = perfOn
+        if (perfOn) dev.supermux.util.PerfTrace.panelVisible.value = true
+        dev.supermux.util.PerfTrace.milestone(
+            "process.start",
+            "uptimeMs" to java.lang.management.ManagementFactory.getRuntimeMXBean().uptime,
+        )
+    }
     // Let Compose paint over the Swing interop children. Must be set before the
     // first Compose window: the flag is read through a memoizing `lazy`, so
     // setting it later is silently ignored.
@@ -947,6 +958,7 @@ fun main() {
             // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
             // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
             // button in the sidebar band.
+            val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
                     "File",
@@ -1003,6 +1015,10 @@ fun main() {
                         // "+" — so there is nothing here to check on or off.
                         MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
                             ui.sidebarCollapsed = !ui.sidebarCollapsed
+                        },
+                        // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
+                        MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
+                            dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
                         },
                     ),
                 ),
@@ -1953,6 +1969,8 @@ fun main() {
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
                     ) {
+                        // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
+                        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                         SupermuxApp(
                             fleet = fleet,
                             ui = ui,
@@ -2048,6 +2066,8 @@ fun main() {
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
                         )
+                        dev.supermux.ui.perf.PerfPanelHost()
+                        }
                     }
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips

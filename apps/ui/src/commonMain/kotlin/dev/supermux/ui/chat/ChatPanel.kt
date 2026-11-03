@@ -79,6 +79,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -231,6 +232,8 @@ data class ChatState(
      * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
      */
     val listedSessions: Set<String> = emptySet(),
+    /** The host holds this chat's whole history page and extras (card #54's "fully shown" mark). */
+    val historyLoaded: Boolean = true,
 )
 
 /**
@@ -346,6 +349,8 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
+    val loadedChats by app.loadedChats.collectAsState()
+    val historyLoaded = sessionId in loadedChats
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -364,6 +369,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         councils = councilsMap[sessionId].orEmpty(),
         councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
         listedSessions = listedSessions,
+        historyLoaded = historyLoaded,
     )
 }
 
@@ -518,6 +524,18 @@ fun ChatPanel(
     val councils = state.councils
     val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
         mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
+    }
+    // Card #54: the chat-open trace's two screen marks — the first frame that draws any of this
+    // chat, and the first that draws it with its whole history loaded.
+    SideEffect { dev.supermux.util.PerfTrace.countRecompose("chat") }
+    LaunchedEffect(session.id, timelineItems.isNotEmpty(), state.historyLoaded) {
+        val trace = dev.supermux.util.PerfTrace.chatTrace(session.id) ?: return@LaunchedEffect
+        if (timelineItems.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        dev.supermux.util.PerfTrace.firstMilestone("chat.firstFrame", "items" to timelineItems.size, "messages" to messages.size, trace = trace)
+        if (state.historyLoaded) {
+            dev.supermux.util.PerfTrace.firstMilestone("chat.complete", "items" to timelineItems.size, "messages" to messages.size, "activity" to activity.size, trace = trace)
+        }
     }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.

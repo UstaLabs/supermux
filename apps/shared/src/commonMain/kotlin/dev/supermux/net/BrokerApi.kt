@@ -28,6 +28,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.media.RangeResult
+import dev.supermux.util.PerfTrace
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -1727,6 +1728,11 @@ class BrokerApi(
     private val token: String,
     private val http: HttpClient,
 ) {
+    init {
+        // Card #54: every request this client sends lands in the load-time trace.
+        http.installPerfTrace()
+    }
+
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
@@ -1775,8 +1781,24 @@ class BrokerApi(
      */
     private suspend inline fun <reified T> decode(resp: HttpResponse): T {
         try {
+            val bodyStart = PerfTrace.elapsedMicros()
             val text = resp.bodyAsText()
-            if (resp.status.isSuccess()) return json.decodeFromString(text)
+            if (resp.status.isSuccess()) {
+                val decodeStart = PerfTrace.elapsedMicros()
+                val value: T = json.decodeFromString(text)
+                // Card #54: the body's read and decode, joined to its request by id.
+                resp.call.request.attributes.getOrNull(PerfRequestKey)?.let { perf ->
+                    PerfTrace.event(
+                        "http.body",
+                        "req" to perf.req,
+                        "chars" to text.length,
+                        "bodyMs" to (decodeStart - bodyStart) / 1000.0,
+                        "decodeMs" to (PerfTrace.elapsedMicros() - decodeStart) / 1000.0,
+                        trace = perf.trace,
+                    )
+                }
+                return value
+            }
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
             throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
@@ -1787,8 +1809,14 @@ class BrokerApi(
         }
     }
 
-    private suspend inline fun <reified T> getJson(url: String): T =
-        decode(http.get(url) { authHeader() })
+    /** GET [url] as [T]; [trace] files the request under a chat open rather than the launch (card #54). */
+    private suspend inline fun <reified T> getJson(url: String, trace: String? = null): T =
+        decode(
+            http.get(url) {
+                authHeader()
+                if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
+            },
+        )
 
     /**
      * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
@@ -3111,8 +3139,8 @@ class BrokerApi(
         }).glossary
 
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
-    suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        getJson("$httpBase/sessions/$sessionId/messages")
+    suspend fun archivedLogs(sessionId: String, trace: String? = null): List<LogEntry> =
+        getJson("$httpBase/sessions/$sessionId/messages", trace)
 
     /** GET /search/messages?q= — live sessions' messages containing [q], newest first. */
     suspend fun searchMessages(q: String, limit: Int = 50): List<MessageSearchHit> =
@@ -3120,8 +3148,8 @@ class BrokerApi(
 
     /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
      *  `trimExtras` snapshot leaves out for chats that were not on screen. */
-    suspend fun chatExtras(sessionId: String): ChatExtras =
-        getJson("$httpBase/sessions/$sessionId/chat-extras")
+    suspend fun chatExtras(sessionId: String, trace: String? = null): ChatExtras =
+        getJson("$httpBase/sessions/$sessionId/chat-extras", trace)
 
     /** GET /projects → known project working directories (absolute paths). */
     suspend fun listProjects(): List<String> =

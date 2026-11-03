@@ -28,7 +28,8 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BlobText
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
-import dev.supermux.util.StartupTrace
+import dev.supermux.util.PerfTrace
+import dev.supermux.util.perfClientLogs
 import dev.supermux.net.ChunkSource
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.media.RangeDownload
@@ -199,7 +200,7 @@ class HostStore(
     val client = BrokerClient(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
-        subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+        subscribeFrame = { req -> subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req) },
         clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
@@ -337,6 +338,9 @@ class HostStore(
     private val outbox = MutableStateFlow<List<ClientFrame.Send>>(emptyList())
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
         _state.map { it.commands }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Sessions whose chat holds its whole history page and extras (card #54's "fully shown"). */
+    val loadedChats: StateFlow<Set<String>> =
+        _state.map { it.completeLogs intersect it.completeExtras }.stateIn(projectionScope, SharingStarted.Eagerly, emptySet())
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
@@ -498,7 +502,7 @@ class HostStore(
     val connected: Boolean get() = client.sync.synced
 
     init {
-        StartupTrace.mark("host.init")
+        PerfTrace.milestone("host.init", "host" to baseUrl)
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
@@ -552,17 +556,70 @@ class HostStore(
 
     /** Fold one inbound frame into HostState plus side effects. Public for reducer tests. */
     fun reduce(frame: ServerFrame) {
-        val start = StartupTrace.elapsedMs()
+        val start = PerfTrace.elapsedMicros()
         _state.update { reduceHostFrame(it, frame) }
+        val micros = PerfTrace.elapsedMicros() - start
+        PerfTrace.countReduce(frame::class.simpleName ?: "?", micros)
         if (frame is ServerFrame.Snapshot) {
-            StartupTrace.mark("state.snapshot.reduced", "ms=${StartupTrace.elapsedMs() - start} sessions=${frame.sessions.size}")
+            PerfTrace.milestone(
+                "state.snapshot.reduced",
+                "ms" to micros / 1000,
+                "sessions" to frame.sessions.size,
+                "workspaces" to frame.workspaces.size,
+                "archivedWorkspaces" to frame.archivedWorkspaces.size,
+                "host" to baseUrl,
+            )
         }
         onFrameEffects(frame)
+    }
+
+    // ── Load-time trace shipping (card #54) ─────────────────────────────────────────────────────
+    // A broker with tracing on says so in its snapshot; from then on this host gets every trace
+    // event the app records (launch, chat opens, requests, per-type frame stats), every 2 s.
+
+    private var perfJob: Job? = null
+    private var perfCursor = 0L
+
+    private fun setPerfShipping(on: Boolean) {
+        PerfTrace.setShipping(baseUrl, on)
+        if (!on) {
+            perfJob?.cancel()
+            perfJob = null
+            return
+        }
+        if (perfJob?.isActive == true) return
+        perfJob = stateScope.launch {
+            var ticks = 0
+            while (isActive) {
+                if (++ticks % PERF_STATS_EVERY == 0) {
+                    PerfTrace.takeStats()?.let { stats -> PerfTrace.event("client.stats", *stats.toList().toTypedArray()) }
+                }
+                shipPerf()
+                delay(PERF_SHIP_MS)
+            }
+        }
+    }
+
+    private suspend fun shipPerf() {
+        while (true) {
+            val events = PerfTrace.since(perfCursor, max = 300)
+            if (events.isEmpty()) return
+            val meta = mapOf(
+                "t" to PerfTrace.elapsedMs(),
+                "launch" to PerfTrace.launchId,
+                "surface" to deps.clientInfo?.surface,
+                "version" to deps.clientInfo?.version,
+                "host" to baseUrl,
+            )
+            if (!trySendFrame(perfClientLogs(events, meta))) return
+            perfCursor = events.last().seq
+        }
     }
 
     private fun onFrameEffects(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Snapshot -> {
+                setPerfShipping(frame.perf)
                 _onboarded.value = frame.onboarded
                 noChangesRoute = false
                 lastSentViewing = null
@@ -1741,20 +1798,40 @@ class HostStore(
         val st = _state.value
         if (chatLoaded(st, sessionId)) return
         if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
-        val start = StartupTrace.elapsedMs()
+        // Card #54: a fetch the user's chat open caused runs under that open's trace; the rest
+        // (the startup prefetch, a reconnect) under the launch's.
+        val chatTrace = PerfTrace.chatTrace(sessionId)
+        val trace = chatTrace ?: PerfTrace.launchId
+        val needLogs = sessionId !in st.completeLogs
+        val needExtras = sessionId !in st.completeExtras
+        val kind = if (chatTrace != null) "open" else "prefetch"
+        PerfTrace.event("chat.fetch", "session" to sessionId, "logs" to needLogs, "extras" to needExtras, "kind" to kind, trace = trace)
+        val start = PerfTrace.elapsedMs()
         try {
             coroutineScope {
-                if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
-                if (sessionId !in st.completeExtras) launch { loadExtras(sessionId) }
+                if (needLogs) launch { loadFullLog(sessionId, trace) }
+                if (needExtras) launch { loadExtras(sessionId, trace) }
             }
         } finally {
             logFetches.update { it - sessionId }
-            StartupTrace.mark("chat.loaded", "session=${sessionId.take(8)} ms=${StartupTrace.elapsedMs() - start}")
+            val now = _state.value
+            PerfTrace.event(
+                "chat.loaded",
+                "session" to sessionId,
+                "kind" to kind,
+                "ms" to PerfTrace.elapsedMs() - start,
+                "messages" to (now.messages[sessionId]?.size ?: 0),
+                "activity" to (now.activity[sessionId]?.size ?: 0),
+                trace = trace,
+            )
         }
     }
 
-    private suspend fun loadFullLog(sessionId: String) {
-        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+    /** Has this session's chat everything it shows (history page + activity/commands)? */
+    fun chatLoaded(sessionId: String): Boolean = chatLoaded(_state.value, sessionId)
+
+    private suspend fun loadFullLog(sessionId: String, trace: String? = null) {
+        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId, trace) } ?: return
         // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
         _state.update {
             it.copy(
@@ -1764,8 +1841,8 @@ class HostStore(
         }
     }
 
-    private suspend fun loadExtras(sessionId: String) {
-        val fetched = runApi("loadExtras") { api.chatExtras(sessionId) } ?: return
+    private suspend fun loadExtras(sessionId: String, trace: String? = null) {
+        val fetched = runApi("loadExtras") { api.chatExtras(sessionId, trace) } ?: return
         _state.update {
             it.copy(
                 activity = it.activity +
@@ -2639,6 +2716,10 @@ internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): S
     if (resp.id.isNotBlank()) resp.id
     else sessions.firstOrNull { it.name == resp.name }?.id
 
+/** Card #54: trace events go to a tracing broker this often; per-type stats every Nth time. */
+private const val PERF_SHIP_MS = 2_000L
+private const val PERF_STATS_EVERY = 15
+
 /** How many recent sessions [HostStore] prefetches after a trimmed snapshot, and after how long. */
 private const val PREFETCH_SESSIONS = 4
 private const val PREFETCH_DELAY_MS = 1_000L
@@ -2652,8 +2733,12 @@ internal const val SNAPSHOT_LOG_TAIL = 1
  * archived workspaces without their views/layout. A broker that predates these fields ignores
  * them and sends everything.
  */
-internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
+internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null): String = buildJsonObject {
     put("type", "subscribe")
+    // Card #54: the launch's trace and this connection's request, so the broker records its
+    // snapshot build under them (ignored by a broker that does not trace).
+    if (trace != null) put("trace", trace)
+    if (req != null) put("req", req)
     put("logTail", SNAPSHOT_LOG_TAIL)
     put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
     // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
