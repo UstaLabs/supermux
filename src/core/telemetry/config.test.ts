@@ -42,7 +42,14 @@ describe("parseTelemetryBody", () => {
   })
 })
 
-test("telemetryEnv tags source builds as dev", () => {
-  expect(telemetryEnv("dev")).toBe("dev")
-  expect(telemetryEnv("0.14.0")).toBe("release")
+describe("telemetryEnv", () => {
+  test("a plain release number is release", () => {
+    for (const v of ["0.14.0", "0.16.0", "1.0.0", "12.3.45"]) expect(telemetryEnv(v)).toBe("release")
+  })
+  test("source builds, test builds and prereleases are dev", () => {
+    // Real versions seen in production telemetry from test builds, plus the source-mode default.
+    for (const v of ["dev", "fixtest2", "fixtest3", "0.12.0-alpha.1", "0.16.0-rc.1", "0.16.0+abc", "v0.16.0", "0.16", "", " 0.16.0"]) {
+      expect(telemetryEnv(v)).toBe("dev")
+    }
+  })
 })

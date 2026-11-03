@@ -42,7 +42,11 @@ export function parseTelemetryBody(input: unknown): { enabled: boolean } | { err
   return { enabled: o.enabled }
 }
 
-/** The `env` field on every event: a source/dev build is "dev", a versioned release is "release". */
+/**
+ * The `env` field on every event. Only a plain release number (`0.16.0`) is "release"; source builds
+ * ("dev"), test builds ("fixtest3") and prereleases ("0.16.0-rc.1") are "dev", so they stay out of
+ * real-user numbers.
+ */
 export function telemetryEnv(buildVersion: string): "dev" | "release" {
-  return buildVersion === "dev" ? "dev" : "release"
+  return /^\d+\.\d+\.\d+$/.test(buildVersion) ? "release" : "dev"
 }
