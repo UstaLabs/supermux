@@ -1,71 +1,39 @@
-import { existsSync, readdirSync, readFileSync } from "fs"
-import { join } from "path"
 import { AgentKind } from "../../../shared/agents"
-import { agentCommand, type AgentCommandProvider, type GrokAcpCommand, type ProviderCtx, type SlashCommand } from "../types"
+import { agentCommand, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
 
-export type { GrokAcpCommand }
+/** Skill scopes that do not depend on the folder (1.0.46: the user's and Grok's bundled skills). */
+const GLOBAL_SCOPES = new Set(["user", "bundled"])
 
 /**
  * Keep only skill-backed entries: those whose `_meta.path` points at a
  * SKILL.md. Grok's list also carries TUI built-ins (compact, always-approve,
- * context, …) with no `_meta` — those are client-side features of grok's own
- * UI; sent as prompt text through the broker they would just be words. A
+ * context, …) with no `_meta`, and workflows — client-side features of grok's
+ * own UI; sent as prompt text through the broker they would just be words. A
  * `/skill-name` prompt, by contrast, injects the SKILL.md server-side
  * (live-verified against grok 0.2.101).
  */
-export function mapGrokCommands(cmds: GrokAcpCommand[]): SlashCommand[] {
-  return cmds
-    .filter((c) => typeof c._meta?.path === "string" && c._meta.path.endsWith("SKILL.md"))
-    .map((c) => agentCommand({ name: c.name, sigil: "/", description: c.description }))
-}
-
-function skillNameFromSkillMd(skillMd: string, fallback: string): string {
-  try {
-    const content = readFileSync(skillMd, "utf8")
-    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
-    if (m) {
-      const nameLine = m[1]!.match(/^name:\s*(.+)$/m)
-      if (nameLine) return nameLine[1]!.trim()
-    }
-  } catch {}
-  return fallback
-}
-
-/**
- * Read-only disk scan of the plugins' skills dirs (`<dir>/<name>/SKILL.md`)
- * for launcher preview, before any grok child runs. Grok resolves a skill's
- * name from its frontmatter, so the scan does too.
- */
-export function scanGrokSkillsFromDisk(skillsDirs: string[]): SlashCommand[] {
-  const names = new Set<string>()
-  const out: SlashCommand[] = []
-  for (const dir of skillsDirs) {
-    if (!existsSync(dir)) continue
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const skillMd = join(dir, entry.name, "SKILL.md")
-      if (!existsSync(skillMd)) continue
-      const name = skillNameFromSkillMd(skillMd, entry.name)
-      if (!name || names.has(name)) continue
-      names.add(name)
-      out.push(agentCommand({ name, sigil: "/" }))
-    }
+export function mapGrokCommands(entries: AgentCommandEntry[]): AgentCommandList {
+  const commands: SlashCommand[] = []
+  const projectIds: string[] = []
+  for (const entry of entries) {
+    const path = entry._meta?.path
+    if (typeof path !== "string" || !path.endsWith("SKILL.md")) continue
+    const cmd = agentCommand({ name: entry.name, sigil: "/", description: entry.description })
+    commands.push(cmd)
+    if (!GLOBAL_SCOPES.has(String(entry._meta?.scope ?? ""))) projectIds.push(cmd.id)
   }
-  return out
+  return { commands, projectIds }
 }
 
 // Grok skills are text-insert only — the user submits `/name ` as a normal
-// prompt and grok injects the SKILL.md server-side. The provider prefers the
-// adapter's live ACP list (fed in via the grok commandContext leaf; refreshed
-// on every available_commands_update); with no live adapter (launcher preview)
-// it falls back to a read-only disk scan of the plugin skills dirs.
+// prompt and grok injects the SKILL.md server-side. The list is the one the
+// session's grok reported (initialize `_meta.availableCommands`, then every
+// `available_commands_update`), kept on its adapter.
 export class GrokCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.Grok
 
-  async list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    // agentContext is grok's commandContext leaf output.
-    const gctx = ctx.agentContext as import("../../agents/grok/session").GrokCommandContext | undefined
-    if (gctx?.commands?.length) return mapGrokCommands(gctx.commands)
-    return scanGrokSkillsFromDisk(gctx?.skillsDirs ?? [])
+  async list(ctx: ProviderCtx): Promise<AgentCommandList | undefined> {
+    const reported = (ctx.agentContext as ReportedCommandsCtx | undefined)?.commands
+    return reported ? mapGrokCommands(reported) : undefined
   }
 }

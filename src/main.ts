@@ -83,13 +83,13 @@ import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
+import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
 import { recordFetched } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider, sqliteCommandStore } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
@@ -1257,17 +1257,19 @@ function adaptersOfKind(kind: AgentKind): unknown[] {
   return out
 }
 
-const cursorCommandProvider = new CursorCommandProvider()
+// Slash commands come from what each live session's agent reports (card #13): nothing is spawned or
+// prompted to learn them. Lists are stored per agent and folder, for restarts and New Session.
 // Annotated to cut the top-level inference cycle (sessionManager → commandRegistry → runtimes → sessionManager).
 const commandRegistry: CommandRegistry = new CommandRegistry({
   providers: {
     claude: new ClaudeCommandProvider(),
     codex: new CodexCommandProvider(),
-    cursor: cursorCommandProvider,
+    cursor: new CursorCommandProvider(),
     opencode: new OpenCodeCommandProvider(),
     grok: new GrokCommandProvider(),
     antigravity: new AntigravityCommandProvider(),
   },
+  store: sqliteCommandStore(db),
   resolveSession: (name) => {
     const s = registry.resolveName(name)
     if (!s) return undefined
@@ -1276,8 +1278,8 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
       name: s.name,
       kind,
       workdir: s.workdir,
+      repoRoot: s.repo_root ?? undefined,
       muted: !!s.mute,
-      pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: s.name }),
       agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
@@ -1796,6 +1798,12 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
+    // Codex pushes no reliable change event (skills/changed never fired, 0.164.0): ask its app-server again,
+    // so a skill the turn added shows up.
+    if (adapter.kind === AgentKind.Codex) {
+      const name = registry.get(sessionId)?.name
+      if (name) void commandRegistry.refresh(name)
+    }
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
     if (!ev?.error) {
@@ -2667,7 +2675,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return commandRegistry.preview({
         kind,
         workdir,
-        pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
         agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
     },

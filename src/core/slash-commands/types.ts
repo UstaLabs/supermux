@@ -5,24 +5,28 @@ export interface CodexRpc {
   request<T = any>(method: string, params: any): Promise<T>
 }
 
-export interface OpenCodeCommandEntry {
+/**
+ * One command as an agent reported it: Claude's initialize reply and commands_changed push, an ACP agent's
+ * `available_commands_update` (Core's normalized `commands-update`), or Grok's `initialize._meta.availableCommands`.
+ * Grok marks skill-backed entries with `_meta.path` → SKILL.md; built-ins have no `_meta`.
+ */
+export interface AgentCommandEntry {
   name: string
   description?: string
-  source?: string
+  argumentHint?: string
+  builtin?: boolean
+  _meta?: Record<string, unknown>
 }
 
-/** Minimal OpenCode client slice for slash-command discovery. */
-export interface OpenCodeCommandClient {
-  listCommands(workdir: string): Promise<OpenCodeCommandEntry[]>
+/** The discovery context of an agent whose session reports its list itself (Claude, Cursor, OpenCode, Grok). */
+export interface ReportedCommandsCtx {
+  /** What the session's agent last reported; undefined until it reports. */
+  commands?: AgentCommandEntry[]
 }
 
-/** One entry of grok's ACP command list (`initialize` `_meta.availableCommands`
- * and the `available_commands_update` push). Skill-backed entries carry
- * `_meta.path` pointing at their SKILL.md; built-ins have no `_meta`. */
-export interface GrokAcpCommand {
-  name: string
-  description?: string
-  _meta?: { scope?: string; path?: string }
+/** The `commandContext` of an agent whose live adapter holds the list its agent reported. */
+export function reportedCommands(adapter: unknown): ReportedCommandsCtx {
+  return { commands: (adapter as { availableCommands?: AgentCommandEntry[] } | undefined)?.availableCommands }
 }
 
 export type CommandFamily = "agent" | "control"
@@ -75,8 +79,6 @@ export interface AgentCommandList {
 export interface ProviderCtx {
   sessionName: string
   workdir: string
-  /** Spawn flags that mirror the real session (e.g. --plugin-dir pairs) so the probe's list matches. */
-  pluginSpawnArgs: string[]
   /** Opaque per-kind discovery context, built by the agent module's
    * `commandContext` leaf. Each provider casts its own kind's shape. */
   agentContext?: unknown
@@ -84,5 +86,6 @@ export interface ProviderCtx {
 
 export interface AgentCommandProvider {
   readonly kind: AgentKind
-  list(ctx: ProviderCtx): Promise<SlashCommand[]>
+  /** The list the agent reported, mapped for the composer. Undefined while it has reported nothing. */
+  list(ctx: ProviderCtx): Promise<AgentCommandList | undefined>
 }

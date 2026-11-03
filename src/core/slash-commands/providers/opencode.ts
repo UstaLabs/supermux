@@ -1,78 +1,22 @@
-import { existsSync, readdirSync, readFileSync } from "fs"
-import { join } from "path"
 import { AgentKind } from "../../../shared/agents"
-import {
-  agentCommand,
-  type AgentCommandProvider,
-  type OpenCodeCommandEntry,
-  type ProviderCtx,
-  type SlashCommand,
-} from "../types"
-
-export type { OpenCodeCommandEntry }
-
-const BUILTIN_FALLBACK = new Set(["init", "review"])
-
-/** Keep skill-sourced commands; when `source` is absent exclude built-in fallbacks. */
-export function mapOpenCodeSkills(cmds: OpenCodeCommandEntry[]): SlashCommand[] {
-  return cmds
-    .filter((c) => (c.source !== undefined ? c.source === "skill" : !BUILTIN_FALLBACK.has(c.name)))
-    .map((c) => agentCommand({ name: c.name, sigil: "/", description: c.description }))
-}
-
-function skillNameFromSkillMd(skillMd: string, fallback: string): string {
-  try {
-    const content = readFileSync(skillMd, "utf8")
-    const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
-    if (m) {
-      const nameLine = m[1]!.match(/^name:\s*(.+)$/m)
-      if (nameLine) return nameLine[1]!.trim()
-    }
-  } catch {}
-  return fallback
-}
+import { agentCommand, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type ProviderCtx, type ReportedCommandsCtx } from "../types"
 
 /**
- * Read-only disk scan of enabled plugin trees for launcher preview (no live
- * `opencode serve`). Scans each plugin dir's `skills/<name>/SKILL.md` frontmatter.
+ * OpenCode's pushed list, all of it: its ACP prompt handler (1.18.34, read from the binary) runs
+ * `session.command` for any "/name" in this list — init, review, custom commands, skills and MCP prompts.
+ * It does not say which entries are the folder's own.
  */
-export function scanOpenCodeSkillsFromDisk(pluginDirs: string[]): SlashCommand[] {
-  const names = new Set<string>()
-  const out: SlashCommand[] = []
-  const add = (name: string) => {
-    if (!name || names.has(name)) return
-    names.add(name)
-    out.push(agentCommand({ name, sigil: "/" }))
-  }
-  for (const pluginDir of pluginDirs) {
-    const skillsDir = join(pluginDir, "skills")
-    if (!existsSync(skillsDir)) continue
-    for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const skillMd = join(skillsDir, entry.name, "SKILL.md")
-      if (!existsSync(skillMd)) continue
-      add(skillNameFromSkillMd(skillMd, entry.name))
-    }
-  }
-  return out
+export function mapOpenCodeCommands(entries: AgentCommandEntry[]): AgentCommandList {
+  return { commands: entries.filter((e) => e.name).map((e) => agentCommand({ name: e.name, sigil: "/", description: e.description })) }
 }
 
-// OpenCode skills are text-insert only — the user submits `/name ` as a normal
-// prompt; the broker does not route `session.command`.
+// OpenCode pushes `available_commands_update` over ACP when a session starts;
+// the session's adapter keeps the last push.
 export class OpenCodeCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.OpenCode
 
-  async list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    // agentContext is opencode's commandContext leaf output.
-    const octx = ctx.agentContext as import("../../agents/opencode/session").OpenCodeCommandContext | undefined
-    if (octx?.client) {
-      try {
-        const cmds = await octx.client.listCommands(ctx.workdir)
-        return mapOpenCodeSkills(cmds)
-      } catch {
-        // fall through to disk scan
-      }
-    }
-    return scanOpenCodeSkillsFromDisk(octx?.pluginDirs ?? [])
+  async list(ctx: ProviderCtx): Promise<AgentCommandList | undefined> {
+    const reported = (ctx.agentContext as ReportedCommandsCtx | undefined)?.commands
+    return reported ? mapOpenCodeCommands(reported) : undefined
   }
 }

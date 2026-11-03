@@ -1,4 +1,5 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
@@ -315,6 +316,7 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
   )
 }
 
-export function commandContext(_ctx: CommandContextCtx): undefined {
-  return undefined
+/** Slash commands: what the session's Claude reported (initialize reply, commands_changed), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }
