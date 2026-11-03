@@ -6,17 +6,12 @@ export interface CodexRpc {
 }
 
 /**
- * One command as an agent reported it: Claude's initialize reply and commands_changed push, an ACP agent's
- * `available_commands_update` (Core's normalized `commands-update`), or Grok's `initialize._meta.availableCommands`.
+ * One command as an agent reported it (Core's normalized `commands-update` entry): Claude's initialize reply and
+ * commands_changed push, an ACP agent's `available_commands_update`, or Grok's `initialize._meta.availableCommands`.
  * Grok marks skill-backed entries with `_meta.path` → SKILL.md; built-ins have no `_meta`.
  */
-export interface AgentCommandEntry {
-  name: string
-  description?: string
-  argumentHint?: string
-  builtin?: boolean
-  _meta?: Record<string, unknown>
-}
+export type { AgentCommandEntry } from "../../../packages/supermux-core/src/events/normalized.js"
+import type { AgentCommandEntry } from "../../../packages/supermux-core/src/events/normalized.js"
 
 /** The discovery context of an agent whose session reports its list itself (Claude, Cursor, OpenCode, Grok). */
 export interface ReportedCommandsCtx {

@@ -30,3 +30,10 @@ test("GrokCommandProvider reads the session's reported list; nothing before it r
   expect((await p.list({ sessionName: "s", workdir: "/w", agentContext: { commands: LIVE_PUSH } }))?.commands).toHaveLength(4)
   expect(await p.list({ sessionName: "s", workdir: "/w", agentContext: { commands: undefined } })).toBeUndefined()
 })
+
+test("GrokCommandProvider: the initialize-time list (built-ins only, no _meta at all) is not the session's report yet", async () => {
+  // grok 1.0.46 lists 7 built-ins in initialize _meta.availableCommands; skills come with the session's push.
+  // Stored as a report it would map to nothing and overwrite the folder's stored list.
+  const initializeList: AgentCommandEntry[] = [{ name: "compact", description: "c" }, { name: "goal", description: "g" }]
+  expect(await new GrokCommandProvider().list({ sessionName: "s", workdir: "/w", agentContext: { commands: initializeList } })).toBeUndefined()
+})

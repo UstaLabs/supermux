@@ -8,6 +8,8 @@ const log = makeLogger("slash/registry")
 
 export interface RegistrySession {
   name: string
+  /** The session's id: a live list belongs to it, not to a later session that reuses the name. */
+  id?: string
   kind: AgentKind
   workdir: string
   /** The repository's own folder when `workdir` is one of its worktrees: lists are stored there too. */
@@ -51,10 +53,14 @@ function withoutProjectCommands(list: AgentCommandList | undefined): AgentComman
  * to do anything: the providers read what each live session already reported (card #13).
  */
 export class CommandRegistry {
-  private live = new Map<string, AgentCommandList>()
+  private live = new Map<string, { id?: string; list: AgentCommandList }>()
   private inflight = new Map<string, Promise<void>>()
   private rerun = new Set<string>()
   private resolved = new Set<string>()
+  /** Bumped by remove(): a refresh that started before it does not bring the session back. */
+  private epochs = new Map<string, number>()
+  /** The merged list last broadcast per session, as JSON, so an unchanged one is not sent again. */
+  private broadcast = new Map<string, string>()
   constructor(private deps: CommandRegistryDeps) {}
 
   /** True once there is something to show from the agent, or its provider has answered (even with nothing). */
@@ -78,12 +84,12 @@ export class CommandRegistry {
       this.rerun.add(name)
       return running
     }
-    const p = (async () => {
+    const p: Promise<void> = (async () => {
       do {
         this.rerun.delete(name)
         await this.run(name)
       } while (this.rerun.has(name))
-    })().finally(() => this.inflight.delete(name))
+    })().finally(() => { if (this.inflight.get(name) === p) this.inflight.delete(name) })
     this.inflight.set(name, p)
     return p
   }
@@ -112,10 +118,13 @@ export class CommandRegistry {
     this.inflight.delete(name)
     this.rerun.delete(name)
     this.resolved.delete(name)
+    this.broadcast.delete(name)
+    this.epochs.set(name, (this.epochs.get(name) ?? 0) + 1)
   }
 
   private agentList(session: RegistrySession): AgentCommandList | undefined {
-    return this.live.get(session.name) ?? this.stored(session.kind, session.workdir)
+    const live = this.live.get(session.name)
+    return (live && live.id === session.id ? live.list : undefined) ?? this.stored(session.kind, session.workdir)
   }
 
   private stored(kind: AgentKind, workdir: string): AgentCommandList | undefined {
@@ -123,20 +132,27 @@ export class CommandRegistry {
   }
 
   private async run(name: string): Promise<void> {
+    const epoch = this.epochs.get(name) ?? 0
     const session = this.deps.resolveSession(name)
     if (!session) return
     const provider = this.deps.providers[session.kind]
     const list = provider
       ? await provider.list({ sessionName: session.name, workdir: session.workdir, agentContext: session.agentContext }).catch(() => undefined)
       : undefined
+    if ((this.epochs.get(name) ?? 0) !== epoch) return // removed while the provider answered
+    const wasResolved = this.resolved.has(name)
     if (list) {
-      this.live.set(name, list)
+      this.live.set(name, { id: session.id, list })
       const folders = session.repoRoot && session.repoRoot !== session.workdir ? [session.workdir, session.repoRoot] : [session.workdir]
       try { this.deps.store.save(session.kind, folders, list) }
       catch (err) { log.warn("agent_commands_store_failed", { session: name, err: err instanceof Error ? err.message : String(err) }) }
     }
     this.resolved.add(name)
     log.debug("agent_commands_resolved", { session: name, kind: session.kind, count: list?.commands.length ?? null })
-    this.deps.onChange?.(name, this.get(name))
+    const merged = this.get(name)
+    const json = JSON.stringify(merged)
+    if (wasResolved && this.broadcast.get(name) === json) return // nothing new (Codex re-lists after every turn)
+    this.broadcast.set(name, json)
+    this.deps.onChange?.(name, merged)
   }
 }

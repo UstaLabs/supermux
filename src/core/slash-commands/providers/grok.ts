@@ -34,6 +34,9 @@ export class GrokCommandProvider implements AgentCommandProvider {
 
   async list(ctx: ProviderCtx): Promise<AgentCommandList | undefined> {
     const reported = (ctx.agentContext as ReportedCommandsCtx | undefined)?.commands
-    return reported ? mapGrokCommands(reported) : undefined
+    // The initialize-time list is built-ins only, none with _meta; the session's push marks skills and
+    // workflows. Until it arrives the session has reported nothing (an empty map would overwrite the store).
+    if (!reported?.some((entry) => entry._meta)) return undefined
+    return mapGrokCommands(reported)
   }
 }

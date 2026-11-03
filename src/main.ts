@@ -1276,6 +1276,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
     const kind = ((s.agent ?? "claude") as AgentKind)
     return {
       name: s.name,
+      id: s.id,
       kind,
       workdir: s.workdir,
       repoRoot: s.repo_root ?? undefined,

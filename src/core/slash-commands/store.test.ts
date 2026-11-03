@@ -73,3 +73,18 @@ test("a row that does not parse reads as nothing", () => {
   expect(store.load("claude", "/w/a")).toBeUndefined()
   expect(store.latest("claude")).toBeUndefined()
 })
+
+test("reads stay current after a save and after old folders are pruned", () => {
+  let t = 0
+  const { store } = fresh(() => t)
+  store.save("claude", ["/w/0"], list(["first"]))
+  expect(store.load("claude", "/w/0")?.commands.map((c) => c.name)).toEqual(["first"])
+  expect(store.latest("claude")?.commands.map((c) => c.name)).toEqual(["first"])
+  t = 1
+  store.save("claude", ["/w/0"], list(["second"]))
+  expect(store.load("claude", "/w/0")?.commands.map((c) => c.name)).toEqual(["second"])
+  expect(store.latest("claude")?.commands.map((c) => c.name)).toEqual(["second"])
+  for (let i = 1; i <= 55; i++) { t = 1 + i; store.save("claude", [`/w/${i}`], list([`c${i}`])) }
+  expect(store.load("claude", "/w/0")).toBeUndefined() // pruned
+  expect(store.latest("claude")?.commands.map((c) => c.name)).toEqual(["c55"])
+})

@@ -140,3 +140,50 @@ test("remove forgets the session's live list", async () => {
   // The stored copy (saved when it reported) is what remains.
   expect(reg.get("s1").map((c) => c.name)).toEqual([...CONTROL, "live"])
 })
+
+test("a session that reuses a name never sees the live list of the session that had it", async () => {
+  const { store } = memoryStore()
+  let current = session({ id: "id-1", workdir: "/w/a" })
+  let answer: AgentCommandList | undefined = list(["old"]) // no projectIds: no fallback for other folders
+  const reg = new CommandRegistry({ providers: { claude: provider(() => answer) }, resolveSession: () => current, store })
+  await reg.refresh("s1")
+  current = session({ id: "id-2", workdir: "/w/b" })
+  answer = undefined
+  await reg.refresh("s1")
+  expect(reg.get("s1").map((c) => c.name)).toEqual(CONTROL)
+})
+
+test("a session removed while its refresh runs stays removed", async () => {
+  const { store } = memoryStore()
+  let release: () => void = () => {}
+  const changes: string[] = []
+  const reg = new CommandRegistry({
+    providers: { claude: { kind: "claude", async list() { await new Promise<void>((r) => { release = r }); return list(["late"]) } } },
+    resolveSession: () => session({ workdir: "/w/none" }),
+    store,
+    onChange: (n) => changes.push(n),
+  })
+  const running = reg.refresh("s1")
+  await Promise.resolve()
+  reg.remove("s1")
+  release()
+  await running
+  expect(changes).toEqual([])
+  expect(reg.isResolved("s1")).toBe(false)
+  expect(reg.get("s1").map((c) => c.name)).toEqual(CONTROL)
+})
+
+test("an unchanged list is not broadcast again", async () => {
+  const { store } = memoryStore()
+  const seen: number[] = []
+  const reg = new CommandRegistry({
+    providers: { claude: provider(() => list(["verify"])) },
+    resolveSession: () => session(),
+    store,
+    onChange: (_n, cmds) => seen.push(cmds.length),
+  })
+  await reg.refresh("s1")
+  await reg.refresh("s1")
+  await reg.refresh("s1")
+  expect(seen).toEqual([CONTROL.length + 1])
+})
