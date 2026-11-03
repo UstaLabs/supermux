@@ -1,6 +1,7 @@
 import {createInterface} from 'node:readline'
 import {appendFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {spawn} from 'node:child_process'
+import {randomUUID} from 'node:crypto'
 
 const argv = process.argv.slice(2)
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
@@ -230,6 +231,30 @@ if (process.env.MODE === 'setup-hang') {
     const text = typeof content === 'string' ? content : content?.[0]?.text
     const uuid = m.uuid
     turn++
+    if (text === '/clear' || text === '/reset' || text === '/new') { clearConversation(uuid); return }
+    // A /clear that happens only once the RELEASE file exists (while no host is attached), after frames of the old
+    // conversation: a re-attach replays them all, so the reset reaches the driver well after its open() returned.
+    if (text === 'clear-when-released') {
+      const target = {session, uuid}
+      hanging = target
+      const wait = setInterval(() => {
+        if (hanging !== target) { clearInterval(wait); return }
+        if (!existsSync(process.env.RELEASE)) return
+        clearInterval(wait)
+        hanging = undefined
+        for (let i = 0; i < 20; i++) send({type: 'command_lifecycle', session_id: session, uuid: randomUUID()})
+        clearConversation(uuid)
+      }, 10)
+      return
+    }
+    // A conversation_reset after which Claude keeps its session id (no such CLI behaviour is known; the driver must not
+    // stay ready to take the next foreign id for the new conversation).
+    if (text === 'reset-same-id') {
+      const reset = randomUUID()
+      send({type: 'conversation_reset', new_conversation_id: reset, uuid: reset, trigger: 'clear', user_message_uuid: uuid, timestamp: new Date().toISOString(), session_id: session})
+      send({type: 'result', subtype: 'success', is_error: false, session_id: session, uuid, user_message_uuid: uuid, stop_reason: null, result: '', duration_ms: 1, duration_api_ms: 0, num_turns: 0, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
+      return
+    }
     if (turn === 1) {
       const id = process.env.MODE === 'wrong-resume' ? 'ffffffff-ffff-4fff-8fff-ffffffffffff' : session
       send(initFrame(id))
@@ -314,6 +339,21 @@ function commands() {
 
 function initializeReply() {
   return {commands: commands(), models: [], session_state: 'idle'}
+}
+
+/**
+ * The real CLI (2.1.308) for /clear and its aliases /reset and /new: a new conversation under a new session id,
+ * with no model turn. conversation_reset still carries the old id, and its new_conversation_id is NOT the new
+ * session id; the new id first appears on the SessionStart:clear hook, then system/init and the prompt's empty result.
+ */
+function clearConversation(uuid) {
+  const previous = session
+  session = randomUUID()
+  const reset = randomUUID()
+  send({type: 'conversation_reset', new_conversation_id: reset, uuid: reset, trigger: 'clear', user_message_uuid: uuid, timestamp: new Date().toISOString(), session_id: previous})
+  send({type: 'system', subtype: 'hook_started', hook_id: randomUUID(), hook_name: 'SessionStart:clear', hook_event: 'SessionStart', uuid: randomUUID(), session_id: session})
+  send(initFrame(session))
+  send({type: 'result', subtype: 'success', is_error: false, session_id: session, uuid, user_message_uuid: uuid, stop_reason: null, result: '', duration_ms: 1, duration_api_ms: 0, num_turns: 0, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
 }
 
 function initFrame(id) {

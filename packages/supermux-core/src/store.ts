@@ -237,6 +237,7 @@ function validRecord(value: unknown): value is SessionRecord {
   const r = value as Record<string, unknown>
   return r.version === 1 && typeof r.id === "string" && typeof r.agent === "string" && !!r.agent
     && typeof r.agentSessionId === "string" && !!r.agentSessionId
+    && (r.previousAgentSessionId === undefined || (typeof r.previousAgentSessionId === "string" && !!r.previousAgentSessionId))
     && typeof r.cwd === "string" && isAbsolute(r.cwd)
     && typeof r.createdAt === "string" && Number.isFinite(Date.parse(r.createdAt))
     && (r.authProfile === undefined || typeof r.authProfile === "string")

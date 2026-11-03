@@ -37,7 +37,7 @@ function fakeDriver(id: string, support: DriverContextSupport | undefined): Fake
     id,
     ...(support ? { context: support } : {}),
     async open(context) {
-      fake.opened.push(structuredClone({ ...context, signal: undefined, onUpdate: undefined, onExit: undefined, requestPermission: undefined, requestAnswers: undefined, onActivity: undefined }) as never)
+      fake.opened.push(structuredClone({ ...context, signal: undefined, onUpdate: undefined, onExit: undefined, requestPermission: undefined, requestAnswers: undefined, onActivity: undefined, onConversationReset: undefined }) as never)
       n++
       return {
         agentSessionId: context.resumeId ?? (context.forkFrom ? `fork-${n}` : `native-${n}`),

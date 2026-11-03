@@ -1864,6 +1864,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       brokerAccounts.notifyChanged()
     }
   })
+  // /clear (or /reset, /new) in Claude: the agent goes on in a new, empty conversation and the session stays. The
+  // chat keeps everything above, so it says where the agent's memory now starts.
+  adapter.on("conversation-reset", () => {
+    void notifySession(sessionId, `Context cleared — ${agentDisplayName(adapter.kind)} starts a new conversation and won't remember the messages above`)
+  })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))

@@ -32,6 +32,7 @@ Fields with `?` may be absent.
 - `session-info` `{ title?, cwd?, model? }`: what the agent reports about its session.
 - `usage` `{ context?, tokens?, cost?, rateLimits? }`: `context` `{ used, size }`, `tokens` `{ input, output, total }`, `cost` `{ amount, currency }`.
 - `compaction` `{ compactionId, status, summary?, error? }`: the agent compacting its context, `in_progress`, `completed`, `failed` or `cancelled`.
+- `conversation-reset` `{ agentSessionId, previousAgentSessionId, trigger? }`: the agent went on in a new, empty conversation in the same process (Claude's `/clear`, `/reset`, `/new`; `trigger` `clear`). The session lives on; its record now names `agentSessionId` (sent once that is saved), so a resume continues the new conversation.
 - `warning` `{ message, source? }`: something to show; the turn goes on.
 - `error` `{ message, errorType?, recoverable? }`: an error the agent reported.
 

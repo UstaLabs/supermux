@@ -79,6 +79,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
   let ignoreAbort = false
   /** Thrown by every open that resumes a conversation (a fresh open still works). */
   let resumeError: Error | undefined
+  let lastRuntime: AgentRuntime | undefined
 
   const driver: AgentDriver = {
     id: kind,
@@ -142,6 +143,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
           return { applied: kind === "codex" ? "next-turn" : "now" }
         },
       }
+      lastRuntime = runtime
       return attachNormalizer(kind, runtime)
     },
   }
@@ -170,6 +172,13 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
     startActivity(id: string) { opens.at(-1)?.onActivity?.({ id, phase: "started" }) },
     completeActivity(id: string) { opens.at(-1)?.onActivity?.({ id, phase: "completed" }) },
     failRuntime(error: Error) { opens.at(-1)?.onExit(error) },
+    /** The agent went on in a new conversation, as Claude does on /clear. */
+    resetConversation(next: string) {
+      const runtime = lastRuntime as { agentSessionId: string }
+      const previous = runtime.agentSessionId
+      runtime.agentSessionId = next
+      opens.at(-1)?.onConversationReset?.({ agentSessionId: next, previousAgentSessionId: previous, trigger: "clear" })
+    },
     get lastCtx() { return opens.at(-1) },
   }
 }
@@ -328,6 +337,47 @@ acrossQueue("existing record with wrong native id is rejected before a replaceme
   })
   await expect(adapter.start()).rejects.toThrow(/native id mismatch/)
   expect(fake.opens.length).toBe(opensAfterCreate)
+})
+
+test("claude: /clear moves the session to Claude's new conversation: the id is saved, the chat is told, a relaunch opens it", async () => {
+  const fake = fakeAgentDriver("claude")
+  const { host, workdir } = await harness("claude", fake)
+  const persisted: string[] = []
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir,
+    initialSessionId: "native-a",
+    persistSessionId: async (id) => { persisted.push(id) },
+  })
+  const resets: unknown[] = []
+  adapter.on("conversation-reset", (e: unknown) => resets.push(e))
+  await adapter.start()
+  expect(persisted).toEqual(["native-a"])
+  fake.resetConversation("native-b")
+  await waitUntil(() => persisted.length === 2, 400)
+  expect(persisted).toEqual(["native-a", "native-b"])
+  expect(resets).toEqual([{ kind: "conversation-reset", trigger: "clear" }])
+  // A model switch relaunches Claude: on the cleared conversation, not the one before it, and no "native id mismatch".
+  await adapter.setConfiguration({ model: "opus" })
+  expect(fake.opens.at(-1)?.resumeId).toBe("native-b")
+  expect(persisted.at(-1)).toBe("native-b")
+})
+
+test("claude: a Core record one /clear ahead of the broker's saved id is the session's conversation", async () => {
+  const fake = fakeAgentDriver("claude")
+  const { host, workdir } = await harness("claude", fake)
+  const first = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-a", persistSessionId: async () => {} })
+  let saved = false
+  host.core.subscribe((e) => { if (e.type === "session.event" && e.event.kind === "conversation-reset") saved = true })
+  await first.start()
+  fake.resetConversation("native-b")
+  await waitUntil(() => saved, 400)
+  await first.stop()
+  expect((await host.core.sessions.get("sess-1"))?.agentSessionId).toBe("native-b")
+  // The broker died before it saved native-b: its row still names native-a.
+  const persisted: string[] = []
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, initialSessionId: "native-a", persistSessionId: async (id) => { persisted.push(id) } })
+  await adapter.start()
+  expect(fake.opens.at(-1)?.resumeId).toBe("native-b")
+  expect(persisted).toEqual(["native-b"])
 })
 
 acrossQueue("new session creates with broker id and persists native id", async (kind) => {

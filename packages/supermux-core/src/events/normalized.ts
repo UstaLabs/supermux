@@ -201,6 +201,8 @@ export type NormalizedBodyBase =
       rateLimits?: unknown
     }
   | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
+  /** The agent started a new, empty conversation in place of the old one (Claude /clear); the session runs on in it. */
+  | { kind: "conversation-reset"; agentSessionId: string; previousAgentSessionId: string; trigger?: string }
   | { kind: "warning"; message: string; source?: string }
   | { kind: "error"; message: string; errorType?: string; recoverable?: boolean }
   | {
