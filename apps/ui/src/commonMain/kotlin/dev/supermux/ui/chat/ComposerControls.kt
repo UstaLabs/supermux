@@ -1,8 +1,8 @@
-// The composer's two picker controls: the run-settings pill (model · effort · fast · permission mode
-// behind ONE panel) and the permission chip, which shows only while the mode is not the agent's own
-// default. They used to be four separate pills in a row that did not fit a phone; now the toolbar is
-// `+ · run-settings (· mode) … mic · send` on every host. Everything is a pill or a circle with no
-// outline — tone alone separates a control from the card.
+// The composer's two picker controls: the run-settings pill (model · effort · fast · account ·
+// permission mode behind ONE panel) and the permission chip, which shows only while the mode is not
+// the agent's own default. They used to be four separate pills in a row that did not fit a phone; now
+// the toolbar is `+ · run-settings (· mode) … mic · send` on every host. Everything is a pill or a
+// circle with no outline — tone alone separates a control from the card.
 package dev.supermux.ui.chat
 
 import androidx.compose.foundation.background
@@ -25,8 +25,10 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -68,11 +70,12 @@ import dev.supermux.ui.widgets.Speedometer
 /**
  * One pill for everything about WHO runs the next turn and HOW: `[logo] Opus 5.5 · high ⚡ ⌄`. Opens
  * the [RunSettingsPanel] — a popover above the pill under a pointer, a bottom sheet under touch —
- * with the model list, the effort segments, the fast switch and the permission mode.
+ * with the model list, the effort segments, the fast switch, the account and the permission mode.
  *
  * [models] null hides the model list (no catalog and no session model), [reasoning] null hides
- * effort, [fastMode] null hides the fast switch, [permission] null hides the Mode row. Tags:
- * `composer-model-pill`, rows `composer-model-<id>`, `composer-reasoning-<id>`, `composer-fast-toggle`.
+ * effort, [fastMode] null hides the fast switch, [account] null hides the Account row, [permission]
+ * null hides the Mode row. Tags: `composer-model-pill`, rows `composer-model-<id>`,
+ * `composer-reasoning-<id>`, `composer-fast-toggle`, the account mark `run_settings_account_mark`.
  */
 @Composable
 internal fun RunSettingsControl(
@@ -93,11 +96,9 @@ internal fun RunSettingsControl(
     modifier: Modifier = Modifier,
     /** The permission modes, picked from the panel's Mode row. */
     permission: RunSettingsPermission? = null,
-    /** Drawn at the top of the panel — the launcher puts its agent row and account choice here. */
+    /** Drawn at the top of the panel — the launcher puts its agent row here. */
     header: (@Composable (sheet: Boolean) -> Unit)? = null,
-    /** Extra marks on the pill before its chevron (the launcher's "added account" glyph). */
-    pillExtra: (@Composable () -> Unit)? = null,
-    /** The launcher's account choice, as a drill-in row of the panel. */
+    /** The account (a new chat's choice, or the one a running chat runs on), as a drill-in row of the panel. */
     account: RunSettingsAccount? = null,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -153,7 +154,16 @@ internal fun RunSettingsControl(
             if (fastMode == true) {
                 Icon(Icons.Filled.Bolt, "Fast mode on", tint = cs.tertiary, modifier = Modifier.size(13.dp))
             }
-            pillExtra?.invoke()
+            // The chat runs (or will run) on an added account, or on one its API refused: the pill
+            // says so, and the panel's Account row says which.
+            if (account != null) accountInk(account)?.let { ink ->
+                Icon(
+                    if (account.unavailable) Icons.Outlined.WarningAmber else Icons.Outlined.AccountCircle,
+                    contentDescription = if (account.unavailable) "Account unavailable: ${account.label}" else "On ${account.label}",
+                    tint = ink,
+                    modifier = Modifier.size(13.dp).testTag("run_settings_account_mark"),
+                )
+            }
             Icon(
                 Icons.Filled.KeyboardArrowDown,
                 contentDescription = null,

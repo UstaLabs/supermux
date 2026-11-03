@@ -628,6 +628,11 @@ fun Composer(
     fastMode: Boolean? = null,
     onToggleFast: (Boolean) -> Unit = {},
     /**
+     * The account the chat runs on and the switch to another: the run-settings panel's Account row
+     * (and a mark on its pill). Null hides it.
+     */
+    account: RunSettingsAccount? = null,
+    /**
      * A model/effort pill was tapped, BEFORE the picker opens. A host that fetches its catalogs
      * lazily (Android under touch — the phone should not spend a request on every chat it opens)
      * refreshes them here; a host that fetched on open ignores it.
@@ -1573,9 +1578,9 @@ fun Composer(
                         val permissionState = permissionModes.takeIf { it.isNotEmpty() }?.let {
                             RunSettingsPermission(it, sessionPermissionMode, onSetPermissionMode)
                         }
-                        // ONE row: + · the run-settings pill (model · effort · fast · mode behind one
-                        // panel) and — only when the mode is NOT the agent's default — the mode as a
-                        // tinted status chip; mic · send on the right.
+                        // ONE row: + · the run-settings pill (model · effort · fast · account · mode
+                        // behind one panel) and — only when the mode is NOT the agent's default — the
+                        // mode as a tinted status chip; mic · send on the right.
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -1587,7 +1592,7 @@ fun Composer(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (showModelPill || showReasoningPill || fastMode != null || permissionState != null) {
+                                if (showModelPill || showReasoningPill || fastMode != null || permissionState != null || account != null) {
                                     RunSettingsControl(
                                         pointer = pointer,
                                         compact = compactToolbar,
@@ -1607,6 +1612,7 @@ fun Composer(
                                         onToggleFast = onToggleFast,
                                         modifier = Modifier.weight(1f, fill = false),
                                         permission = permissionState,
+                                        account = account,
                                     )
                                 }
                                 if (permissionState?.current?.default == false) {
