@@ -210,4 +210,9 @@ export type LoginConfig = {
   commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor" | "antigravity", string>>
   /** Whole login, including the user's part. Default 1800000 (30 min): a link opened on a phone takes a while. */
   timeoutMs?: number
+  /**
+   * Starts that timeout: calls `fire` after `ms`, returns what stops it. Default: a timer that does not keep the
+   * process alive. A test passes its own to fire it when it chooses, not when a loaded machine gets there.
+   */
+  schedule?: (fire: () => void, ms: number) => () => void
 }

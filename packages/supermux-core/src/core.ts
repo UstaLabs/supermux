@@ -13,7 +13,7 @@ import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
 import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
-import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
+import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
   contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, joinInstructions, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
@@ -141,6 +141,7 @@ export class Core {
     if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
     if (login?.runner !== undefined && typeof login.runner !== "function") throw new TypeError("accounts.login.runner must be a function")
+    if (login?.schedule !== undefined && typeof login.schedule !== "function") throw new TypeError("accounts.login.schedule must be a function")
     if (accounts.fetch !== undefined && typeof accounts.fetch !== "function") throw new TypeError("accounts.fetch must be a function")
     if (accounts.registry !== undefined) {
       if (!(accounts.registry instanceof AccountRegistry)) throw new TypeError("accounts.registry must be an AccountRegistry")
@@ -841,6 +842,7 @@ export class Core {
       command,
       runner: config.runner ?? defaultLoginRunner,
       timeoutMs: config.timeoutMs ?? LOGIN_TIMEOUT_MS,
+      schedule: config.schedule ?? defaultLoginSchedule,
       precheck: async () => {
         await this.ready()
         if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
