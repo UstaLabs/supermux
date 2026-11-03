@@ -28,3 +28,19 @@ test("CodexCommandProvider reports nothing without an app-server, or when the ca
   const failing = { request: async () => { throw new Error("gone") } }
   expect(await p.list({ sessionName: "s", workdir: "/w", agentContext: failing })).toBeUndefined()
 })
+
+test("mapCodexSkills: the source Codex gives — a plugin by its prefix, then the skill's scope (#56)", () => {
+  const list = mapCodexSkills({ data: [{ skills: [
+    { name: "mux:browser", scope: "user" },
+    { name: "imagegen", scope: "system" },
+    { name: "repo-skill", scope: "repo" },
+    { name: "mine", scope: "user" },
+    { name: "managed", scope: "admin" },
+  ] }] })
+  const by = (name: string) => list.commands.find((c) => c.name === name)!
+  expect(by("mux:browser")).toMatchObject({ source: "plugin", plugin: "mux" })
+  expect(by("imagegen")).toMatchObject({ source: "builtin" })
+  expect(by("repo-skill")).toMatchObject({ source: "project" })
+  expect(by("mine")).toMatchObject({ source: "user" })
+  expect(by("managed").source).toBeUndefined()
+})

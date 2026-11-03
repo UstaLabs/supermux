@@ -28,3 +28,25 @@ test("ClaudeCommandProvider reads the list the session's Claude reported; nothin
   expect(await p.list({ sessionName: "s", workdir: "/w", agentContext: { commands: undefined } })).toBeUndefined()
   expect(await p.list({ sessionName: "s", workdir: "/w" })).toBeUndefined()
 })
+
+test("mapClaudeCommands passes on Claude's argument hint and aliases (#56)", () => {
+  const { commands } = mapClaudeCommands([
+    { name: "loop", description: "Run on an interval", argumentHint: "[interval] [prompt]", aliases: ["proactive"], builtin: true },
+    { name: "usage", description: "Show usage", aliases: ["usage", "cost", ""], builtin: true },
+  ])
+  expect(commands[0]).toMatchObject({ argumentHint: "[interval] [prompt]", aliases: ["proactive"] })
+  // An alias equal to the name (or empty) says nothing.
+  expect(commands[1]!.aliases).toEqual(["cost"])
+})
+
+test("mapClaudeCommands: a source only where Claude says so — built-in, or a plugin by its prefix (#56)", () => {
+  const { commands } = mapClaudeCommands(REPORTED)
+  const by = (name: string) => commands.find((c) => c.name === name)!
+  expect(by("code-review")).toMatchObject({ source: "builtin" })
+  // The plugin is the source now, so the description's "(superpowers) " opener goes.
+  expect(by("superpowers:brainstorming")).toMatchObject({ source: "plugin", plugin: "superpowers", description: "Explore intent" })
+  // An MCP prompt's "server:" is no plugin; a project command carries no source of its own.
+  expect(by("mini:greet-prompt").source).toBeUndefined()
+  expect(by("proj-cmd").source).toBeUndefined()
+  expect(by("proj-cmd").plugin).toBeUndefined()
+})
