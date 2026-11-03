@@ -275,17 +275,20 @@ test('autonomous interrupt retries until vendor end and does not leak into the n
   const activity: any[] = []
   const r = await driver({ TRACE: trace, AUTONOMOUS_ON_OPEN: '1', AUTONOMOUS_HOLD: '1', NATIVE_SLOW: '1', TURN_ID: 'auto-1' }, { cancelRetryIntervalMs: 25, cancelRetryTimeoutMs: 500 }).open(context({ onActivity: n => activity.push(n) }))
   try {
-    const wait = Date.now()
-    while (!activity.some(a => a.phase === 'started') && Date.now() - wait < 1000) await new Promise(r => setTimeout(r, 10))
-    expect(activity.some(a => a.phase === 'started')).toBe(true)
+    await until(() => activity.some(a => a.phase === 'started'), 'auto-1 to start')
     await r.interrupt()
     const after = async () => (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // The vendor end: the retried cancel that finds auto-1 armed ends it, and the retries stop.
+    await until(() => activity.some(a => a.phase === 'completed'), 'auto-1 to end')
+    // A cancel sent just before that end may still be on its way; the fixture answers a prompt
+    // only after recording every message sent before it, so the count below is final.
+    expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     const cancels = (await after()).filter(x => x.cancel === true)
     expect(cancels[0]?.nativeTurn).toBe(false)
     expect(cancels.some(x => x.nativeTurn === true)).toBe(true)
     expect(cancels.length).toBeGreaterThan(1)
     const cancelCount = cancels.length
+    // Room for a retry that leaked past the end (they come every 25 ms) to show up.
     await new Promise(resolve => setTimeout(resolve, 80))
     expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     await r.interrupt()
