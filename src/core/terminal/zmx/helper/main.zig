@@ -287,16 +287,30 @@ pub fn main(init: std.process.Init) !void {
 
     run(&state);
 
-    // Last words matter: a detach reason or an exit the broker has not read
-    // yet is the difference between closing a tab and retrying. Drain what we
-    // can, bounded, then go.
-    var spins: usize = 0;
-    while (state.out.pending() > 0 and spins < 300) : (spins += 1) {
+    // The daemon connection is finished with; let it go before waiting on anyone.
+    if (state.sock >= 0) {
+        _ = close(state.sock);
+        state.sock = -1;
+    }
+
+    // LAST WORDS ARE OWED IN FULL. A detach reason, a lost target or an exit
+    // the broker has not read yet is the difference between closing a tab and
+    // retrying — and cut short it is worse than unsaid: the broker reads a
+    // frame that stops half-way as a corrupt stream ("helper stream ended with
+    // N bytes of a partial frame"), a NON-recoverable protocol failure in place
+    // of the recoverable one being reported. That is what a fixed 300 x 1 ms
+    // drain produced whenever the broker took longer than that to read the
+    // backlog, as a loaded machine does. So wait for the broker itself: until
+    // it has read every byte, or its end of the pipe is gone. Neither wait can
+    // outlive it — a live broker reads a helper's stdout to EOF, one that exits
+    // closes the pipe, and one that is done with us kills us.
+    while (state.out.pending() > 0) {
         if (!state.out.flush(STDOUT)) break;
         if (state.out.pending() == 0) break;
-        _ = usleep(1000);
+        var fds = [_]std.posix.pollfd{.{ .fd = STDOUT, .events = std.posix.POLL.OUT, .revents = 0 }};
+        _ = std.posix.poll(&fds, -1) catch break;
+        if (fds[0].revents & std.posix.POLL.OUT == 0) break; // ERR/HUP: the broker is gone
     }
-    if (state.sock >= 0) _ = close(state.sock);
     std.process.exit(state.status);
 }
 
