@@ -16,6 +16,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -49,6 +51,7 @@ import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.widgets.LocalSoftKeyboardTakesBack
 import dev.supermux.workspace.singleViewLayout
 import dev.supermux.workspace.toDto
 import kotlinx.serialization.json.JsonObject
@@ -160,6 +163,90 @@ class SupermuxAppNavTest {
         waitForIdle()
 
         assertEquals(null, ui.selectedId)
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
+    }
+
+    // ── The soft keyboard closes first (#30) ──────────────────────────────────────────────────
+
+    /**
+     * BACK with the soft keyboard up closes the keyboard and leaves the chat open.
+     *
+     * The gesture fired here is BACK reaching the APP while the keyboard is up, which Android does
+     * whenever the app's callback sits above the keyboard's on the window (widgets/KeyboardBack.kt
+     * has the platform side). The layer pop is on for as long as a chat is open, so without the
+     * keyboard rule it took that BACK and left the chat with the keyboard still showing.
+     */
+    @Test fun compact_back_with_the_keyboard_up_closes_the_keyboard_and_keeps_the_chat() = runComposeUiTest {
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        val app = oneWorkspaceStore()
+        val input = ShellBackInput()
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
+        }
+        val keyboard = CountingKeyboard()
+        var keyboardUp by mutableStateOf(false)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides owner,
+                LocalSoftwareKeyboardController provides keyboard,
+                LocalSoftKeyboardTakesBack provides keyboardUp,
+            ) {
+                SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+            }
+        }
+        waitForIdle()
+        // Up AFTER the chat opened, the way a tap on the composer raises it.
+        keyboardUp = true
+        waitForIdle()
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertEquals("s1", ui.selectedId)
+
+        // With the keyboard down, the next BACK is the chat's again.
+        keyboardUp = false
+        waitForIdle()
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertEquals(null, ui.selectedId)
+    }
+
+    /** The rule is the shell's, not one screen's: a pushed route keeps its page while typing too. */
+    @Test fun compact_back_with_the_keyboard_up_keeps_a_pushed_route_open() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        val input = ShellBackInput()
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
+        }
+        val keyboard = CountingKeyboard()
+        var keyboardUp by mutableStateOf(false)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides owner,
+                LocalSoftwareKeyboardController provides keyboard,
+                LocalSoftKeyboardTakesBack provides keyboardUp,
+            ) {
+                SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+            }
+        }
+        waitForIdle()
+        ui.openSettings()
+        waitForIdle()
+        keyboardUp = true
+        waitForIdle()
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertTrue(ui.settingsOpen)
+
+        keyboardUp = false
+        waitForIdle()
+        runOnIdle { input.back() }
+        waitForIdle()
         assertEquals(listOf(Route.Home), ui.backStack.toList())
     }
 
@@ -417,5 +504,16 @@ private class ShellBackInput : NavigationEventInput() {
         dispatchOnBackStarted(NavigationEvent())
         dispatchOnBackProgressed(NavigationEvent(progress = 1f))
         dispatchOnBackCompleted()
+    }
+}
+
+/** The soft keyboard, counted: the desktop has none, so the shell's calls are what is asserted. */
+private class CountingKeyboard : SoftwareKeyboardController {
+    var hides = 0
+
+    override fun show() {}
+
+    override fun hide() {
+        hides++
     }
 }
