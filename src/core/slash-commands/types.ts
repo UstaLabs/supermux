@@ -61,6 +61,16 @@ export function agentCommand(opts: { name: string; sigil: "/" | "$"; description
   }
 }
 
+/**
+ * What a provider read from an agent: the composer entries plus, when the agent says so, which of them exist
+ * only because of the folder they were reported in (project commands and skills).
+ */
+export interface AgentCommandList {
+  commands: SlashCommand[]
+  /** Ids of folder-only entries. Absent: the agent does not mark them, so the list can't stand in for another folder. */
+  projectIds?: string[]
+}
+
 /** Minimal session view a provider needs. */
 export interface ProviderCtx {
   sessionName: string
