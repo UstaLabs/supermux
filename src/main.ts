@@ -1,5 +1,6 @@
 // src/main.ts
 import { avatarRev } from "./core/agents/avatar"
+import { PerfLog } from "./core/perf/perf-log"
 import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
@@ -389,6 +390,8 @@ process.on("exit", () => releasePidFile(PID_FILE))
 
 // DB creation BEFORE registry
 const dbPath = join(STATE_DIR, "db.sqlite3")
+// Load-time tracing (card #54): off unless MUX_PERF=1 or `bun scripts/perf-timeline.ts on`.
+const perfLog = new PerfLog({ dir: join(STATE_DIR, "perf"), envEnabled: process.env.MUX_PERF === "1" })
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
@@ -2505,6 +2508,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   }
   webChannel = new WebChannel({
     updateChecker,
+    perf: perfLog,
     getHostInfo: () => ({
       hostId: hostIdentity.hostId,
       name: advertisedHostName,
