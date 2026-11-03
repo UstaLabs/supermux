@@ -132,6 +132,8 @@ import dev.supermux.ui.shell.windows.RegistryShellWindows
 import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
+import dev.supermux.ui.adaptive.LocalWindowControlsInsets
+import dev.supermux.ui.adaptive.WindowControlsInsets
 import dev.supermux.desktop.shell.macTitleBarDragRegion
 import dev.supermux.desktop.shell.DesktopWindowDragChrome
 import dev.supermux.ui.shell.LocalWindowDragChrome
@@ -1028,6 +1030,13 @@ fun main() {
                       customChrome = linuxChrome != null || windowsChrome != null,
                       windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
                   ),
+                  // The OS's own window controls over the content, for a full-window overlay (the
+                  // chat's media viewer lays its top bar in their band, clear of them).
+                  LocalWindowControlsInsets provides when {
+                      isMacOs() -> WindowControlsInsets(band = MacTitleBarHeight, start = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth)
+                      windowsChrome != null -> WindowControlsInsets(band = WindowsTitleBarHeight, end = windowsChrome.captionButtonsWidth)
+                      else -> WindowControlsInsets()
+                  },
               ) {
               Box(
                   Modifier

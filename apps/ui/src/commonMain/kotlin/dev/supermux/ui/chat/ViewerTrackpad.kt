@@ -176,15 +176,18 @@ internal val SwipeSettleSpec = spring<Float>(dampingRatio = Spring.DampingRatioN
  * The viewer's two-finger trackpad swipes on a Mac. Sideways the item follows the fingers and, on
  * letting go, goes on to the next one or springs back, one item per swipe, as Photos and Quick
  * Look do. A pull follows the fingers through [onPull] (px, downward positive) and is judged on
- * letting go by [onPullLetGo] (px/s). Wheel events [owns] declines (⌘/Ctrl + scroll on a picture,
- * a zoomed picture) go on to the page underneath, untouched. Read for the modifier's life: pass
- * callbacks that read state rather than capture it.
+ * letting go by [onPullLetGo] (px/s). [onQuiet] says when a swipe's events, momentum and all, have
+ * stopped: a viewer closed earlier hands the rest of the coasting to whatever is under it. Wheel
+ * events [owns] declines (⌘/Ctrl + scroll on a picture, a zoomed picture) go on to the page
+ * underneath, untouched. Read for the modifier's life: pass callbacks that read state rather than
+ * capture it.
  */
 internal fun Modifier.viewerTrackpad(
     pager: PagerState,
     owns: (PointerEvent) -> Boolean,
     onPull: (Float) -> Unit,
     onPullLetGo: (Float) -> Unit,
+    onQuiet: () -> Unit = {},
 ): Modifier = pointerInput(pager) {
     val unit = TrackpadScrollUnit.toPx()
     val slop = AxisSlop.toPx()
@@ -240,6 +243,8 @@ internal fun Modifier.viewerTrackpad(
                         }
                     }
                 }
+                // No new swipe carried over: nothing more is coming from the pad.
+                if (carried == null) onQuiet()
             }
         }
     }

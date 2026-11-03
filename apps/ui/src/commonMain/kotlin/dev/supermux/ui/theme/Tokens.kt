@@ -103,8 +103,12 @@ object Media {
     /** ▶ on a collage tile. */
     val collagePlayGlyph = 30.dp
 
-    /** One tile of the fullscreen viewer's thumbnail strip. */
-    val viewerThumbSize = 56.dp
+    /** One tile of the fullscreen viewer's thumbnail strip, and the current one, a little bigger. */
+    val viewerThumbSize = 52.dp
+    val viewerThumbCurrent = 64.dp
+
+    /** Between two tiles of the strip. */
+    val viewerThumbGap = 6.dp
 }
 
 /**

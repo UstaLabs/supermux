@@ -5,20 +5,25 @@ package dev.supermux.ui.chat
 
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.key.KeyEventType
 import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.chatTimeLabel
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.accounts.isAccountNotice
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.editor.filePreviewKind
+import dev.supermux.ui.editor.formatFileSize
+import androidx.compose.ui.unit.dp
 import dev.supermux.ui.parseMarkdownBlocks
 
 /** Whether [att] paints as a picture, plays as a clip, or neither (a file chip). */
@@ -330,4 +335,124 @@ internal fun posterSized(frame: ImageBitmap): ImageBitmap {
         paint = Paint().apply { filterQuality = FilterQuality.Medium },
     )
     return out
+}
+
+// ── A file and a single picture in a message ────────────────────────────────────────────────────
+
+/** The families a file card's badge is coloured by. */
+internal enum class FileFamily(val color: Color) {
+    Pdf(Color(0xFFE5484D)),
+    Document(Color(0xFF3E63DD)),
+    Sheet(Color(0xFF30A46C)),
+    Slides(Color(0xFFF76B15)),
+    Archive(Color(0xFFAD7F58)),
+    Audio(Color(0xFF8E4EC6)),
+    Video(Color(0xFFD6409F)),
+    Image(Color(0xFF12A594)),
+    Code(Color(0xFF687076)),
+    Other(Color(0xFF8B8D98)),
+}
+
+private val DOCUMENT_EXT = setOf("doc", "docx", "rtf", "odt", "pages")
+private val SHEET_EXT = setOf("xls", "xlsx", "csv", "tsv", "numbers", "ods")
+private val SLIDES_EXT = setOf("ppt", "pptx", "key", "odp")
+private val ARCHIVE_EXT = setOf("zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar")
+private val AUDIO_EXT = setOf("mp3", "m4a", "wav", "aac", "ogg", "oga", "opus", "flac")
+private val VIDEO_EXT = setOf("mp4", "mov", "m4v", "webm", "mkv", "avi")
+private val IMAGE_EXT = setOf("png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "svg", "tif", "tiff")
+private val CODE_EXT = setOf(
+    "txt", "md", "json", "yaml", "yml", "toml", "xml", "html", "css", "js", "ts", "kt", "kts", "java",
+    "py", "rs", "go", "swift", "sh", "sql", "log", "diff", "patch",
+)
+
+/** A file's family: its extension first, its MIME type after. */
+internal fun fileFamily(extension: String?, mime: String?): FileFamily {
+    val ext = extension?.lowercase()
+    val m = mime?.lowercase().orEmpty()
+    return when {
+        ext == "pdf" || m == "application/pdf" -> FileFamily.Pdf
+        ext in DOCUMENT_EXT -> FileFamily.Document
+        ext in SHEET_EXT -> FileFamily.Sheet
+        ext in SLIDES_EXT -> FileFamily.Slides
+        ext in ARCHIVE_EXT || m == "application/zip" -> FileFamily.Archive
+        ext in AUDIO_EXT || m.startsWith("audio/") -> FileFamily.Audio
+        ext in VIDEO_EXT || m.startsWith("video/") -> FileFamily.Video
+        ext in IMAGE_EXT || m.startsWith("image/") -> FileFamily.Image
+        ext in CODE_EXT || m.startsWith("text/") -> FileFamily.Code
+        else -> FileFamily.Other
+    }
+}
+
+/** The extension a file name shows, lower case: what follows its last dot, if short enough to be one. */
+internal fun fileExtension(name: String?): String? {
+    if (name == null) return null
+    val dot = name.lastIndexOf('.')
+    if (dot <= 0 || dot == name.lastIndex) return null
+    return name.substring(dot + 1).lowercase().takeIf { ext -> ext.length <= 5 && ext.all { it.isLetterOrDigit() } }
+}
+
+/** A file card's badge text: up to four letters of the extension; null draws the kind's glyph. */
+internal fun fileBadgeLabel(name: String?): String? = fileExtension(name)?.uppercase()?.take(4)
+
+/** A file card's second line: its type and size, whichever are known ("PDF · 28.2 KB"). */
+internal fun fileMetaLine(name: String?, mime: String?, size: Long?): String =
+    listOfNotNull(
+        fileExtension(name)?.uppercase() ?: mimeLabel(mime),
+        size?.takeIf { it > 0 }?.let(::formatFileSize),
+    ).joinToString(" · ")
+
+private fun mimeLabel(mime: String?): String? = when {
+    mime == null -> null
+    mime.startsWith("audio/") -> "Audio"
+    mime.startsWith("video/") -> "Video"
+    mime.startsWith("image/") -> "Image"
+    else -> null
+}
+
+/** Where a single picture's inline frame cuts it, when it is more extreme than the frame allows. */
+internal enum class PictureCrop { Top, Center }
+
+/** A single picture's inline frame, and how the picture is cut to it (null: it shows whole). */
+internal data class PictureFrameSize(val width: Dp, val height: Dp, val crop: PictureCrop?)
+
+/** Tallest (1:2) and widest (5:2) a single picture shows whole inline; past these it is cut. */
+internal const val PICTURE_TALLEST = 0.5f
+internal const val PICTURE_WIDEST = 2.5f
+
+/**
+ * The inline frame of one [pixelWidth]×[pixelHeight] picture at [density]: never bigger than the
+ * picture itself, at most [maxWidth]×[maxHeight], and no more extreme than 1:2 or 5:2. Past those the
+ * frame keeps the limit and the picture is cut to it: a long screenshot to its top, where it starts,
+ * and a panorama to its middle. The viewer still shows every pixel.
+ */
+internal fun pictureFrame(pixelWidth: Int, pixelHeight: Int, maxWidth: Dp, maxHeight: Dp, density: Float): PictureFrameSize {
+    if (pixelWidth <= 0 || pixelHeight <= 0 || density <= 0f) return PictureFrameSize(maxWidth, maxHeight, null)
+    val w = pixelWidth / density
+    val h = pixelHeight / density
+    val aspect = w / h
+    val crop = when {
+        aspect < PICTURE_TALLEST -> PictureCrop.Top
+        aspect > PICTURE_WIDEST -> PictureCrop.Center
+        else -> null
+    }
+    // The part of the picture the frame shows, at the picture's own size.
+    val shownW = if (crop == PictureCrop.Center) h * PICTURE_WIDEST else w
+    val shownH = if (crop == PictureCrop.Top) w / PICTURE_TALLEST else h
+    val scale = minOf(1f, maxWidth.value / shownW, maxHeight.value / shownH)
+    return PictureFrameSize((shownW * scale).dp, (shownH * scale).dp, crop)
+}
+
+/**
+ * Who sent a picture or clip and when, the way the viewer says it under its counter: "You · 13:53",
+ * else the sending session's name for a message from another session, else [agentName]. Null when
+ * the message has no readable time.
+ */
+internal fun mediaCaption(entry: LogEntry, agentName: String, nowMs: Long): String? {
+    val time = chatTimeLabel(entry.ts, nowMs) ?: return null
+    val who = when {
+        entry.channel == "inbox" -> entry.from_session_name ?: agentName
+        entry.direction == "inbound" -> "You"
+        else -> agentName
+    }
+    return "$who · $time"
 }

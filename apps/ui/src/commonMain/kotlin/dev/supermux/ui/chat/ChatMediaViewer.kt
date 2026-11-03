@@ -4,15 +4,24 @@
 // and swipe down to close.
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,6 +56,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,6 +67,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -72,6 +84,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
@@ -82,11 +96,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.Attachment
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowControlsInsets
+import dev.supermux.ui.adaptive.WindowControlsInsets
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Media
@@ -95,6 +113,7 @@ import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -161,10 +180,11 @@ internal fun ChatMediaViewer(
     startKey: String,
     resolve: (ChatMediaItem) -> MediaHandle,
     onDismiss: () -> Unit,
+    caption: (ChatMediaItem) -> String? = { null },
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit = ViewerPlayer,
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        ChatMediaViewerContent(items, startKey, resolve, onDismiss, renderPlayer)
+        ChatMediaViewerContent(items, startKey, resolve, onDismiss, caption = caption, renderPlayer = renderPlayer)
     }
 }
 
@@ -174,7 +194,8 @@ internal fun ChatMediaViewer(
  *  - A pager of every item. A picture keeps the lightbox's zoom/pan ([LightboxTransform]); while
  *    one is zoomed, a drag pans it instead of turning the page. A clip plays in place once its page
  *    is the settled one — never before, so swiping past a clip downloads nothing.
- *  - "3 / 7", zoom −/+ for a picture, Save, Close across the top.
+ *  - "3 / 7" and who sent it when ([caption]), zoom −/+ for a picture, Save, Close across the top.
+ *    Under a pointer the top bar and the side arrows fade after a still moment, back on a move.
  *  - A pointer adds ‹ › at the sides and a thumbnail strip along the bottom; keys ←/→, Space
  *    (play/pause), F (the clip full screen) and Esc work everywhere a keyboard does.
  *  - Touch swipes between items and closes on a swipe down; so does a Mac trackpad's two-finger
@@ -186,6 +207,7 @@ internal fun ChatMediaViewerContent(
     startKey: String,
     resolve: (ChatMediaItem) -> MediaHandle,
     onDismiss: () -> Unit,
+    caption: (ChatMediaItem) -> String? = { null },
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit = ViewerPlayer,
 ) {
     if (items.isEmpty()) {
@@ -193,6 +215,7 @@ internal fun ChatMediaViewerContent(
         return
     }
     val pointer = LocalPointerAvailable.current
+    val windowControls = LocalWindowControlsInsets.current
     val platform = LocalPlatform.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
@@ -251,6 +274,47 @@ internal fun ChatMediaViewerContent(
     val zoomedNow by rememberUpdatedState(zoomed)
     val pictureNow by rememberUpdatedState(current.kind == FilePreviewKind.Image)
     val flingPx = with(density) { DismissFling.toPx() }
+
+    // Closing by a pull: the picture slides on down and fades, and the dialog goes only once the
+    // trackpad is quiet. Closed mid-coast, the momentum still arriving would scroll the chat behind.
+    var leaving by remember { mutableStateOf(false) }
+    var outOfView by remember { mutableStateOf(false) }
+    var padQuiet by remember { mutableStateOf(true) }
+    var leaveFade by remember { mutableFloatStateOf(1f) }
+    LaunchedEffect(outOfView, padQuiet) { if (outOfView && padQuiet) dismiss() }
+    // A pad that never says it is quiet still lets the viewer go.
+    LaunchedEffect(outOfView) {
+        if (outOfView) {
+            delay(LEAVE_QUIET_TIMEOUT_MS)
+            dismiss()
+        }
+    }
+    fun leaveDown(velocity: Float) {
+        if (leaving) return
+        leaving = true
+        scope.launch {
+            launch { animate(1f, 0f, animationSpec = tween(LEAVE_MS)) { value, _ -> leaveFade = value } }
+            animate(dragY, maxOf(heightPx, dragY), animationSpec = tween(LEAVE_MS, easing = FastOutLinearInEasing)) { value, _ -> dragY = value }
+            outOfView = true
+        }
+    }
+
+    // Under a pointer the chrome (top bar, side arrows) fades after a still moment and comes back on
+    // any move, as Photos and Quick Look do. It stays while the pointer rests on it.
+    var pointerMoves by remember { mutableIntStateOf(0) }
+    val chromeHover = remember { MutableInteractionSource() }
+    val hoveringChrome by chromeHover.collectIsHoveredAsState()
+    var chromeShown by remember { mutableStateOf(true) }
+    LaunchedEffect(pointerMoves, hoveringChrome) {
+        chromeShown = true
+        if (pointer && !hoveringChrome) {
+            delay(CHROME_IDLE_MS)
+            chromeShown = false
+        }
+    }
+    val chromeAlpha by animateFloatAsState(if (chromeShown) 1f else 0f, animationSpec = tween(CHROME_FADE_MS), label = "viewer chrome")
+    val chrome = Modifier.graphicsLayer { alpha = chromeAlpha }.hoverable(chromeHover)
+
     val trackpad = platform.caps.trackpadMomentum
     // A Mac trackpad's two-finger swipes, which the stock pager judges by the momentum's dying tail.
     val trackpadSwipes = if (!trackpad) Modifier else {
@@ -266,14 +330,17 @@ internal fun ChatMediaViewerContent(
             },
             onPull = remember {
                 { dy: Float ->
-                    pullBack?.cancel()
-                    dragY = (dragY + dy).coerceAtLeast(0f)
+                    if (!leaving) {
+                        pullBack?.cancel()
+                        padQuiet = false
+                        dragY = (dragY + dy).coerceAtLeast(0f)
+                    }
                 }
             },
             onPullLetGo = remember {
                 { velocity: Float ->
                     if (shouldDismissOnRelease(dragY, velocity, heightPx, flingPx)) {
-                        dismiss()
+                        leaveDown(velocity)
                     } else {
                         pullBack = scope.launch {
                             animate(dragY, 0f, initialVelocity = velocity, animationSpec = SwipeSettleSpec) { value, _ -> dragY = value }
@@ -281,6 +348,7 @@ internal fun ChatMediaViewerContent(
                     }
                 }
             },
+            onQuiet = remember { { padQuiet = true } },
         )
     }
     // Swipe down to close is a touch gesture: a desktop mouse drag does nothing here.
@@ -291,7 +359,7 @@ internal fun ChatMediaViewerContent(
             onDragEnd = {
                 val velocity = tracker.calculateVelocity().y
                 if (shouldDismissOnRelease(dragY, velocity, size.height.toFloat(), flingPx)) {
-                    dismiss()
+                    leaveDown(velocity)
                 } else {
                     scope.launch { animate(dragY, 0f) { value, _ -> dragY = value } }
                 }
@@ -310,7 +378,16 @@ internal fun ChatMediaViewerContent(
     Box(
         Modifier
             .fillMaxSize()
+            .graphicsLayer { alpha = leaveFade }
             .background(Color.Black.copy(alpha = backdrop))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type == PointerEventType.Move || event.type == PointerEventType.Enter) pointerMoves++
+                    }
+                }
+            }
             .onSizeChanged { heightPx = it.height.toFloat() }
             .focusRequester(focus)
             .focusable()
@@ -351,26 +428,44 @@ internal fun ChatMediaViewerContent(
                         )
                     }
                 }
-                ViewerTopBar(
-                    counter = if (items.size > 1) viewerCounter(page, items.size) else null,
-                    picture = current.kind == FilePreviewKind.Image,
-                    onZoomOut = { transformOf(current.key).zoomBy(1f / LightboxTransform.STEP) },
-                    onZoomIn = { transformOf(current.key).zoomBy(LightboxTransform.STEP) },
-                    onSave = ::save,
-                    onClose = { dismiss() },
-                    modifier = Modifier.align(Alignment.TopCenter),
-                )
+                val counter = if (items.size > 1) viewerCounter(page, items.size) else null
+                val onZoomOut = { transformOf(current.key).zoomBy(1f / LightboxTransform.STEP) }
+                val onZoomIn = { transformOf(current.key).zoomBy(LightboxTransform.STEP) }
+                if (windowControls.band > 0.dp) {
+                    ViewerTitleBar(
+                        controls = windowControls,
+                        counter = counter,
+                        caption = caption(current),
+                        picture = current.kind == FilePreviewKind.Image,
+                        onZoomOut = onZoomOut,
+                        onZoomIn = onZoomIn,
+                        onSave = ::save,
+                        onClose = { dismiss() },
+                        modifier = Modifier.align(Alignment.TopCenter).then(chrome),
+                    )
+                } else {
+                    ViewerTopBar(
+                        counter = counter,
+                        caption = caption(current),
+                        picture = current.kind == FilePreviewKind.Image,
+                        onZoomOut = onZoomOut,
+                        onZoomIn = onZoomIn,
+                        onSave = ::save,
+                        onClose = { dismiss() },
+                        modifier = Modifier.align(Alignment.TopCenter).then(chrome),
+                    )
+                }
                 if (pointer && items.size > 1) {
                     if (page > 0) {
                         SideArrow(
-                            Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous", "chat_media_viewer_prev", { go(-1) },
-                            Modifier.align(Alignment.CenterStart),
+                            MediaIcons.ChevronLeft, "Previous", "chat_media_viewer_prev", { go(-1) },
+                            Modifier.align(Alignment.CenterStart).then(chrome),
                         )
                     }
                     if (page < items.lastIndex) {
                         SideArrow(
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next", "chat_media_viewer_next", { go(+1) },
-                            Modifier.align(Alignment.CenterEnd),
+                            MediaIcons.ChevronRight, "Next", "chat_media_viewer_next", { go(+1) },
+                            Modifier.align(Alignment.CenterEnd).then(chrome),
                         )
                     }
                 }
@@ -383,6 +478,16 @@ internal fun ChatMediaViewerContent(
 
 /** How fast a downward fling closes the viewer even short of [DISMISS_DISTANCE_FRACTION]. */
 private val DismissFling = 1200.dp
+
+/** A still pointer for this long fades the viewer's chrome. */
+private const val CHROME_IDLE_MS = 2_500L
+private const val CHROME_FADE_MS = 220
+
+/** A pull that closes the viewer slides it out over this long. */
+private const val LEAVE_MS = 200
+
+/** The longest a closing viewer waits for the trackpad's momentum to stop. */
+private const val LEAVE_QUIET_TIMEOUT_MS = 1_500L
 
 /** A picture page: the lightbox's transform and gestures, through the timeline's load + decode. */
 @Composable
@@ -462,10 +567,95 @@ private fun ViewerNotice(text: String) {
     }
 }
 
-/** Counter on the left; zoom (a picture), Save and Close on the right, over a top scrim. */
+/**
+ * The top bar where the window's own controls float over the content (a Mac's traffic lights,
+ * Windows' caption buttons): the window's title band itself, a bar clear of those controls, with
+ * "3 / 7 · You · 13:53" on the left and zoom (a picture), Save and Close on the right.
+ */
+@Composable
+private fun ViewerTitleBar(
+    controls: WindowControlsInsets,
+    counter: String?,
+    caption: String?,
+    picture: Boolean,
+    onZoomOut: () -> Unit,
+    onZoomIn: () -> Unit,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(controls.band)
+            .background(ViewerChrome.Bar)
+            .drawBehind {
+                val y = size.height - 0.5f
+                drawLine(ViewerChrome.Hairline, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
+            }
+            .padding(start = controls.start + Space.xs, end = controls.end + Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        if (counter != null) {
+            Text(
+                counter,
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.testTag("chat_media_viewer_counter"),
+            )
+        }
+        if (counter != null && caption != null) {
+            Text("·", color = ViewerChrome.Muted, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = Space.xs))
+        }
+        if (caption != null) {
+            Text(
+                caption,
+                color = ViewerChrome.Muted,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("chat_media_viewer_caption"),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (picture) {
+            BarButton(MediaIcons.ZoomOut, "Zoom out", "chat_media_viewer_zoom_out", onZoomOut)
+            BarButton(MediaIcons.ZoomIn, "Zoom in", "chat_media_viewer_zoom_in", onZoomIn)
+        }
+        BarButton(MediaIcons.Save, "Save", "chat_media_viewer_save", onSave)
+        BarButton(MediaIcons.Close, "Close", "chat_media_viewer_close", onClose)
+    }
+}
+
+/** A title-bar button: the glyph alone, a soft square behind it under the pointer, as a Mac toolbar's. */
+@Composable
+private fun BarButton(icon: ImageVector, label: String, tag: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(ViewerChrome.BarButton)
+            .clip(RoundedCornerShape(ViewerChrome.BarButtonCorner))
+            .focusProperties { canFocus = false }
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(ViewerChrome.BarIcon))
+    }
+}
+
+/**
+ * The top bar where nothing of the window's floats over the content (a phone, a browser): the
+ * counter with who sent it when under it on the left, zoom (a picture), Save and Close on the
+ * right, over a top scrim.
+ */
 @Composable
 private fun ViewerTopBar(
     counter: String?,
+    caption: String?,
     picture: Boolean,
     onZoomOut: () -> Unit,
     onZoomIn: () -> Unit,
@@ -482,21 +672,34 @@ private fun ViewerTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        if (counter != null) {
-            Text(
-                counter,
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(start = Space.sm).testTag("chat_media_viewer_counter"),
-            )
+        if (counter != null || caption != null) {
+            Column(Modifier.padding(start = Space.sm)) {
+                if (counter != null) {
+                    Text(
+                        counter,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag("chat_media_viewer_counter"),
+                    )
+                }
+                if (caption != null) {
+                    Text(
+                        caption,
+                        color = ViewerChrome.Muted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        modifier = Modifier.testTag("chat_media_viewer_caption"),
+                    )
+                }
+            }
         }
         Spacer(Modifier.weight(1f))
         if (picture) {
-            ViewerButton(Icons.Filled.Remove, "Zoom out", "chat_media_viewer_zoom_out", onZoomOut)
-            ViewerButton(Icons.Filled.Add, "Zoom in", "chat_media_viewer_zoom_in", onZoomIn)
+            ViewerButton(MediaIcons.ZoomOut, "Zoom out", "chat_media_viewer_zoom_out", onZoomOut)
+            ViewerButton(MediaIcons.ZoomIn, "Zoom in", "chat_media_viewer_zoom_in", onZoomIn)
         }
-        ViewerButton(Icons.Filled.Download, "Save", "chat_media_viewer_save", onSave)
-        ViewerButton(Icons.Filled.Close, "Close", "chat_media_viewer_close", onClose)
+        ViewerButton(MediaIcons.Save, "Save", "chat_media_viewer_save", onSave)
+        ViewerButton(MediaIcons.Close, "Close", "chat_media_viewer_close", onClose)
     }
 }
 
@@ -516,31 +719,47 @@ private fun ViewerButton(icon: ImageVector, label: String, tag: String, onClick:
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = Color.White)
+        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(ViewerChrome.ButtonIcon))
     }
 }
 
+/** ‹ or › at a side: a thin chevron on a translucent disc with a faint rim. */
 @Composable
 private fun SideArrow(icon: ImageVector, label: String, tag: String, onClick: () -> Unit, modifier: Modifier) {
     Box(
         modifier
             .padding(Space.md)
-            .size(44.dp)
+            .size(ViewerChrome.ArrowDisc)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.45f))
+            .background(Color.Black.copy(alpha = 0.4f))
+            .border(1.dp, ViewerChrome.Hairline, CircleShape)
             .focusProperties { canFocus = false }
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(28.dp))
+        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(ViewerChrome.ArrowIcon))
     }
 }
 
+/** The viewer's chrome palette: it always sits on black, so it does not follow the app theme. */
+private object ViewerChrome {
+    val Bar = Color(0xFF1C1C1E).copy(alpha = 0.94f)
+    val Hairline = Color.White.copy(alpha = 0.1f)
+    val Muted = Color.White.copy(alpha = 0.65f)
+    val BarButton = 28.dp
+    val BarButtonCorner = 6.dp
+    val BarIcon = 17.dp
+    val ButtonIcon = 22.dp
+    val ArrowDisc = 40.dp
+    val ArrowIcon = 22.dp
+}
+
 /**
- * The desktop strip: every item as a small tile, the current one outlined and bright. A clip's tile
- * is its poster — the strip downloads no clip either. Keeps the current tile in view.
+ * The desktop strip: every item as a small tile. The current one sits in the middle, a little
+ * bigger and outlined in the accent colour, and the strip glides to keep it there as the viewer
+ * moves on. A clip's tile is its poster: the strip downloads no clip either.
  */
 @Composable
 private fun ViewerStrip(
@@ -549,49 +768,59 @@ private fun ViewerStrip(
     resolve: (ChatMediaItem) -> MediaHandle,
     onPick: (Int) -> Unit,
 ) {
-    val state = rememberLazyListState()
-    LaunchedEffect(current) {
-        val visible = state.layoutInfo.visibleItemsInfo
-        val first = visible.firstOrNull()?.index ?: 0
-        val last = visible.lastOrNull()?.index ?: 0
-        if (current <= first || current >= last) state.animateScrollToItem((current - 2).coerceAtLeast(0))
-    }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = current)
+    LaunchedEffect(current) { state.animateScrollToItem(current) }
     val shape = RoundedCornerShape(Radii.sm)
-    LazyRow(
-        state = state,
-        modifier = Modifier
+    val accent = MaterialTheme.colorScheme.primary
+    BoxWithConstraints(
+        Modifier
             .fillMaxWidth()
             .background(Color.Black)
             .navigationBarsPadding()
             .padding(vertical = Space.sm)
             .testTag("chat_media_viewer_strip"),
-        horizontalArrangement = Arrangement.spacedBy(Space.xs, Alignment.CenterHorizontally),
-        contentPadding = PaddingValues(horizontal = Space.md),
     ) {
-        itemsIndexed(items, key = { _, item -> item.key }) { i, item ->
-            val selected = i == current
-            Box(
-                Modifier
-                    .size(Media.viewerThumbSize)
-                    .clip(shape)
-                    .border(2.dp, if (selected) Color.White else Color.Transparent, shape)
-                    .graphicsLayer { alpha = if (selected) 1f else 0.55f }
-                    .focusProperties { canFocus = false }
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable { onPick(i) }
-                    .testTag("chat_media_viewer_thumb:$i"),
-                contentAlignment = Alignment.Center,
-            ) {
-                when (item.kind) {
-                    FilePreviewKind.Image -> StripPicture(remember(item.key) { resolve(item) })
-                    FilePreviewKind.Video -> {
-                        val handle = remember(item.key) { resolve(item) }
-                        Box(Modifier.fillMaxSize()) {
-                            val poster = handle.att.poster_file_id
-                            val frame = if (poster == null) ClipFrames.of(handle.att.file_id) else null
-                            poster?.let { PosterPicture(it, handle.media, Modifier.fillMaxSize()) }
-                            frame?.let { Image(BitmapPainter(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                            VideoPosterTile(glyph = 18.dp, background = if (poster != null || frame != null) Color.Transparent else VideoPoster.Background)
+        // Half the strip less half the current tile on each side: any tile, the first and the last
+        // too, scrolls to the middle.
+        val side = ((maxWidth - Media.viewerThumbCurrent) / 2).coerceAtLeast(0.dp)
+        LazyRow(
+            state = state,
+            modifier = Modifier.fillMaxWidth().height(Media.viewerThumbCurrent),
+            contentPadding = PaddingValues(horizontal = side),
+            horizontalArrangement = Arrangement.spacedBy(Media.viewerThumbGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            itemsIndexed(items, key = { _, item -> item.key }) { i, item ->
+                val selected = i == current
+                val size by animateDpAsState(
+                    if (selected) Media.viewerThumbCurrent else Media.viewerThumbSize,
+                    animationSpec = tween(STRIP_MS),
+                    label = "strip tile",
+                )
+                val dim by animateFloatAsState(if (selected) 1f else 0.6f, animationSpec = tween(STRIP_MS), label = "strip tile alpha")
+                Box(
+                    Modifier
+                        .size(size)
+                        .graphicsLayer { alpha = dim }
+                        .clip(shape)
+                        .border(2.dp, if (selected) accent else Color.Transparent, shape)
+                        .focusProperties { canFocus = false }
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { onPick(i) }
+                        .testTag("chat_media_viewer_thumb:$i"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when (item.kind) {
+                        FilePreviewKind.Image -> StripPicture(remember(item.key) { resolve(item) })
+                        FilePreviewKind.Video -> {
+                            val handle = remember(item.key) { resolve(item) }
+                            Box(Modifier.fillMaxSize()) {
+                                val poster = handle.att.poster_file_id
+                                val frame = if (poster == null) ClipFrames.of(handle.att.file_id) else null
+                                poster?.let { PosterPicture(it, handle.media, Modifier.fillMaxSize()) }
+                                frame?.let { Image(BitmapPainter(it), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                                VideoPosterTile(glyph = 18.dp, background = if (poster != null || frame != null) Color.Transparent else VideoPoster.Background)
+                            }
                         }
                     }
                 }
@@ -599,6 +828,9 @@ private fun ViewerStrip(
         }
     }
 }
+
+/** How long a strip tile takes to grow into the current one, or shrink back. */
+private const val STRIP_MS = 220
 
 @Composable
 private fun StripPicture(handle: MediaHandle) {

@@ -114,6 +114,19 @@ private fun Modifier.collageSize(fraction: Float, max: Dp, aspect: Float): Modif
     layout(width, height) { placeable.place(0, 0) }
 }
 
+/**
+ * A message's media column: [Media.inlineVideoWidthFraction] of the row, never wider than
+ * [Media.collageMaxWidth]. It is the collage's own width, so a file card under a collage, or a
+ * picture on its own, lines up with one.
+ */
+internal fun Modifier.mediaColumnWidth(): Modifier = layout { measurable, constraints ->
+    val cap = Media.collageMaxWidth.roundToPx()
+    val offered = if (constraints.hasBoundedWidth) (constraints.maxWidth * Media.inlineVideoWidthFraction).roundToInt() else cap
+    val width = minOf(offered, cap).coerceIn(constraints.minWidth, constraints.maxWidth)
+    val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
+    layout(width, placeable.height) { placeable.place(0, 0) }
+}
+
 /** A picture cropped to its tile, through the same load + decode path as a single image. */
 @Composable
 private fun CollagePicture(item: ChatMediaItem.FromAttachment, media: AttachmentMedia) {
@@ -197,7 +210,7 @@ internal fun VideoPosterTile(modifier: Modifier = Modifier, glyph: Dp = 30.dp, b
                 .background(Color.Black.copy(alpha = VideoControls.DiscAlpha)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Filled.PlayArrow, contentDescription = "Video", tint = VideoControls.Foreground, modifier = Modifier.size(glyph))
+            Icon(MediaIcons.Play, contentDescription = "Video", tint = VideoControls.Foreground, modifier = Modifier.size(glyph))
         }
     }
 }

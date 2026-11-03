@@ -503,6 +503,9 @@ fun ChatPanel(
         chatMediaItems(timelineItems, hostFiles = markdownFiles != null, baseDir = markdownFiles?.baseDir)
     }
     val latestMedia by androidx.compose.runtime.rememberUpdatedState(mediaItems)
+    // Who sent each one and when, for the viewer's line under its counter.
+    val mediaEntries = remember(timelineItems) { timelineItems.mapNotNull { (it as? TimelineItem.Msg)?.entry }.associateBy { it.id } }
+    val mediaAgentName = remember(session.agent) { dev.supermux.ui.accounts.agentDisplayName(session.agent) }
     var viewerKey by remember(session.id) { mutableStateOf<String?>(null) }
     val mediaOpener = remember(session.id) {
         ChatMediaOpener { key -> latestMedia.any { it.key == key }.also { found -> if (found) viewerKey = key } }
@@ -1048,6 +1051,9 @@ fun ChatPanel(
                 startKey = key,
                 resolve = { item -> chatMediaHandle(item, actions.media, markdownFiles, platform.files::probeMime) },
                 onDismiss = { viewerKey = null },
+                caption = { item ->
+                    mediaEntries[item.entryId]?.let { mediaCaption(it, mediaAgentName, Clock.System.now().toEpochMilliseconds()) }
+                },
             )
         }
 
