@@ -453,7 +453,8 @@ test("claude live: the reload_plugins reply, which lists the commands, reaches t
 test("claude live: holdOnCacheImpact passes hold_on_cache_impact; a held reload is refused and the folder restored", async () => {
   const f = contextFixture()
   const launched = f.launch({ instructions: undefined, plugins: [], mcpServers: [] })
-  const { runtime, control } = await openLive("claude", launched, { HOLD: "1" })
+  const updates: AgentUpdate[] = []
+  const { runtime, control } = await openLive("claude", launched, { HOLD: "1", COMMANDS: JSON.stringify([{ name: "from-held" }]) }, u => updates.push(u))
   try {
     const before = readdirSync(join(launched.directory, "plugins")).sort()
     const change = { kind: "plugins" as const, op: "add" as const, item: f.plugin }
@@ -461,6 +462,8 @@ test("claude live: holdOnCacheImpact passes hold_on_cache_impact; a held reload 
     expect(refused).toEqual([{ change, reason: expect.stringContaining("held the plugin reload") }])
     expect(control()).toEqual([{ subtype: "reload_plugins", hold_on_cache_impact: true }])
     expect(readdirSync(join(launched.directory, "plugins")).sort()).toEqual(before)
+    // The held reload changed nothing: only the initialize reply reported commands.
+    expect(updates.filter(u => u.protocol === "native" && (u.value as { type?: string }).type === "control_response")).toHaveLength(1)
   } finally { await runtime.close({ mode: "shutdown" }) }
 })
 

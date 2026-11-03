@@ -488,9 +488,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
     function forwardCommands(reply: any) {
       if (Array.isArray(reply?.response?.commands)) context.onUpdate({ protocol: 'native', value: { type: 'control_response', response: reply } })
     }
-    /** A second initialize: Claude 2.1.308 answers with the live list and keeps its MCP servers and permission mode. */
+    /**
+     * A second initialize: Claude 2.1.308 answers with the live list and keeps its MCP servers and permission mode.
+     * Optional: a CLI that refuses or never answers it costs the host only this refresh, never the session.
+     */
     function askCommands() {
-      void rpc.request({ subtype: 'initialize' }).then(forwardCommands, () => { /* an older CLI may refuse: the host keeps its stored list */ })
+      void rpc.request({ subtype: 'initialize' }, { optional: true }).then(forwardCommands, () => { /* the host keeps its stored list */ })
     }
     const setupAbort = () => { fail(new Error('Claude setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
@@ -578,7 +581,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
           let reply: any
           try { reply = await rpc.request({ subtype: 'reload_plugins', ...(applyOptions.holdOnCacheImpact ? { hold_on_cache_impact: true } : {}) }) }
           catch (error) { undo(); throw error }
-          forwardCommands(reply)
+          // A held reload changed nothing (the folder is restored below): its list is not news.
+          if (reply?.response?.held !== true) forwardCommands(reply)
           if (reply?.response?.held === true) {
             undo()
             const impact = reply.response.cache_impact !== undefined ? `: ${JSON.stringify(reply.response.cache_impact)}` : ''

@@ -100,14 +100,15 @@ test('process death leaves keeper; reattach seeds owned turn and asks for the co
 
   const activity: Array<{ id: string; phase: string }> = []
   const updates: any[] = []
+  const order: string[] = []
   const r = await libraryClaude({
     env: { TRACE: trace },
     keeper: { stateDirectory, limits: keeperLimits() },
   }).open(ctx({
     sessionId: 'k1',
     resumeId: info.sessionId,
-    onActivity: n => activity.push({ ...n }),
-    onUpdate: u => updates.push(u),
+    onActivity: n => { activity.push({ ...n }); order.push(`activity:${n.phase}`) },
+    onUpdate: u => { updates.push(u); if (u.protocol === 'native' && (u.value as any)?.type === 'control_response') order.push('commands') },
   }))
   try {
     const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => {
@@ -126,6 +127,8 @@ test('process death leaves keeper; reattach seeds owned turn and asks for the co
     const commandReplies = () => updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
     for (let i = 0; i < 100 && commandReplies().length === 0; i++) await new Promise(x => setTimeout(x, 20))
     expect(commandReplies().map(u => u.value.response.response.commands)).toEqual([[{ name: 'verify', description: 'Check work' }]])
+    // Asked only once the owned turn was over, never during it.
+    expect(order.indexOf('commands')).toBeGreaterThan(order.indexOf('activity:completed'))
     const after = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return l } })
     expect(after.filter((x: any) => x?.type === 'control_request' && x.request?.subtype === 'initialize')).toHaveLength(2)
     expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
@@ -264,6 +267,24 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await r2.close({ mode: 'shutdown' })
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)
+})
+
+test('a CLI that never answers the repeat initialize keeps its session: the list is optional', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-noreply-'))
+  dirs.push(stateDirectory)
+  const opts = { env: { IGNORE_REPEAT_INITIALIZE: '1' }, requestTimeoutMs: 1500, keeper: { stateDirectory, limits: keeperLimits() } }
+  const r = await libraryClaude(opts).open(ctx({ sessionId: 'k-noreply' }))
+  const sid = r.agentSessionId
+  await r.close({ mode: 'detach' })
+  const exits: Array<Error | undefined> = []
+  const r2 = await libraryClaude(opts).open(ctx({ sessionId: 'k-noreply', resumeId: sid, onExit: e => exits.push(e) }))
+  try {
+    await new Promise(x => setTimeout(x, 2500)) // past the request timeout
+    expect(exits).toEqual([])
+    expect(await r2.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+  } finally {
+    await r2.close({ mode: 'shutdown' })
+  }
 })
 
 test('a keeper another process started under its own temp dir, too deep for sun_path, is re-attached at its recorded socket', async () => {

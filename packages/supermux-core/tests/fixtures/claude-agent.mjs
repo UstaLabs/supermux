@@ -125,8 +125,10 @@ if (process.env.MODE === 'setup-hang') {
       return
     }
     if (!initialized) fail(20, 'not initialized')
-    // The real CLI (2.1.308) answers a second initialize with the live command list.
+    // The real CLI (2.1.308) answers a second initialize with the live command list; IGNORE_REPEAT_INITIALIZE
+    // plays a CLI that never answers it.
     if (m.type === 'control_request' && m.request?.subtype === 'initialize') {
+      if (process.env.IGNORE_REPEAT_INITIALIZE === '1') return
       send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: initializeReply()}})
       return
     }
