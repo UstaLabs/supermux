@@ -200,6 +200,8 @@ private fun SlashList(
                 is MenuItem.Header -> MenuHeader(item.title, item.count)
                 is MenuItem.Command -> SlashRowView(
                     row = item.row,
+                    // Under its plugin's header a command needn't repeat the plugin: "using-superpowers".
+                    bareName = item.key.startsWith("r:plugin:"),
                     selected = item.index == selectedIndex,
                     onHover = onHighlight?.let { h -> { h(item.index) } },
                     onClick = { onPick(item.row.command) },
@@ -227,6 +229,7 @@ private sealed interface MenuItem {
 @Composable
 private fun SlashRowView(
     row: SlashRow,
+    bareName: Boolean,
     selected: Boolean,
     onHover: (() -> Unit)?,
     onClick: () -> Unit,
@@ -240,7 +243,7 @@ private fun SlashRowView(
     ComposerMenuRow(selected = selected, tag = tag, onClick = onClick, onHover = onHover) {
         SlashSourceMark(cmd, agent)
         Text(
-            text = slashName(cmd, row.nameHits),
+            text = slashName(cmd, row.nameHits, bare = bareName),
             fontFamily = MonoFontFamily,
             fontSize = 13.sp,
             maxLines = 1,
@@ -457,12 +460,23 @@ internal fun SlashSourceMark(cmd: SlashCommand, agent: String?) {
     }
 }
 
-/** The name as typed: sigil, a plugin prefix dimmed, the matched letters bold. */
+/**
+ * The name as typed: sigil, a plugin prefix dimmed, the matched letters bold. [bare] leaves the prefix
+ * out, for a row already under its plugin's header (what is inserted is still the whole name).
+ */
 @Composable
-private fun slashName(cmd: SlashCommand, hits: List<Int>): AnnotatedString {
+private fun slashName(cmd: SlashCommand, hits: List<Int>, bare: Boolean = false): AnnotatedString {
     val cs = MaterialTheme.colorScheme
     val dim = cs.onSurfaceVariant.copy(alpha = 0.8f)
     val prefix = namePrefix(cmd.name).length
+    if (bare && prefix > 0) {
+        return buildAnnotatedString {
+            withStyle(SpanStyle(color = cs.onSurface)) {
+                append(cmd.sigil)
+                append(bolded(cmd.name.substring(prefix), hits.map { it - prefix }.filter { it >= 0 }, cs.onSurface))
+            }
+        }
+    }
     val hit = hits.toSet()
     return buildAnnotatedString {
         withStyle(SpanStyle(color = if (prefix > 0) dim else cs.onSurface)) { append(cmd.sigil) }

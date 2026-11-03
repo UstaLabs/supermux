@@ -111,21 +111,28 @@ fun slashMenu(
 
 private fun sectionedSlashMenu(commands: List<SlashCommand>, recents: List<String>, agentLabel: String): SlashMenuModel {
     val agent = commands.filter { it.action == null }
+    // A plugin's commands are "<plugin>:<command>", so they group under that prefix (Ahmet, 2026-11-04). A
+    // skill read from a plugin's folder has no prefix but says which plugin it is.
+    fun groupOf(cmd: SlashCommand): String? =
+        namePrefix(cmd.name).removeSuffix(":").ifEmpty { null }
+            ?: cmd.plugin?.takeIf { cmd.source == SlashCommand.SOURCE_PLUGIN && it.isNotBlank() }
     fun group(key: String, title: String, pick: (SlashCommand) -> Boolean) =
         agent.filter(pick).sortedBy { shortName(it.name).lowercase() }.map { SlashRow(it) }
             .takeIf { it.isNotEmpty() }?.let { SlashSection(key, title, it) }
     val recent = recents.take(SLASH_RECENTS_MAX).mapNotNull { name -> agent.firstOrNull { it.name == name } }
+    val ungrouped: (SlashCommand) -> Boolean = { groupOf(it) == null }
     val sections = buildList {
         if (recent.isNotEmpty()) add(SlashSection("recent", "Recent", recent.map { SlashRow(it) }))
         commands.filter { it.action != null }.map { SlashRow(it) }.takeIf { it.isNotEmpty() }?.let { add(SlashSection("supermux", "supermux", it)) }
-        group("project", "This project") { it.source == SlashCommand.SOURCE_PROJECT }?.let(::add)
-        group("user", "Your skills") { it.source == SlashCommand.SOURCE_USER }?.let(::add)
-        agent.filter { it.source == SlashCommand.SOURCE_PLUGIN }.mapNotNull { it.plugin }.distinct().sortedBy { it.lowercase() }.forEach { plugin ->
-            group("plugin:$plugin", plugin) { it.source == SlashCommand.SOURCE_PLUGIN && it.plugin == plugin }?.let(::add)
+        group("project", "This project") { ungrouped(it) && it.source == SlashCommand.SOURCE_PROJECT }?.let(::add)
+        group("user", "Your skills") { ungrouped(it) && it.source == SlashCommand.SOURCE_USER }?.let(::add)
+        agent.mapNotNull(::groupOf).distinct().sortedBy { it.lowercase() }.forEach { plugin ->
+            // "plugin:" keys mark the groups whose rows drop the repeated prefix (SlashMenu reads it).
+            group("plugin:$plugin", plugin) { groupOf(it) == plugin }?.let(::add)
         }
-        group("builtin", "$agentLabel built-in") { it.source == SlashCommand.SOURCE_BUILTIN }?.let(::add)
+        group("builtin", "$agentLabel built-in") { ungrouped(it) && it.source == SlashCommand.SOURCE_BUILTIN }?.let(::add)
         val known = setOf(SlashCommand.SOURCE_PROJECT, SlashCommand.SOURCE_USER, SlashCommand.SOURCE_BUILTIN)
-        group("other", "Other") { it.source !in known && !(it.source == SlashCommand.SOURCE_PLUGIN && it.plugin != null) }?.let(::add)
+        group("other", "Other") { ungrouped(it) && it.source !in known }?.let(::add)
     }
     return SlashMenuModel("", sections)
 }
