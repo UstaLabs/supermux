@@ -20,6 +20,14 @@ afterEach(async () => {
 })
 
 function signal() { return new AbortController().signal }
+/** Resolves once [check] holds; the limit only turns an event that never comes into a clear failure. */
+async function until(check: () => boolean, what: string, ms = 10_000) {
+  const start = Date.now()
+  while (!check()) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
 function ctx(extra: Partial<DriverContext> = {}): DriverContext {
   return { sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), requestAnswers: async () => ({ outcome: 'cancelled' as const }), ...extra }
 }
@@ -683,13 +691,15 @@ test('prepublication activity overflow fails setup without publishing notices', 
 })
 
 test('grok wrapper rejects configure during known native activity', async () => {
-  const { r } = await traced({ AUTONOMOUS_ON_OPEN: '1', AUTONOMOUS_HOLD: '1', TURN_ID: 'wrap-1' })
+  const activity: any[] = []
+  const { r } = await traced({ AUTONOMOUS_ON_OPEN: '1', AUTONOMOUS_HOLD: '1', TURN_ID: 'wrap-1' }, {}, { onActivity: n => activity.push({ ...n }) })
   try {
-    await new Promise(resolve => setTimeout(resolve, 40))
+    // The fixture starts wrap-1 a little after the session opens, and ends it when cancelled.
+    await until(() => activity.some(a => a.id === 'wrap-1' && a.phase === 'started'), 'wrap-1 to start')
     await expect(r.configure({ model: 'x' })).rejects.toMatchObject({ code: 'busy' })
     await expect(r.prompt([{ type: 'text', text: 'hello' }], signal())).rejects.toMatchObject({ code: 'busy' })
     await r.interrupt()
-    await new Promise(resolve => setTimeout(resolve, 40))
+    await until(() => activity.some(a => a.id === 'wrap-1' && a.phase === 'completed'), 'wrap-1 to end')
     expect(await r.prompt([{ type: 'text', text: 'hello' }], signal())).toEqual({ stopReason: 'end_turn' })
   } finally { await r.close({ mode: "shutdown" }) }
 })
