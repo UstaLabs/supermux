@@ -3,8 +3,10 @@
 //   1. who   — the launcher's agent switcher, or the running chat's agent as a quiet title;
 //   2. which — a search field (focused on open under a pointer) over a short scrolling model list,
 //              starred models pinned first;
-//   3. how   — settings rows that always show their current value (Account, Effort, Fast, Mode).
-//              Mode and Account open their own list in place of the panel, with a back arrow.
+//   3. how   — settings rows that always show their current value (Effort, Fast, Account, Mode).
+//              Mode and Account open their own list in place of the panel, with a back arrow. The
+//              Account row is a new chat's account choice, or the account a running chat runs on
+//              and the switch to another (it replaced the chat header's account pill).
 // The popover is pinned by its bottom edge to the pill, so only its top edge ever moves.
 // A pointer gets it as a popover above the pill; touch gets the same content in a bottom sheet.
 package dev.supermux.ui.chat
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,9 +46,12 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +59,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
@@ -75,6 +82,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -95,17 +104,27 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.net.AccountDto
+import dev.supermux.net.SessionAccountResult
+import dev.supermux.state.AccountResult
+import dev.supermux.ui.accounts.AccountTag
 import dev.supermux.ui.accounts.accountPickerDetail
 import dev.supermux.ui.accounts.accountShortLabel
+import dev.supermux.ui.accounts.accountUnavailableText
+import dev.supermux.ui.accounts.accountsFor
 import dev.supermux.ui.accounts.agentDisplayName
+import dev.supermux.ui.accounts.hasAccountChoice
+import dev.supermux.ui.accounts.isSystemAccountId
+import dev.supermux.ui.accounts.sessionSwitchFailureText
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.GeistMonoFontFamily
 import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.widgets.ModalHost
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /** A starred model's stored key: `"<agent>/<modelId>"` (see [dev.supermux.ui.prefs.UiPrefs.starredModels]). */
@@ -129,17 +148,114 @@ private fun rememberStars(): Pair<Set<String>, (String) -> Unit> {
     return keys to { key -> scope.launch { prefs.putStarredModels(if (key in keys) keys - key else keys + key) } }
 }
 
-/** The launcher's account choice: [accounts] are this agent's logins, system login first. */
-internal class RunSettingsAccount(
+/**
+ * The panel's Account row and the list it opens, for both of its callers:
+ *  - the launcher (a new chat): "Auto" is listed first and is the default — [selectedId] null = the
+ *    account with the most room left, picked by the broker when the chat starts. A pick is instant.
+ *  - a running chat ([forChat]): it runs on exactly one account, so there is no Auto; a pick is the
+ *    switch, which takes a moment ([pendingId]) and can be refused ([refusal]).
+ */
+class RunSettingsAccount(
+    /** This agent's logins, system login first; empty while they load. */
     val accounts: List<AccountDto>,
-    /** null = Auto: the account with the most room left, picked by the broker when the chat starts. */
+    /** The account chosen (the launcher's null = Auto) or run on. */
     val selectedId: String?,
     val onSelect: (String?) -> Unit,
+    /** List "Auto" first: a new chat. */
+    val offersAuto: Boolean = true,
+    /** The row's value until [selectedId] is in [accounts] (a running chat's own `accountLabel`). */
+    val fallbackLabel: String? = null,
+    /** The account a pick is being applied to: its row spins, and no other pick is taken meanwhile. */
+    val pendingId: String? = null,
+    /** Why the last pick was refused, shown under the list. */
+    val refusal: String? = null,
+    /** Opens Settings ▸ Accounts; offered when the current account is unavailable. */
+    val onOpenAccounts: (() -> Unit)? = null,
 ) {
-    /** The account chosen by hand; null while Auto is chosen. */
+    /** The account chosen by hand (null while Auto is chosen) or run on. */
     val current: AccountDto? = selectedId?.let { id -> accounts.firstOrNull { it.id == id } }
     /** The account Auto would pick now (the broker marks it), when known. */
     val autoPick: AccountDto? = accounts.firstOrNull { it.auto }
+    /** On an added account, not the system login (and not Auto). */
+    val onAdded: Boolean = current?.let { !it.system } ?: (!offersAuto && !isSystemAccountId(selectedId))
+    /** The current account is marked unavailable (its API refused it). Picking it again is the retry. */
+    val unavailable: Boolean = current?.unavailable != null
+    /** The row's value: the current account, or Auto and what it would pick now. */
+    val label: String = when {
+        current != null -> accountShortLabel(current)
+        !offersAuto -> fallbackLabel?.takeIf { it.isNotBlank() }
+            ?: if (isSystemAccountId(selectedId)) "System login" else selectedId.orEmpty()
+        else -> autoPick?.let { "Auto · ${accountShortLabel(it)}" } ?: "Auto"
+    }
+
+    companion object {
+        /**
+         * A running chat's account, or null when there is nothing to say. The rule is the one the
+         * header's account pill had: shown on an added account, when the agent has more than its
+         * system login to switch between, or when the account the chat runs on is unavailable.
+         */
+        fun forChat(
+            agent: String,
+            /** The session's `account`; null or `<agent>:system` = the system login. */
+            accountId: String?,
+            accountLabel: String?,
+            /** The host's accounts (every agent); null until loaded. */
+            accounts: List<AccountDto>?,
+            switch: SessionAccountSwitch,
+            onOpenAccounts: (() -> Unit)? = null,
+        ): RunSettingsAccount? {
+            val list = accountsFor(accounts.orEmpty(), agent)
+            val onSystem = isSystemAccountId(accountId)
+            val id = if (onSystem) list.firstOrNull { it.system }?.id ?: "$agent:system" else accountId.orEmpty()
+            val unavailable = list.firstOrNull { it.id == id }?.unavailable != null
+            if (onSystem && !unavailable && !hasAccountChoice(accounts, agent)) return null
+            return RunSettingsAccount(
+                accounts = list,
+                selectedId = id,
+                onSelect = { picked -> if (picked != null) switch.start(picked) },
+                offersAuto = false,
+                fallbackLabel = accountLabel,
+                pendingId = switch.pendingId,
+                refusal = switch.refusal,
+                onOpenAccounts = onOpenAccounts,
+            )
+        }
+    }
+}
+
+/**
+ * A running chat's account switch (POST /sessions/<id>/account), one at a time. It belongs to the
+ * chat, not to the run-settings panel, so closing the panel mid-switch cancels nothing; while the
+ * panel is open, its Account list shows [pendingId] spinning and [refusal] (busy, not running…).
+ */
+@Stable
+class SessionAccountSwitch(
+    private val scope: CoroutineScope,
+    private val switch: suspend (accountId: String) -> AccountResult<SessionAccountResult>,
+) {
+    var pendingId: String? by mutableStateOf(null)
+        private set
+    var refusal: String? by mutableStateOf(null)
+        private set
+
+    fun start(accountId: String) {
+        if (pendingId != null) return
+        pendingId = accountId
+        refusal = null
+        scope.launch {
+            try {
+                val result = switch(accountId)
+                if (result is AccountResult.Failed) refusal = sessionSwitchFailureText(result.code, result.message)
+            } finally {
+                pendingId = null
+            }
+        }
+    }
+
+    /** Nothing stale to say: the panel opened again, or the chat's account changed (from anywhere). */
+    fun clearRefusal() {
+        refusal = null
+    }
 }
 
 /** One pickable row: a real model, or the agent's own default. */
@@ -224,6 +340,9 @@ internal fun RunSettingsPanel(
 
     // A drilled-in view has no search field to hold the keyboard: the panel takes it, so Esc goes back.
     LaunchedEffect(view) { if (drilled && !sheet) runCatching { panelFocus.requestFocus() } }
+    // A pick that lands shows the panel again, the new account on its row: at once in the launcher,
+    // a moment later for a running chat's switch (or one made elsewhere meanwhile).
+    LaunchedEffect(account?.selectedId) { if (view == PanelView.Accounts) back() }
 
     // ONE height, whatever is inside: switching agent, filtering, a model with or without Fast, Mode
     // and Account — none of them resize the panel. The model list takes whatever the rest leaves.
@@ -367,15 +486,14 @@ internal fun RunSettingsPanel(
                             }
                         }
                         if (account != null) {
-                            val current = account.current
-                            val onAdded = current != null && !current.system
+                            val ink = accountInk(account)
                             SettingRow(
                                 sheet,
                                 icon = {
                                     Icon(
-                                        Icons.Outlined.AccountCircle,
+                                        if (account.unavailable) Icons.Outlined.WarningAmber else Icons.Outlined.AccountCircle,
                                         null,
-                                        tint = if (onAdded) cs.primary else cs.onSurfaceVariant,
+                                        tint = ink ?: cs.onSurfaceVariant,
                                         modifier = Modifier.size(16.dp),
                                     )
                                 },
@@ -383,11 +501,10 @@ internal fun RunSettingsPanel(
                                 onClick = { view = PanelView.Accounts },
                                 tag = "run_settings_account",
                             ) {
+                                if (account.pendingId != null) Spinner()
                                 Text(
-                                    current?.let { accountShortLabel(it) }
-                                        ?: account.autoPick?.let { "Auto · ${accountShortLabel(it)}" }
-                                        ?: "Auto",
-                                    color = if (onAdded) cs.primary else cs.onSurface.copy(alpha = 0.8f),
+                                    account.label,
+                                    color = ink ?: cs.onSurface.copy(alpha = 0.8f),
                                     fontSize = 13.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -428,44 +545,13 @@ internal fun RunSettingsPanel(
 
             PanelView.Accounts -> DrillView(
                 sheet = sheet,
-                title = "Start this chat on",
+                title = if (account?.offersAuto == false) "Run this chat on" else "Start this chat on",
                 // Account is the second-to-last settings row: its Back takes the last row's place,
                 // and a spacer row keeps it level with where Account itself was.
                 rowsBelowBack = if (permission?.current != null) 1 else 0,
                 onBack = back,
             ) {
-                // Auto first, and the default: the account with the most room left when the chat starts.
-                // A chosen account this agent no longer has falls back to Auto, so Auto shows checked.
-                if (account != null) {
-                    DrillOption(
-                        sheet = sheet,
-                        selected = account.current == null,
-                        icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-                        title = "Auto",
-                        detail = account.autoPick?.let { "Most room left · now ${accountShortLabel(it)}" } ?: "The account with the most room left",
-                        tag = "account-picker-item:auto",
-                    ) {
-                        haptic.perform(HapticKind.Tick)
-                        account.onSelect(null)
-                        back()
-                    }
-                    account.accounts.forEach { a ->
-                        val selected = a.id == account.current?.id
-                        DrillOption(
-                            sheet = sheet,
-                            selected = selected,
-                            icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
-                            title = accountShortLabel(a),
-                            detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
-                            tag = "account-picker-item:${a.id}",
-                        ) {
-                            haptic.perform(HapticKind.Tick)
-                            // The system login is a choice of its own: its id, which the broker resolves.
-                            account.onSelect(a.id)
-                            back()
-                        }
-                    }
-                }
+                if (account != null) AccountOptions(sheet, account, onBack = back, onDismiss = onDismiss)
             }
 
             PanelView.Modes -> DrillView(
@@ -544,7 +630,148 @@ private fun ColumnScope.DrillView(
     }
 }
 
-/** One option of a drilled-in list: icon · title over a one-line detail · a check when current. */
+/**
+ * The Account list. A new chat lists Auto first (the default); a running chat lists the accounts it
+ * can move to. Each row says how it signs in and how full its busiest window is, tagged when it keeps
+ * its own history or its API refused it; the current one is checked, and picking it just steps back.
+ * A running chat's switch spins on its row until it lands (the panel then steps back by itself) or is
+ * refused, and the reason shows under the rows.
+ */
+@Composable
+private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: () -> Unit, onDismiss: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val sem = LocalSemantics.current
+    val haptic = rememberHaptics()
+    val pick: (String?) -> Unit = { id ->
+        if (account.pendingId == null) {
+            haptic.perform(HapticKind.Tick)
+            // The system login is a choice of its own: its id, which the broker resolves.
+            if (id == account.selectedId) onBack() else account.onSelect(id)
+        }
+    }
+    val current = account.current
+    if (current != null && account.unavailable) {
+        UnavailableNotice(current, account.onOpenAccounts?.let { open -> { onDismiss(); open() } })
+    }
+    if (account.offersAuto) {
+        // Auto first, and the default: the account with the most room left when the chat starts.
+        // A chosen account this agent no longer has falls back to Auto, so Auto shows checked.
+        DrillOption(
+            sheet = sheet,
+            selected = current == null,
+            icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
+            title = "Auto",
+            detail = account.autoPick?.let { "Most room left · now ${accountShortLabel(it)}" } ?: "The account with the most room left",
+            tag = "account-picker-item:auto",
+        ) { pick(null) }
+    }
+    if (account.accounts.isEmpty()) {
+        Text(
+            "Loading accounts…",
+            color = cs.onSurfaceVariant,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        )
+    }
+    account.accounts.forEach { a ->
+        DrillOption(
+            sheet = sheet,
+            selected = a.id == current?.id,
+            busy = a.id == account.pendingId,
+            icon = { Icon(Icons.Outlined.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) },
+            title = accountShortLabel(a),
+            badges = {
+                if (a.isolated) AccountTag("Isolated", sem.warning)
+                // A tag, not a block: picking it is how the user retries it.
+                if (a.unavailable != null) AccountTag("Unavailable", sem.danger, Modifier.testTag("account-unavailable-tag:${a.id}"))
+            },
+            detail = accountPickerDetail(a).takeIf { it.isNotBlank() },
+            tag = "account-picker-item:${a.id}",
+        ) { pick(a.id) }
+    }
+    account.refusal?.let { RefusalLine(it) }
+}
+
+/** Atop the Account list while the current account is unavailable: why, and where to log in again. */
+@Composable
+private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    val danger = LocalSemantics.current.danger
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 8.dp)
+            .testTag("run_settings_account_unavailable"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(Icons.Outlined.WarningAmber, null, tint = danger, modifier = Modifier.size(16.dp))
+            Text(
+                "${accountShortLabel(account)} is unavailable",
+                color = cs.onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Column(Modifier.padding(start = 26.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            accountUnavailableText(account)?.let {
+                Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+            if (onOpenAccounts != null) {
+                Text(
+                    "Open Accounts",
+                    color = cs.primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable(onClick = onOpenAccounts)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .padding(vertical = 2.dp)
+                        .testTag("run_settings_open_accounts"),
+                )
+            }
+        }
+    }
+    HorizontalDivider(Modifier.padding(bottom = 4.dp), color = cs.onSurface.copy(alpha = 0.07f))
+}
+
+/** Why the last pick was refused (busy, not running…): one quiet line under the rows. */
+@Composable
+private fun RefusalLine(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag("run_settings_account_refusal"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(Icons.Outlined.ErrorOutline, null, tint = LocalSemantics.current.warning, modifier = Modifier.size(16.dp))
+        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp)
+    }
+}
+
+/** The Account row's tone, and the pill mark's: danger when refused, primary on an added account. */
+@Composable
+internal fun accountInk(account: RunSettingsAccount): Color? = when {
+    account.unavailable -> LocalSemantics.current.danger
+    account.onAdded -> MaterialTheme.colorScheme.primary
+    else -> null
+}
+
+/** A pick being applied. */
+@Composable
+private fun Spinner() {
+    CircularProgressIndicator(strokeWidth = 1.5.dp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+}
+
+/**
+ * One option of a drilled-in list: icon · title (and its [badges]) over a one-line detail · a check
+ * when current, a spinner while [busy].
+ */
 @Composable
 private fun DrillOption(
     sheet: Boolean,
@@ -553,6 +780,8 @@ private fun DrillOption(
     title: String,
     detail: String?,
     tag: String,
+    busy: Boolean = false,
+    badges: (@Composable RowScope.() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -569,12 +798,25 @@ private fun DrillOption(
         Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { icon() }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = cs.onSurface, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    title,
+                    color = cs.onSurface,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                badges?.invoke(this)
+            }
             if (detail != null) {
                 Text(detail, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (selected) Icon(Icons.Filled.Check, null, tint = cs.primary, modifier = Modifier.padding(start = 8.dp).size(16.dp))
+        when {
+            busy -> Box(Modifier.padding(start = 8.dp).size(16.dp), contentAlignment = Alignment.Center) { Spinner() }
+            selected -> Icon(Icons.Filled.Check, null, tint = cs.primary, modifier = Modifier.padding(start = 8.dp).size(16.dp))
+        }
     }
 }
 

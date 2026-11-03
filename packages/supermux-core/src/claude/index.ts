@@ -186,6 +186,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let unsolicited: string | undefined
     /** Re-attached during an owned turn: ask for the command list once that turn is over. */
     let commandsAfterTurn = false
+    /**
+     * Claude announced a new conversation (conversation_reset) in the turn that runs: the next id its own frames carry
+     * is the new one's. Kept in the keeper meta too, so a host that re-attaches before that id arrives still follows it.
+     */
+    let resetting: { trigger?: string } | undefined
     let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
     const answeredPermissions = new Map<string, AnsweredPermission>()
@@ -216,6 +221,22 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (turnUuid !== undefined && pending.turnUuid !== turnUuid) continue
         pending.controller.abort()
       }
+    }
+    /**
+     * /clear (and /reset, /new): Claude 2.1.308 goes on in a new conversation under a new session id. It says so
+     * with conversation_reset, still under the old id (its new_conversation_id is not the session id), and the
+     * frames after it carry the new id. The keeper keeps the id it replaced: a host whose record still names that
+     * one can re-attach.
+     */
+    function followConversation(next: string, previous: string, trigger?: string) {
+      agentSessionId = next
+      resetting = undefined
+      try { rpc.setMeta({ agentSessionId: next, previousAgentSessionId: previous, conversationReset: null }) } catch { /* */ }
+      try { context.onConversationReset?.({ agentSessionId: next, previousAgentSessionId: previous, ...(trigger ? { trigger } : {}) }) } catch { /* */ }
+    }
+    function expectReset(next: { trigger?: string } | undefined) {
+      resetting = next
+      try { rpc.setMeta({ conversationReset: next ?? null }) } catch { /* */ }
     }
     function fail(error: Error) {
       if (fatal) return
@@ -437,6 +458,17 @@ export function claude(options: ClaudeOptions): AgentDriver {
       }
       if (plumbing.has(message?.type)) return
       const sessionId = message?.session_id
+      // Only Claude's own main-thread frames name its conversation (a subagent's frames carry a parent_tool_use_id).
+      const ownFrame = !message?.parent_tool_use_id
+      if (message?.type === 'conversation_reset') {
+        if (ownFrame && (typeof sessionId !== 'string' || sessionId === agentSessionId)) expectReset({ ...(typeof message.trigger === 'string' && message.trigger ? { trigger: message.trigger } : {}) })
+      } else if (resetting && ownFrame && (message?.type === 'system' || message?.type === 'result') && typeof sessionId === 'string' && sessionId && sessionId !== agentSessionId) {
+        followConversation(sessionId, agentSessionId, resetting.trigger)
+      } else if (resetting && ownFrame && message?.type === 'result') {
+        // The reset's turn ended in the conversation it had: the next foreign id is not a new conversation.
+        expectReset(undefined)
+      }
+      // An id change Claude did not announce is still a failure.
       if (message?.type === 'system' && message.subtype === 'init') {
         if (typeof message.session_id !== 'string' || !message.session_id) { fail(new Error('Claude session identity missing')); return }
         if (message.session_id !== agentSessionId) { fail(new Error('Claude session identity mismatch')); return }
@@ -513,8 +545,16 @@ export function claude(options: ClaudeOptions): AgentDriver {
           ? structuredClone(seededContext)
           : { folder: false, launchServers: contextMeta.launchServers, dynamicServers: [] }
         const sid = rpc.welcome.meta.agentSessionId as string
-        if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
+        // The process went on in a new conversation (/clear) the host never saved: its record names the one before.
+        const behind = !!context.resumeId && context.resumeId !== sid && rpc.welcome.meta.previousAgentSessionId === context.resumeId
+        if (context.resumeId && context.resumeId !== sid && !behind) throw new Error('Claude session identity mismatch')
         agentSessionId = sid
+        if (behind) {
+          try { context.onConversationReset?.({ agentSessionId: sid, previousAgentSessionId: context.resumeId! }) } catch { /* */ }
+        }
+        // The old host heard conversation_reset but not yet the new id: the replay follows it.
+        const pending = rpc.welcome.meta.conversationReset as { trigger?: unknown } | null | undefined
+        if (pending && typeof pending === 'object' && !Array.isArray(pending)) resetting = { ...(typeof pending.trigger === 'string' && pending.trigger ? { trigger: pending.trigger } : {}) }
         identityConfirmed = true
         const owned = rpc.welcome.meta.ownedTurn
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
@@ -610,7 +650,9 @@ export function claude(options: ClaudeOptions): AgentDriver {
       recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
     }
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
+      // Live: /clear moves the process to a new conversation (see followConversation).
+      get agentSessionId() { return agentSessionId },
+      capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
       nativeProtocol: 'claude-stream-json' as const,
       ...(restoredSubagents ? { restoredSubagents } : {}),
       context: contextControl,

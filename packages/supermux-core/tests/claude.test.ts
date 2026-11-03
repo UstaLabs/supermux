@@ -94,6 +94,60 @@ test('resume preserves identity; missing resume never creates a replacement', as
   } finally { await late.close({ mode: "shutdown" }) }
 })
 
+test('/clear moves the runtime to the conversation Claude starts instead of failing it', async () => {
+  // Claude 2.1.308 answers /clear (and /reset, /new) with a new conversation under a new session id: conversation_reset,
+  // then frames under the new id. It used to fail the session as an identity mismatch (card #55).
+  const resets: unknown[] = []
+  const exits: Error[] = []
+  const updates: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset), onExit: e => exits.push(e), onUpdate: u => updates.push(u) }))
+  try {
+    const first = r.agentSessionId
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    const second = r.agentSessionId
+    expect(second).not.toBe(first)
+    // The new conversation's turns are this runtime's turns.
+    const before = updates.length
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(updates.slice(before).some(u => u.value?.session_id === second && u.value?.message?.content?.[0]?.text === 'héllo')).toBe(true)
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(r.agentSessionId).not.toBe(second)
+    expect(resets).toEqual([
+      {agentSessionId: second, previousAgentSessionId: first, trigger: 'clear'},
+      {agentSessionId: r.agentSessionId, previousAgentSessionId: second, trigger: 'clear'},
+    ])
+    expect(exits).toEqual([])
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('/clear as the very first message: no system/init under the launch id, still followed', async () => {
+  const resets: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset) }))
+  try {
+    const launched = r.agentSessionId
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(resets).toEqual([{agentSessionId: r.agentSessionId, previousAgentSessionId: launched, trigger: 'clear'}])
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('a conversation_reset that keeps the id ends with its turn: a later foreign id is still not this session', async () => {
+  const resets: unknown[] = []
+  const updates: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset), onUpdate: u => updates.push(u) }))
+  try {
+    const id = r.agentSessionId
+    expect(await r.prompt(input('reset-same-id'), signal())).toEqual({stopReason: 'end_turn'})
+    // The fixture's normal reply starts with frames of 'other-session'.
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(r.agentSessionId).toBe(id)
+    expect(resets).toEqual([])
+    expect(updates.some(u => u.value?.session_id === 'other-session')).toBe(false)
+    expect(updates.some(u => u.value?.session_id === id && u.value?.message?.content?.[0]?.text === 'héllo')).toBe(true)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('interrupt cancels the in-flight turn via control_request', async () => {
   const r = await driver().open(ctx())
   try {
@@ -437,6 +491,38 @@ test('through Core, the command list Claude reports while opening becomes comman
       await until(() => listed().length > before)
       expect(listed().slice(before)).toEqual([commands])
     }
+  } finally {
+    await core.close({agents: 'shutdown'})
+  }
+})
+
+test('through Core, /clear keeps the session and its record follows the new conversation, so a resume continues it', async () => {
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-core-clear-'))
+  keeperDirs.push(stateDirectory)
+  const core = createCore({stateDirectory, agents: [driver()], limits: TEST_LIMITS})
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const resets = () => events.flatMap(e => e.type === 'session.event' && e.event.kind === 'conversation-reset' ? [e.event] : [])
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 150 && !ok(); i++) await new Promise(r => setTimeout(r, 20)) }
+  const run = async (session: Awaited<ReturnType<typeof core.sessions.create>>, text: string) => (await (await session.send({content: input(text), whenBusy: 'queue'})).completed).status
+  try {
+    const id = nextId()
+    const session = await core.sessions.create({agent: 'claude', cwd: process.cwd(), id})
+    const first = session.snapshot().agentSessionId
+    expect(await run(session, 'hello')).toBe('completed')
+    expect(await run(session, '/clear')).toBe('completed')
+    const second = session.snapshot().agentSessionId
+    expect(second).not.toBe(first)
+    await until(() => resets().length > 0)
+    expect(resets()).toMatchObject([{kind: 'conversation-reset', agentSessionId: second, previousAgentSessionId: first, trigger: 'clear'}])
+    expect(await core.sessions.get(id)).toMatchObject({agentSessionId: second, previousAgentSessionId: first})
+    expect(await run(session, 'hello')).toBe('completed')
+    expect(events.some(e => e.type === 'session.failed')).toBe(false)
+    // A relaunch resumes the cleared conversation, never the one before it.
+    await session.close({mode: 'shutdown'})
+    const resumed = await core.sessions.resume(id)
+    expect(resumed.snapshot().agentSessionId).toBe(second)
+    expect(await run(resumed, 'hello')).toBe('completed')
   } finally {
     await core.close({agents: 'shutdown'})
   }

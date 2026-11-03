@@ -276,14 +276,14 @@ class ChatActions(
      * the header's Kill does. Null = this client cannot, and the card shows no Stop.
      */
     val endCouncil: ((councilId: String) -> Unit)? = null,
-    /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
+    /** The session's host's accounts (every agent), live; null until loaded. Drives the run-settings Account row. */
     val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     /** Start following [accounts] (the first call fetches GET /accounts). */
     val ensureAccounts: () -> Unit = {},
     /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
     val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
-    /** Opens Settings ▸ Accounts (the pill's link when the session's account is unavailable); null = no link. */
+    /** Opens Settings ▸ Accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
 )
 
@@ -464,8 +464,20 @@ fun ChatPanel(
     val dead = agent?.state == "dead"
 
     LaunchedEffect(session.id) { actions.ensureMessagesLoaded() }
+    // The session's account lives in the composer's run-settings panel (with or without a header):
+    // which one it runs on, and the switch to another, which outlives the panel.
     val sessionAccounts by actions.accounts.collectAsState(null)
-    LaunchedEffect(actions, showHeader) { if (showHeader) actions.ensureAccounts() }
+    LaunchedEffect(actions) { actions.ensureAccounts() }
+    val accountSwitch = remember(session.id, actions) { SessionAccountSwitch(scope, actions.setAccount) }
+    LaunchedEffect(accountSwitch, session.account) { accountSwitch.clearRefusal() }
+    val runAccount = RunSettingsAccount.forChat(
+        agent = session.agent,
+        accountId = session.account,
+        accountLabel = session.accountLabel,
+        accounts = sessionAccounts,
+        switch = accountSwitch,
+        onOpenAccounts = actions.openAccounts,
+    )
 
     var pendingRespondIds by remember(session.id) { mutableStateOf(setOf<String>()) }
     val liveRequestIds = remember(state.requests) { state.requests.map { it.requestId }.toSet() }
@@ -904,17 +916,6 @@ fun ChatPanel(
                         modifier = Modifier.size(17.dp),
                     )
                 }
-                // The session's account: shown on an added account, or when the agent has more
-                // than one to switch between (dev.supermux.ui.accounts.SessionAccountPill).
-                dev.supermux.ui.accounts.SessionAccountPill(
-                    agent = session.agent,
-                    accountId = session.account,
-                    accountLabel = session.accountLabel,
-                    accounts = sessionAccounts,
-                    onSwitch = actions.setAccount,
-                    onOpenAccounts = actions.openAccounts,
-                    narrow = headerWidth < 460.dp,
-                )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
                 headerActions()
             }
@@ -994,8 +995,13 @@ fun ChatPanel(
                 },
                 fastMode = (session.fastMode == true).takeIf { fastSupported },
                 onToggleFast = { on -> scope.launch { actions.pickFast(on) } },
-                // Re-fetch when a picker opens so a catalog that changed since open is current.
-                onPickerOpened = { scope.launch { refreshCatalogs() } },
+                account = runAccount,
+                // Re-fetch when a picker opens so a catalog that changed since open is current; an
+                // old refusal of an account switch has nothing left to say.
+                onPickerOpened = {
+                    accountSwitch.clearRefusal()
+                    scope.launch { refreshCatalogs() }
+                },
                 tray = {
                     ComposerFooter(
                         session = session,

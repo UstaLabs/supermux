@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
+import { chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
@@ -530,6 +531,72 @@ test("fork rejects a native runtime reusing its parent's identity",async()=>{
   const {core}=await setup(d.driver),source=await core.sessions.create({ id: nextId(), agent:'test',cwd:WORKDIR})
   await expect(source.fork({ id: nextId() })).rejects.toMatchObject({code:'fork_identity_unchanged'})
   expect(await core.sessions.list()).toHaveLength(1)
+})
+
+/** A driver whose agent can go on in a new conversation (as Claude does on /clear); `reset()` reports it. */
+function resettingDriver() {
+  let reset!: () => void
+  let lateOnResume = false
+  const driver: AgentDriver = {
+    id: "test",
+    async open(ctx) {
+      let native = ctx.resumeId ?? "native-a"
+      reset = () => {
+        const previous = native
+        native = native === "native-a" ? "native-b" : `${native}+`
+        ctx.onConversationReset?.({ agentSessionId: native, previousAgentSessionId: previous, trigger: "clear" })
+      }
+      let late = lateOnResume && !!ctx.resumeId
+      return {
+        get agentSessionId() { return native },
+        // Claude's transport replays a re-attach's frames in a loop of its own, so a replayed /clear can reach Core
+        // after open() returned. Core reads this as it makes the Session, the record already saved: the last moment
+        // before the Session exists.
+        get restoredSubagents() { if (late) { late = false; reset() } return undefined },
+        capabilities: { resume: true, steer: false, fork: false, detach: true },
+        prompt: async () => ({ stopReason: "end_turn" }),
+        interrupt: async () => {},
+        close: async () => {},
+      }
+    },
+  }
+  return { driver, reset: () => reset(), resetLateOnResume() { lateOnResume = true } }
+}
+const resets = (events: CoreEvent[]) => events.flatMap(e => e.type === "session.event" && e.event.kind === "conversation-reset" ? [e.event] : [])
+
+test("a conversation reset reported after the driver's open() returned, before the Session existed, is recorded", async () => {
+  const d = resettingDriver()
+  const { core } = await setup(d.driver)
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const id = nextId()
+  await (await core.sessions.create({ id, agent: "test", cwd: WORKDIR })).close({ mode: "detach" })
+  d.resetLateOnResume()
+  const session = await core.sessions.resume(id)
+  for (let i = 0; i < 300 && !resets(events).length; i++) await new Promise(r => setTimeout(r, 10))
+  expect(session.snapshot().agentSessionId).toBe("native-b")
+  expect(resets(events)).toMatchObject([{ agentSessionId: "native-b", previousAgentSessionId: "native-a", trigger: "clear" }])
+  expect(await core.sessions.get(id)).toMatchObject({ agentSessionId: "native-b", previousAgentSessionId: "native-a" })
+})
+
+test("a conversation reset whose save fails: the session runs on in it and warns, and conversation-reset is not sent", async () => {
+  const d = resettingDriver()
+  const { core, stateDirectory } = await setup(d.driver)
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "test", cwd: WORKDIR })
+  const records = join(stateDirectory, "sessions")
+  chmodSync(records, 0o500)
+  try {
+    d.reset()
+    const warned = () => events.some(e => e.type === "session.event" && e.event.kind === "warning")
+    for (let i = 0; i < 300 && !warned(); i++) await new Promise(r => setTimeout(r, 10))
+    expect(session.snapshot().agentSessionId).toBe("native-b")
+    expect(events.find(e => e.type === "session.event" && e.event.kind === "warning")).toMatchObject({ event: { source: "core", message: expect.stringContaining("native-b") } })
+    expect(resets(events)).toEqual([])
+  } finally { chmodSync(records, 0o700) }
+  expect((await core.sessions.get(id))?.agentSessionId).toBe("native-a")
 })
 
 test("Session.close without mode throws TypeError before teardown", async () => {
