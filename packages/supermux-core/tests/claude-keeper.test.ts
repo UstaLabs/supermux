@@ -424,6 +424,74 @@ test('a turn that ended while no host was attached arrives as normalized events 
   }
 })
 
+test('re-attach after a /clear the host never saved: the keeper names the new conversation and accepts the one it replaced', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-clear-'))
+  dirs.push(stateDirectory)
+  const keeper = { stateDirectory, limits: keeperLimits() }
+  const signal = new AbortController().signal
+  const r = await libraryClaude({ keeper }).open(ctx({ sessionId: 'k-clear' }))
+  const before = r.agentSessionId
+  expect(await r.prompt([{ type: 'text', text: '/clear' }], signal)).toEqual({ stopReason: 'end_turn' })
+  const after = r.agentSessionId
+  expect(after).not.toBe(before)
+  await r.close({ mode: 'detach' })
+  // The host died before it saved the new id: its record still names the conversation /clear replaced.
+  const resets: unknown[] = []
+  const r2 = await libraryClaude({ keeper }).open(ctx({ sessionId: 'k-clear', resumeId: before, onConversationReset: reset => resets.push(reset) }))
+  try {
+    expect(r2.agentSessionId).toBe(after)
+    expect(resets).toEqual([{ agentSessionId: after, previousAgentSessionId: before }])
+    expect(await r2.prompt([{ type: 'text', text: 'hello' }], signal)).toEqual({ stopReason: 'end_turn' })
+  } finally {
+    await r2.close({ mode: 'detach' })
+  }
+  // Any other conversation is still not this process's.
+  await expect(libraryClaude({ keeper }).open(ctx({ sessionId: 'k-clear', resumeId: 'unrelated' }))).rejects.toThrow('identity')
+})
+
+test('a /clear that ran while no host was attached: Core resumes into the new conversation and records it', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-clear-detached-'))
+  dirs.push(stateDirectory)
+  const release = join(stateDirectory, 'release')
+  const mk = () => createCore({
+    stateDirectory: join(stateDirectory, 'core'),
+    limits: { interruptTimeoutMs: 5000, maxPending: 8, outstandingActivity: 64 },
+    agents: [libraryClaude({ env: { RELEASE: release }, keeper: { stateDirectory, limits: keeperLimits() } })],
+  })
+  const core1 = mk()
+  const s1 = await core1.sessions.create({ id: 'cleared', agent: 'claude', cwd: process.cwd() })
+  const before = s1.snapshot().agentSessionId
+  await s1.send({ content: [{ type: 'text', text: 'clear-when-released' }], whenBusy: 'reject' })
+  const took = async () => (await readFile(join(stateDirectory, 'keepers', 'cleared', 'journal.ndjson'), 'utf8').catch(() => '')).includes('clear-when-released')
+  await until(took)
+  expect(await took()).toBe(true)
+  await s1.close({ mode: 'detach' })
+  await core1.close({ agents: 'detach' })
+  // /clear runs only now, with no host attached: the keeper journals the new conversation.
+  await writeFile(release, '')
+  const cleared = async () => (await journaled(stateDirectory, 'cleared')).some(m => m.type === 'result' && m.session_id !== before)
+  await until(cleared, 10_000)
+  expect(await cleared()).toBe(true)
+
+  const core2 = mk()
+  const events: CoreEvent[] = []
+  core2.subscribe(e => { events.push(e) })
+  try {
+    const s2 = await core2.sessions.resume('cleared')
+    const after = s2.snapshot().agentSessionId
+    expect(after).not.toBe(before)
+    expect(await core2.sessions.get('cleared')).toMatchObject({ agentSessionId: after, previousAgentSessionId: before })
+    expect(events.flatMap(e => e.type === 'session.event' && e.event.kind === 'conversation-reset' ? [e.event] : []))
+      .toMatchObject([{ agentSessionId: after, previousAgentSessionId: before, trigger: 'clear' }])
+    await until(() => s2.snapshot().state === 'idle')
+    const receipt = await s2.send({ content: [{ type: 'text', text: 'hello' }], whenBusy: 'queue' })
+    expect((await receipt.completed).status).toBe('completed')
+    await s2.close({ mode: 'shutdown' })
+  } finally {
+    await core2.close({ agents: 'shutdown' })
+  }
+})
+
 test('no leaked keeper after this file', async () => {
   const pids = await readdir('/proc').catch(() => [] as string[])
   for (const pid of pids) {

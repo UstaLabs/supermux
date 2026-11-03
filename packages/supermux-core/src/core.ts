@@ -31,7 +31,7 @@ import type {
 import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
-  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
+  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec, ConversationReset,
 } from "./types.js"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
@@ -866,7 +866,7 @@ export class Core {
   }
 
   private async openSession(
-    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string },
+    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string; previousAgentSessionId?: string },
     resumeId?: string,
     forkFrom?: ForkSource,
     originalRecord?: SessionRecord,
@@ -905,6 +905,11 @@ export class Core {
      * raw update went out unnormalized.
      */
     let heldCommands: AgentUpdate | undefined
+    /**
+     * A new conversation the agent went on in while opening (a re-attach replaying a /clear, or a record one /clear
+     * behind its process): the record is made with it, and the Session reports it once it exists.
+     */
+    let openingReset: ConversationReset | undefined
     let earlyBytes = 0
     let holding = true
     let attachSession!: (value: Session | null) => void
@@ -974,6 +979,12 @@ export class Core {
           }
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
+        onConversationReset: reset => {
+          const copied = copyConversationReset(reset)
+          if (!copied || discarded) return
+          if (session) session.conversationReset(copied)
+          else openingReset = copied
+        },
         requestPermission: async (request, signal) => {
           if (discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
           const attached = session ?? await Promise.race([
@@ -1004,7 +1015,10 @@ export class Core {
       })
       this.assertOpen()
       if (failed) throw failed
-      if (resumeId && runtime.agentSessionId !== resumeId) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      // Only a new conversation the agent itself reported (openingReset) may replace the one resumed.
+      const reset = openingReset?.agentSessionId === runtime.agentSessionId ? openingReset : undefined
+      if (resumeId && runtime.agentSessionId !== resumeId && !reset) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      const previousAgentSessionId = reset ? reset.previousAgentSessionId : input.previousAgentSessionId
       if (forkFrom && runtime.agentSessionId === forkFrom.agentSessionId) throw new CoreError("fork_identity_unchanged", "Agent reused the source conversation instead of forking")
       if (nonemptyConfiguration(input.configuration) && (!runtime.capabilities.configure || !runtime.configure)) {
         throw new UnsupportedOperation("configure", driver.id)
@@ -1012,6 +1026,7 @@ export class Core {
       const record: SessionRecord = {
         version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
         createdAt: input.createdAt, agentSessionId: runtime.agentSessionId,
+        ...(previousAgentSessionId ? { previousAgentSessionId } : {}),
         ...(input.authProfile ? { authProfile: input.authProfile } : {}),
         ...(input.account ? { account: input.account } : {}),
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
@@ -1062,6 +1077,7 @@ export class Core {
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
       if (heldCommands) session.reportHeldCommands(heldCommands)
+      if (reset) session.conversationReset(reset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -1622,6 +1638,14 @@ function carriesCommands(update: AgentUpdate): boolean {
   if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
   if (value.type === "system") return value.subtype === "commands_changed"
   return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
+
+/** A driver's ConversationReset, copied; undefined unless both ids are nonempty strings. */
+function copyConversationReset(reset: ConversationReset | null | undefined): ConversationReset | undefined {
+  if (!reset || typeof reset !== "object") return
+  const { agentSessionId, previousAgentSessionId, trigger } = reset
+  if (typeof agentSessionId !== "string" || !agentSessionId || typeof previousAgentSessionId !== "string" || !previousAgentSessionId) return
+  return { agentSessionId, previousAgentSessionId, ...(typeof trigger === "string" && trigger ? { trigger } : {}) }
 }
 
 /** An update's size as JSON; one that cannot be measured counts as too big to hold. */

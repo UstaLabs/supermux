@@ -9,7 +9,7 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
-  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
+  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
 import type { ContextPatch, RuntimeContextControl, SessionContext, UpdateContextOptions, UpdateContextResult } from "./context/types.js"
@@ -75,6 +75,8 @@ export class Session {
   private subagentsSaving?: Promise<void>
   /** Core holds the queue while it applies a context change (no queued input starts meanwhile). */
   private holds = 0
+  /** Records saved for conversation resets, in order (two quick /clears must land in the order they happened). */
+  private resetSaves: Promise<void> = Promise.resolve()
   private stateWaiters: Array<() => void> = []
 
   constructor(
@@ -568,6 +570,22 @@ export class Session {
   reportHeldCommands(update: AgentUpdate): void {
     if (this.state === "closed") return
     for (const body of this.runtime.normalize?.(update) ?? []) if (body.kind === "commands-update") this.emitNormalized(body, update)
+  }
+
+  /**
+   * The agent went on in a new conversation (DriverContext.onConversationReset): the record follows it, so a resume
+   * continues the new conversation, and conversation-reset goes out once it is saved. A failed save emits nothing (a
+   * host that heard of the new id would run ahead of the record); the keeper still names the id it replaced, so the
+   * next re-attach repairs the record. One already recorded (reported while the session opened) is only reported.
+   */
+  conversationReset(reset: ConversationReset): void {
+    if (this.state === "closed") return
+    const report = () => this.emitNormalized({ kind: "conversation-reset", ...reset }, undefined, false)
+    if (this.record.agentSessionId === reset.agentSessionId) { report(); return }
+    this.record.agentSessionId = reset.agentSessionId
+    this.record.previousAgentSessionId = reset.previousAgentSessionId
+    const saved = structuredClone(this.record)
+    this.resetSaves = this.resetSaves.then(() => this.persistRecord(saved)).then(report).catch(() => {})
   }
 
   /** Native activity is independent of owned receipts. Duplicate start for an id is a no-op. */

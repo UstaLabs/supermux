@@ -23,7 +23,7 @@ export type {
   PermissionOptionKind, RequestAnswer, PermissionAnswer, QuestionAnswer, PendingRequest,
   QuestionRequest, QuestionResponse, AnswersHandler, UserQuestionSpec, UserQuestionOption,
   Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
-  SessionRecord, SessionState, ForkOptions, ForkSource,
+  SessionRecord, SessionState, ForkOptions, ForkSource, ConversationReset,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,
   PermissionsSpec, PermissionsApplied, ToolKind,

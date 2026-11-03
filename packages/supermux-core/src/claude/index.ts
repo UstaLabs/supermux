@@ -186,6 +186,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let unsolicited: string | undefined
     /** Re-attached during an owned turn: ask for the command list once that turn is over. */
     let commandsAfterTurn = false
+    /** Claude announced a new conversation (conversation_reset): the next session id it uses is the new one's. */
+    let resetting: { trigger?: string } | undefined
     let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
     const answeredPermissions = new Map<string, AnsweredPermission>()
@@ -216,6 +218,17 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (turnUuid !== undefined && pending.turnUuid !== turnUuid) continue
         pending.controller.abort()
       }
+    }
+    /**
+     * /clear (and /reset, /new): Claude 2.1.308 goes on in a new conversation under a new session id. It says so
+     * with conversation_reset, still under the old id (its new_conversation_id is not the session id), and the
+     * frames after it carry the new id. The keeper keeps the id it replaced: a host whose record still names that
+     * one can re-attach.
+     */
+    function followConversation(next: string, previous: string, trigger?: string) {
+      agentSessionId = next
+      try { rpc.setMeta({ agentSessionId: next, previousAgentSessionId: previous }) } catch { /* */ }
+      try { context.onConversationReset?.({ agentSessionId: next, previousAgentSessionId: previous, ...(trigger ? { trigger } : {}) }) } catch { /* */ }
     }
     function fail(error: Error) {
       if (fatal) return
@@ -437,6 +450,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
       }
       if (plumbing.has(message?.type)) return
       const sessionId = message?.session_id
+      if (message?.type === 'conversation_reset') {
+        if (typeof sessionId !== 'string' || sessionId === agentSessionId) resetting = { ...(typeof message.trigger === 'string' && message.trigger ? { trigger: message.trigger } : {}) }
+      } else if (resetting && typeof sessionId === 'string' && sessionId && sessionId !== agentSessionId) {
+        const { trigger } = resetting
+        resetting = undefined
+        followConversation(sessionId, agentSessionId, trigger)
+      }
+      // An id change Claude did not announce is still a failure.
       if (message?.type === 'system' && message.subtype === 'init') {
         if (typeof message.session_id !== 'string' || !message.session_id) { fail(new Error('Claude session identity missing')); return }
         if (message.session_id !== agentSessionId) { fail(new Error('Claude session identity mismatch')); return }
@@ -513,8 +534,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
           ? structuredClone(seededContext)
           : { folder: false, launchServers: contextMeta.launchServers, dynamicServers: [] }
         const sid = rpc.welcome.meta.agentSessionId as string
-        if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
+        // The process went on in a new conversation (/clear) the host never saved: its record names the one before.
+        const behind = !!context.resumeId && context.resumeId !== sid && rpc.welcome.meta.previousAgentSessionId === context.resumeId
+        if (context.resumeId && context.resumeId !== sid && !behind) throw new Error('Claude session identity mismatch')
         agentSessionId = sid
+        if (behind) {
+          try { context.onConversationReset?.({ agentSessionId: sid, previousAgentSessionId: context.resumeId! }) } catch { /* */ }
+        }
         identityConfirmed = true
         const owned = rpc.welcome.meta.ownedTurn
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
@@ -610,7 +636,9 @@ export function claude(options: ClaudeOptions): AgentDriver {
       recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
     }
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
+      // Live: /clear moves the process to a new conversation (see followConversation).
+      get agentSessionId() { return agentSessionId },
+      capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
       nativeProtocol: 'claude-stream-json' as const,
       ...(restoredSubagents ? { restoredSubagents } : {}),
       context: contextControl,
