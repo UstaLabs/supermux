@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -74,7 +73,7 @@ import dev.supermux.ui.widgets.Speedometer
  * [models] null hides the model list (no catalog and no session model), [reasoning] null hides
  * effort, [fastMode] null hides the fast switch, [account] null hides the Account row, [permission]
  * null hides the Mode row. Tags: `composer-model-pill`, rows `composer-model-<id>`,
- * `composer-reasoning-<id>`, `composer-fast-toggle`, the account mark `run_settings_account_mark`.
+ * `composer-reasoning-<id>`, `composer-fast-toggle`.
  */
 @Composable
 internal fun RunSettingsControl(
@@ -152,15 +151,6 @@ internal fun RunSettingsControl(
             }
             if (fastMode == true) {
                 Icon(Icons.Filled.Bolt, "Fast mode on", tint = cs.tertiary, modifier = Modifier.size(13.dp))
-            }
-            // A new chat that will run on an added account chosen by hand says so on the pill.
-            if (account != null && account.offersAuto && account.onAdded) {
-                Icon(
-                    Icons.Outlined.AccountCircle,
-                    contentDescription = "On an added account",
-                    tint = cs.primary,
-                    modifier = Modifier.size(13.dp).testTag("run_settings_account_mark"),
-                )
             }
             Icon(
                 Icons.Filled.KeyboardArrowDown,
