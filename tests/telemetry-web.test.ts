@@ -4,7 +4,10 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-telemetry-web-${process.pid}.json`
-const PORT = 18911
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 let recorded: { event: string; props: Record<string, unknown> }[]
@@ -17,9 +20,9 @@ beforeEach(async () => {
   recorded = []
   enabled = true
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     staticDir: undefined,
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
@@ -36,6 +39,7 @@ beforeEach(async () => {
     },
   } as any)
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -43,7 +47,7 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: `http://127.0.0.1:${PORT}`, "content-type": "application/json" })
+const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: "http://127.0.0.1", "content-type": "application/json" })
 
 function openWs(query = ""): Promise<WebSocket> {
   return new Promise((resolve, reject) => {

@@ -5,7 +5,10 @@ import { TerminalFrameLane } from "../src/channels/web/terminal-protocol"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-ws-${process.pid}.json`
-const PORT = 18788
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 
@@ -15,15 +18,16 @@ beforeEach(async () => {
   const store = new DeviceStore(DEV_PATH)
   token = store.mint("test").token
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [{ name: "ana", workdir: "/h", mute: false, connected: true, agent: "claude" as const }],
     getSessionLog: () => [],
     setMute: () => {},
     onSendFromWeb: () => {},
   })
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -89,9 +93,9 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
   const focusCalls: any[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -105,6 +109,7 @@ test("agent terminal: rejects non-claude, accepts claude and attaches with targe
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
 
   // non-claude (no tmux target) → upgrade rejected, no attach
   await expect(connectTerm("codexSess", "agent")).rejects.toThrow()
@@ -136,9 +141,9 @@ test("two terminal sockets on one terminal get distinct viewer ids, and each det
   const detachCalls: any[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -150,6 +155,7 @@ test("two terminal sockets on one terminal get distinct viewer ids, and each det
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
 
   const first = await connectTerm("ana", "scratch")
   const second = await connectTerm("ana", "scratch")
@@ -170,9 +176,9 @@ test("two terminal sockets on one terminal get distinct viewer ids, and each det
 test("terminal attach rejection reports an error and closes with 1011", async () => {
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -184,6 +190,7 @@ test("terminal attach rejection reports an error and closes with 1011", async ()
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`,
     { headers: { Cookie: `cmux_token=${token}` } },
@@ -205,9 +212,9 @@ test("terminal attach rejection reports an error and closes with 1011", async ()
 test("terminal reset precedes replay and viewer failure reconnects without a target-exit frame", async () => {
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -223,6 +230,7 @@ test("terminal reset precedes replay and viewer failure reconnects without a tar
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
   const frames: Array<{ type: string } | string> = []
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`,
@@ -253,9 +261,9 @@ test("revision 2: the only reset is the backend's, and it arrives after ready", 
   let drive: ((o: any) => Promise<void>) | undefined
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -280,6 +288,7 @@ test("revision 2: the only reset is the backend's, and it arrives after ready", 
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
   const frames: any[] = []
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
@@ -304,9 +313,9 @@ test("revision 2: the only reset is the backend's, and it arrives after ready", 
 test("revision 2: a lost helper is a failure frame, never a fabricated exit", async () => {
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -318,6 +327,7 @@ test("revision 2: a lost helper is a failure frame, never a fabricated exit", as
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
   const frames: any[] = []
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
@@ -339,9 +349,9 @@ test("an unsupported protocol revision is refused by name and closed", async () 
   await ch.stop()
   // No terminalManager at all: the refusal happens before anything is attached.
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -349,6 +359,7 @@ test("an unsupported protocol revision is refused by name and closed", async () 
     getSessionWorkdir: () => "/w",
   })
   await ch.start()
+  PORT = ch.boundPort
   const frames: any[] = []
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=7`,
@@ -370,9 +381,9 @@ test("revision 2: a reply reaches the pty only while owning, past replay-end, on
   let events: ((e: any) => Promise<void>) | undefined
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -391,6 +402,7 @@ test("revision 2: a reply reaches the pty only while owning, past replay-end, on
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
   const frames: any[] = []
   const ws = new WebSocket(
     `ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch&terminalProtocol=2`,
@@ -426,15 +438,16 @@ test("ws send frame triggers onSendFromWeb callback", async () => {
   const received: any[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
     onSendFromWeb: (msg) => received.push(msg),
   })
   await ch.start()
+  PORT = ch.boundPort
   const ws = await connect(token)
   ws.send(JSON.stringify({ type: "send", session: "ana", op: "reply", args: { text: "hi" } }))
   // wait a tick for the handler
@@ -457,9 +470,9 @@ test("legacy resize/focus geometry is bounded, exactly like revision 2's", async
   const focusCalls: any[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -473,6 +486,7 @@ test("legacy resize/focus geometry is bounded, exactly like revision 2's", async
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
 
   const ws = await connectTerm("ana", "scratch")
   await new Promise((r) => setTimeout(r, 50))
@@ -504,9 +518,9 @@ test("/ws/term is Origin-checked: the app's own origin connects, another site do
   const attachCalls: any[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -518,6 +532,7 @@ test("/ws/term is Origin-checked: the app's own origin connects, another site do
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
 
   const open = (headers: Record<string, string>) => new Promise<string>((resolve) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/term?session=ana&kind=scratch`, { headers })
@@ -528,7 +543,7 @@ test("/ws/term is Origin-checked: the app's own origin connects, another site do
 
   const cookie = { Cookie: `cmux_token=${token}` }
   // The PWA: a cookie and the broker's own origin.
-  expect(await open({ ...cookie, Origin: `http://127.0.0.1:${PORT}` })).toBe("open")
+  expect(await open({ ...cookie, Origin: "http://127.0.0.1" })).toBe("open")
   // A page on the broker's origin in SUBDOMAIN proxy mode, or any other site:
   // the Lax cookie may still be attached, and the socket is refused anyway.
   expect(await open({ ...cookie, Origin: "http://evil.example" })).toBe("refused")
@@ -563,9 +578,9 @@ test("a lane that has already ended accepts nothing, least of all a close", asyn
   const wrote: string[] = []
   await ch.stop()
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -579,6 +594,7 @@ test("a lane that has already ended accepts nothing, least of all a close", asyn
     } as any,
   })
   await ch.start()
+  PORT = ch.boundPort
 
   const lane = new TerminalFrameLane(
     { text: () => {}, binary: () => {}, close: () => {} },
