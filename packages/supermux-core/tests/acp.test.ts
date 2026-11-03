@@ -222,7 +222,8 @@ test('replay coalesced history does not start activity; live load burst does', a
     onActivity: n => activity.push({ ...n }),
   }))
   try {
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // The live burst comes from the fixture a little after load answered.
+    await until(() => activity.some(a => a.id === 'live-1' && a.phase === 'completed'), 'live-1 to end')
     expect(updates.some(u => u.replay === true && u.protocol === 'native' && u.value?.params?.update?.sessionUpdate === 'user_message_chunk')).toBe(true)
     expect(activity.filter(a => a.id === 'hist-1')).toEqual([])
     expect(activity.filter(a => a.id === 'live-1').map(a => a.phase)).toEqual(['started', 'completed'])
@@ -250,7 +251,8 @@ test('owned prompt reports overlapping native activity without a second receipt'
   const r = await driver().open(context({ onActivity: n => activity.push({ ...n }) }))
   try {
     expect(await r.prompt([{ type: 'text', text: 'handoff' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
-    await new Promise(resolve => setTimeout(resolve, 40))
+    // auto-2 starts as the prompt answers and may land after it.
+    await until(() => activity.some(a => a.id === 'auto-2' && a.phase === 'completed'), 'auto-2 to end')
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started', 'auto-2:completed'])
   } finally { await r.close({ mode: "shutdown" }) }
 })
@@ -261,7 +263,8 @@ test('owned prompt response does not complete a later native generation', async 
   try {
     expect(await r.prompt([{ type: 'text', text: 'handoff-delay' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started'])
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // The fixture ends auto-2 itself, 300 ms after starting it.
+    await until(() => activity.some(a => a.id === 'auto-2' && a.phase === 'completed'), 'auto-2 to end')
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started', 'auto-2:completed'])
   } finally { await r.close({ mode: "shutdown" }) }
 })
