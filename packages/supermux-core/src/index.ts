@@ -8,6 +8,7 @@ export type {
   NormalizedBody, EventEnvelope, NativeRef, NativeProtocol, EventOrigin, TurnCompleteReason,
   ToolCallPhase, ToolCategory, PlanEntryStatus, PlanEntryPriority, TaskKind, TaskPhase, CompactionStatus,
   SubagentPhase, SubagentMessaging, SubagentStats, SubagentEndedBy, SubagentActionsSource, SubagentDelivery,
+  AgentCommandEntry,
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper, detachedKeeperHooks } from "./keeper/index.js"

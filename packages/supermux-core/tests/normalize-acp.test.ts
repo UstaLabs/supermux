@@ -78,6 +78,19 @@ describe("acp normalizer", () => {
     expect(n(acp("compaction_summary_chunk", { compactionId: "c", content: { type: "text", text: "ch" } }))[0]).toMatchObject({ kind: "compaction", status: "in_progress" })
   })
 
+  test("commands-update keeps _meta and the input hint", () => {
+    // Grok marks skills with _meta.path → SKILL.md; the broker's filter needs it.
+    const n = createAcpNormalizer()
+    const out = n(acp("available_commands_update", { availableCommands: [
+      { name: "soul", description: "d", input: { hint: "on|off" }, _meta: { scope: "user", path: "/p/soul/SKILL.md" } },
+      { name: "compact", description: "c" },
+    ] }))
+    expect(out).toEqual([{ kind: "commands-update", commands: [
+      { name: "soul", description: "d", argumentHint: "on|off", _meta: { scope: "user", path: "/p/soul/SKILL.md" } },
+      { name: "compact", description: "c" },
+    ] }])
+  })
+
   test("plan_removed and plan_update", () => {
     const n = createAcpNormalizer()
     expect(n(acp("plan_removed"))[0]).toMatchObject({ kind: "plan", entries: [] })
