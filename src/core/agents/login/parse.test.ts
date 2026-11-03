@@ -9,6 +9,15 @@ describe("login output parsers", () => {
     expect(parseCursorLoginUrl(output)).toBe(url)
   })
 
+  test("extracts Claude's URL from Windows ConPTY output, where the hyperlink ends with ESC \\", () => {
+    // Shape captured from claude.exe under Bun's ConPTY on Windows 11 (2026-11-02), state shortened.
+    const url = "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=PoSd4v"
+    const output = `\x1b[?9001h\x1b[?1004h\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;claude\x07\x1b[?25hOpening browser to sign in…\r\n`
+      + `If the browser didn't open, visit: \x1b[94m\x1b]8;id=12220-1;${url}\x1b\\${url}\x1b[m\x1b]8;;\x1b\\\r\nPaste code here if prompted > `
+
+    expect(parseCursorLoginUrl(output)).toBe(url)
+  })
+
   test("extracts colorized Codex device auth", () => {
     expect(parseCodexDeviceAuth("\x1b[94mhttps://auth.example/device\x1b[0m code ABCD-EFGH")).toEqual({
       url: "https://auth.example/device",

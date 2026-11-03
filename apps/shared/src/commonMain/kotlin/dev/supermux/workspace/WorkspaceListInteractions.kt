@@ -5,7 +5,7 @@ import dev.supermux.session.moveId
 
 /**
  * Scope for workspace drag-reorder (project group key, or a flat-list bucket).
- * PA workspaces are never reorderable and never appear in a working order.
+ * The Agents (PA workspaces) are one scope of their own, keyed [dev.supermux.session.PA_GROUP_KEY].
  */
 data class WorkspaceReorderScope(val key: String)
 

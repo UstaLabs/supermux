@@ -111,7 +111,7 @@ import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
-import { checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
+import { agentGreetingPrompt, checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -215,6 +215,7 @@ import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
 import { CoreAdapter } from "./core/agents/core-bridge/core-adapter"
 import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
+import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
@@ -1160,7 +1161,7 @@ const sessionManager = new SessionManager(registry, {
   orchestration: {
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
-      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent })
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel })
       return { name: created.name, session_id: created.id }
     },
     refreshTelegramMenu,
@@ -2231,6 +2232,19 @@ const createAgentDeps: CreateAgentDeps = {
     await refreshTelegramMenu()
     if (entry) announceCreatedSession(entry)
   },
+  greet: (id, name) => { void greetNewAgent(id, name) },
+}
+
+/** A new Agent's first turn: it says hello in the user's language. Not in the message log, so the
+ *  chat opens with the Agent's own greeting. chat_id "web" routes the answer to its visible chat. */
+async function greetNewAgent(id: string, name: string): Promise<void> {
+  try {
+    if (!(await sessionManager.waitDeliverable(id, 60_000))) return
+    const r = await sessionManager.deliver(id, agentGreetingPrompt(name, messageLog.recentUserTexts(8)), { channel: "web", chat_id: "web", message_id: `greet-${id}` })
+    if (!r.ok) log.warn("agent_greet_not_delivered", { id, reason: (r as { reason?: string }).reason })
+  } catch (err: any) {
+    log.warn("agent_greet_failed", { id, err: err?.message ?? String(err) })
+  }
 }
 
 function spawnLoginProc(kind: string) {
@@ -2252,11 +2266,13 @@ function spawnLoginProc(kind: string) {
     cleaned = true
     try { spec.cleanup?.() } catch (err: any) { log.warn("login_cleanup_failed", { kind, err: err?.message ?? String(err) }) }
   }
+  // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
+  if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
   let child: ReturnType<typeof nodeSpawn>
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
-    // met inside the descriptor's own command line (claude wraps `script`).
+    // met inside the descriptor's own command line (`script`; a ConPTY above on Windows).
     child = spawnCommand(cmd, args, { env, detached, ...(cwd ? { cwd } : {}) })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.

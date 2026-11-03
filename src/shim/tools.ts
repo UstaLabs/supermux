@@ -79,7 +79,7 @@ const OUTBOUND_TOOLS = [
 ]
 
 const ORCHESTRATION_TOOLS = [
-  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. Pass chat_id to auto-switch that chat to the new session. It runs on the agent's account with the most room left.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, chat_id: { type: "string" } }, required: ["workdir"] } },
+  { name: "spawn_session",  description: "Spawn a new agent session. agent defaults to 'claude'; pass 'codex', 'cursor', 'opencode', 'grok', or 'antigravity' for those CLIs. model and effort: from list_models; omit them for the agent's default. Pass chat_id to auto-switch that chat to the new session. It runs on the agent's account with the most room left.", inputSchema: { type: "object", properties: { workdir: { type: "string" }, name: { type: "string" }, agent: { type: "string", enum: AGENT_KINDS }, model: { type: "string" }, effort: { type: "string" }, chat_id: { type: "string" } }, required: ["workdir"] } },
   { name: "kill_session",   description: "Kill a session by id: its agent is stopped and the session is archived. Its child sessions are killed too.", inputSchema: { type: "object", properties: { id: { type: "string", description: "Session id" } }, required: ["id"] } },
   { name: "rename_session", description: "Rename your OWN session (the one you are running in). A worker session may rename only once, so pick a name that stays accurate for the whole session; an Agent may rename itself any time. Use a short, natural, human-readable display title with spaces and normal capitalization (for example, 'Fix Session Renaming'), not a lowercase slug. Names are preserved as entered after trimming; duplicate names are rejected.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "mute_session",   description: "Mute or unmute a session.",                        inputSchema: { type: "object", properties: { name: { type: "string" }, muted: { type: "boolean" } }, required: ["name", "muted"] } },
@@ -318,8 +318,8 @@ const MEMBER_ONLY = new Set(["council_report"])
  */
 export type ToolAgentChoices = Record<string, { access: Array<{ id: string; level: string; description: string }>; efforts: string[] | null }>
 
-/** The tools that start sessions on an agent: their access and effort get the catalog's values as enums. */
-const STARTS_SESSIONS = new Set(["delegate", "council", "council_add"])
+/** The tools that start sessions on an agent: their access (where they take one) and effort get the catalog's values as enums. */
+const STARTS_SESSIONS = new Set(["spawn_session", "delegate", "council", "council_add"])
 
 export function listTools(rpcOnly = false, opts: { councilMember?: boolean; choices?: ToolAgentChoices } = {}) {
   if (rpcOnly) return RPC_TOOLS
@@ -354,9 +354,10 @@ function choiceProperties(choices: ToolAgentChoices): { access: Record<string, u
 
 function withChoices(schema: Record<string, unknown>, choices: ToolAgentChoices): Record<string, unknown> {
   const fields = choiceProperties(choices)
-  const patch = (props: Record<string, unknown>) => ({ ...props, access: fields.access, effort: fields.effort })
+  // spawn_session takes no access (its session is shown to the user, who can approve): only effort.
+  const patch = (props: Record<string, unknown>) => ({ ...props, ...("access" in props ? { access: fields.access } : {}), effort: fields.effort })
   const props = schema.properties as Record<string, unknown>
-  if ("access" in props) return { ...schema, properties: patch(props) }
+  if ("effort" in props) return { ...schema, properties: patch(props) }
   // council / council_add: the fields sit in members' items.
   const members = props.members as { items: { properties: Record<string, unknown> } } & Record<string, unknown>
   return { ...schema, properties: { ...props, members: { ...members, items: { ...members.items, properties: patch(members.items.properties) } } } }

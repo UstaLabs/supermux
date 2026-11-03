@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -248,12 +249,15 @@ fun WorkspaceRow(
                                 )
                                 if (trailing.isNotEmpty()) {
                                     Spacer(Modifier.width(8.dp))
+                                    // Capped: a long project tag would otherwise push the ⋮ off the row.
                                     Text(
                                         trailing,
                                         color = cs.onSurfaceVariant.copy(alpha = 0.6f),
                                         fontFamily = MonoFontFamily,
                                         fontSize = 10.5.sp,
                                         maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 112.dp),
                                     )
                                 }
                                 // Where the right-click menu is inert (touch, Android in Pointer

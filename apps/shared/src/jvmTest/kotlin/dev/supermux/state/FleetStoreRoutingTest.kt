@@ -187,4 +187,34 @@ class FleetStoreRoutingTest {
         assertEquals(emptyList(), f.calls.getValue("a").toList())
         f.fleet.close()
     }
+
+    // The Agents (and the flat list) can mix hosts. Every host that owns one of the dropped rows
+    // gets the WHOLE order, so each one saves its own rows at their place in the merged list.
+    @Test fun reorderingAMixedHostScopeSavesItOnEveryOwningHost() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.reorderWorkspaces(listOf("w-b", "w-a"))
+        advanceUntilIdle()
+
+        await("both hosts own a dropped row, got A=${f.calls.getValue("a")} B=${f.calls.getValue("b")}") {
+            "PATCH /workspaces/reorder" in f.calls.getValue("a") && "PATCH /workspaces/reorder" in f.calls.getValue("b")
+        }
+        assertEquals(mapOf("w-b" to 0, "w-a" to 1), f.fleet.workspaces.value.associate { it.id to it.sortOrder })
+        f.fleet.close()
+    }
+
+    @Test fun reorderingOneHostsRowsLeavesTheOtherHostAlone() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.reorderWorkspaces(listOf("w-b"))
+        advanceUntilIdle()
+
+        await("host B owns w-b, got ${f.calls.getValue("b")}") { "PATCH /workspaces/reorder" in f.calls.getValue("b") }
+        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A owns none of the dropped rows")
+        f.fleet.close()
+    }
 }

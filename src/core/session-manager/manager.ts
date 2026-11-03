@@ -163,7 +163,7 @@ export type SessionManagerPorts = {
   /** Orchestration-op collaborators that stay in main.ts. */
   orchestration: {
     /** spawn_session: the app's create path (workspace and frames included). */
-    spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind }): Promise<SpawnResult>
+    spawnSession(args: { workdir: string; requestedName?: string; agent?: AgentKind; model?: string; reasoningLevel?: string }): Promise<SpawnResult>
     refreshTelegramMenu(): Promise<void>
     wsDto(id: string): WorkspaceDto | undefined
     exposedProxyLinksBaseUrl(): string | undefined
@@ -665,9 +665,13 @@ export class SessionManager {
             return { ok: false, error: `unknown agent kind: ${String(requestedAgent)}` }
           }
           const agent = requestedAgent ?? undefined
+          // effort checked like delegate's; model and effort omitted: the agent's defaults.
+          const effort = optionalStringArg(op.args, "effort")
+          const badEffort = effortError(agentChoices((kind) => this.ports.config.lookupModels(kind)), agent ?? AgentKind.Claude, effort)
+          if (badEffort) return { ok: false, error: badEffort }
           // The app's create path (main.ts createSessionWithWorkspace): the workspace, its frame,
           // the full session_added and the Telegram menu all happen there.
-          const r = await this.ports.orchestration.spawnSession({ workdir: stringArg(op.args, "workdir"), requestedName: optionalStringArg(op.args, "name"), agent })
+          const r = await this.ports.orchestration.spawnSession({ workdir: stringArg(op.args, "workdir"), requestedName: optionalStringArg(op.args, "name"), agent, model: optionalStringArg(op.args, "model"), reasoningLevel: effort })
           // Auto-bind the requesting chat to the new session if the
           // caller included a chat_id.  Claude sessions register
           // asynchronously via socket, so poll until the session

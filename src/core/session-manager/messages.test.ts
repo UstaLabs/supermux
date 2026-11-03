@@ -101,3 +101,15 @@ test("lastReply is the newest non-empty, non-error assistant reply", () => {
   store.append(sid, { id: "o4", ts: "2026-10-29T10:04:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "  " } as never)
   expect(store.lastReply(sid)).toBe("second")
 })
+
+test("recentUserTexts: the user's own words across sessions, newest first, without broker-made rows", () => {
+  const store = setup(["s1", "s2"])
+  store.append("s1", { id: "a", ts: "2026-11-01T10:00:00.000Z", ...base, message_id: "1", text: "selam" })
+  store.append("s2", { id: "b", ts: "2026-11-01T10:01:00.000Z", ...base, channel: "telegram", chat_id: "telegram:1", message_id: "2", text: "nasılsın" })
+  store.append("s1", { id: "c", ts: "2026-11-01T10:02:00.000Z", ...base, message_id: "broker-9", text: "broker note" })
+  store.append("s1", { id: "d", ts: "2026-11-01T10:03:00.000Z", ...base, message_id: "review-9", text: "📝 review" })
+  store.append("s1", { id: "e", ts: "2026-11-01T10:04:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "agent reply" })
+  store.append("s1", { id: "f", ts: "2026-11-01T10:05:00.000Z", ...base, message_id: "3", text: "   " })
+  expect(store.recentUserTexts(5)).toEqual(["nasılsın", "selam"])
+  expect(store.recentUserTexts(1)).toEqual(["nasılsın"])
+})

@@ -12,14 +12,14 @@ import { ProjectService, ProjectConflictError, ProjectNotFoundError } from "./se
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function make() {
+function make(home = "/h", managedWorktreesRoot = "/h/.mux/worktrees") {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const imagesDir = join(mkdtempSync(join(tmpdir(), "project-svc-")), "project-images")
   dirs.push(join(imagesDir, ".."))
   const store = new ProjectStore(db)
   const images = new ProjectImages(imagesDir)
-  const svc = new ProjectService(store, { home: "/h", managedWorktreesRoot: "/h/.mux/worktrees", images })
+  const svc = new ProjectService(store, { home, managedWorktreesRoot, images })
   return { db, store, images, svc }
 }
 
@@ -298,6 +298,25 @@ test("reconcile skips internal sessions' workspaces and internal legacy sessions
 
   expect(svc.list().map((p) => p.name)).toEqual(["real"])
   expect(created).toHaveLength(1)
+})
+
+test("a Windows broker's workspaces become projects named by their folder", () => {
+  // The rows a Windows broker (DESKTOP-OMQ5AMQ) showed with no ⋮: no project was ever made for them.
+  const { db, svc } = make("C:\\Users\\hatic", "C:\\Users\\hatic\\.mux\\worktrees")
+  const ws = new WorkspaceStore(db)
+  const clone = "C:\\Users\\hatic\\.mux\\state\\projects\\github.com\\yasinemre\\erydor"
+  const rows = [
+    ws.create({ name: "a", workdir: clone }),
+    ws.create({ name: "b", workdir: "D:\\Projects\\TunnelWho" }),
+    ws.create({ name: "c", workdir: "D:\\UnrealProject\\TestProject" }),
+    // A session worktree joins its repo's project, even with the repo root spelled as git prints it.
+    ws.create({ name: "d", workdir: "C:\\Users\\hatic\\.mux\\worktrees\\w\\x", repo_root: "D:/Projects/TunnelWho" }),
+  ]
+  expect(svc.reconcile(db)).toHaveLength(3)
+  expect(svc.list().map((p) => p.name)).toEqual(["TestProject", "TunnelWho", "erydor"])
+  const membership = svc.membership(rows)
+  expect(Object.keys(membership)).toEqual(rows.map((w) => w.id))
+  expect(membership[rows[3]!.id]).toBe(membership[rows[1]!.id])
 })
 
 test("membership maps workspace ids to project ids and omits unresolved rows", () => {

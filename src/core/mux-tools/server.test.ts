@@ -509,6 +509,31 @@ test("kill_session by the child's parent ends it as 'parent'; by another session
   expect(archivedChildren).toEqual([{ id: kid1.id, endedBy: "parent" }, { id: kid2.id }])
 })
 
+describe("spawn_session model and effort", () => {
+  test("model and effort reach the create path (effort as reasoningLevel); omitted, neither is set", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const c = await connect(AgentKind.Claude, t.pa.id)
+    await call(c, "spawn_session", { workdir: "/tmp/m", name: "with-model", model: "opus", effort: "high" })
+    await call(c, "spawn_session", { workdir: "/tmp/m", name: "plain" })
+    expect(t.spawns).toEqual([
+      { workdir: "/tmp/m", requestedName: "with-model", agent: undefined, model: "opus", reasoningLevel: "high" },
+      { workdir: "/tmp/m", requestedName: "plain", agent: undefined, model: undefined, reasoningLevel: undefined },
+    ])
+  })
+
+  test("an effort the agent doesn't take is refused like delegate's, before anything starts", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    const spawn = (args: Record<string, unknown>) => t.m.orchestration(t.pa.id, { name: "spawn_session", args: { workdir: "/tmp/e", ...args } })
+    // agent omitted is claude: its efforts are checked.
+    expect(await spawn({ effort: "turbo" })).toEqual({ ok: false, error: expect.stringMatching(/^effort must be one of .+ for claude$/) })
+    expect(await spawn({ agent: "cursor", effort: "high" })).toEqual({ ok: false, error: "cursor has no effort setting: leave effort out" })
+    expect(t.spawns).toEqual([])
+    // An agent without efforts spawns fine when effort is left out.
+    expect((await spawn({ agent: "cursor", model: "gpt-5" })).ok).toBe(true)
+    expect(t.spawns).toEqual([{ workdir: "/tmp/e", requestedName: undefined, agent: "cursor", model: "gpt-5", reasoningLevel: undefined }])
+  })
+})
+
 describe("delegate", () => {
   const ok = { task: "Review the auth changes", agent: "codex", access: "auto", checkout: "shared" }
 

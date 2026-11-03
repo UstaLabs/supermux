@@ -2,10 +2,12 @@
 //
 // An Agent is not a workspace in a project: it has an identity (avatar, name) and a presence
 // (always on, working, waiting for you). So it never gets a folder header, a collapse chevron or
-// a project menu — it gets its own card at the top of the list.
+// a project menu — it gets its own zone at the top of the list. It is still sorted like a
+// workspace row: the same drag, the same saved order, in a scope of its own.
 package dev.supermux.ui.session
 
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -27,6 +29,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -50,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -80,10 +85,30 @@ internal data class AgentEntry(
     val sessionId: String? = null,
 )
 
-/** Header + one row per Agent, inside its own card. */
-@Composable
-internal fun AgentsBlock(
+/** The Agents zone's header item. */
+internal const val AGENTS_HEADER_KEY = "chrome:agents"
+
+/** The Agents zone's last item: the Archived fold and the space under the zone. */
+internal const val AGENTS_END_KEY = "chrome:agents_end"
+
+/** Prefix of an Agent row's item key ([agentRowKey]). */
+internal const val AGENT_ROW_PREFIX = "agent:"
+
+/** An Agent row's item key; the list's shared reorder lifts the row by it. */
+internal fun agentRowKey(workspaceId: String) = AGENT_ROW_PREFIX + workspaceId
+
+/**
+ * The Agents zone as list items: the header, one row per Agent, then the Archived fold.
+ *
+ * Every Agent is an item of its own so the list's shared reorder ([ReorderableItem], the one the
+ * workspace rows use) can lift it. [reorder] decides which moves are allowed — the Agents are one
+ * scope of their own — and [onDragStarted] / [onDragStopped] are the list's own drag hooks.
+ */
+internal fun LazyListScope.agentsZone(
     agents: List<AgentEntry>,
+    reorder: ReorderableListState,
+    onDragStarted: (AgentEntry) -> Unit,
+    onDragStopped: () -> Unit,
     onOpen: (AgentEntry) -> Unit,
     contextEntries: (AgentEntry) -> List<RowContextMenuEntry>,
     onNewAgent: (() -> Unit)? = null,
@@ -94,51 +119,80 @@ internal fun AgentsBlock(
     /** Agent id → avatar (the app-level cache, archived Agents included). */
     avatars: Map<String, AvatarRig> = emptyMap(),
 ) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth()) {
-        // Same header as "Workspaces" (SessionsSectionHeader): title, then 28dp icon buttons.
-        Row(
-            Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Agents",
-                color = cs.onSurfaceVariant,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f),
+    item(key = AGENTS_HEADER_KEY) { AgentsHeader(waiting = agents.count { it.unread }, onNewAgent = onNewAgent) }
+    items(agents, key = { agentRowKey(it.id) }) { a ->
+        val interaction = remember { MutableInteractionSource() }
+        ReorderableItem(reorder, key = agentRowKey(a.id)) { isDragging ->
+            AgentRow(
+                a,
+                onClick = { onOpen(a) },
+                menu = { contextEntries(a) },
+                dragModifier = Modifier.reorderDragHandle(
+                    interactionSource = interaction,
+                    onDragStarted = { onDragStarted(a) },
+                    onDragStopped = onDragStopped,
+                ),
+                interactionSource = interaction,
+                isDragging = isDragging,
             )
-            val waiting = agents.count { it.unread }
-            if (waiting > 0) {
-                Text("$waiting waiting", color = cs.primary, fontSize = 11.sp, fontFamily = MonoFontFamily)
-                Spacer(Modifier.width(4.dp))
-            }
-            if (onNewAgent != null) {
-                // The header's compact 28dp buttons — the Workspaces ⋮ uses the same, so the two
-                // trailing icons share one column.
-                // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
-                val touch = !LocalPointerAvailable.current
-                IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("agents_new")) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
-                }
+        }
+    }
+    item(key = AGENTS_END_KEY) {
+        Column(Modifier.fillMaxWidth()) {
+            archiveActions?.let { ArchivedAgentsFold(archived, avatars, it) }
+            // Sections are separated by space alone (like Finder/Mail sidebars), no rule.
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+/** Same header as "Workspaces" (SessionsSectionHeader): title, then 28dp icon buttons. */
+@Composable
+private fun AgentsHeader(waiting: Int, onNewAgent: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Agents",
+            color = cs.onSurfaceVariant,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        if (waiting > 0) {
+            Text("$waiting waiting", color = cs.primary, fontSize = 11.sp, fontFamily = MonoFontFamily)
+            Spacer(Modifier.width(4.dp))
+        }
+        if (onNewAgent != null) {
+            // The header's compact 28dp buttons — the Workspaces ⋮ uses the same, so the two
+            // trailing icons share one column.
+            // Touch gets a thumb-sized target; it stays in one column with the Workspaces ⋮.
+            val touch = !LocalPointerAvailable.current
+            IconButton(onClick = onNewAgent, modifier = Modifier.size(if (touch) 34.dp else 28.dp).testTag("agents_new")) {
+                Icon(Icons.Filled.Add, contentDescription = "New Agent", tint = cs.onSurfaceVariant, modifier = Modifier.size(if (touch) 19.dp else 16.dp))
             }
         }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            agents.forEach { a ->
-                AgentRow(a, onClick = { onOpen(a) }, menu = { contextEntries(a) })
-            }
-        }
-        archiveActions?.let { ArchivedAgentsFold(archived, avatars, it) }
-        // Sections are separated by space alone (like Finder/Mail sidebars), no rule.
-        Spacer(Modifier.height(6.dp))
     }
 }
 
 @Composable
-private fun AgentRow(a: AgentEntry, onClick: () -> Unit, menu: () -> List<RowContextMenuEntry>) {
+private fun AgentRow(
+    a: AgentEntry,
+    onClick: () -> Unit,
+    menu: () -> List<RowContextMenuEntry>,
+    /** The row's drag handle, applied outside the clickable so the drag owns the gesture. */
+    dragModifier: Modifier = Modifier,
+    /** The row's own, shared with the drag handle so the click and the drag do not fight. */
+    interactionSource: MutableInteractionSource? = null,
+    /** Lifted by the list's reorder: the row casts the shadow a dragged workspace row does. */
+    isDragging: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
+    val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "agent-drag-elevation")
     val bg = when {
         a.active -> cs.onSurface.copy(alpha = 0.08f)
         hovered -> cs.onSurface.copy(alpha = 0.045f)
@@ -154,14 +208,18 @@ private fun AgentRow(a: AgentEntry, onClick: () -> Unit, menu: () -> List<RowCon
     }
     RowContextMenu(items = menu) {
         Row(
-            Modifier
+            dragModifier
                 .fillMaxWidth()
+                // The zone's side margins (each Agent is its own list item now).
+                .padding(horizontal = 8.dp)
                 .heightIn(min = 44.dp)
+                // Lifted by the reorder: the same shadow a dragged workspace row casts.
+                .shadow(elevation, RoundedCornerShape(7.dp), clip = false)
                 .clip(RoundedCornerShape(7.dp))
                 .background(bg)
                 .hoverable(interaction)
                 .listRowFocus()
-                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .clickable(interactionSource = interaction, indication = null, enabled = !isDragging, onClick = onClick)
                 .testTag("agent_row_${a.id}")
                 // The avatar's left edge lines up with the section headers' text (14dp in).
                 .padding(start = 6.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
