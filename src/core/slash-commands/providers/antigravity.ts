@@ -3,7 +3,7 @@ import { dirname, join } from "path"
 import { AgentKind } from "../../../shared/agents"
 import { home } from "../../../shared/home"
 import { agentCommand, type AgentCommandList, type AgentCommandProvider, type ProviderCtx, type SlashCommand } from "../types"
-import { scanSkillDirs } from "./skill-dirs"
+import { pluginOfSkillsDir, scanSkillDirs } from "./skill-dirs"
 
 /**
  * agy's own commands: its 9 system commands and the 2 built-in skills it mounts, as agy 1.4.12 lists them
@@ -49,15 +49,19 @@ export function antigravityWorkspaceSkillDirs(workdir: string): string[] {
 // global skills (~/.gemini/config/skills, linked into every session's shadow HOME), the session's plugin skills
 // (handed in via agentContext), then agy's own commands. A name is listed once; a skill marked
 // `disable-slash-command: true` is left out. Skills are text-insert: `/name ` goes as a normal prompt and agy
-// runs it. Not read: skills.json/plugins.json declarations and a plugin's enabled state.
+// runs it. Not read: skills.json/plugins.json declarations and a plugin's enabled state. Each entry's source is
+// the folder it was read from.
 export class AntigravityCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.Antigravity
 
   async list(ctx: ProviderCtx): Promise<AgentCommandList | undefined> {
     const a = ctx.agentContext as { skillsDirs?: string[]; userHome?: string } | undefined
-    const own = scanSkillDirs(antigravityWorkspaceSkillDirs(ctx.workdir))
-    const global = scanSkillDirs([join(a?.userHome ?? home(), ".gemini", "config", "skills"), ...(a?.skillsDirs ?? [])])
-    const builtins = AGY_SYSTEM_COMMANDS.map((c) => agentCommand({ name: c.name, sigil: "/", description: c.description }))
+    const own = scanSkillDirs(antigravityWorkspaceSkillDirs(ctx.workdir), () => ({ source: "project" }))
+    const userDir = join(a?.userHome ?? home(), ".gemini", "config", "skills")
+    const global = scanSkillDirs([userDir, ...(a?.skillsDirs ?? [])], (dir) =>
+      dir === userDir ? { source: "user" } : { source: "plugin", plugin: pluginOfSkillsDir(dir) },
+    )
+    const builtins = AGY_SYSTEM_COMMANDS.map((c) => agentCommand({ name: c.name, sigil: "/", description: c.description, origin: { source: "builtin" } }))
     const seen = new Set<string>()
     const commands: SlashCommand[] = []
     for (const cmd of [...own, ...global, ...builtins]) {

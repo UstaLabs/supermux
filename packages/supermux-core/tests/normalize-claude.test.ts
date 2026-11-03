@@ -25,7 +25,7 @@ describe("claude normalizer", () => {
       { description: "nameless rows are skipped" },
     ]
     const expected = [
-      { name: "code-review", description: "Review", argumentHint: "[pr]", builtin: true },
+      { name: "code-review", description: "Review", argumentHint: "[pr]", aliases: ["review"], builtin: true },
       { name: "proj-cmd", description: "A project command (project)" },
     ]
     expect(n(native({ type: "system", subtype: "commands_changed", commands }))).toEqual([{ kind: "commands-update", commands: expected }])

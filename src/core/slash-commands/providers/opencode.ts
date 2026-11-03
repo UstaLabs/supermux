@@ -7,7 +7,7 @@ import { agentCommand, type AgentCommandEntry, type AgentCommandList, type Agent
  * It does not say which entries are the folder's own.
  */
 export function mapOpenCodeCommands(entries: AgentCommandEntry[]): AgentCommandList {
-  return { commands: entries.filter((e) => e.name).map((e) => agentCommand({ name: e.name, sigil: "/", description: e.description })) }
+  return { commands: entries.filter((e) => e.name).map((e) => agentCommand({ name: e.name, sigil: "/", description: e.description, argumentHint: e.argumentHint })) }
 }
 
 // OpenCode pushes `available_commands_update` over ACP when a session starts;

@@ -13,6 +13,8 @@ interface SettingsStore {
 /** Every key both apps persist, in one place so they store the same thing. */
 object SettingsKeys {
     fun draft(sessionId: String) = "draft:$sessionId"
+    /** The `/` commands last picked or sent to [agent] (newest first, one name per line). */
+    fun slashRecents(agent: String) = "slash:recents:$agent"
     /** Serialized [LauncherPrefs] — the launcher's sticky agent/model/effort choices.
      *  Read/written through `dev.supermux.ui.prefs.UiPrefs` (one owner, both platforms). */
     const val LAUNCHER_PREFS = "launcher:prefs"

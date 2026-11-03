@@ -37,3 +37,16 @@ test("GrokCommandProvider: the initialize-time list (built-ins only, no _meta at
   const initializeList: AgentCommandEntry[] = [{ name: "compact", description: "c" }, { name: "goal", description: "g" }]
   expect(await new GrokCommandProvider().list({ sessionName: "s", workdir: "/w", agentContext: { commands: initializeList } })).toBeUndefined()
 })
+
+test("mapGrokCommands: the source is Grok's own skill scope; an unknown scope gives none (#56)", () => {
+  const { commands } = mapGrokCommands([
+    ...LIVE_PUSH,
+    { name: "odd-scope", argumentHint: "<topic>", _meta: { scope: "team", path: "/t/odd-scope/SKILL.md" } },
+  ])
+  const by = (name: string) => commands.find((c) => c.name === name)!
+  expect(by("check-work").source).toBe("user")
+  expect(by("build-with-ai").source).toBe("builtin")
+  expect(by("repo-skill").source).toBe("project")
+  expect(by("odd-scope").source).toBeUndefined()
+  expect(by("odd-scope").argumentHint).toBe("<topic>")
+})

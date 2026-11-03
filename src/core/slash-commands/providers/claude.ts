@@ -1,5 +1,5 @@
 import { AgentKind } from "../../../shared/agents"
-import { agentCommand, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
+import { agentCommand, pluginOfName, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type CommandOrigin, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
 
 /** Claude shows MCP prompts as "server:prompt (MCP)"; the command itself is "server:prompt". */
 const MCP_SUFFIX = / \(MCP\)$/
@@ -14,7 +14,14 @@ export function mapClaudeCommands(entries: AgentCommandEntry[]): AgentCommandLis
   for (const entry of entries) {
     // "__remote-workflow" and the like are Claude's own plumbing.
     if (!entry.name || entry.name.startsWith("_")) continue
-    const cmd = agentCommand({ name: entry.name.replace(MCP_SUFFIX, ""), sigil: "/", description: entry.description })
+    const mcp = MCP_SUFFIX.test(entry.name)
+    const name = entry.name.replace(MCP_SUFFIX, "")
+    // A plugin's skills are "<plugin>:<skill>"; an MCP prompt's "<server>:" is no plugin.
+    const plugin = mcp ? undefined : pluginOfName(name)
+    const origin: CommandOrigin | undefined = entry.builtin ? { source: "builtin" } : plugin ? { source: "plugin", plugin } : undefined
+    // Claude opens a plugin skill's description with "(<plugin>) ", which the source now says.
+    const description = plugin && entry.description?.startsWith(`(${plugin}) `) ? entry.description.slice(plugin.length + 3) : entry.description
+    const cmd = agentCommand({ name, sigil: "/", description, argumentHint: entry.argumentHint, aliases: entry.aliases, origin })
     if (seen.has(cmd.id)) continue
     seen.add(cmd.id)
     commands.push(cmd)

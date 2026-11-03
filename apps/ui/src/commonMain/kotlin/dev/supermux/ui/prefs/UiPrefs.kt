@@ -139,6 +139,13 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putFilesRevealActive(value: Boolean) =
         settings.putString(SettingsKeys.FILES_REVEAL_ACTIVE, value.toString())
 
+    /** The `/` menu's Recent for [agent]: the command names last picked or sent, newest first. */
+    fun slashRecents(agent: String): Flow<List<String>> =
+        settings.string(SettingsKeys.slashRecents(agent)).map { raw -> raw?.split('\n')?.filter { it.isNotBlank() }.orEmpty() }
+
+    suspend fun putSlashRecents(agent: String, names: List<String>) =
+        settings.putString(SettingsKeys.slashRecents(agent), names.joinToString("\n"))
+
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =
         settings.string(SettingsKeys.CHAT_DETAIL_LEVEL).map { ChatDetailLevel.parse(it) }

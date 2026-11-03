@@ -51,18 +51,20 @@ fun KeyEvent.isComposerSendEnter(): Boolean =
     )
 
 /** What a key does in an open composer menu (the `/` commands, the `@` files). */
-enum class ComposerMenuKey { Up, Down, Pick, Complete, Dismiss }
+enum class ComposerMenuKey { Up, Down, PageUp, PageDown, Pick, Complete, Dismiss }
 
 /**
- * The composer menus' keys, one rule for the `/` and `@` menus: ↑/↓ move, Enter (soft or hardware)
- * picks, Tab completes (opens a folder; the `/` menu has no use for it), Esc closes. Key-down only,
- * and never with Shift: Shift+Enter stays a newline. Null = not a menu key.
+ * The composer menus' keys, one rule for the `/` and `@` menus: ↑/↓ move, Page Up/Down jump a page,
+ * Enter (soft or hardware) picks, Tab completes (opens a folder; in the `/` menu it picks), Esc
+ * closes. Key-down only, and never with Shift: Shift+Enter stays a newline. Null = not a menu key.
  */
 fun composerMenuKey(key: Key, type: KeyEventType, shiftPressed: Boolean): ComposerMenuKey? {
     if (type != KeyEventType.KeyDown) return null
     return when (key) {
         Key.DirectionDown -> ComposerMenuKey.Down
         Key.DirectionUp -> ComposerMenuKey.Up
+        Key.PageDown -> ComposerMenuKey.PageDown
+        Key.PageUp -> ComposerMenuKey.PageUp
         Key.Enter, Key.NumPadEnter -> ComposerMenuKey.Pick.takeUnless { shiftPressed }
         Key.Tab -> ComposerMenuKey.Complete.takeUnless { shiftPressed }
         Key.Escape -> ComposerMenuKey.Dismiss

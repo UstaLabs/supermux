@@ -34,6 +34,19 @@ export type ControlAction =
   | { kind: "stop" }
   | { kind: "kill" }
 
+/**
+ * Where an agent command comes from. Set only when the agent says so (Claude's built-in flag, a plugin's
+ * "<plugin>:" name prefix, Codex's skill scope, Grok's skill scope) or the folder it was read from does
+ * (Antigravity). Nothing is guessed: a command no one vouches for has no source.
+ */
+export type CommandSource = "builtin" | "plugin" | "project" | "user"
+
+export interface CommandOrigin {
+  source: CommandSource
+  /** With source "plugin": the plugin's name. */
+  plugin?: string
+}
+
 export interface SlashCommand {
   /** Unique within a session's list, e.g. "agent:superpowers:brainstorming" or "control:kill". */
   id: string
@@ -45,11 +58,27 @@ export interface SlashCommand {
   description?: string
   /** agent only: the literal text inserted into the composer. */
   insertText?: string
+  /** agent only: the agent's own hint for the arguments, e.g. "[interval] [prompt]". */
+  argumentHint?: string
+  /** agent only: other names the agent accepts for the command, e.g. "review" for "code-review". */
+  aliases?: string[]
+  /** agent only: where the command comes from, when something says so (see CommandSource). */
+  source?: CommandSource
+  /** agent only, with source "plugin": the plugin's name. */
+  plugin?: string
   /** control only: the web action to dispatch. */
   action?: ControlAction
 }
 
-export function agentCommand(opts: { name: string; sigil: "/" | "$"; description?: string }): SlashCommand {
+export function agentCommand(opts: {
+  name: string
+  sigil: "/" | "$"
+  description?: string
+  argumentHint?: string
+  aliases?: string[]
+  origin?: CommandOrigin
+}): SlashCommand {
+  const aliases = opts.aliases?.filter((a) => a && a !== opts.name)
   return {
     id: `agent:${opts.name}`,
     family: "agent",
@@ -57,7 +86,17 @@ export function agentCommand(opts: { name: string; sigil: "/" | "$"; description
     sigil: opts.sigil,
     description: opts.description,
     insertText: `${opts.sigil}${opts.name} `,
+    ...(opts.argumentHint ? { argumentHint: opts.argumentHint } : {}),
+    ...(aliases?.length ? { aliases } : {}),
+    ...(opts.origin ? { source: opts.origin.source } : {}),
+    ...(opts.origin?.plugin ? { plugin: opts.origin.plugin } : {}),
   }
+}
+
+/** The plugin a namespaced name belongs to: "superpowers:brainstorming" → "superpowers". */
+export function pluginOfName(name: string): string | undefined {
+  const i = name.indexOf(":")
+  return i > 0 ? name.slice(0, i) : undefined
 }
 
 /**

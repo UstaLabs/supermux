@@ -95,3 +95,25 @@ test("a name is listed once: the folder's skill wins over the user's, and any sk
     expect(list.commands.filter((c) => c.name === "goal")).toEqual([expect.objectContaining({ description: "goal skill" })])
   } finally { s.done() }
 })
+
+test("each entry's source is the folder it was read from: project, the user's, a plugin by its manifest name, agy's own (#56)", async () => {
+  const s = sandbox()
+  try {
+    const work = join(s.root, "w")
+    const muxCore = join(s.root, "plugins", "mux-core"), bare = join(s.root, "plugins", "bare-plugin")
+    skill(join(work, ".agents", "skills"), "proj-skill")
+    skill(join(s.userHome, ".gemini", "config", "skills"), "user-skill")
+    skill(join(muxCore, "skills"), "browser")
+    mkdirSync(join(muxCore, ".claude-plugin"), { recursive: true })
+    writeFileSync(join(muxCore, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "mux" }))
+    skill(join(bare, "skills"), "bare-skill")
+    const list = await names(work, { userHome: s.userHome, skillsDirs: [join(muxCore, "skills"), join(bare, "skills")] })
+    const by = (name: string) => list.commands.find((c) => c.name === name)!
+    expect(by("proj-skill")).toMatchObject({ source: "project" })
+    expect(by("user-skill")).toMatchObject({ source: "user" })
+    // The plugin's own name ("mux"), not its folder's ("mux-core"); with no manifest, the folder's name.
+    expect(by("browser")).toMatchObject({ source: "plugin", plugin: "mux" })
+    expect(by("bare-skill")).toMatchObject({ source: "plugin", plugin: "bare-plugin" })
+    expect(by("goal")).toMatchObject({ source: "builtin" })
+  } finally { s.done() }
+})

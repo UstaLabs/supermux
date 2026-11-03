@@ -1,8 +1,16 @@
 import { AgentKind } from "../../../shared/agents"
-import { agentCommand, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
+import { agentCommand, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type CommandOrigin, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
 
 /** Skill scopes that do not depend on the folder (1.0.46: the user's and Grok's bundled skills). */
 const GLOBAL_SCOPES = new Set(["user", "bundled"])
+
+/** The source Grok's own `_meta.scope` names; any other scope says nothing we can show. */
+const SCOPE_ORIGIN = new Map<string, CommandOrigin>([
+  ["bundled", { source: "builtin" }],
+  ["user", { source: "user" }],
+  ["project", { source: "project" }],
+  ["repo", { source: "project" }],
+])
 
 /**
  * Keep only skill-backed entries: those whose `_meta.path` points at a
@@ -18,9 +26,16 @@ export function mapGrokCommands(entries: AgentCommandEntry[]): AgentCommandList 
   for (const entry of entries) {
     const path = entry._meta?.path
     if (typeof path !== "string" || !path.endsWith("SKILL.md")) continue
-    const cmd = agentCommand({ name: entry.name, sigil: "/", description: entry.description })
+    const scope = String(entry._meta?.scope ?? "")
+    const cmd = agentCommand({
+      name: entry.name,
+      sigil: "/",
+      description: entry.description,
+      argumentHint: entry.argumentHint,
+      origin: SCOPE_ORIGIN.get(scope),
+    })
     commands.push(cmd)
-    if (!GLOBAL_SCOPES.has(String(entry._meta?.scope ?? ""))) projectIds.push(cmd.id)
+    if (!GLOBAL_SCOPES.has(scope)) projectIds.push(cmd.id)
   }
   return { commands, projectIds }
 }
