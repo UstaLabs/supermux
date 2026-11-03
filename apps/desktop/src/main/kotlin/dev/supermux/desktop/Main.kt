@@ -906,6 +906,7 @@ fun main() {
             undecorated = linuxMoveResize != null,
         ) {
             if (shuttingDown) return@Window
+            dev.supermux.util.PerfTrace.firstMilestone("desktop.window.composing")
 
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
             // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
@@ -2339,6 +2340,10 @@ private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.
                 val owners = fleet.sessionHost.value
                 val wsOwners = fleet.workspaceHost.value
                 val tails = fleet.messages.value
+                // The live sidebar hides a project whose workspaces are all archived; the cache has no
+                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
+                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
+                val archivedOnly = fleet.archivedWorkspaces.value.mapNotNull { it.projectId }.toSet() - liveProjects
                 val now = System.currentTimeMillis()
                 synchronized(cache) {
                     for (host in fleet.store.list()) {
@@ -2350,7 +2355,7 @@ private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.
                             now,
                             host.version,
                             workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
-                            projects = projects.filter { it.hostId == host.recordId }.map { it.project },
+                            projects = projects.filter { it.hostId == host.recordId && it.project.id !in archivedOnly }.map { it.project },
                             lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
                         )
                     }

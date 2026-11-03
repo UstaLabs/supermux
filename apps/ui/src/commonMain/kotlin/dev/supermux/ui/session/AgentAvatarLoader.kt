@@ -9,6 +9,13 @@ import androidx.compose.runtime.remember
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+/** Agent pictures fetched at once. */
+private const val AVATAR_FETCHES = 6
 
 @Composable
 fun rememberAgentAvatars(
@@ -21,25 +28,33 @@ fun rememberAgentAvatars(
     val wanted = sessions.filter { it.role == "personal_assistant" && it.avatar != null }.associate { it.id to it.avatar!! } + extra
     LaunchedEffect(wanted) {
         cache.keys.retainAll(wanted.keys)
-        // Card #54: the launch trace's "Agents have their pictures" mark — fetched one at a time.
+        // Fetched side by side (at most [AVATAR_FETCHES] at once): one after another, each picture
+        // waited for the last one's round trip — ~3 s for ten Agents through the relay (card #54).
         val start = dev.supermux.util.PerfTrace.elapsedMs()
-        var fetched = 0
-        for ((id, rev) in wanted) {
-            if (cache[id]?.first == rev) continue
-            fetched++
-            val text = try {
-                apiFor(id)?.getAgentAvatar(id)
-            } catch (c: CancellationException) {
-                throw c
-            } catch (_: Throwable) {
-                null
+        val missing = wanted.filter { (id, rev) -> cache[id]?.first != rev }
+        val fetched = missing.size
+        val gate = Semaphore(AVATAR_FETCHES)
+        coroutineScope {
+            for ((id, rev) in missing) {
+                launch {
+                    val text = gate.withPermit {
+                        try {
+                            apiFor(id)?.getAgentAvatar(id)
+                        } catch (c: CancellationException) {
+                            throw c
+                        } catch (_: Throwable) {
+                            null
+                        }
+                    }
+                    text?.let(::parseAvatarRig)?.let { cache[id] = rev to it }
+                }
             }
-            text?.let(::parseAvatarRig)?.let { cache[id] = rev to it }
         }
         if (fetched > 0) {
             dev.supermux.util.PerfTrace.milestone(
                 "avatars.loaded",
                 "fetched" to fetched,
+                "parallel" to AVATAR_FETCHES,
                 "shown" to cache.size,
                 "wanted" to wanted.size,
                 "ms" to dev.supermux.util.PerfTrace.elapsedMs() - start,

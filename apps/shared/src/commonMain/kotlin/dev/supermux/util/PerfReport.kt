@@ -9,6 +9,7 @@ import kotlin.math.roundToInt
 object PerfReport {
     private val launchSteps = linkedMapOf(
         "process.start" to "process start",
+        "desktop.window.composing" to "window composing",
         "host.init" to "store ready",
         "cache.seeded" to "cache drawn from",
         "ws.connecting" to "connecting",
@@ -66,7 +67,7 @@ object PerfReport {
             "ui.sessions.drawn" -> "${f["sessions"]} sessions"
             "ui.workspaces.drawn" -> "${f["workspaces"]} in ${f["groups"]} groups"
             "ui.agents.drawn" -> "${f["agents"]} Agents, ${f["pictures"]} pictures yet"
-            "avatars.loaded" -> "${f["fetched"]} fetched one at a time in ${ms(f["ms"])}"
+            "avatars.loaded" -> "${f["fetched"]} fetched ${if (f["parallel"] != null) "${f["parallel"]} at a time" else "one at a time"} in ${ms(f["ms"])}"
             else -> f.entries.filter { it.key != "req" && it.key != "host" }.joinToString(" ") { "${it.key}=${it.value}" }
         }
     }
