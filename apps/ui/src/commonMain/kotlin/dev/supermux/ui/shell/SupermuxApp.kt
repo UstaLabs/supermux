@@ -168,6 +168,7 @@ import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.widgets.IosBackSwipe
 import dev.supermux.ui.widgets.IosPushIn
+import dev.supermux.ui.widgets.KeyboardFirstBack
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.iosStyleBackSwipe
 import dev.supermux.ui.widgets.iosSwipeUnderLayer
@@ -687,8 +688,9 @@ fun SupermuxApp(
     // ── ONE back handler for the whole app: Android's `PhoneLayerBack` plus the two per-layer
     //    handlers, folded together. Panes that own BACK themselves — the editor's search overlay
     //    and its tree drawer — register their own handler deeper in the tree, and Compose
-    //    dispatches to the innermost enabled one first, so they still win. The IME is the
-    //    platform's: while it is up the system hides it before this handler is reached.
+    //    dispatches to the innermost enabled one first, so they still win. The soft keyboard
+    //    comes before all of them, and the system does NOT see to that while these handlers are
+    //    on: [KeyboardFirstBack], at the end of this function, closes it (widgets/KeyboardBack.kt).
     var backProgress by remember { mutableFloatStateOf(0f) }
     val canPopLayer = compact && ui.currentRoute is Route.Home && ui.selectedId != null
     BackHandler(enabled = ui.overlayOpen) { ui.goBack() }
@@ -1179,6 +1181,9 @@ fun SupermuxApp(
         }
     }
     }
+    // Last, so that it is added after every handler above even when the keyboard is already up
+    // on the first frame; when it comes up later this is the newest handler anyway.
+    KeyboardFirstBack()
 }
 
 /** A full-pane overlay that closes on Escape, the way every sibling overlay does. */
