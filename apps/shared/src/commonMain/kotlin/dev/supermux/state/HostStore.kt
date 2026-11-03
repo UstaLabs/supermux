@@ -2377,6 +2377,10 @@ class HostStore(
         session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
     ) = dev.supermux.net.DictationStreamClient(baseUrl, token, http).open(dictationId, sessionId, session)
 
+    /** The phone's poster for a clip it just uploaded (POST /files/<clip>/poster). False on any failure. */
+    suspend fun linkPoster(clipFileId: String, posterFileId: String): Boolean =
+        runApi("linkPoster") { api.linkPoster(clipFileId, posterFileId) } ?: false
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {

@@ -15,6 +15,7 @@ import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.exp
@@ -36,30 +37,74 @@ internal fun Modifier.diagramGestures(transform: LightboxTransform): Modifier = 
     .onSizeChanged { transform.viewport = Size(it.width.toFloat(), it.height.toFloat()) }
     // Separate pointerInput blocks: one detector cannot both own the wheel and arbitrate taps
     // against drags (as in the image lightbox).
-    .pointerInput(transform) {
-        val panPerUnit = WheelPan.toPx()
-        awaitPointerEventScope {
-            while (true) {
-                val event = awaitPointerEvent()
-                if (event.type != PointerEventType.Scroll) continue
-                val delta = event.changes.fold(Offset.Zero) { acc, c -> acc + c.scrollDelta }
-                if (delta == Offset.Zero) continue
-                val mods = event.keyboardModifiers
-                val focus = event.changes.first().position
-                if (mods.isCtrlPressed || mods.isMetaPressed) {
-                    transform.zoomBy(wheelZoomFactor(delta.y), focus)
-                } else if (transform.scale > LightboxTransform.MIN) {
-                    transform.panBy(-delta * panPerUnit)
-                } else {
-                    continue // at fit: let the chat have the scroll
-                }
-                event.changes.forEach { it.consume() }
+    .zoomOrPanWheel(transform, WheelPan)
+    .trackpadMagnifyTarget(transform)
+    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom(it) }) }
+    .pinchOrPanWhenZoomed(transform)
+
+/**
+ * The viewer's picture page: the lightbox's own wheel (a plain notch zooms) and double-tap, the
+ * macOS trackpad pinch, and the drag rule that lets it live in a pager — at fit a one-finger drag
+ * is left to the pager's swipe (and the swipe-down close), two fingers zoom, a zoomed picture pans.
+ * With [trackpad] ([dev.supermux.ui.platform.Caps.trackpadMomentum]) a plain two-finger scroll at
+ * fit belongs to the viewer's swipes instead, so the wheel is the diagram's: ⌘/Ctrl zooms, a
+ * zoomed picture pans with the fingers.
+ */
+internal fun Modifier.viewerImageGestures(transform: LightboxTransform, trackpad: Boolean = false): Modifier = this
+    .onSizeChanged { transform.viewport = Size(it.width.toFloat(), it.height.toFloat()) }
+    .then(if (trackpad) Modifier.zoomOrPanWheel(transform, TrackpadScrollUnit) else Modifier.lightboxWheelZoom(transform))
+    .trackpadMagnifyTarget(transform)
+    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom() }) }
+    .pinchOrPanWhenZoomed(transform)
+
+/**
+ * Ctrl/⌘ + wheel zooms about the cursor, proportionally, so a trackpad pinch that arrives as
+ * Ctrl + wheel tracks the fingers; a plain wheel pans a zoomed picture [panPerUnit] a unit and, at
+ * fit, is left for whatever scrolls around it.
+ */
+internal fun Modifier.zoomOrPanWheel(transform: LightboxTransform, panPerUnit: Dp): Modifier = pointerInput(transform, panPerUnit) {
+    val pan = panPerUnit.toPx()
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.type != PointerEventType.Scroll) continue
+            val delta = event.changes.fold(Offset.Zero) { acc, c -> acc + c.scrollDelta }
+            if (delta == Offset.Zero) continue
+            val mods = event.keyboardModifiers
+            val focus = event.changes.first().position
+            if (mods.isCtrlPressed || mods.isMetaPressed) {
+                transform.zoomBy(wheelZoomFactor(delta.y), focus)
+            } else if (transform.scale > LightboxTransform.MIN) {
+                transform.panBy(-delta * pan)
+            } else {
+                continue // at fit: let the chat have the scroll
             }
+            event.changes.forEach { it.consume() }
         }
     }
+}
+
+/** The lightbox's wheel: a notch up zooms in, a notch down zooms out, about the centre. */
+internal fun Modifier.lightboxWheelZoom(transform: LightboxTransform): Modifier = pointerInput(transform) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.type != PointerEventType.Scroll) continue
+            val dy = event.changes.fold(0f) { acc, c -> acc + c.scrollDelta.y }
+            if (dy == 0f) continue
+            // Scrolling DOWN (positive) zooms out, as every image viewer does.
+            transform.zoomBy(if (dy < 0f) LightboxTransform.STEP else 1f / LightboxTransform.STEP)
+            event.changes.forEach { it.consume() }
+        }
+    }
+}
+
+/**
+ * Hovering makes [transform] the target of a host-delivered trackpad pinch ([TrackpadMagnify]); the
+ * cursor position doubles as the zoom focus, so no window→local coordinate mapping is needed.
+ */
+internal fun Modifier.trackpadMagnifyTarget(transform: LightboxTransform): Modifier = this
     .pointerInput(transform) {
-        // Hovering makes this diagram the target of a host-delivered trackpad pinch; the cursor
-        // position doubles as the zoom focus, so no window→local coordinate mapping is needed.
         var hover = Offset.Zero
         val target: (Float) -> Unit = { magnification -> transform.zoomBy(1f + magnification, hover) }
         try {
@@ -79,7 +124,13 @@ internal fun Modifier.diagramGestures(transform: LightboxTransform): Modifier = 
             if (TrackpadMagnify.target === target) TrackpadMagnify.target = null
         }
     }
-    .pointerInput(transform) { detectTapGestures(onDoubleTap = { transform.toggleZoom(it) }) }
+
+/**
+ * Drags for content that lives inside a scroller (the chat, the viewer's pager): two fingers always
+ * zoom; one finger (or the mouse) pans only once there is something to pan, so at fit the scroller
+ * keeps its scroll; and a gesture someone else claimed first is left to them.
+ */
+internal fun Modifier.pinchOrPanWhenZoomed(transform: LightboxTransform): Modifier = this
     .pointerInput(transform) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)

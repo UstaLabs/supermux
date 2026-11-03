@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -45,6 +46,19 @@ class AttachmentVideoTest {
         onNodeWithTag("attachment_video_poster").assertIsDisplayed()
         assertEquals(0, fetches.get(), "a transcript must not eagerly download every clip")
         assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size)
+    }
+
+    @Test fun the_poster_shows_the_clips_length_before_anything_is_fetched() = runComposeUiTest {
+        val fetches = AtomicInteger(0)
+        setPlatformContent {
+            AttachmentList(
+                attachments = listOf(videoAtt().copy(duration_ms = 75_000)),
+                alignEnd = false,
+                media = AttachmentMedia.fromBytes { fetches.incrementAndGet(); ByteArray(4) },
+            )
+        }
+        onNodeWithTag("attachment_video_duration", useUnmergedTree = true).assertTextEquals("1:15")
+        assertEquals(0, fetches.get())
     }
 
     @Test fun video_note_and_mime_only_videos_also_get_the_poster() = runComposeUiTest {

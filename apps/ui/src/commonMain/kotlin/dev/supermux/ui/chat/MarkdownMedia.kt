@@ -84,7 +84,13 @@ private fun percentDecode(s: String): String {
     return bytes.toByteArray().decodeToString()
 }
 
-/** A host-file image or video at [absPath]; a failed read falls back to the failure link line. */
+/**
+ * A host-file image or video at [absPath]; a failed read falls back to the failure link line.
+ *
+ * In a chat row (a [LocalChatMediaEntry] under a [LocalChatMediaViewer]) a tap on the picture, or
+ * the clip's ⤢, opens the chat's viewer at it — the same set and viewer as the attachments. Outside
+ * one (the editor's markdown preview) the picture keeps its own lightbox.
+ */
 @Composable
 internal fun LocalMarkdownMedia(
     image: MdBlock.Image,
@@ -94,11 +100,15 @@ internal fun LocalMarkdownMedia(
 ) {
     val name = absPath.substringAfterLast('/')
     val mime = LocalPlatform.current.files.probeMime(name)
+    val viewer = LocalChatMediaViewer.current
+    val viewerKey = LocalChatMediaEntry.current?.let { markdownMediaKey(it, absPath) }
+    val openInViewer: (() -> Boolean)? = if (viewer != null && viewerKey != null) ({ viewer.open(viewerKey) }) else null
     if (filePreviewKind(absPath) == FilePreviewKind.Video) {
         // The chat's inline player: it reads the bytes only once play is pressed.
         InlineVideo(
             Attachment(file_id = absPath, kind = "video", mime = mime, name = image.alt.ifEmpty { name }),
             media = AttachmentMedia.fromBytes { files.load(it).getOrNull() },
+            onOpenViewer = openInViewer,
         )
         return
     }
@@ -120,7 +130,7 @@ internal fun LocalMarkdownMedia(
                     width = decoded.width,
                     height = decoded.height,
                     tag = "md_image",
-                    onClick = { lightbox = true },
+                    onClick = { if (openInViewer?.invoke() != true) lightbox = true },
                 ) { mod ->
                     Image(
                         painter = decoded.painter,

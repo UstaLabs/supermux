@@ -124,6 +124,16 @@ data class Attachment(
     val mime: String? = null,
     val size: Long? = null,
     val name: String? = null,
+    /**
+     * The DISPLAYED size (EXIF orientation and a clip's rotation applied) and a clip's length,
+     * read by the broker from the file's own header — known before anything is downloaded. Absent
+     * for a file that is not media, and from a broker older than these fields.
+     */
+    val width: Int? = null,
+    val height: Int? = null,
+    val duration_ms: Long? = null,
+    /** The picture the sending phone made of a clip: another broker file, fetched like any picture. */
+    val poster_file_id: String? = null,
 )
 
 /** Composer text + attachments saved on a draft session. */

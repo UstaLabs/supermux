@@ -295,6 +295,12 @@ export interface WebChannelOpts {
   getSessionsSnapshot: () => SessionSnapshot[]
   /** Newest `limit` entries (the store's default when omitted), oldest first. */
   getSessionLog: (name: string, limit?: number) => unknown[]
+  /**
+   * Fill in what a log's attachments say about their files (displayed size, a clip's length, a
+   * phone's poster) before the log goes out — reading, once, the header of any older file that was
+   * stored before those existed. In place. Absent in tests that do not care.
+   */
+  enrichAttachments?: (entries: unknown[]) => Promise<void>
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
@@ -1611,6 +1617,7 @@ export class WebChannel implements Channel {
           commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
         }
       }
+      await this.opts.enrichAttachments?.(Object.values(logs).flat())
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
@@ -2525,6 +2532,20 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // The poster a phone made of a clip it sent: both are this device's own uploads. A refusal reads
+    // like an unknown id, so probing someone else's file ids learns nothing.
+    if (method === "POST" && /^\/files\/[^/]+\/poster$/.test(path)) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const clip = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => null) as { poster_file_id?: unknown } | null
+      const poster = typeof body?.poster_file_id === "string" ? body.poster_file_id : ""
+      if (!poster) return new Response("poster_file_id required", { status: 400 })
+      const linked = await this.fileStore.setPoster(clip, poster, auth.device.name)
+      return linked ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 })
+    }
+
     if (method === "GET" && path.startsWith("/files/")) {
       const auth = this.requireAuth(req)
       if (!auth.ok) return this.authFailureResponse(auth)
@@ -3374,7 +3395,9 @@ export class WebChannel implements Channel {
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
-      return this.json(this.opts.getSessionLog(id))
+      const log = this.opts.getSessionLog(id)
+      await this.opts.enrichAttachments?.(log)
+      return this.json(log)
     }
     if (method === "POST" && path.startsWith("/sessions/") && path.endsWith("/mute")) {
       const id = decodeURIComponent(path.split("/")[2]!)

@@ -1,6 +1,8 @@
 package dev.supermux.ui.chat
 
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,8 +22,8 @@ import kotlin.test.assertTrue
  * [AttachmentList] under [runComposeUiTest] with the `media` seam faked — no broker, no
  * network; bytes decode through Coil's `ByteArray` fetcher exactly as in production.
  *
- * The lightbox tests are new in cluster D2: a tap opens it on BOTH hosts now (Android had it,
- * desktop opened an OS viewer), so it is asserted under a pointer AND under touch.
+ * A tap opens the ONE fullscreen viewer (the chat's media viewer, whose picture page is the old
+ * lightbox) on BOTH hosts, so it is asserted under a pointer AND under touch.
  */
 @OptIn(ExperimentalTestApi::class)
 class AttachmentImageTest {
@@ -127,24 +129,43 @@ class AttachmentImageTest {
         assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size)
     }
 
-    // ── Lightbox (union: Android's, now on both) ──────────────────────────────────────
+    @Test fun a_picture_whose_size_is_known_reserves_its_exact_box_before_it_loads() = runComposeUiTest {
+        // The broker read the header: 800×400. The row must not jump when the bitmap lands, so
+        // the placeholder already has the picture's own shrink-only box.
+        setPlatformContent {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.requiredWidth(400.dp)) {
+                AttachmentList(
+                    attachments = listOf(imageAtt().copy(width = 800, height = 400)),
+                    alignEnd = false,
+                    media = AttachmentMedia.fromBytes { kotlinx.coroutines.awaitCancellation() },
+                )
+            }
+        }
+        val box = onNodeWithTag("attachment_image_loading").fetchSemanticsNode().boundsInRoot
+        with(density) {
+            assertEquals(400f, box.width.toDp().value, 1f, "shrunk to the column")
+            assertEquals(200f, box.height.toDp().value, 1f, "at the picture's own 2:1")
+        }
+    }
 
-    @Test fun tapping_an_image_opens_the_lightbox_under_a_pointer() = runComposeUiTest {
+    // ── The fullscreen viewer, on both hosts ──────────────────────────────────────────
+
+    @Test fun tapping_an_image_opens_the_viewer_under_a_pointer() = runComposeUiTest {
         setPlatformContent(pointer = true) {
             AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_image").fetchSemanticsNodes().isNotEmpty()
         }
-        assertEquals(0, onAllNodesWithTag("image_lightbox").fetchSemanticsNodes().size)
+        assertEquals(0, onAllNodesWithTag("chat_media_viewer").fetchSemanticsNodes().size)
         onNodeWithTag("attachment_image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("image_lightbox").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithTag("chat_media_viewer_image").fetchSemanticsNodes().isNotEmpty()
         }
-        onNodeWithTag("image_lightbox").assertIsDisplayed()
+        onNodeWithTag("chat_media_viewer_image").assertIsDisplayed()
     }
 
-    @Test fun tapping_an_image_opens_the_lightbox_under_touch() = runComposeUiTest {
+    @Test fun tapping_an_image_opens_the_viewer_under_touch() = runComposeUiTest {
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) {
             AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
         }
@@ -153,12 +174,12 @@ class AttachmentImageTest {
         }
         onNodeWithTag("attachment_image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("image_lightbox").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithTag("chat_media_viewer_image").fetchSemanticsNodes().isNotEmpty()
         }
-        onNodeWithTag("image_lightbox").assertIsDisplayed()
+        onNodeWithTag("chat_media_viewer_image").assertIsDisplayed()
     }
 
-    @Test fun the_lightbox_download_hands_the_bytes_to_the_host() = runComposeUiTest {
+    @Test fun the_viewers_save_hands_the_bytes_to_the_host() = runComposeUiTest {
         val platform = FakePlatform()
         setPlatformContent(platform) {
             AttachmentList(listOf(imageAtt()), alignEnd = false, media = AttachmentMedia.fromBytes { TINY_PNG_BYTES })
@@ -168,10 +189,10 @@ class AttachmentImageTest {
         }
         onNodeWithTag("attachment_image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("image_lightbox_download").fetchSemanticsNodes().isNotEmpty()
+            onAllNodesWithTag("chat_media_viewer_save").fetchSemanticsNodes().isNotEmpty()
         }
-        onNodeWithTag("image_lightbox_download").performClick()
-        // Default host here is a pointer one, so the lightbox takes the same save-as branch the
+        onNodeWithTag("chat_media_viewer_save").performClick()
+        // Default host here is a pointer one, so the viewer takes the same save-as branch the
         // chip does (ImageLightboxTest covers the touch branch).
         waitUntil(timeoutMillis = 5_000L) { platform.files.openedSaved.isNotEmpty() }
         assertEquals(listOf("shot.png|image/png|${TINY_PNG_BYTES.size}"), platform.files.saved)
