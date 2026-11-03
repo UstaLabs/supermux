@@ -1,4 +1,5 @@
 import { EventEmitter } from "events"
+import type { AgentCommandEntry } from "../../slash-commands/types"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
@@ -224,7 +225,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   readonly profile: CoreAdapterProfile
 
   availableModels: { modelId: string }[] = []
-  availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
+  /** The slash commands the agent last reported (ACP push, Claude's initialize reply); undefined until it reports. */
+  availableCommands?: AgentCommandEntry[]
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -1181,7 +1183,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private ingestInitialize(params: unknown): void {
-    type Command = CoreAdapter["availableCommands"][number]
+    type Command = AgentCommandEntry
     const init = params as {
       _meta?: { modelState?: { availableModels?: { modelId: string }[] }; availableCommands?: Command[] }
       modelState?: { availableModels?: { modelId: string }[] }

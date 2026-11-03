@@ -428,7 +428,7 @@ export class SessionManager {
     this.registry.unregister(id)  // archives the session (resumable via resumeFromArchive)
     if (s) this.deleteRuntime(s.id)
     this.ports.cleanup.forgetReplyTarget(id)
-    this.ports.commands.remove(id)
+    if (s) this.ports.commands.remove(s.name)  // the command registry is keyed by name
     this.ports.agentState.clear(id)  // drop any lingering working/dead state for the now-archived session
     this.ports.bgTasks.clear(id)      // archived sessions cannot be "waiting"
     // NOTE: do NOT delete agent_home here — archived sessions are resumable, so

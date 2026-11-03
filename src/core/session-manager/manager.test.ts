@@ -1052,6 +1052,14 @@ describe("unregister", () => {
     expect(forgotten).toEqual(["s"])
     expect(m.registry.sessions.getById("s")?.status).toBe("archived")
   })
+
+  test("drops the session's slash commands by name, the registry's key", () => {
+    const commandsRemoved: string[] = []
+    const m = manager({ commandsRemoved })
+    m.registry.register({ id: "id-1", name: "named", workdir: "/tmp", pid: 0, agent: "codex" })
+    m.unregister("id-1")
+    expect(commandsRemoved).toEqual(["named"])
+  })
 })
 
 describe("killAndArchive (the app's kill, kill_session and /kill)", () => {

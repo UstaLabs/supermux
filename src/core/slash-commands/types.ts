@@ -5,24 +5,23 @@ export interface CodexRpc {
   request<T = any>(method: string, params: any): Promise<T>
 }
 
-export interface OpenCodeCommandEntry {
-  name: string
-  description?: string
-  source?: string
+/**
+ * One command as an agent reported it (Core's normalized `commands-update` entry): Claude's initialize reply and
+ * commands_changed push, an ACP agent's `available_commands_update`, or Grok's `initialize._meta.availableCommands`.
+ * Grok marks skill-backed entries with `_meta.path` → SKILL.md; built-ins have no `_meta`.
+ */
+export type { AgentCommandEntry } from "../../../packages/supermux-core/src/events/normalized.js"
+import type { AgentCommandEntry } from "../../../packages/supermux-core/src/events/normalized.js"
+
+/** The discovery context of an agent whose session reports its list itself (Claude, Cursor, OpenCode, Grok). */
+export interface ReportedCommandsCtx {
+  /** What the session's agent last reported; undefined until it reports. */
+  commands?: AgentCommandEntry[]
 }
 
-/** Minimal OpenCode client slice for slash-command discovery. */
-export interface OpenCodeCommandClient {
-  listCommands(workdir: string): Promise<OpenCodeCommandEntry[]>
-}
-
-/** One entry of grok's ACP command list (`initialize` `_meta.availableCommands`
- * and the `available_commands_update` push). Skill-backed entries carry
- * `_meta.path` pointing at their SKILL.md; built-ins have no `_meta`. */
-export interface GrokAcpCommand {
-  name: string
-  description?: string
-  _meta?: { scope?: string; path?: string }
+/** The `commandContext` of an agent whose live adapter holds the list its agent reported. */
+export function reportedCommands(adapter: unknown): ReportedCommandsCtx {
+  return { commands: (adapter as { availableCommands?: AgentCommandEntry[] } | undefined)?.availableCommands }
 }
 
 export type CommandFamily = "agent" | "control"
@@ -61,12 +60,20 @@ export function agentCommand(opts: { name: string; sigil: "/" | "$"; description
   }
 }
 
+/**
+ * What a provider read from an agent: the composer entries plus, when the agent says so, which of them exist
+ * only because of the folder they were reported in (project commands and skills).
+ */
+export interface AgentCommandList {
+  commands: SlashCommand[]
+  /** Ids of folder-only entries. Absent: the agent does not mark them, so the list can't stand in for another folder. */
+  projectIds?: string[]
+}
+
 /** Minimal session view a provider needs. */
 export interface ProviderCtx {
   sessionName: string
   workdir: string
-  /** Spawn flags that mirror the real session (e.g. --plugin-dir pairs) so the probe's list matches. */
-  pluginSpawnArgs: string[]
   /** Opaque per-kind discovery context, built by the agent module's
    * `commandContext` leaf. Each provider casts its own kind's shape. */
   agentContext?: unknown
@@ -74,5 +81,6 @@ export interface ProviderCtx {
 
 export interface AgentCommandProvider {
   readonly kind: AgentKind
-  list(ctx: ProviderCtx): Promise<SlashCommand[]>
+  /** The list the agent reported, mapped for the composer. Undefined while it has reported nothing. */
+  list(ctx: ProviderCtx): Promise<AgentCommandList | undefined>
 }

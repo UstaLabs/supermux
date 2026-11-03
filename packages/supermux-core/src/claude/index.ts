@@ -184,6 +184,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
     const normalizer = createClaudeNormalizer()
     /** A turn the CLI started by itself (background task finished): no user frame, no owner. */
     let unsolicited: string | undefined
+    /** Re-attached during an owned turn: ask for the command list once that turn is over. */
+    let commandsAfterTurn = false
     let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
     const answeredPermissions = new Map<string, AnsweredPermission>()
@@ -471,12 +473,27 @@ export function claude(options: ClaudeOptions): AgentDriver {
         try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
         fromMetaOwned = false
         if (active === finishing) active = undefined
+        if (commandsAfterTurn && !active) { commandsAfterTurn = false; askCommands() }
       }
     }, fail)
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Claude runtime closed')) }
       await rpc.close({ mode })
+    }
+    /**
+     * Claude lists its slash commands in the initialize and reload_plugins replies. Such a reply goes to the
+     * host as the native frame it is, and the normalizer turns it into commands-update — no prompt needed.
+     */
+    function forwardCommands(reply: any) {
+      if (Array.isArray(reply?.response?.commands)) context.onUpdate({ protocol: 'native', value: { type: 'control_response', response: reply } })
+    }
+    /**
+     * A second initialize: Claude 2.1.308 answers with the live list and keeps its MCP servers and permission mode.
+     * Optional: a CLI that refuses or never answers it costs the host only this refresh, never the session.
+     */
+    function askCommands() {
+      void rpc.request({ subtype: 'initialize' }, { optional: true }).then(forwardCommands, () => { /* the host keeps its stored list */ })
     }
     const setupAbort = () => { fail(new Error('Claude setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
@@ -515,9 +532,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
         rpc.start()
         if (fatal) throw fatal
         ready = true
+        // The host that heard the first initialize is gone; ask again, once no owned turn is running.
+        if (active) commandsAfterTurn = true
+        else askCommands()
       } else {
         rpc.start()
-        await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
+        forwardCommands(await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise]))
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
         // A created but never-prompted session may have no durable history.
@@ -561,6 +581,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
           let reply: any
           try { reply = await rpc.request({ subtype: 'reload_plugins', ...(applyOptions.holdOnCacheImpact ? { hold_on_cache_impact: true } : {}) }) }
           catch (error) { undo(); throw error }
+          // A held reload changed nothing (the folder is restored below): its list is not news.
+          if (reply?.response?.held !== true) forwardCommands(reply)
           if (reply?.response?.held === true) {
             undo()
             const impact = reply.response.cache_impact !== undefined ? `: ${JSON.stringify(reply.response.cache_impact)}` : ''

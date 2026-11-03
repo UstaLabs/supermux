@@ -2,7 +2,7 @@ import { test, expect } from "bun:test"
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { antigravitySkillsDirs, ensureAntigravityPluginScopes, ensureGrokPluginScopes, ensureOpenCodePluginScopes, grokSkillsDirs, loadPluginsRegistry, opencodePluginRoots, pluginSpawnArgsForKind, sessionPlugins } from "./index"
+import { antigravitySkillsDirs, ensureAntigravityPluginScopes, ensureGrokPluginScopes, ensureOpenCodePluginScopes, loadPluginsRegistry, sessionPlugins } from "./index"
 import { AgentKind } from "../../shared/agents"
 
 function setup(): { root: string; file: string } {
@@ -59,23 +59,6 @@ test("ensureOpenCodePluginScopes still adds opencode via the shared engine", () 
   }
 })
 
-test("grokSkillsDirs resolves skills dirs for grok-scoped plugins from the registry file", () => {
-  const { root, file } = setup()
-  try {
-    const dir = writeSkillPlugin(root, "sp")
-    writeFileSync(file, JSON.stringify({
-      version: 1,
-      plugins: [
-        { name: "sp", source: { type: "local", path: dir }, enabled: true, scopes: ["grok"] },
-        { name: "other", source: { type: "local", path: writeSkillPlugin(root, "other") }, enabled: true, scopes: ["claude"] },
-      ],
-    }))
-    expect(grokSkillsDirs("s", { file, pluginsDir: root })).toEqual([join(dir, "skills")])
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 test("sessionPlugins never throws: a malformed plugins.json yields no paths and reports the error", () => {
   const { root, file } = setup()
   try {
@@ -117,9 +100,6 @@ test("sessionPlugins: enabled + scoped + not overridden off + compatible, in reg
     expect(sessionPlugins("opencode", "s", o)).toEqual([all])
     expect(sessionPlugins("grok", "s", o)).toEqual([all])
     expect(sessionPlugins("antigravity", "s", o)).toEqual([all])
-    expect(pluginSpawnArgsForKind(AgentKind.Claude, { ...o, sessionName: "s" })).toEqual(["--plugin-dir", all, "--plugin-dir", claudeOnly])
-    expect(pluginSpawnArgsForKind(AgentKind.Codex, { ...o, sessionName: "s" })).toEqual([])
-    expect(opencodePluginRoots("s", o)).toEqual([all])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

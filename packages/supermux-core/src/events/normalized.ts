@@ -26,6 +26,18 @@ export type TurnCompleteReason = "ok" | "interrupt" | "error" | "stall"
 export type PlanEntryStatus = "pending" | "in_progress" | "completed"
 export type PlanEntryPriority = "high" | "medium" | "low"
 
+/** One command an agent says it accepts as `/name`. The optional fields are the agent's own, passed through. */
+export type AgentCommandEntry = {
+  name: string
+  description?: string
+  /** Claude `argumentHint`; ACP `input.hint`. */
+  argumentHint?: string
+  /** Claude: a built-in command rather than a skill, plugin or custom command. */
+  builtin?: boolean
+  /** ACP `_meta` as sent (Grok: `scope` and the SKILL.md `path`). */
+  _meta?: Record<string, unknown>
+}
+
 export type TaskKind = "shell" | "agent" | "workflow" | "monitor" | "subagent" | "collab"
 export type TaskPhase = "started" | "interacted" | "interrupted" | "completed" | "failed" | "wake"
 
@@ -172,7 +184,7 @@ export type NormalizedBodyBase =
         | { answers: Record<string, string | string[]> }
         | { decline: true }
     }
-  | { kind: "commands-update"; commands: { name: string; description?: string }[] }
+  | { kind: "commands-update"; commands: AgentCommandEntry[] }
   | { kind: "mode-update"; modeId?: string; model?: string }
   | { kind: "permissions-update"; spec: import("../types.js").PermissionsSpec; applied: "now" | "next-turn" }
   | {

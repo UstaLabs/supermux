@@ -530,7 +530,7 @@ acrossGrok("skips replay chat but still applies commands and initialize metadata
   })
   await flush()
   expect(adapter.availableModels.map((m) => m.modelId)).toEqual(["grok-4.5"])
-  expect(adapter.availableCommands.map((c) => c.name)).toEqual(["soul"])
+  expect(adapter.availableCommands?.map((c) => c.name)).toEqual(["soul"])
   expect(events.some((e) => e.kind === "assistant-message")).toBe(false)
   expect(events.some((e) => e.kind === "commands-update")).toBe(true)
 })
@@ -1144,7 +1144,7 @@ acrossGrok("direct and nested native params both flush assistant and replay comm
     value: { method: "_x.ai/session_notification", params: { update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "nested" }] } } },
   })
   await flush()
-  expect(adapter.availableCommands.map((c) => c.name)).toEqual(["nested"])
+  expect(adapter.availableCommands?.map((c) => c.name)).toEqual(["nested"])
   expect(events.filter((e) => e.kind === "turn-start")).toHaveLength(0)
   fake.startActivity("live")
   await flush()

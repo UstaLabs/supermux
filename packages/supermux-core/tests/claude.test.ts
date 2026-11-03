@@ -57,6 +57,18 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('the initialize reply reaches the host as a native update carrying the command list', async () => {
+  // Claude 2.1.308 lists its slash commands in the initialize reply; no prompt is needed (card #13).
+  const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
+  const updates: any[] = []
+  const r = await driver({COMMANDS: JSON.stringify(commands)}).open(ctx({onUpdate: u => updates.push(u)}))
+  try {
+    const replies = updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
+    expect(replies).toHaveLength(1)
+    expect(replies[0].value.response.response.commands).toEqual(commands)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('resuming a conversation that was never sent to starts it fresh under the same id', async () => {
   // Restarted before its first message: Claude has no conversation file and says "No conversation found".
   const r = await driver().open(ctx({resumeId: 'never-sent'}))
@@ -400,6 +412,33 @@ test('AskUserQuestion through Core emits user-question and never permission-requ
     expect((await receipt.completed).status).toBe('completed')
   } finally {
     await core.close({ agents: 'shutdown' })
+  }
+})
+
+test('through Core, the command list Claude reports while opening becomes commands-update: fresh and on every re-attach', async () => {
+  // The initialize reply (fresh) and the repeat initialize's reply (re-attach) usually arrive before Core has
+  // made the Session, while it holds updates; they must still come out normalized (card #13).
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-core-cmds-'))
+  keeperDirs.push(stateDirectory)
+  const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
+  const core = createCore({stateDirectory, agents: [driver({COMMANDS: JSON.stringify(commands)})], limits: TEST_LIMITS})
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const listed = () => events.flatMap(e => e.type === 'session.event' && e.event.kind === 'commands-update' ? [e.event.commands] : [])
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 150 && !ok(); i++) await new Promise(r => setTimeout(r, 20)) }
+  try {
+    const id = nextId()
+    let session = await core.sessions.create({agent: 'claude', cwd: process.cwd(), id})
+    expect(listed()).toEqual([commands])
+    for (let round = 1; round <= 3; round++) {
+      const before = listed().length
+      await session.close({mode: 'detach'})
+      session = await core.sessions.resume(id)
+      await until(() => listed().length > before)
+      expect(listed().slice(before)).toEqual([commands])
+    }
+  } finally {
+    await core.close({agents: 'shutdown'})
   }
 })
 

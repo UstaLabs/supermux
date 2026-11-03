@@ -82,7 +82,7 @@ async function runAttach(env: Record<string, string>) {
   return JSON.parse(out.trim().split('\n').filter(Boolean).at(-1)!)
 }
 
-test('process death leaves keeper; reattach skips initialize and seeds owned turn', async () => {
+test('process death leaves keeper; reattach seeds owned turn and asks for the commands only after it', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-reattach-'))
   dirs.push(stateDirectory)
   const trace = join(stateDirectory, 'trace')
@@ -92,19 +92,23 @@ test('process death leaves keeper; reattach skips initialize and seeds owned tur
     KEEPER_PROMPT: 'hang-then-result',
     CLAUDE_FIXTURE: fixture,
     TRACE: trace,
+    COMMANDS: JSON.stringify([{ name: 'verify', description: 'Check work' }]),
   })
   expect(typeof info.ackedSeq).toBe('number')
   expect(alive(info.keeperPid)).toBe(true)
   expect(alive(info.agentPid)).toBe(true)
 
   const activity: Array<{ id: string; phase: string }> = []
+  const updates: any[] = []
+  const order: string[] = []
   const r = await libraryClaude({
     env: { TRACE: trace },
     keeper: { stateDirectory, limits: keeperLimits() },
   }).open(ctx({
     sessionId: 'k1',
     resumeId: info.sessionId,
-    onActivity: n => activity.push({ ...n }),
+    onActivity: n => { activity.push({ ...n }); order.push(`activity:${n.phase}`) },
+    onUpdate: u => { updates.push(u); if (u.protocol === 'native' && (u.value as any)?.type === 'control_response') order.push('commands') },
   }))
   try {
     const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => {
@@ -119,6 +123,14 @@ test('process death leaves keeper; reattach skips initialize and seeds owned tur
       await new Promise(x => setTimeout(x, 30))
     }
     expect(activity.some(a => a.phase === 'completed')).toBe(true)
+    // The host that heard the first initialize is gone: once the owned turn is over, ask again.
+    const commandReplies = () => updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
+    for (let i = 0; i < 100 && commandReplies().length === 0; i++) await new Promise(x => setTimeout(x, 20))
+    expect(commandReplies().map(u => u.value.response.response.commands)).toEqual([[{ name: 'verify', description: 'Check work' }]])
+    // Asked only once the owned turn was over, never during it.
+    expect(order.indexOf('commands')).toBeGreaterThan(order.indexOf('activity:completed'))
+    const after = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return l } })
+    expect(after.filter((x: any) => x?.type === 'control_request' && x.request?.subtype === 'initialize')).toHaveLength(2)
     expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
   } finally {
     await r.close({ mode: 'shutdown' })
@@ -244,13 +256,35 @@ test('Claude detach keeps keeper and agent; later resume re-attaches', async () 
   await r.close({ mode: 'detach' })
   expect(alive(status.keeperPid)).toBe(true)
   expect(alive(status.agentPid)).toBe(true)
+  const updates: any[] = []
   const r2 = await libraryClaude({
     keeper: { stateDirectory, limits: keeperLimits() },
-  }).open(ctx({ sessionId: 'k-detach', resumeId: sid }))
+  }).open(ctx({ sessionId: 'k-detach', resumeId: sid, onUpdate: u => updates.push(u) }))
   expect(r2.agentSessionId).toBe(sid)
+  // Idle on re-attach: the command list is asked for at once (a second initialize).
+  for (let i = 0; i < 100 && !updates.some(u => u.value?.type === 'control_response'); i++) await new Promise(x => setTimeout(x, 20))
+  expect(updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')).toHaveLength(1)
   await r2.close({ mode: 'shutdown' })
   await waitDead(status.keeperPid)
   await waitDead(status.agentPid)
+})
+
+test('a CLI that never answers the repeat initialize keeps its session: the list is optional', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-noreply-'))
+  dirs.push(stateDirectory)
+  const opts = { env: { IGNORE_REPEAT_INITIALIZE: '1' }, requestTimeoutMs: 1500, keeper: { stateDirectory, limits: keeperLimits() } }
+  const r = await libraryClaude(opts).open(ctx({ sessionId: 'k-noreply' }))
+  const sid = r.agentSessionId
+  await r.close({ mode: 'detach' })
+  const exits: Array<Error | undefined> = []
+  const r2 = await libraryClaude(opts).open(ctx({ sessionId: 'k-noreply', resumeId: sid, onExit: e => exits.push(e) }))
+  try {
+    await new Promise(x => setTimeout(x, 2500)) // past the request timeout
+    expect(exits).toEqual([])
+    expect(await r2.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+  } finally {
+    await r2.close({ mode: 'shutdown' })
+  }
 })
 
 test('a keeper another process started under its own temp dir, too deep for sun_path, is re-attached at its recorded socket', async () => {

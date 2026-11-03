@@ -1,7 +1,8 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, CURSOR_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getCursorCoreHost } from "./core-host-provider"
 import type { CursorCoreHost, CursorPrepareExtra } from "./core-host"
@@ -14,6 +15,12 @@ import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/cursor/session")
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+
+/** Slash commands: the list Cursor pushed over ACP (available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
+}
+
 
 function resolveHost(explicit?: CursorCoreHost): CursorCoreHost {
   return explicit ?? getCursorCoreHost()

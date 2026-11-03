@@ -1,25 +1,30 @@
 import { test, expect } from "bun:test"
 import { mapCodexSkills, CodexCommandProvider } from "./codex"
 
-const sample = { data: [{ cwd: "/tmp", skills: [
+const sample = { data: [{ cwd: "/w/proj", skills: [
   { name: "mux:browser", description: "control chrome", path: "/x", scope: "user", enabled: true },
-  { name: "mux:soul", description: "set up PA identity", path: "/soul", scope: "user", enabled: true },
+  { name: "repo-skill", description: "this repo's own", path: "/w/proj/.agents/skills/repo-skill", scope: "repo", enabled: true },
   { name: "mux:hidden", description: "no", path: "/y", scope: "user", enabled: false },
 ]}]}
 
-test("mapCodexSkills flattens, filters disabled, uses $ sigil", () => {
-  const cmds = mapCodexSkills(sample)
-  expect(cmds.map((c) => c.name)).toEqual(["mux:browser", "mux:soul"])
-  expect(cmds[0]).toMatchObject({ family: "agent", sigil: "$", insertText: "$mux:browser ", description: "control chrome" })
+test("mapCodexSkills: enabled skills as $ entries; repo skills are the folder's own", () => {
+  const list = mapCodexSkills(sample)
+  expect(list.commands.map((c) => c.name)).toEqual(["mux:browser", "repo-skill"])
+  expect(list.commands[0]).toMatchObject({ family: "agent", sigil: "$", insertText: "$mux:browser ", description: "control chrome" })
+  expect(list.projectIds).toEqual(["agent:repo-skill"])
 })
 
-test("CodexCommandProvider calls skills/list on the client", async () => {
-  const provider = new CodexCommandProvider()
-  const client: any = { request: async (m: string) => (m === "skills/list" ? sample : (() => { throw new Error("unexpected " + m) })()) }
-  const cmds = await provider.list({ sessionName: "s", workdir: "/tmp", pluginSpawnArgs: [], agentContext: client })
-  expect(cmds.map((c) => c.name)).toEqual(["mux:browser", "mux:soul"])
+test("CodexCommandProvider asks the app-server about the session's own folder", async () => {
+  const calls: unknown[] = []
+  const client = { request: async (method: string, params: unknown) => { calls.push([method, params]); return sample as any } }
+  const list = await new CodexCommandProvider().list({ sessionName: "s", workdir: "/w/proj", agentContext: client })
+  expect(calls).toEqual([["skills/list", { cwds: ["/w/proj"] }]])
+  expect(list?.commands.map((c) => c.name)).toEqual(["mux:browser", "repo-skill"])
 })
 
-test("CodexCommandProvider returns [] without a client", async () => {
-  expect(await new CodexCommandProvider().list({ sessionName: "s", workdir: "/tmp", pluginSpawnArgs: [] })).toEqual([])
+test("CodexCommandProvider reports nothing without an app-server, or when the call fails", async () => {
+  const p = new CodexCommandProvider()
+  expect(await p.list({ sessionName: "s", workdir: "/w" })).toBeUndefined()
+  const failing = { request: async () => { throw new Error("gone") } }
+  expect(await p.list({ sessionName: "s", workdir: "/w", agentContext: failing })).toBeUndefined()
 })

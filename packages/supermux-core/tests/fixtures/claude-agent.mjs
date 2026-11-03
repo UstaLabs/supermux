@@ -120,16 +120,23 @@ if (process.env.MODE === 'setup-hang') {
       if (process.env.MODE === 'wrong-resume-early') {
         send(initFrame('ffffffff-ffff-4fff-8fff-ffffffffffff'))
       }
-      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {commands: [], models: [], session_state: 'idle'}}})
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: initializeReply()}})
       initialized = true
       return
     }
     if (!initialized) fail(20, 'not initialized')
+    // The real CLI (2.1.308) answers a second initialize with the live command list; IGNORE_REPEAT_INITIALIZE
+    // plays a CLI that never answers it.
+    if (m.type === 'control_request' && m.request?.subtype === 'initialize') {
+      if (process.env.IGNORE_REPEAT_INITIALIZE === '1') return
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: initializeReply()}})
+      return
+    }
     if (m.type === 'control_request' && ['reload_plugins', 'reload_skills', 'mcp_set_servers'].includes(m.request?.subtype)) {
       // Session context in flight (C1b): record what the driver asked for.
       if (process.env.CONTROL_TRACE) appendFileSync(process.env.CONTROL_TRACE, JSON.stringify(m.request) + '\n')
       const held = m.request.subtype === 'reload_plugins' && m.request.hold_on_cache_impact === true && process.env.HOLD === '1'
-      const response = m.request.subtype === 'mcp_set_servers' ? {added: Object.keys(m.request.servers ?? {}), removed: [], errors: {}} : {plugins: [], ...(m.request.hold_on_cache_impact ? {held, ...(held ? {cache_impact: {tools: 1}} : {})} : {})}
+      const response = m.request.subtype === 'mcp_set_servers' ? {added: Object.keys(m.request.servers ?? {}), removed: [], errors: {}} : {plugins: [], ...(m.request.subtype === 'reload_plugins' ? {commands: commands()} : {}), ...(m.request.hold_on_cache_impact ? {held, ...(held ? {cache_impact: {tools: 1}} : {})} : {})}
       send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response}})
       return
     }
@@ -298,6 +305,15 @@ if (process.env.MODE === 'setup-hang') {
     send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: 'héllo'}]}})
     finish({session, uuid}, text === 'fail' ? 'failed' : 'end_turn')
   })
+}
+
+/** COMMANDS (JSON) is the command list the CLI reports, as Claude 2.1.308 does in initialize and reload_plugins replies. */
+function commands() {
+  return process.env.COMMANDS ? JSON.parse(process.env.COMMANDS) : []
+}
+
+function initializeReply() {
+  return {commands: commands(), models: [], session_state: 'idle'}
 }
 
 function initFrame(id) {
