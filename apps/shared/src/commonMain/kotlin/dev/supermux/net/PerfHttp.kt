@@ -6,6 +6,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.plugin
 import io.ktor.http.contentLength
+import io.ktor.http.encodedPath
 import io.ktor.util.AttributeKey
 
 /** Card #54: which trace and request id an HTTP call belongs to (a request attribute). */
