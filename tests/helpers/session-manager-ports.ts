@@ -22,6 +22,8 @@ export type PortSeams = {
   sessionEffort?: SessionManagerPorts["resume"]["sessionEffort"]
   /** collects forgetReplyTarget calls (session ids). */
   forgotten?: string[]
+  /** Names handed to commands.remove (the command registry is keyed by session name). */
+  commandsRemoved?: string[]
   /** collects retireWorkspaceIfEmpty calls (workspace ids). */
   retired?: string[]
   /** collects children.archived calls. */
@@ -53,7 +55,7 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: seams.phase ?? "idle", since: 0 }) },
     bgTasks: { clear: () => {} },
-    commands: { remove: () => {}, refresh: async () => {} },
+    commands: { remove: (name) => { seams.commandsRemoved?.push(name) }, refresh: async () => {} },
     config: { lookupModels: seams.lookupModels ?? (() => []), agentStatuses: () => [], modelGates: () => [] },
     register: {
       interruptClaudePane: async () => {},
