@@ -131,7 +131,8 @@ class AttachmentImageTest {
 
     @Test fun a_picture_whose_size_is_known_reserves_its_exact_box_before_it_loads() = runComposeUiTest {
         // The broker read the header: 800×400. The row must not jump when the bitmap lands, so
-        // the placeholder already has the picture's own shrink-only box.
+        // the placeholder already has the picture's own frame in the media column (0.7 of the
+        // row, at most a collage's width).
         setPlatformContent {
             androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.requiredWidth(400.dp)) {
                 AttachmentList(
@@ -143,8 +144,8 @@ class AttachmentImageTest {
         }
         val box = onNodeWithTag("attachment_image_loading").fetchSemanticsNode().boundsInRoot
         with(density) {
-            assertEquals(400f, box.width.toDp().value, 1f, "shrunk to the column")
-            assertEquals(200f, box.height.toDp().value, 1f, "at the picture's own 2:1")
+            assertEquals(280f, box.width.toDp().value, 1f, "shrunk to the media column, 0.7 of the 400 dp row")
+            assertEquals(140f, box.height.toDp().value, 1f, "at the picture's own 2:1")
         }
     }
 
