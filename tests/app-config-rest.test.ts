@@ -9,7 +9,10 @@ import { SettingsStore } from "../src/core/settings/store"
 import { openDb, runMigrations } from "../src/core/storage/db"
 
 const DEV_PATH = `/tmp/devices-app-config-${process.pid}.json`
-const PORT = 18897
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 let store: SettingsStore
@@ -24,9 +27,9 @@ function freshDb() {
 const appConfigEnv = { MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
 
 const base = (extra: object) => ({
-  port: PORT,
+  port: 0,
   devicesFile: DEV_PATH,
-  publicUrl: "http://127.0.0.1:" + PORT,
+  publicUrl: "http://127.0.0.1",
   staticDir: undefined,
   getSessionsSnapshot: () => [],
   getSessionLog: () => [],
@@ -51,6 +54,7 @@ beforeEach(async () => {
     }),
   )
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -58,7 +62,7 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: `http://127.0.0.1:${PORT}`, "content-type": "application/json" })
+const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: "http://127.0.0.1", "content-type": "application/json" })
 
 test("GET /settings/config returns 200 with telegramConfigured boolean, no telegramBotToken", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/settings/config`, { headers: auth() })

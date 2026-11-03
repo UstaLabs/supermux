@@ -72,19 +72,29 @@ class FleetStoreActionsTest {
         val fleet = FleetStore(
             store = s, scope = this, deps = testDeps(),
             appFactory = { url, token, onConn ->
-                val http = HttpClient(MockEngine { req ->
-                    if (req.url.encodedPath == "/archived-sessions") {
-                        archivedHits += url
-                        val id = if (url.contains("h-a")) "a1" else "b1"
-                        respond(
-                            """[{"id":"$id","name":"$id","workdir":"/w","agent":"claude"}]""",
-                            HttpStatusCode.OK,
-                            headersOf("Content-Type", "application/json"),
-                        )
-                    } else {
-                        respond("{}", HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                // Both hosts answer on the thread that asked, as they do on the app's main dispatcher.
+                // On Ktor's IO threads the two answers land on two threads at once, and FleetStore
+                // emits each merged list outside its lock, so the OLDER list could be the last one
+                // emitted and stay: archived=[b1] with both hosts hit. The app never publishes from two
+                // threads (every client runs the fleet on its main dispatcher); this test must not.
+                val http = HttpClient(MockEngine) {
+                    engine {
+                        dispatcher = Dispatchers.Unconfined
+                        addHandler { req ->
+                            if (req.url.encodedPath == "/archived-sessions") {
+                                archivedHits += url
+                                val id = if (url.contains("h-a")) "a1" else "b1"
+                                respond(
+                                    """[{"id":"$id","name":"$id","workdir":"/w","agent":"claude"}]""",
+                                    HttpStatusCode.OK,
+                                    headersOf("Content-Type", "application/json"),
+                                )
+                            } else {
+                                respond("{}", HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                            }
+                        }
                     }
-                })
+                }
                 HostStore(
                     url, token, this, testDeps(http = http), connectOnInit = false,
                     onConnectionChange = onConn, apiOverride = BrokerApi(url, token, http),

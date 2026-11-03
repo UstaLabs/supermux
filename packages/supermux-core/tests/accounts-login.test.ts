@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
 import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
 import { unlinkLink } from "../src/accounts/login.js"
-import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
+import type { AgentDriver, LoginConfig, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
@@ -21,7 +21,7 @@ const driver = (id: string): AgentDriver => ({ id, async open() { throw new Erro
 type Identity = { email?: string; org?: string; accountId?: string }
 const IDENTITY: Identity = { email: "new@x.io", org: "org-new", accountId: "acct-new" }
 
-async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner } = {}) {
+async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner; schedule?: LoginConfig["schedule"] } = {}) {
   const base = await mkdtemp(join(tmpdir(), "accounts-login-"))
   dirs.push(base)
   const log = join(base, "cli.log")
@@ -38,7 +38,7 @@ async function setup(options: { behavior?: string; identity?: Identity; timeoutM
   const vault = memoryVault()
   const core = createCore({
     stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode", "antigravity"].map(driver), limits: TEST_LIMITS,
-    accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}) } },
+    accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}), ...(options.schedule ? { schedule: options.schedule } : {}) } },
   })
   cores.push(core)
   const pending = join(stateDirectory, "accounts", "pending")
@@ -324,8 +324,15 @@ test("cancel kills the process group and removes the temp dir", async () => {
 })
 
 test("timeout fails the login and cleans up", async () => {
-  const { core, pending, invocations } = await setup({ behavior: "hang", timeoutMs: 400 })
+  // The login's own timeout, fired once the CLI runs: a real 400 ms one fired whenever a loaded machine took
+  // longer to start the CLI, which was killed before it logged the pid this test checks.
+  let timeout: { fire: () => void; ms: number } | undefined
+  const schedule = (fire: () => void, ms: number) => { timeout = { fire, ms }; return () => { timeout = undefined } }
+  const { core, pending, invocations } = await setup({ behavior: "hang", timeoutMs: 400, schedule })
   const handle = core.accounts.login({ agent: "grok" })
+  await phase(handle, "awaiting_user")
+  expect(timeout?.ms).toBe(400)
+  timeout!.fire()
   await expect(handle.done).rejects.toMatchObject({ code: "login_timeout" })
   expect(handle.state()).toMatchObject({ phase: "failed", errorCode: "login_timeout" })
   const [run] = await invocations()

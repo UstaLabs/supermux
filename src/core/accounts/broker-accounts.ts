@@ -312,8 +312,11 @@ export class BrokerAccounts {
     this.logins.set(loginId, entry)
     const publish = () => this.deps.broadcast({ type: "account_login_state", ...entry.state })
     handle.on((state) => {
+      // The core says "done" before handle.done hands over the account, which this entry gets only after
+      // this.changed() below: "done" is set there, with the account, so a read never says done without it.
+      if (state.phase === "done") return
       entry.state = { loginId, agent, ...state, ...(entry.state.account ? { account: entry.state.account } : {}) }
-      if (state.phase !== "done") publish()
+      publish()
     })
     void handle.done.then(async (account) => {
       await this.changed()

@@ -129,6 +129,9 @@ object BrokerVersion {
     /** Every `<broker> version` child still running ([readBundledBuild]), for [killProbes]. */
     private val liveProbes: MutableSet<Process> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+    /** Test-only: the probes [killProbes] would kill right now. */
+    internal fun liveProbesForTest(): List<Process> = liveProbes.toList()
+
     /** Kill every running `<broker> version` probe (the app is quitting); its read then returns null. */
     fun killProbes() {
         for (p in liveProbes.toList()) {

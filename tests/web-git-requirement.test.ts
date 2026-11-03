@@ -11,7 +11,13 @@ import {
 } from "../src/core/git/requirement"
 
 const DEV_PATH = `/tmp/devices-git-req-${process.pid}.json`
-const PORT = 18823
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
+let base = ""
+/** The app's own origin: the configured public URL (the CSRF rule compares Origin with it). */
+const ORIGIN = "http://127.0.0.1"
 let ch: WebChannel
 let token: string
 
@@ -42,9 +48,9 @@ beforeEach(async () => {
   spawnThrows = undefined
   paThrows = undefined
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: ORIGIN,
     staticDir: undefined,
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
@@ -66,6 +72,8 @@ beforeEach(async () => {
     createAgent: async (args: unknown) => { paCalls.push(args); if (paThrows) throw paThrows; return { id: "pa1", name: "pa", workdir: "/tmp", provider: "claude" } },
   } as any)
   await ch.start()
+  PORT = ch.boundPort
+  base = `http://127.0.0.1:${PORT}`
 })
 
 afterEach(async () => {
@@ -73,8 +81,7 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const base = `http://127.0.0.1:${PORT}`
-const authed = () => ({ Cookie: `cmux_token=${token}`, Origin: base, "content-type": "application/json" })
+const authed = () => ({ Cookie: `cmux_token=${token}`, Origin: ORIGIN, "content-type": "application/json" })
 
 // ── GET /host ──────────────────────────────────────────────────────────────────────────────
 
@@ -148,7 +155,7 @@ test("a personal assistant whose agent is not installed gets the same 409", asyn
 // ── POST /system/install-git ───────────────────────────────────────────────────────────────
 
 test("POST /system/install-git needs auth", async () => {
-  const res = await fetch(`${base}/system/install-git`, { method: "POST", headers: { Origin: base, "content-type": "application/json" }, body: "{}" })
+  const res = await fetch(`${base}/system/install-git`, { method: "POST", headers: { Origin: ORIGIN, "content-type": "application/json" }, body: "{}" })
   expect(res.status).toBe(401)
   expect(installCalls).toBe(0)
 })

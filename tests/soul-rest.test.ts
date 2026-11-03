@@ -4,14 +4,17 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-soul-rest-${process.pid}.json`
-const PORT = 18793
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 
 const base = (extra: object) => ({
-  port: PORT,
+  port: 0,
   devicesFile: DEV_PATH,
-  publicUrl: "http://127.0.0.1:" + PORT,
+  publicUrl: "http://127.0.0.1",
   staticDir: undefined,
   getSessionsSnapshot: () => [],
   getSessionLog: () => [],
@@ -27,6 +30,7 @@ beforeEach(async () => {
   token = deviceStore.mint("d").token
   ch = new WebChannel(base({}))
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -34,7 +38,7 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: `http://127.0.0.1:${PORT}` })
+const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: "http://127.0.0.1" })
 
 for (const method of ["GET", "PUT"]) {
   test(`${method} /settings/soul is gone (410) and points at Agent memory`, async () => {

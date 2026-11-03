@@ -35,16 +35,23 @@ import kotlinx.coroutines.channels.Channel
  * longer builds bytes, so the only bytes in the system come out of here, and a test can count
  * them.
  */
-class FakeTerminalEngine(var size: TerminalSize) : TerminalEngine {
+class FakeTerminalEngine(@Volatile var size: TerminalSize) : TerminalEngine {
     private val screen = StringBuilder()
     private val effects = mutableListOf<TerminalEffect>()
-    private var generation = 0L
+
+    /** The newest frame this engine can show; a published viewport carrying it is fully caught up. */
+    @Volatile var generation = 0L
+        private set
     private var sequence = 0L
     private var closed = false
 
     /** Every feed, with the origin it carried. The adapter's ONE feed lane, recorded. */
     val feeds = mutableListOf<Pair<String, OutputOrigin>>()
     var resets = 0
+        private set
+
+    /** How many times the grid resized this engine: once, on its first layout, in these tests. */
+    @Volatile var resizes = 0
         private set
     var closes = 0
         private set
@@ -78,6 +85,7 @@ class FakeTerminalEngine(var size: TerminalSize) : TerminalEngine {
 
     override fun resize(size: TerminalSize) {
         this.size = size
+        resizes++
         generation++
         sequence++
     }

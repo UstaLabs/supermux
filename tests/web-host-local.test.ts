@@ -4,16 +4,19 @@ import { request } from "node:http"
 import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 
 const DEV_PATH = `/tmp/devices-host-local-${process.pid}.json`
-const PORT = 18798
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 
 beforeEach(async () => {
   __resetAuthFailures()
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     staticDir: undefined,
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
@@ -25,6 +28,7 @@ beforeEach(async () => {
     }),
   } as any)
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {

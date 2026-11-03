@@ -14,7 +14,10 @@ function hasBin(bin: string): boolean {
 const canRun = process.platform === "linux" && hasBin("Xvfb") && hasBin("x11vnc")
 
 const DEV_PATH = `/tmp/devices-display-e2e-${process.pid}.json`
-const PORT = 18833
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 
 let ch: WebChannel
 let mgr: DisplayManager
@@ -33,9 +36,9 @@ beforeEach(async () => {
   })
 
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: `http://localhost:${PORT}`,
+    publicUrl: "http://localhost",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -46,6 +49,7 @@ beforeEach(async () => {
     stopDisplay: (id: string) => mgr.stop(id),
   } as any)
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {

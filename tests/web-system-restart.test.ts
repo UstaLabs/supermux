@@ -6,16 +6,19 @@ import { DeviceStore } from "../src/channels/web/device-store"
 const childProcess = require("child_process")
 
 const DEV_PATH = `/tmp/devices-system-restart-${process.pid}.json`
-const PORT = 18797
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 
 const spawnCalls: Array<{ cmd: string; args: string[]; opts: Record<string, unknown> }> = []
 
 const base = (extra: object) => ({
-  port: PORT,
+  port: 0,
   devicesFile: DEV_PATH,
-  publicUrl: "http://127.0.0.1:" + PORT,
+  publicUrl: "http://127.0.0.1",
   staticDir: undefined,
   getSessionsSnapshot: () => [],
   getSessionLog: () => [],
@@ -32,6 +35,7 @@ beforeEach(async () => {
   spawnCalls.length = 0
   ch = new WebChannel(base({}))
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -42,14 +46,14 @@ afterEach(async () => {
 
 const auth = () => ({
   Cookie: `cmux_token=${token}`,
-  Origin: `http://127.0.0.1:${PORT}`,
+  Origin: "http://127.0.0.1",
   "content-type": "application/json",
 })
 
 test("POST /system/restart returns 401 without auth", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/system/restart`, {
     method: "POST",
-    headers: { "content-type": "application/json", Origin: `http://127.0.0.1:${PORT}` },
+    headers: { "content-type": "application/json", Origin: "http://127.0.0.1" },
   })
   expect(res.status).toBe(401)
 })

@@ -467,10 +467,10 @@ test("reconnect: host unavailable while down, then the bridge replays initialize
 })
 
 /**
- * The host answered a ping through the bridge. A ping written while the bridge has not yet seen its old
- * host go away is lost with that socket, so a short timeout counts as "not yet" instead of failing.
+ * The host answered a ping through the bridge. While the bridge is down it answers "host unavailable" itself, and a ping
+ * written just before it saw its old host go away gets that answer too, when it does.
  */
-const answered = (client: BridgeClient) => client.request("ping", {}, 500).then(response => response.error === undefined, () => false)
+const answered = (client: BridgeClient) => client.request("ping").then(response => response.error === undefined)
 
 test("reconnect: the bridge tells the agent (tools/list_changed) when the new host lists other tools than the agent got, and stays quiet when they are the same", async () => {
   const state = scratch()
@@ -568,4 +568,44 @@ test("reconnect replay, byte level: initialize (original params) then notificati
   for (const socket of sockets) socket.destroy()
   await new Promise<void>(resolve => fake.close(() => resolve()))
   expect(existsSync(path)).toBe(false)
+})
+
+test("a request the host never answered gets host unavailable when its connection closes; one the agent cancelled gets nothing", async () => {
+  const dir = scratch()
+  const path = join(dir, "fake.sock")
+  const seen: Array<Record<string, any>> = []
+  const sockets: Socket[] = []
+  // A host that answers initialize and leaves every other request unanswered.
+  const fake = createServer(socket => {
+    sockets.push(socket)
+    let buffer = ""
+    let greeted = false
+    socket.on("data", chunk => {
+      buffer += chunk.toString()
+      for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
+        const message = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1)
+        seen.push(message)
+        if (!greeted) { greeted = true; socket.write(JSON.stringify({ ok: true }) + "\n"); continue }
+        if (message.method === "initialize") socket.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fake", version: "1" } } }) + "\n")
+      }
+    })
+    socket.on("error", () => {})
+  })
+  await new Promise<void>(resolve => fake.listen(path, resolve))
+  const client = new BridgeClient({ socket: path, session: "s1", server: "orders", token: "t".repeat(64) })
+  clients.push(client)
+  await client.initialize()
+  const call = client.request("tools/call", { name: "lookup", arguments: {} })
+  client.send({ jsonrpc: "2.0", id: "cancelled", method: "tools/call", params: { name: "lookup", arguments: {} } })
+  client.notify("notifications/cancelled", { requestId: "cancelled", reason: "user" })
+  await until(() => seen.some(message => message.method === "notifications/cancelled"), 5000, "both calls at the host")
+  // The host goes away with both calls unanswered (and takes no new connection).
+  const closed = new Promise<void>(resolve => fake.close(() => resolve()))
+  sockets[0]!.destroy()
+  expect((await call).error).toEqual({ code: -32000, message: "host unavailable" })
+  // Down, the bridge answers a request at once, and it writes its answers in order: this one comes after any other.
+  await client.request("ping")
+  // One answer per request: the initialize (from the host), the call and the ping; none for the cancelled call.
+  expect(client.received.map(message => [message.id, message.error?.message ?? "answered"])).toEqual([[1, "answered"], [2, "host unavailable"], [3, "host unavailable"]])
+  await closed
 })

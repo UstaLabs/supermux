@@ -325,7 +325,9 @@ export const defaultLoginRunner: LoginRunner = input => {
     for (const listener of output) listener(`${command}: ${error.message}\n`)
     exit(null)
   })
-  child.on("exit", code => exit(code))
+  // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
+  // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
+  child.on("close", code => exit(code))
   const signal = (name: NodeJS.Signals) => {
     try {
       if (child.pid && process.platform !== "win32") process.kill(-child.pid, name)
@@ -345,6 +347,13 @@ export const defaultLoginRunner: LoginRunner = input => {
   }
 }
 
+/** The login timeout's default scheduler (see LoginConfig.schedule): a timer that does not keep the process alive. */
+export function defaultLoginSchedule(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms)
+  timer.unref?.()
+  return () => clearTimeout(timer)
+}
+
 export type LoginDeps = {
   kind: LoginKind
   options: LoginOptions
@@ -353,6 +362,8 @@ export type LoginDeps = {
   command: string
   runner: LoginRunner
   timeoutMs: number
+  /** Starts the timeout (fire after timeoutMs), returns what stops it. */
+  schedule: (fire: () => void, ms: number) => () => void
   /** Fails early (e.g. account_exists for a taken id) before any process starts. */
   precheck(): Promise<void>
   /** Promotes a verified login: rename into a home (subscription) or move tokens to the vault (token). */
@@ -370,7 +381,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
   let proc: LoginProcess | undefined
   let directory: string | undefined
   let finished = false
-  let timer: ReturnType<typeof setTimeout> | undefined
+  let stopTimeout: (() => void) | undefined
   let exited: Promise<void> = Promise.resolve()
   let output = ""
   let resolveDone!: (account: Account) => void
@@ -384,7 +395,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
     for (const listener of listeners) { try { listener(snapshot) } catch { /* listeners cannot break the login */ } }
   }
   const cleanup = async () => {
-    if (timer) clearTimeout(timer)
+    stopTimeout?.()
     proc?.kill()
     await Promise.race([exited, new Promise(resolve => { const t = setTimeout(resolve, KILL_GRACE_MS + 1000); t.unref?.() })])
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {})
@@ -433,8 +444,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
     const child = deps.runner(plan.spawn)
     proc = child
     exited = new Promise(resolve => child.onExit(() => resolve()))
-    timer = setTimeout(() => fail(new CoreError("login_timeout", `Login did not finish within ${Math.round(deps.timeoutMs / 1000)} s`)), deps.timeoutMs)
-    timer.unref?.()
+    stopTimeout = deps.schedule(() => fail(new CoreError("login_timeout", `Login did not finish within ${Math.round(deps.timeoutMs / 1000)} s`)), deps.timeoutMs)
     child.onOutput(chunk => {
       if (finished) return
       output = (output + chunk).slice(-OUTPUT_LIMIT)
@@ -450,7 +460,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
         return
       }
       if (finished) return
-      if (timer) clearTimeout(timer)
+      stopTimeout?.()
       verify(dir, plan).then(account => {
         if (finished) return
         finished = true

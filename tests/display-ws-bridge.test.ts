@@ -4,7 +4,10 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-display-${process.pid}.json`
-const PORT = 18811
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 
 let ch: WebChannel
 let echo: Bun.TCPSocketListener<undefined>
@@ -22,9 +25,9 @@ beforeEach(async () => {
   echoPort = echo.port
 
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: `http://localhost:${PORT}`,
+    publicUrl: "http://localhost",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -33,6 +36,7 @@ beforeEach(async () => {
     listDisplays: () => [],
   } as any)
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
