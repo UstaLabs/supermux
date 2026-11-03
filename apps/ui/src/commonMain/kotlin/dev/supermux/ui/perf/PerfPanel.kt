@@ -100,11 +100,16 @@ fun PerfConsoleReporter() {
             delay(1_000)
             val now = PerfTrace.elapsedMs()
             if (!launchPrinted) {
-                val last = PerfTrace.events(PerfTrace.launchId).lastOrNull {
-                    it.name == "ui.workspaces.drawn" || it.name == "ui.agents.drawn" || it.name == "avatars.loaded"
+                val events = PerfTrace.events(PerfTrace.launchId)
+                // Settled = the LIVE list is on screen (with a cache the first paint is not live:
+                // the second draw is), and nothing new for 3 s. Printed at 30 s regardless.
+                val fromCache = events.any { it.name == "cache.seeded" }
+                val live = events.lastOrNull { it.name == "ui.sessions.drawn" && (!fromCache || (it.fields["n"] as? Number)?.toInt() == 2) }
+                val last = events.lastOrNull {
+                    it.name == "ui.workspaces.drawn" || it.name == "ui.agents.drawn" || it.name == "avatars.loaded" || it.name == "ui.sessions.drawn"
                 }
-                if (last != null && now - last.t > 3_000) {
-                    println("\n" + PerfReport.launch().joinToString("\n"))
+                if ((live != null && last != null && now - last.t > 3_000) || now > 30_000) {
+                    println("\n" + (PerfReport.launch() + PerfReport.http()).joinToString("\n"))
                     launchPrinted = true
                 }
             }
