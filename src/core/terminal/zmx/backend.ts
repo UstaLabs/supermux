@@ -92,6 +92,11 @@ const ATTACH_ROWS = 24
  * exactly the bytes that must not be drawn on top of the next epoch. The
  * shell, the target and every other viewer are untouched — a slow tab pays for
  * itself and for nobody else.
+ *
+ * It bounds what is still queued when the event loop TURNS, not the count in
+ * the middle of one burst: a burst runs the count up for a viewer whose `emit`
+ * is instant, and a viewer that has caught up by the next turn was never slow
+ * (see `ZmxViewer.#checkBacklog`).
  */
 export const VIEWER_PENDING_MAX = 1024 * 1024
 
@@ -864,6 +869,8 @@ class ZmxViewer implements WorkspaceTerminalViewer {
   #pendingBytes = 0
   /** True once this viewer went over its cap: its queue is dropped from here. */
   #overflowed = false
+  /** A look at the backlog, scheduled for the next turn of the event loop. */
+  #backlogCheck: ReturnType<typeof setImmediate> | null = null
 
   constructor(
     private readonly backend: ZmxWorkspaceBackend,
@@ -972,7 +979,8 @@ class ZmxViewer implements WorkspaceTerminalViewer {
    * subprocess pipe regardless (see `HelperHandlers.onOutput`), so all that
    * changes is WHERE the backlog sits, and the one place that can see it is
    * here. So the bytes are counted on the way into the queue, released when
-   * `emit` is done with them, and a viewer that passes its cap is dropped.
+   * `emit` is done with them, and a viewer that is still past its cap once the
+   * event loop has turned is dropped (see `#checkBacklog`).
    */
   #onOutput(bytes: Uint8Array): void {
     if (this.#dead) return
@@ -988,13 +996,37 @@ class ZmxViewer implements WorkspaceTerminalViewer {
       void this.#deliver({ type: "replay-end", epoch })
       this.#replayClosed = true
     }
-    if (this.#pendingBytes + bytes.length > this.pendingMax) {
-      this.#overflow(bytes.length)
-      return
-    }
     this.#pendingBytes += bytes.length
     const release = () => { this.#pendingBytes = Math.max(0, this.#pendingBytes - bytes.length) }
     this.#deliver({ type: "output", bytes }).then(release, release)
+    if (this.#pendingBytes > this.pendingMax) this.#checkBacklog()
+  }
+
+  /**
+   * Over the cap is not yet BEHIND: look again once the event loop has turned.
+   *
+   * The count rises as the helper's reader hands frames over and falls as
+   * `emit` finishes with them — but inside one turn of the event loop the two
+   * do not move at the same speed. The reader takes a frame per microtask;
+   * each delivery through `#deliver` is several promise hops long. So a burst
+   * Bun hands over in one turn (several MiB of a flood can arrive at once)
+   * runs the count past the cap for a viewer whose `emit` returns IMMEDIATELY,
+   * and dropping it there drops a viewer that was never slow: on CI that was
+   * the integration suite's fast readers, cut off mid-flood with
+   * `resync_required` while the slow viewer next to them was the one under
+   * test. Everything a prompt `emit` was handed has been emitted by the time
+   * the microtask queue drains, so what is STILL queued at the next turn is
+   * exactly what is waiting on an `emit` that has not returned — and that is
+   * what the cap bounds. A slow viewer's bound is unchanged in kind: the cap,
+   * plus at most what the event loop handed over in the one turn it took to
+   * look.
+   */
+  #checkBacklog(): void {
+    if (this.#backlogCheck || this.#overflowed || this.#dead) return
+    this.#backlogCheck = setImmediate(() => {
+      this.#backlogCheck = null
+      if (this.#pendingBytes > this.pendingMax) this.#overflow()
+    })
   }
 
   /**
@@ -1007,7 +1039,7 @@ class ZmxViewer implements WorkspaceTerminalViewer {
    * instead of a stale replay. Nothing is sent to the daemon: the helper is
    * killed, which is what detaches this viewer and no other.
    */
-  #overflow(refused: number): void {
+  #overflow(): void {
     if (this.#overflowed || this.#dead) return
     this.#overflowed = true
     const queued = this.#pendingBytes
@@ -1017,11 +1049,11 @@ class ZmxViewer implements WorkspaceTerminalViewer {
     this.#helper = undefined
     try { helper?.kill() } catch {}
     log.warn("zmx_viewer_pending_over_cap", {
-      viewer: this.viewerId, queued, refused, cap: this.pendingMax,
+      viewer: this.viewerId, queued, cap: this.pendingMax,
     })
     void this.#deliver(new WorkspaceTerminalError(
       "backend-unavailable",
-      `the broker dropped this viewer: resync_required (${queued + refused} bytes queued behind emit, cap ${this.pendingMax})`,
+      `the broker dropped this viewer: resync_required (${queued} bytes queued behind emit, cap ${this.pendingMax})`,
       true,
     ).toEvent())
   }

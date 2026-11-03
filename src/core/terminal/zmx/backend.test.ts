@@ -46,6 +46,11 @@ import type { HelperCommandBody, HelperEvent } from "./protocol"
 
 const encoder = new TextEncoder()
 
+/** The next turn of the event loop. By then the microtask queue — every promise
+ * hop a prompt `emit` needs — has drained, which is the moment the viewer cap
+ * is judged at (`ZmxViewer.#checkBacklog`). */
+const nextTurn = () => new Promise<void>(resolve => setImmediate(resolve))
+
 type FakeTarget = {
   name: string
   socket: string
@@ -809,12 +814,14 @@ describe("ZmxWorkspaceBackend", () => {
 
     slow = true
     helper.emitOutput(new Uint8Array(512)) // taken; `emit` blocks on it
-    await Bun.sleep(1) // ...and really has, before anything queues behind it
+    await nextTurn() // ...and really has, before anything queues behind it
     helper.emitOutput(new Uint8Array(512)) // queued: exactly at the cap
+    await nextTurn()
     expect(events.some(event => event.type === "failure")).toBe(false)
-    helper.emitOutput(new Uint8Array(1)) // one byte over, and that is that
+    helper.emitOutput(new Uint8Array(1)) // one byte over...
+    await nextTurn() // ...and still over once the event loop has turned: that is that
     stall.resolve()
-    await Bun.sleep(5)
+    await nextTurn()
 
     const failure = events.find(event => event.type === "failure")
     expect(failure).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
@@ -830,6 +837,29 @@ describe("ZmxWorkspaceBackend", () => {
     expect(other.events.some(event => event.type === "failure")).toBe(false)
     expect(other.events.filter(event => event.type === "output").length).toBeGreaterThan(1)
     expect(await backend.exists(CONTRACT_A)).toBe(true)
+  })
+
+  test("a burst past the cap that a prompt emit takes in the same turn does not drop the viewer", async () => {
+    // THE FALSE DROP. Bun hands a flood over in bursts — several MiB in one
+    // turn of the event loop — and inside that turn the helper's reader takes
+    // a frame per microtask while each delivery is several promise hops long,
+    // so the count runs past the cap although `emit` returns at once. That
+    // viewer is not behind; by the next turn it has had every byte. Dropping it
+    // is what cut the integration suite's FAST readers off mid-flood on CI.
+    const { fake, backend } = harness({ viewerPendingMax: 1024 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const { events, emit } = recorder()
+    await backend.attachExisting(CONTRACT_A, "prompt", emit)
+    const helper = fake.launched.at(-1)!
+    const outputs = () => events.filter(event => event.type === "output").length
+    const before = outputs()
+
+    // 32 KiB — thirty-two times the cap — handed over within one turn.
+    for (let i = 0; i < 64; i++) helper.emitOutput(new Uint8Array(512))
+    await nextTurn()
+
+    expect(events.some(event => event.type === "failure")).toBe(false)
+    expect(outputs()).toBe(before + 64)
   })
 
   test("list reports milliseconds from the daemon's own clock, oldest first", async () => {
