@@ -66,14 +66,24 @@ class FakeRealtime implements RealtimeWs {
 
 const AUTH = JSON.stringify({ tokens: { access_token: "at" } })
 
-function engine(sockets: FakeRealtime[], connections = new DictationConnections()) {
+/**
+ * [sockets] in the order the engine opens them, or keyed by the language a session is minted for:
+ * like a live ephemeral key, each minted key opens the session it was minted for.
+ */
+function engine(sockets: FakeRealtime[] | Record<string, FakeRealtime>, connections = new DictationConnections()) {
   let mints = 0
+  const mintedFor = new Map<string, string>()
   const e = codexRealtimeEngine({
     authPath: "/fake/auth.json",
     readFileFn: () => AUTH,
-    fetchFn: async () => { mints++; return new Response(JSON.stringify({ value: `ek${mints}` }), { status: 200 }) },
-    connectWs: () => {
-      const ws = sockets.shift()
+    fetchFn: async (_url, init) => {
+      const key = `ek${++mints}`
+      mintedFor.set(key, JSON.parse(String(init?.body)).session.audio.input.transcription.language ?? "")
+      return new Response(JSON.stringify({ value: key }), { status: 200 })
+    },
+    connectWs: (_url, protocols) => {
+      const key = protocols.find((p) => p.startsWith("openai-insecure-api-key."))!.slice("openai-insecure-api-key.".length)
+      const ws = Array.isArray(sockets) ? sockets.shift() : sockets[mintedFor.get(key)!]
       if (!ws) throw new Error("no more sockets")
       return ws
     },
@@ -127,10 +137,12 @@ test("the last pass closes the connection", async () => {
 test("separate dictations get separate connections", async () => {
   const a = new FakeRealtime(["from a"])
   const b = new FakeRealtime(["from b"])
-  const { e, mints } = engine([a, b])
+  // Each dictation is minted for its own language, so it gets its own fake whichever of the two
+  // concurrent passes decodes its audio and mints first.
+  const { e, mints } = engine({ en: a, tr: b })
   const [ra, rb] = await Promise.all([
-    e.transcribe(clip(300), { stream: "A" }),
-    e.transcribe(clip(300), { stream: "B" }),
+    e.transcribe(clip(300), { stream: "A", lang: "en" }),
+    e.transcribe(clip(300), { stream: "B", lang: "tr" }),
   ])
   expect([ra.text, rb.text]).toEqual(["from a", "from b"])
   expect(mints()).toBe(2)
@@ -162,13 +174,14 @@ test("when the reused connection fails mid-pass, the pass is retried on a one-of
 test("passes on one connection run in order", async () => {
   const ws = new FakeRealtime(["first", "second"])
   ws.answerAfterMs = 20
-  const { e } = engine([ws])
-  await e.warm!("d1", {})
+  // Handed to the connection itself, in this order: through the engine, each pass first decodes
+  // its audio file, and two decodes finish in either order.
+  const conn = await RealtimeConnection.open(ws, { model: "m" }, 1_000)
   const [a, b] = await Promise.all([
-    e.transcribe(clip(300), { stream: "d1" }),
-    e.transcribe(clip(600), { stream: "d1" }),
+    conn.transcribe(new Uint8Array(4_800), { model: "m" }, 1_000),
+    conn.transcribe(new Uint8Array(9_600), { model: "m" }, 1_000),
   ])
-  expect([a.text, b.text]).toEqual(["first", "second"])
+  expect([a, b]).toEqual(["first", "second"])
 })
 
 test("a pass that never answers retires the connection", async () => {
