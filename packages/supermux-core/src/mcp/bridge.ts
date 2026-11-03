@@ -7,7 +7,9 @@
  *
  * If the host goes away (restart, detached session) the bridge keeps running and reconnects with
  * backoff. While it is disconnected every JSON-RPC request from the agent gets an immediate error
- * `{code: -32000, message: "host unavailable"}`; notifications are dropped. A new host-side server
+ * `{code: -32000, message: "host unavailable"}`; notifications are dropped. A request the host had
+ * not answered when it went away gets that error too, as soon as the bridge sees the connection
+ * close: no host will answer it (the next one never got it). A new host-side server
  * is uninitialized while the agent already initialized, so on every reconnect the bridge replays
  * the agent's original `initialize` (its response is swallowed) and `notifications/initialized`
  * before it forwards anything else. The new host may list other tools (the host was updated): when
@@ -60,6 +62,12 @@ let listChanged = false
 const listing = new Set<string>()
 /** The tools (JSON) of the last tools/list answer the agent got. */
 let listed: string | undefined
+/**
+ * The agent's requests sent to the host and not answered yet (JSON id → id): answered "host unavailable" when the
+ * connection closes, as no host will answer them. That includes one written after the host closed its end but
+ * before the bridge saw it (the socket has ended, its close event has not run yet).
+ */
+const pending = new Map<string, string | number>()
 /** The bridge's own tools/list to a new host. */
 let checkId: string | undefined
 let checks = 0
@@ -69,11 +77,13 @@ let stopping = false
 function toAgent(message: Message): void { process.stdout.write(JSON.stringify(message) + "\n") }
 function toHost(message: Message): void { socket?.write(JSON.stringify(message) + "\n") }
 
+function refuse(id: string | number): void {
+  toAgent({ jsonrpc: "2.0", id, error: { code: HOST_UNAVAILABLE, message: "host unavailable" } })
+}
+
 function unavailable(message: Message): void {
   // Requests get an answer right away; notifications and responses are dropped.
-  if (message.method !== undefined && message.id !== undefined && message.id !== null) {
-    toAgent({ jsonrpc: "2.0", id: message.id, error: { code: HOST_UNAVAILABLE, message: "host unavailable" } })
-  }
+  if (message.method !== undefined && message.id !== undefined && message.id !== null) refuse(message.id)
 }
 
 function fromAgent(message: Message): void {
@@ -85,6 +95,9 @@ function fromAgent(message: Message): void {
   }
   const cursor = (message.params as { cursor?: unknown } | undefined)?.cursor
   if (message.method === "tools/list" && message.id !== undefined && message.id !== null && cursor === undefined) listing.add(JSON.stringify(message.id))
+  if (message.method !== undefined && message.id !== undefined && message.id !== null) pending.set(JSON.stringify(message.id), message.id)
+  // The host's SDK sends nothing for a request the agent cancelled, and the agent expects nothing.
+  if (message.method === "notifications/cancelled") pending.delete(JSON.stringify((message.params as { requestId?: unknown } | undefined)?.requestId))
   toHost(message)
 }
 
@@ -109,6 +122,7 @@ function fromHost(message: Message): void {
   }
   if (message.method === undefined && message.id !== undefined && message.id !== null) {
     const key = JSON.stringify(message.id)
+    pending.delete(key)
     if (key === initializeKey) {
       initializeKey = undefined
       listChanged = (message.result as { capabilities?: { tools?: { listChanged?: unknown } } } | undefined)?.capabilities?.tools?.listChanged === true
@@ -131,8 +145,11 @@ function down(): void {
   replayId = undefined
   checkId = undefined
   listing.clear()
+  const lost = [...pending.values()]
+  pending.clear()
   if (stopping) return
   state = "down"
+  for (const id of lost) refuse(id)
   const queue = held
   held = []
   for (const message of queue) unavailable(message)
