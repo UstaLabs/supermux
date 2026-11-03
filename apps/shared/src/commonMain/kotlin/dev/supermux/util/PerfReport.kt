@@ -10,6 +10,7 @@ object PerfReport {
     private val launchSteps = linkedMapOf(
         "process.start" to "process start",
         "host.init" to "store ready",
+        "cache.seeded" to "cache drawn from",
         "ws.connecting" to "connecting",
         "ws.open" to "socket open",
         "ws.subscribe.sent" to "subscribe sent",
@@ -62,7 +63,7 @@ object PerfReport {
             "ws.snapshot.arrived" -> "${size(num(f["chars"]) ?: 0)}, ${ms(f["sinceSubscribeMs"])} after subscribe"
             "ws.snapshot.decoded" -> ms(f["decodeMs"])
             "state.snapshot.reduced" -> "${ms(f["ms"])} · ${f["sessions"]} sessions · ${f["workspaces"]} workspaces · ${f["archivedWorkspaces"]} archived"
-            "ui.sessions.drawn" -> "${f["sessions"]} sessions${if (num(f["n"]) != 1L) " (redraw ${f["n"]})" else ""}"
+            "ui.sessions.drawn" -> "${f["sessions"]} sessions"
             "ui.workspaces.drawn" -> "${f["workspaces"]} in ${f["groups"]} groups"
             "ui.agents.drawn" -> "${f["agents"]} Agents, ${f["pictures"]} pictures yet"
             "avatars.loaded" -> "${f["fetched"]} fetched one at a time in ${ms(f["ms"])}"
@@ -77,10 +78,14 @@ object PerfReport {
         val firstReq = all.firstOrNull { it.name == "ws.connecting" }?.fields?.get("req")
         val steps = all.filter { e ->
             e.name in launchSteps && (e.fields["req"] == null || e.fields["req"] == firstReq) &&
-                (e.name != "ui.sessions.drawn" || num(e.fields["n"]) == 1L)
-        }.distinctBy { it.name }
+                (e.name != "ui.sessions.drawn" || (num(e.fields["n"]) ?: 0L) <= 2L)
+        }.distinctBy { if (it.name == "ui.sessions.drawn") "${it.name}#${it.fields["n"]}" else it.name }
         val out = mutableListOf("Launch ${PerfTrace.launchId}")
-        for (e in steps) out += "  ${"+${e.t}".padStart(7)}  ${launchSteps.getValue(e.name).padEnd(17)} ${stepDetail(e)}"
+        for (e in steps) {
+            // With a cache the list is drawn twice: from the cache, then live.
+            val label = if (e.name == "ui.sessions.drawn" && num(e.fields["n"]) == 2L) "live list drawn" else launchSteps.getValue(e.name)
+            out += "  ${"+${e.t}".padStart(7)}  ${label.padEnd(17)} ${stepDetail(e)}"
+        }
         val bodies = all.filter { it.name == "http.body" }.associateBy { it.fields["req"] }
         val settledAt = steps.lastOrNull()?.t ?: 0
         val requests = all.filter { it.name == "http" && it.t <= settledAt + 2_000 }

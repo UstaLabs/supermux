@@ -42,6 +42,10 @@ object DesktopHostStores {
         return null
     }
 
+    /** The offline-snapshot cache under [dir] (card #54): the sidebar's first paint on the next launch. */
+    fun snapshots(dir: Path = defaultDir()): dev.supermux.host.HostSnapshotStore =
+        dev.supermux.host.HostSnapshotStore(DesktopSnapshotPersistence(dir.resolve(DesktopSnapshotPersistence.FILE)))
+
     /** `~/.config/supermux-desktop` (or `%APPDATA%\supermux-desktop`) — the same dir
      *  [DesktopTokenStore] uses, so the fleet files sit alongside the legacy `auth.json`. */
     fun defaultDir(): Path = DesktopTokenStore.defaultPath().parent

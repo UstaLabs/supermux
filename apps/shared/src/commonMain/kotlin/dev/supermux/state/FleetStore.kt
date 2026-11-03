@@ -605,6 +605,9 @@ class FleetStore(
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         app.bindMedia(recordId)
+        // Card #54: a cache that holds workspaces (the desktop's) draws the sidebar before the
+        // socket opens; one that holds only sessions keeps the older, session-only seed above.
+        snapshots?.get(recordId)?.takeIf { it.workspaces.isNotEmpty() }?.let { app.seedFromCache(it) }
         val conn = HostConn(app)
         // Collectors funnel each host's flows into the merged state, tagged by recordId.
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }

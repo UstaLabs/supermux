@@ -1830,6 +1830,32 @@ class HostStore(
         }
     }
 
+    /**
+     * Card #54: draw this host's last-known sessions, workspaces and projects before its socket
+     * opens (the desktop has nothing else to show for the ~5 s a launch takes). Only into an empty,
+     * not-yet-synced store; the first live snapshot replaces every part of it.
+     */
+    fun seedFromCache(snap: dev.supermux.host.HostSnapshot) {
+        var seeded = false
+        _state.update { st ->
+            if (client.sync.synced || st.sessions.isNotEmpty() || st.workspaces.isNotEmpty()) {
+                st
+            } else {
+                seeded = true
+                st.copy(
+                    sessions = snap.sessions,
+                    workspaces = snap.workspaces,
+                    projects = snap.projects,
+                    projectCatalogKnown = snap.projects.isNotEmpty(),
+                    messages = snap.lastMessages.mapValues { listOf(it.value) },
+                )
+            }
+        }
+        if (seeded) {
+            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "host" to baseUrl)
+        }
+    }
+
     /** Has this session's chat everything it shows (history page + activity/commands)? */
     fun chatLoaded(sessionId: String): Boolean = chatLoaded(_state.value, sessionId)
 

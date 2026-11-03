@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.sample
 import dev.supermux.ui.perf.PerfPanelHost
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -1115,12 +1117,15 @@ fun main() {
                     }
                 } else {
                     val scope = rememberCoroutineScope()
+                    // Card #54: last launch's sessions/workspaces, drawn before the socket opens.
+                    val desktopSnapshots = remember { DesktopHostStores.snapshots() }
                     // The multi-host fleet: one connection per paired host, merged into AppShell.
                     val fleet = remember {
                         FleetStore(
                             hostStore,
                             scope,
                             desktopDeps,
+                            snapshots = desktopSnapshots,
                             appFactory = { url, token, onConn ->
                                 HostStore(
                                     url, token, scope, desktopDeps,
@@ -1133,6 +1138,8 @@ fun main() {
                         )
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // Keep that cache current: at most every 20 s while the lists change, off the UI thread.
+                    LaunchedEffect(fleet) { keepDesktopSnapshots(fleet, desktopSnapshots) }
                     // Published up to the tray (session count, the remote host's name/reachability).
                     DisposableEffect(fleet) {
                         pairedFleet = fleet
@@ -2316,3 +2323,39 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
 /** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
 internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
     if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null
+
+/**
+ * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's
+ * offline cache, so the next launch draws its sidebar before the socket opens. Sampled (at most one
+ * write per 20 s while things change) and written off the UI thread.
+ */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.host.HostSnapshotStore) {
+    combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
+        .sample(20_000)
+        .collect { (sessions, workspaces, projects) ->
+            if (sessions.isEmpty()) return@collect
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val owners = fleet.sessionHost.value
+                val wsOwners = fleet.workspaceHost.value
+                val tails = fleet.messages.value
+                val now = System.currentTimeMillis()
+                synchronized(cache) {
+                    for (host in fleet.store.list()) {
+                        val mine = sessions.filter { owners[it.id] == host.recordId }
+                        if (mine.isEmpty()) continue
+                        cache.replace(
+                            host.recordId,
+                            mine,
+                            now,
+                            host.version,
+                            workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
+                            projects = projects.filter { it.hostId == host.recordId }.map { it.project },
+                            lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
+                        )
+                    }
+                }
+            }
+        }
+}
+
