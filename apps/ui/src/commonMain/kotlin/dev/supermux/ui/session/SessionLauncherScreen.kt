@@ -71,7 +71,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -1155,8 +1154,8 @@ fun SessionLauncherScreen(
                         launcherReasoning = launcherReasoning + (agent to level)
                         onPrefsChange(currentPrefs())
                     }
-                    // ONE pill for who runs the chat and how: the agent row and the account choice
-                    // sit at the top of the run-settings menu, the models and effort below them.
+                    // ONE pill for who runs the chat and how: the agent row sits at the top of the
+                    // run-settings menu, the models and effort below it, the account and mode last.
                     val agentHeader: @Composable (Boolean) -> Unit = { sheet ->
                         dev.supermux.ui.chat.AgentSwitcher(
                             agents = agents,
@@ -1207,17 +1206,6 @@ fun SessionLauncherScreen(
                                     )
                                 } else {
                                     null
-                                },
-                                pillExtra = {
-                                    // The chat will run on an added account chosen by hand.
-                                    if (!dev.supermux.ui.accounts.isSystemAccountId(chosenAccount())) {
-                                        Icon(
-                                            Icons.Outlined.AccountCircle,
-                                            contentDescription = "On an added account",
-                                            tint = cs.primary,
-                                            modifier = Modifier.size(13.dp).testTag("launcher_agent_account_mark"),
-                                        )
-                                    }
                                 },
                             )
                         }
