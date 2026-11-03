@@ -73,6 +73,9 @@ class DesktopPlatform : Platform {
         terminal = true,
         // No hardware H.264 decoder: desktop displays are VNC, so `videoDecoder()` is null.
         scrcpy = false,
+        // AWT turns a Mac trackpad's two-finger scroll into wheel events that run on into the
+        // system's momentum, with no "fingers lifted" in between.
+        trackpadMomentum = isMacOs(),
     )
 
     /** The shared Compose terminal. No `SwingPanel` is left on the terminal path: the grid is

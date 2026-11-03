@@ -223,6 +223,13 @@ data class Caps(
     val terminal: Boolean = false,
     val scrcpy: Boolean = false,
     val setupWizard: Boolean = false,
+    /**
+     * A two-finger trackpad scroll arrives as wheel events that run straight on into the system's
+     * momentum, with nothing to say when the fingers lifted (macOS through AWT). A screen that pages
+     * or pulls on a swipe has to read the lift from the deltas itself; the stock wheel handling
+     * judges the swipe by the momentum's dying tail instead.
+     */
+    val trackpadMomentum: Boolean = false,
 )
 
 /**

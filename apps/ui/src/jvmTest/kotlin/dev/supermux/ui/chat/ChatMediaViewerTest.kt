@@ -9,25 +9,33 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performMultiModalInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.width
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.Attachment
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.NO_CAPS
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -225,5 +233,153 @@ class ChatMediaViewerTest {
         onNodeWithTag("chat_media_viewer_save").performClick()
         waitUntil(timeoutMillis = 5_000L) { platform.files.openedSaved.isNotEmpty() }
         assertEquals(listOf("a.png|image/png|${TINY_PNG_BYTES.size}"), platform.files.saved)
+    }
+
+    // ── A Mac trackpad ────────────────────────────────────────────────────────────────
+
+    /** A Mac: two-finger scrolls arrive as wheel events that run on into the system's momentum. */
+    private fun macTrackpad() = FakePlatform(caps = NO_CAPS.copy(trackpadMomentum = true))
+
+    /**
+     * Two fingers on a Mac trackpad the way AWT hands them over: a wheel event every 8 ms in wheel
+     * units of 10 dp, the fingers' own and then, with nothing in between to say they lifted, the
+     * system's momentum. Sideways [units] > 0 move toward the next item; with [down], they pull down.
+     */
+    private fun ComposeUiTest.trackpad(vararg units: Float, down: Boolean = false) {
+        onNodeWithTag("chat_media_viewer_pager").performMouseInput {
+            moveTo(center)
+            for (u in units) {
+                if (down) scroll(-u, ScrollWheel.Vertical) else scroll(u, ScrollWheel.Horizontal)
+                advanceEventTime(8)
+            }
+        }
+    }
+
+    /** A short, quick swipe: the fingers speed up over about 90 dp, then the momentum falls off. */
+    private val shortFlick = floatArrayOf(0.5f, 1f, 2f, 2.5f, 3f, 2.8f, 2.65f, 2.5f, 2.37f, 2.25f, 2.1f, 2f)
+
+    private fun ComposeUiTest.awaitPicture() =
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("chat_media_viewer_image").fetchSemanticsNodes().isNotEmpty() }
+
+    /**
+     * The fingers are off the pad and no momentum follows: the trackpad goes quiet. The test clock
+     * only moves for frames and injected events, so the quiet has to be waited out by hand.
+     */
+    private fun ComposeUiTest.trackpadGoesQuiet() {
+        mainClock.advanceTimeBy(300)
+        waitForIdle()
+    }
+
+    /**
+     * Where the picture's top-left corner is drawn, transform and all. Its bounds would not do: the
+     * pager clips them to the page, so a zoomed picture's bounds are just the page's.
+     */
+    private fun ComposeUiTest.pictureCorner() = onNodeWithTag("chat_media_viewer_image").fetchSemanticsNode().positionInRoot
+
+    @Test fun a_short_quick_trackpad_swipe_turns_to_the_next_item() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        trackpad(*shortFlick)
+        waitForIdle()
+        counter().assertTextEquals("2 / 3")
+    }
+
+    @Test fun the_next_item_follows_the_fingers_while_they_move() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        val width = onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().width
+        mainClock.autoAdvance = false
+        trackpad(0.5f, 1f, 2f, 2.5f) // 60 dp, and the fingers are still down
+        mainClock.advanceTimeByFrame()
+        val left = onNodeWithTag("chat_media_viewer_poster", useUnmergedTree = true).getBoundsInRoot().left
+        assertEquals((width - 60.dp).value, left.value, 1f)
+    }
+
+    @Test fun one_trackpad_swipe_moves_one_item_at_most() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        // Fast all the way, and far past two items' width.
+        trackpad(3f, 6f, 10f, 14f, 18f, 22f, 26f, 30f, 34f, 38f, 42f, 46f, 45f, 43f, 41f, 39f, 37f)
+        waitForIdle()
+        counter().assertTextEquals("2 / 3")
+    }
+
+    @Test fun a_long_swipe_never_shows_past_the_next_item() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        waitForIdle()
+        mainClock.autoAdvance = false
+        trackpad(3f, 6f, 10f, 14f, 18f, 22f, 26f, 30f, 34f, 38f, 42f, 46f) // past two widths, still moving
+        mainClock.advanceTimeByFrame()
+        counter().assertTextEquals("2 / 3")
+    }
+
+    @Test fun a_small_slow_trackpad_nudge_springs_back() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        awaitPicture()
+        val rest = pictureCorner().x
+        trackpad(0.3f, 0.3f, 0.4f, 0.3f, 0.2f)
+        waitForIdle()
+        assertTrue(pictureCorner().x < rest - 10f, "the nudge moved the picture while the fingers were on the pad")
+        trackpadGoesQuiet()
+        counter().assertTextEquals("1 / 3")
+        assertEquals(rest, pictureCorner().x, 0.5f, "back at rest on the first item")
+    }
+
+    @Test fun the_viewer_follows_a_two_finger_pull() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        val top = onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().top
+        mainClock.autoAdvance = false
+        trackpad(1f, 2f, 2f, down = true) // 50 dp, and the fingers are still down
+        mainClock.advanceTimeByFrame()
+        assertEquals((top + 50.dp).value, onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().top.value, 1f)
+    }
+
+    @Test fun a_two_finger_pull_down_closes_it() = runComposeUiTest {
+        var closed = false
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA, onDismiss = { closed = true }) }
+        trackpad(1f, 2f, 4f, 6f, 8f, 9f, 8.5f, 8f, 7.6f, 7.2f, 6.8f, down = true)
+        waitForIdle()
+        assertTrue(closed)
+    }
+
+    @Test fun a_short_slow_pull_springs_back() = runComposeUiTest {
+        var closed = false
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA, onDismiss = { closed = true }) }
+        val top = onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().top
+        trackpad(0.3f, 0.4f, 0.3f, 0.2f, down = true)
+        waitForIdle()
+        assertTrue(onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().top > top, "the pull moved it while the fingers were on the pad")
+        trackpadGoesQuiet()
+        assertFalse(closed)
+        assertEquals(top, onNodeWithTag("chat_media_viewer_pager").getBoundsInRoot().top)
+    }
+
+    @Test fun command_scroll_zooms_the_picture_and_turns_no_page() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        awaitPicture()
+        val before = pictureCorner()
+        onNodeWithTag("chat_media_viewer_pager").performMultiModalInput {
+            key { keyDown(Key.MetaLeft) }
+            mouse {
+                moveTo(center)
+                scroll(-2f)
+                scroll(3f, ScrollWheel.Horizontal)
+            }
+            key { keyUp(Key.MetaLeft) }
+        }
+        waitForIdle()
+        counter().assertTextEquals("1 / 3")
+        val after = pictureCorner()
+        assertTrue(after.x < before.x && after.y < before.y, "⌘ + scroll up zooms in about the middle; $before -> $after")
+    }
+
+    @Test fun a_zoomed_picture_pans_under_two_fingers_and_turns_no_page() = runComposeUiTest {
+        setPlatformContent(macTrackpad()) { Viewer(start = imgA) }
+        awaitPicture()
+        onNodeWithTag("chat_media_viewer_zoom_in").performClick()
+        onNodeWithTag("chat_media_viewer_zoom_in").performClick()
+        waitForIdle()
+        val before = pictureCorner().x
+        trackpad(*shortFlick)
+        trackpadGoesQuiet()
+        counter().assertTextEquals("1 / 3")
+        assertTrue(pictureCorner().x < before - 10f, "fingers moving left take the zoomed picture left")
     }
 }

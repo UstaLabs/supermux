@@ -46,6 +46,8 @@ class DesktopPlatformTest {
                 // G1: the shared Compose terminal is bound; no hardware H.264 decoder (VNC displays).
                 terminal = true,
                 scrcpy = false,
+                // A Mac trackpad's wheel stream carries the system's momentum, with no lift in it.
+                trackpadMomentum = isMacOs(),
             ),
             DesktopPlatform().caps,
         )

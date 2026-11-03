@@ -1,6 +1,7 @@
 // The ONE fullscreen viewer for the chat's pictures and clips: every one the chat holds, in
-// timeline order, opened at the tapped one. Desktop first — ←/→, Space, F, Esc, side arrows and a
-// thumbnail strip — with the phone's swipe between items and swipe down to close.
+// timeline order, opened at the tapped one. Desktop first — ←/→, Space, F, Esc, side arrows, a
+// thumbnail strip and a Mac trackpad's two-finger swipes — with the phone's swipe between items
+// and swipe down to close.
 package dev.supermux.ui.chat
 
 import androidx.compose.animation.core.animate
@@ -70,7 +71,10 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -90,6 +94,7 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -172,7 +177,8 @@ internal fun ChatMediaViewer(
  *  - "3 / 7", zoom −/+ for a picture, Save, Close across the top.
  *  - A pointer adds ‹ › at the sides and a thumbnail strip along the bottom; keys ←/→, Space
  *    (play/pause), F (the clip full screen) and Esc work everywhere a keyboard does.
- *  - Touch swipes between items and closes on a swipe down.
+ *  - Touch swipes between items and closes on a swipe down; so does a Mac trackpad's two-finger
+ *    scroll ([viewerTrackpad]), the item following the fingers until they let go.
  */
 @Composable
 internal fun ChatMediaViewerContent(
@@ -243,7 +249,40 @@ internal fun ChatMediaViewerContent(
     var heightPx by remember { mutableFloatStateOf(0f) }
     var dragY by remember { mutableFloatStateOf(0f) }
     val zoomedNow by rememberUpdatedState(zoomed)
+    val pictureNow by rememberUpdatedState(current.kind == FilePreviewKind.Image)
     val flingPx = with(density) { DismissFling.toPx() }
+    val trackpad = platform.caps.trackpadMomentum
+    // A Mac trackpad's two-finger swipes, which the stock pager judges by the momentum's dying tail.
+    val trackpadSwipes = if (!trackpad) Modifier else {
+        var pullBack by remember { mutableStateOf<Job?>(null) }
+        Modifier.viewerTrackpad(
+            pager = pager,
+            // ⌘/Ctrl + scroll zooms a picture and a zoomed picture pans: those stay the page's own.
+            owns = remember {
+                { event: PointerEvent ->
+                    val chord = event.keyboardModifiers.isCtrlPressed || event.keyboardModifiers.isMetaPressed
+                    !zoomedNow && !(chord && pictureNow)
+                }
+            },
+            onPull = remember {
+                { dy: Float ->
+                    pullBack?.cancel()
+                    dragY = (dragY + dy).coerceAtLeast(0f)
+                }
+            },
+            onPullLetGo = remember {
+                { velocity: Float ->
+                    if (shouldDismissOnRelease(dragY, velocity, heightPx, flingPx)) {
+                        dismiss()
+                    } else {
+                        pullBack = scope.launch {
+                            animate(dragY, 0f, initialVelocity = velocity, animationSpec = SwipeSettleSpec) { value, _ -> dragY = value }
+                        }
+                    }
+                }
+            },
+        )
+    }
     // Swipe down to close is a touch gesture: a desktop mouse drag does nothing here.
     val dismissDrag = if (pointer) Modifier else Modifier.pointerInput(Unit) {
         val tracker = VelocityTracker()
@@ -290,7 +329,7 @@ internal fun ChatMediaViewerContent(
             .testTag("chat_media_viewer"),
     ) {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxWidth().weight(1f).then(dismissDrag)) {
+            Box(Modifier.fillMaxWidth().weight(1f).then(dismissDrag).then(trackpadSwipes)) {
                 HorizontalPager(
                     state = pager,
                     key = { latest.getOrNull(it)?.key ?: "#$it" },
@@ -303,7 +342,7 @@ internal fun ChatMediaViewerContent(
                     val item = items.getOrNull(index) ?: return@HorizontalPager
                     val handle = remember(item.key) { resolve(item) }
                     when (item.kind) {
-                        FilePreviewKind.Image -> ViewerPicture(handle, item.name, transformOf(item.key))
+                        FilePreviewKind.Image -> ViewerPicture(handle, item.name, transformOf(item.key), trackpad)
                         FilePreviewKind.Video -> ViewerClip(
                             handle = handle,
                             active = index == pager.settledPage,
@@ -347,8 +386,8 @@ private val DismissFling = 1200.dp
 
 /** A picture page: the lightbox's transform and gestures, through the timeline's load + decode. */
 @Composable
-private fun ViewerPicture(handle: MediaHandle, name: String, transform: LightboxTransform) {
-    Box(Modifier.fillMaxSize().viewerImageGestures(transform), contentAlignment = Alignment.Center) {
+private fun ViewerPicture(handle: MediaHandle, name: String, transform: LightboxTransform, trackpad: Boolean) {
+    Box(Modifier.fillMaxSize().viewerImageGestures(transform, trackpad), contentAlignment = Alignment.Center) {
         when (val image = rememberAttachmentImage(handle.att, handle.media, handle.memoryCacheKey)) {
             is AttachmentImage.Ready -> Image(
                 painter = image.decoded.painter,
