@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -154,13 +153,12 @@ internal fun RunSettingsControl(
             if (fastMode == true) {
                 Icon(Icons.Filled.Bolt, "Fast mode on", tint = cs.tertiary, modifier = Modifier.size(13.dp))
             }
-            // The chat runs (or will run) on an added account, or on one its API refused: the pill
-            // says so, and the panel's Account row says which.
-            if (account != null) accountInk(account)?.let { ink ->
+            // A new chat that will run on an added account chosen by hand says so on the pill.
+            if (account != null && account.offersAuto && account.onAdded) {
                 Icon(
-                    if (account.unavailable) Icons.Outlined.WarningAmber else Icons.Outlined.AccountCircle,
-                    contentDescription = if (account.unavailable) "Account unavailable: ${account.label}" else "On ${account.label}",
-                    tint = ink,
+                    Icons.Outlined.AccountCircle,
+                    contentDescription = "On an added account",
+                    tint = cs.primary,
                     modifier = Modifier.size(13.dp).testTag("run_settings_account_mark"),
                 )
             }
