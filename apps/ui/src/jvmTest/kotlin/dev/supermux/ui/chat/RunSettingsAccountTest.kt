@@ -11,7 +11,10 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasParent
 import androidx.compose.ui.test.hasProgressBarRangeInfo
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -157,15 +160,15 @@ class RunSettingsAccountTest {
         waitForIdle()
     }
 
-    @Test fun the_pill_marks_an_added_account_and_the_panel_switches_it() = runComposeUiTest {
+    @Test fun the_panel_names_the_account_and_switches_it_and_the_pill_has_no_account_icon() = runComposeUiTest {
         var sessionAccount by mutableStateOf<String?>("claude-work")
         val asked = mutableListOf<String>()
         setPlatformContent {
             ChatComposer(listOf(system, work, ci), { sessionAccount }, onSwitch = { id -> asked += id; sessionAccount = id; ok(id) })
         }
         waitForIdle()
-        // The pill says the chat runs on an added account; the panel says which.
-        onNodeWithContentDescription("On Work (Max)").assertIsDisplayed()
+        // No account icon on the pill: the account is named in the panel only.
+        onNodeWithContentDescription("Work (Max)", substring = true).assertDoesNotExist()
         onNodeWithTag("composer-model-pill").performClick()
         waitForIdle()
         onNodeWithTag("run_settings_account").assertTextContains("Work (Max)", substring = true)
@@ -179,9 +182,8 @@ class RunSettingsAccountTest {
         onNodeWithTag("account-picker-item:claude:system").performClick()
         waitForIdle()
         assertEquals(listOf("claude:system"), asked)
-        // It landed: the panel is back, its Account row on the new account, and the pill unmarked.
+        // It landed: the panel is back, its Account row on the new account.
         onNodeWithTag("run_settings_account").assertTextContains("System login", substring = true)
-        onNodeWithTag("run_settings_account_mark", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun picking_the_account_it_runs_on_just_steps_back() = runComposeUiTest {
@@ -208,9 +210,13 @@ class RunSettingsAccountTest {
         onNodeWithTag("account-picker-item:claude-ci").performClick()
         waitForIdle()
         assertEquals(listOf("claude-ci"), asked)
-        onNodeWithTag("run_settings_account_refusal").assertTextContains("Busy right now — try again after this turn.")
+        onNode(hasText("Busy right now — try again after this turn.") and hasParent(hasTestTag("run_settings_account_refusal")))
+            .assertIsDisplayed()
         onNodeWithText("Run this chat on").assertIsDisplayed()
-        onNodeWithContentDescription("On Work (Max)").assertExists()
+        // Still on Work: back on the panel, its Account row says so.
+        onNodeWithTag("run_settings_back").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").assertTextContains("Work (Max)", substring = true)
     }
 
     @Test fun a_switch_in_flight_spins_takes_no_second_pick_and_outlives_the_panel() = runComposeUiTest {
@@ -242,22 +248,29 @@ class RunSettingsAccountTest {
         onNodeWithTag("composer-model-sonnet").performClick()
         waitForIdle()
         onNodeWithTag("run_settings_panel").assertDoesNotExist()
-        // The switch was not cancelled with the panel: it lands, and the pill follows the chat.
+        // The switch was not cancelled with the panel: it lands, and the panel shows the new account.
         answer.complete(Unit)
         waitForIdle()
         assertEquals(1, landed)
-        onNodeWithContentDescription("On CI token").assertIsDisplayed()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").assertTextContains("CI token", substring = true)
     }
 
-    @Test fun an_unavailable_account_warns_on_the_pill_links_to_accounts_and_still_switches() = runComposeUiTest {
+    @Test fun an_unavailable_account_is_flagged_in_the_panel_links_to_accounts_and_still_switches() = runComposeUiTest {
         val asked = mutableListOf<String>()
         var opened = 0
         setPlatformContent {
             ChatComposer(listOf(refusedSystem, work), { null }, onSwitch = { id -> asked += id; ok(id) }, onOpenAccounts = { opened++ })
         }
         waitForIdle()
-        onNodeWithContentDescription("Account unavailable: System login").assertIsDisplayed()
-        openAccountList()
+        // The pill stays as it is; the panel's Account row and list carry the warning.
+        onNodeWithContentDescription("unavailable", substring = true).assertDoesNotExist()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").assertTextContains("System login", substring = true)
+        onNodeWithTag("run_settings_account").performClick()
+        waitForIdle()
         onNodeWithTag("run_settings_account_unavailable").assertExists()
         onNodeWithText("Refused: Your organization has disabled", substring = true).assertIsDisplayed()
         onNodeWithTag("account-unavailable-tag:claude:system", useUnmergedTree = true).assertExists()
@@ -314,8 +327,11 @@ class RunSettingsAccountTest {
         // The header names the session; nothing in it names the account any more.
         onNodeWithText("demo").assertIsDisplayed()
         onNodeWithText("Work (Max)").assertDoesNotExist()
-        onNodeWithContentDescription("On Work (Max)").assertIsDisplayed()
-        openAccountList()
+        onNodeWithTag("composer-model-pill").performClick()
+        waitForIdle()
+        onNodeWithTag("run_settings_account").assertTextContains("Work (Max)", substring = true)
+        onNodeWithTag("run_settings_account").performClick()
+        waitForIdle()
         onNodeWithTag("account-picker-item:claude:system").performClick()
         waitForIdle()
         assertEquals(listOf("claude:system"), asked)

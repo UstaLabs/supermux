@@ -627,10 +627,7 @@ fun Composer(
     /** Fast mode on/off for a model that offers it; null hides the toggle. */
     fastMode: Boolean? = null,
     onToggleFast: (Boolean) -> Unit = {},
-    /**
-     * The account the chat runs on and the switch to another: the run-settings panel's Account row
-     * (and a mark on its pill). Null hides it.
-     */
+    /** The account the chat runs on and the switch to another: the run-settings panel's Account row. Null hides it. */
     account: RunSettingsAccount? = null,
     /**
      * A model/effort pill was tapped, BEFORE the picker opens. A host that fetches its catalogs
