@@ -347,6 +347,10 @@ here is rejected, not stored.
 Builds run from source, test builds and prereleases send telemetry too, marked `env: "dev"` so
 they can be told apart from releases. Automated test brokers never send telemetry.
 
+A test install of a released version (a fresh-install VM, a Docker trial, a demo) is marked
+`env: "dev"` too: set `MUX_TELEMETRY_ENV=dev` in its environment or in its `~/.mux/state/.env`
+before it first starts. This can only mark an install as `dev`; nothing can mark one as `release`.
+
 ## Turning it off
 
 Any of these turns it off:

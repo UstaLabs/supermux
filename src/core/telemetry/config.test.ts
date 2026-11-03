@@ -46,6 +46,18 @@ describe("telemetryEnv", () => {
   test("a plain release number is release", () => {
     for (const v of ["0.14.0", "0.16.0", "1.0.0", "12.3.45"]) expect(telemetryEnv(v)).toBe("release")
   })
+  test("MUX_TELEMETRY_ENV=dev marks an agent test install as dev, even on a release binary", () => {
+    expect(telemetryEnv("0.17.0", "dev")).toBe("dev")
+    expect(telemetryEnv("0.17.0", " DEV ")).toBe("dev")
+    expect(telemetryEnv("dev", "dev")).toBe("dev")
+  })
+  test("the override can only mark dev, never promote a build to release", () => {
+    expect(telemetryEnv("fixtest3", "release")).toBe("dev")
+    expect(telemetryEnv("0.17.0", "release")).toBe("release")
+    expect(telemetryEnv("0.17.0", "")).toBe("release")
+    expect(telemetryEnv("0.17.0", "junk")).toBe("release")
+    expect(telemetryEnv("0.17.0", undefined)).toBe("release")
+  })
   test("source builds, test builds and prereleases are dev", () => {
     // Real versions seen in production telemetry from test builds, plus the source-mode default.
     for (const v of ["dev", "fixtest2", "fixtest3", "0.12.0-alpha.1", "0.16.0-rc.1", "0.16.0+abc", "v0.16.0", "0.16", "", " 0.16.0"]) {

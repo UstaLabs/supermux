@@ -46,7 +46,12 @@ export function parseTelemetryBody(input: unknown): { enabled: boolean } | { err
  * The `env` field on every event. Only a plain release number (`0.16.0`) is "release"; source builds
  * ("dev"), test builds ("fixtest3") and prereleases ("0.16.0-rc.1") are "dev", so they stay out of
  * real-user numbers.
+ *
+ * `override` is `MUX_TELEMETRY_ENV`. Set to `dev` it marks an agent's test install (a fresh-install
+ * VM, a Docker trial, a demo container) as dev even when it runs a real release binary. It can only
+ * ever mark dev: nothing promotes a build to "release".
  */
-export function telemetryEnv(buildVersion: string): "dev" | "release" {
+export function telemetryEnv(buildVersion: string, override?: string): "dev" | "release" {
+  if (override?.trim().toLowerCase() === "dev") return "dev"
   return /^\d+\.\d+\.\d+$/.test(buildVersion) ? "release" : "dev"
 }
