@@ -353,8 +353,27 @@ data class SlashCommand(
     val sigil: String = "/",
     val description: String? = null,
     val insertText: String? = null,
+    /** The agent's own hint for the arguments, e.g. "[interval] [prompt]". */
+    val argumentHint: String? = null,
+    /** Other names the agent accepts for the command ("review" for "code-review"). */
+    val aliases: List<String> = emptyList(),
+    /**
+     * Where the command comes from — [SOURCE_BUILTIN], [SOURCE_PLUGIN], [SOURCE_PROJECT] or
+     * [SOURCE_USER] — and only when the agent (or the folder it was read from) says so. Null means
+     * nobody vouched for one, and the menu shows none rather than a guess.
+     */
+    val source: String? = null,
+    /** With [source] "plugin": the plugin's name. */
+    val plugin: String? = null,
     val action: ControlAction? = null,
-)
+) {
+    companion object {
+        const val SOURCE_BUILTIN = "builtin"
+        const val SOURCE_PLUGIN = "plugin"
+        const val SOURCE_PROJECT = "project"
+        const val SOURCE_USER = "user"
+    }
+}
 
 /**
  * The workspace layout tree (spec §5.3). A polymorphic sealed interface keyed by
