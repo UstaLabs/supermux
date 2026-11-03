@@ -98,6 +98,9 @@ export type SubagentSnapshotEvent = { kind: "subagent-snapshot"; subagents: Suba
 /** A subagent's own tool call started: the one-line activity to show when the agent sends none. */
 export type SubagentActivityEvent = { kind: "subagent-activity"; subagentId: string; activity: string }
 
+/** The agent went on in a new, empty conversation (Claude /clear, /reset, /new); the session stays. */
+export type ConversationResetEvent = { kind: "conversation-reset"; trigger?: string }
+
 /** Background shell / workflow / monitor tasks (Claude background Bash, …). */
 export type TaskEvent = {
   kind: "task"
@@ -121,6 +124,7 @@ export type AgentEvent =
   | SubagentEvent
   | SubagentActivityEvent
   | SubagentSnapshotEvent
+  | ConversationResetEvent
   | TaskEvent
 
 export type InboundMeta = {

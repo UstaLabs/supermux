@@ -1022,7 +1022,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     return this.stopped || epoch !== this.startEpoch
   }
 
-  private assertCompatibleRecord(record: { agent: string; cwd: string; agentSessionId: string }): void {
+  private assertCompatibleRecord(record: { agent: string; cwd: string; agentSessionId: string; previousAgentSessionId?: string }): void {
     if (record.agent !== this.kind) {
       throw new Error(`core session ${this.id} is agent ${record.agent}, expected ${this.kind}`)
     }
@@ -1030,8 +1030,27 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       throw new Error(`core session ${this.id} cwd mismatch`)
     }
     if (this.initialSessionId && record.agentSessionId !== this.initialSessionId) {
-      throw new Error(`core session ${this.id} native id mismatch`)
+      // The agent went on in a new conversation (Claude /clear) before the broker saved its id: the record names it.
+      if (record.previousAgentSessionId !== this.initialSessionId) throw new Error(`core session ${this.id} native id mismatch`)
+      log.info("core_record_after_conversation_reset", { session: this.sessionName, session_id: this.id, agent: this.kind, saved: this.initialSessionId, record: record.agentSessionId })
+      this.initialSessionId = record.agentSessionId
+      this.nativeSessionId = record.agentSessionId
     }
+  }
+
+  /**
+   * The agent went on in a new conversation (Claude /clear): the session runs on in it, so the broker saves its id
+   * and a relaunch opens it, never the conversation before.
+   */
+  private async followConversation(nativeId: string, trigger: string | undefined): Promise<void> {
+    if (this.initialSessionId !== undefined) this.initialSessionId = nativeId
+    this.nativeSessionId = nativeId
+    try {
+      await this.persistSessionId(nativeId)
+    } catch (err) {
+      log.warn("conversation_reset_persist_failed", { session: this.sessionName, session_id: this.id, agent: this.kind, err: asError(err).message })
+    }
+    this.emit("conversation-reset", { kind: "conversation-reset", ...(trigger ? { trigger } : {}) })
   }
 
   private desiredConfiguration(): SessionConfiguration {
@@ -1116,6 +1135,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       // it, so disarm for good. Re-arming per event cut every quiet stretch —
       // a subagent working for minutes, a long tool run — at 90 s.
       if (this.stallTimer) this.disarmStall()
+      if (event.event.kind === "conversation-reset") {
+        void this.followConversation(event.event.agentSessionId, event.event.trigger)
+        return
+      }
       this.bridge.handle(event.event)
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
