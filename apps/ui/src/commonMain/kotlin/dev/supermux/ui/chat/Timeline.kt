@@ -1658,20 +1658,27 @@ internal fun MountedVideoPlayer(
             return@LaunchedEffect
         }
         withFrameNanos { }
-        val frame = runCatching { frameLayer.toImageBitmap() }.getOrNull()
-        if (frame != null && !looksBlank(frame)) ClipFrames.keep(id, posterSized(frame))
+        // Best effort: a clip's tile can do without its frame; the app must not go down for one.
+        try {
+            val frame = softwareFrame(frameLayer.toImageBitmap())
+            if (!looksBlank(frame)) ClipFrames.keep(id, posterSized(frame))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+        }
         grabbing = false
     }
-    // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
-    // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
-    // the main thread that parks the EDT waiting for the EDT and freezes the entire app. A
-    // LaunchedEffect body runs on the main dispatcher, so hop off it.
+    // ⚠️ Where openUri runs is per platform ([VideoOpenContext]). On the desktop it MUST NOT run on
+    // the Compose/AWT main thread: Compose Media Player's macOS backend reports failures through
+    // `setPlayerError`, which is `runBlocking { withContext(Main) }`, and on the main thread that
+    // parks the EDT waiting for the EDT and freezes the entire app. On Android it MUST run there:
+    // ExoPlayer throws when it is called off the thread that made it.
     //
     // runCatching, not try/catch-in-composition, because a Linux box with no GStreamer throws
     // UnsatisfiedLinkError (an Error — runCatching catches Throwable) the first time the JNI shim
     // is touched. Either way we degrade to the download chip instead of taking the timeline down.
     LaunchedEffect(uri) {
-        runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { player.openUri(uri) } }
+        runCatching { kotlinx.coroutines.withContext(VideoOpenContext) { player.openUri(uri) } }
             .onFailure { onError() }
     }
     val error = player.error
