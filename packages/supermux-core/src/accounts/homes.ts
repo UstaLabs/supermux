@@ -1,9 +1,10 @@
-import { chmod, lstat, mkdir, open, readdir, readlink, rm, rmdir, symlink, unlink } from "node:fs/promises"
+import { chmod, lstat, mkdir, open, readdir, readlink, rm, rmdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 import { CoreError } from "../errors.js"
 import { assertVaultId } from "./vault.js"
 import type { Account, HomeLayout, HomeRoots } from "./types.js"
+import { Unsupported, files } from "@supermux/platform"
 
 export function claudeRoot(roots: HomeRoots = {}): string {
   return resolve(roots.claudeRoot ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
@@ -77,8 +78,6 @@ async function ensureRootEntry(root: string, target: string, type: "dir" | "file
 }
 
 async function link(path: string, target: string, type: "dir" | "file"): Promise<void> {
-  const windows = process.platform === "win32"
-  if (windows && type === "file") throw new CoreError("unsupported_operation", `Shared files (${basename(path)}) need symlinks, which supermux does not create on Windows; use an isolated account`)
   let existing
   try { existing = await lstat(path) } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
@@ -93,7 +92,17 @@ async function link(path: string, target: string, type: "dir" | "file"): Promise
     if (!existing.isFile() || existing.size > 0) throw conflict(path)
     await rm(path)
   }
-  await symlink(target, path, type === "dir" ? (windows ? "junction" : "dir") : "file")
+  // A folder is a junction on Windows (any user may make one); a file link needs Developer Mode there. The registry
+  // makes an account isolated where this host cannot link files (Q5), so Unsupported here is a host that changed.
+  if (type === "dir") return files.linkDirectory(target, path)
+  try {
+    files.linkFile(target, path)
+  } catch (error) {
+    if (error instanceof Unsupported) {
+      throw new CoreError("unsupported_operation", `Shared files (${basename(path)}) need file links, which this Windows host allows only with Developer Mode; use an isolated account`)
+    }
+    throw error
+  }
 }
 
 function conflict(path: string): CoreError {
