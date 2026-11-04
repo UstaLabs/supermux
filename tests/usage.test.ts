@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from "bun:test"
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -436,7 +436,7 @@ test("fetchCursorUsage returns null when db missing", async () => {
 
 // ── opencode ──
 
-test("fetchOpenCodeUsage aggregates token usage and cost from opencode.db", async () => {
+test("fetchOpenCodeUsage aggregates token usage and cost from the messages of a store without per-session totals", async () => {
   const dbPath = join(tmpDir, "opencode.db")
   const db = new Database(dbPath)
   db.run("CREATE TABLE session (id TEXT PRIMARY KEY)")
@@ -464,6 +464,44 @@ test("fetchOpenCodeUsage aggregates token usage and cost from opencode.db", asyn
   expect(result!.outputTokens).toBe(130)
   expect(result!.cacheReadTokens).toBe(10)
   expect(result!.cacheWriteTokens).toBe(5)
+})
+
+test("fetchOpenCodeUsage sums the totals opencode keeps per session and parses no message body", async () => {
+  // opencode keeps each session's cost and tokens on its row (its `session_usage` migration backfilled
+  // them). Message bodies can be huge — a real store holds a 290 MB one — and parsing all of them on
+  // the broker's event loop stalled it past the other providers' 10 s fetch timeouts.
+  const dbPath = join(tmpDir, "opencode.db")
+  const db = new Database(dbPath)
+  db.run(`CREATE TABLE session (
+    id TEXT PRIMARY KEY, cost REAL DEFAULT 0 NOT NULL,
+    tokens_input INTEGER DEFAULT 0 NOT NULL, tokens_output INTEGER DEFAULT 0 NOT NULL,
+    tokens_reasoning INTEGER DEFAULT 0 NOT NULL, tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+    tokens_cache_write INTEGER DEFAULT 0 NOT NULL)`)
+  db.run("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)")
+  db.run("INSERT INTO session VALUES ('s1', 0.05, 100, 50, 7, 10, 5), ('s2', 0.03, 200, 80, 0, 0, 0)")
+  const bodies = [
+    JSON.stringify({ role: "user" }),
+    JSON.stringify({ role: "assistant", cost: 0.05, tokens: { input: 100, output: 50, reasoning: 7, cache: { read: 10, write: 5 } } }),
+    JSON.stringify({ role: "assistant", cost: 0.03, tokens: { input: 200, output: 80, reasoning: 0, cache: { read: 0, write: 0 } } }),
+  ]
+  bodies.forEach((data, i) => db.run("INSERT INTO message VALUES (?, ?, ?)", [`m${i}`, i < 2 ? "s1" : "s2", data]))
+  db.close()
+
+  const parse = spyOn(JSON, "parse")
+  try {
+    const result = await fetchOpenCodeUsage(dbPath)
+    expect(parse.mock.calls.filter(([text]) => bodies.includes(text as string))).toEqual([])
+    expect(result).not.toBeNull()
+    expect(result!.sessions).toBe(2)
+    expect(result!.messages).toBe(3)
+    expect(result!.totalCostUsd).toBeCloseTo(0.08, 5)
+    expect(result!.inputTokens).toBe(300)
+    expect(result!.outputTokens).toBe(130)
+    expect(result!.cacheReadTokens).toBe(10)
+    expect(result!.cacheWriteTokens).toBe(5)
+  } finally {
+    parse.mockRestore()
+  }
 })
 
 test("fetchOpenCodeUsage returns null when the db is missing (free tier, no sessions yet)", async () => {

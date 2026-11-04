@@ -606,10 +606,18 @@ export async function fetchCursorUsageWithToken(token: string): Promise<CursorUs
 //
 // opencode has no usage API — it records every assistant turn's token counts and
 // cost in its own SQLite store (the native OpenCode data dir's opencode.db, the same data
-// `opencode stats` reads). Each message row's `data` JSON carries, for assistant
-// messages, `cost` and `tokens: { input, output, cache: { read, write } }`. We open
-// the DB read-only (WAL permits concurrent readers while opencode is running) and
-// aggregate all-time totals.
+// `opencode stats` reads). We open the DB read-only (WAL permits concurrent readers
+// while opencode is running) and report all-time totals.
+//
+// Since its `session_usage` migration (2026-05) opencode keeps each session's cost and
+// tokens on the session row, backfilled from the messages, so the totals are a sum over
+// sessions. The message bodies stay unread then: they can be hundreds of MB (a real store
+// holds a 290 MB one), and loading and parsing them all here blocked the broker's event
+// loop for seconds, past the 10 s timeouts of the provider fetches running beside it.
+// Only an older store falls back to the messages, where each row's `data` JSON carries,
+// for assistant messages, `cost` and `tokens: { input, output, cache: { read, write } }`.
+const OPENCODE_SESSION_TOTALS = ["cost", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
+
 export async function fetchOpenCodeUsage(
   dbPath: string = OPENCODE_DB,
 ): Promise<OpenCodeUsage | null> {
@@ -618,6 +626,25 @@ export async function fetchOpenCodeUsage(
   const db = new Database(dbPath, { readonly: true })
   try {
     const sessions = (db.query("SELECT COUNT(*) AS c FROM session").get() as { c: number } | null)?.c ?? 0
+    const columns = (db.query("PRAGMA table_info(session)").all() as Array<{ name: string }>).map((c) => c.name)
+    if (OPENCODE_SESSION_TOTALS.every((c) => columns.includes(c))) {
+      const t = db.query(
+        `SELECT COALESCE(SUM(cost), 0) AS cost, COALESCE(SUM(tokens_input), 0) AS input,
+          COALESCE(SUM(tokens_output), 0) AS output, COALESCE(SUM(tokens_cache_read), 0) AS cacheRead,
+          COALESCE(SUM(tokens_cache_write), 0) AS cacheWrite FROM session`,
+      ).get() as { cost: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+      const messages = (db.query("SELECT COUNT(*) AS c FROM message").get() as { c: number } | null)?.c ?? 0
+      return {
+        sessions,
+        messages,
+        totalCostUsd: t.cost,
+        inputTokens: t.input,
+        outputTokens: t.output,
+        cacheReadTokens: t.cacheRead,
+        cacheWriteTokens: t.cacheWrite,
+      }
+    }
+
     const rows = db.query("SELECT data FROM message").all() as Array<{ data: string }>
 
     let messages = 0
