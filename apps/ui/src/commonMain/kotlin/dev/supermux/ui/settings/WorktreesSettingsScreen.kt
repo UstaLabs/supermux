@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.hostParent
 import dev.supermux.net.WorktreeChangesDto
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeListDto
@@ -436,7 +437,7 @@ private fun groupByRepo(rows: List<WorktreeSummaryDto>): List<RepoGroup> {
     return byKey.map { (key, groupRows) ->
         val first = groupRows.first()
         val label = if ((rootsPerName[first.repoName] ?: 1) > 1) {
-            "${first.repoName} (${first.repoRoot?.substringBeforeLast('/')?.ifEmpty { "/" } ?: "unknown location"})"
+            "${first.repoName} (${first.repoRoot?.let { hostParent(it) ?: it } ?: "unknown location"})"
         } else {
             first.repoName
         }

@@ -109,6 +109,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.hostIsInside
+import dev.supermux.fs.hostParent
 import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
@@ -352,14 +354,15 @@ fun SessionListScreen(
     // Agents' home root (the parent of any Agent's workdir, e.g. ~/.mux/workspace/) never shows.
     val agentHomeRoots = remember(sessions) {
         sessions.filter { it.role == "personal_assistant" }
-            .mapNotNull { s -> s.workdir.trimEnd('/').substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let { "$it/" } }
+            // Never a root (`/`, `C:\`): an Agent at the top of a drive must not hide every project.
+            .mapNotNull { s -> hostParent(s.workdir)?.takeIf { hostParent(it) != null } }
             .toSet()
     }
     val visibleProjects = remember(projects, multiHost, hostFilter, agentHomeRoots) {
         val byHost = if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
         byHost.filterNot { ref ->
             val locs = ref.project.locations
-            locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> (loc.path.trimEnd('/') + "/").startsWith(root) } }
+            locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> hostIsInside(loc.path, root) } }
         }
     }
     val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending) {
