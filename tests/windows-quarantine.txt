@@ -11,14 +11,11 @@ packages/supermux-core/tests/accounts-core.test.ts | asserts POSIX file modes (0
 packages/supermux-core/tests/accounts-homes.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude home links shared entries to the root, creating missi" | #29
 packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test never sees the typed code, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/accounts-vault.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "file vault: 0700 dir, 0600 files, round trip, delete, missin" | #29
-packages/supermux-core/tests/acp.test.ts | a turn times out at 20 s, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/agents-table.test.ts | expect(received).toBe(expected); first: "README.md's agents table is exactly renderAgentsTable() once" | #29
 packages/supermux-core/tests/antigravity.test.ts | assertions fail, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/auth.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "materializes owner-only credentials and preserves native ses" | #29
 packages/supermux-core/tests/claude-keeper.test.ts | expected true got false; first: "a keeper another process started under its own temp dir, too" | #29
-packages/supermux-core/tests/claude.test.ts | native create times out at 20 s, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/codex-catalog.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "multiAgentV1Args writes a private v1 catalog and passes it a" | #29
-packages/supermux-core/tests/codex.test.ts | expected "turn failed" got "Codex request timed out: turn/start"; first: "native lifecycle, early completion, filtered updates, and fa" | #29
 packages/supermux-core/tests/compiled-entry.test.ts | TypeError: File URL path must be an absolute path; first: "module urls inside a compiled binary are recognised on every" | #29
 packages/supermux-core/tests/configuration.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "optional configuration and history > storage failure rolls b" | #29
 packages/supermux-core/tests/context-drivers.test.ts | runs a POSIX command Windows lacks; first: "opencode: no session context → the launch is byte-for-byte t" | #29
@@ -56,7 +53,6 @@ src/core/agents/claude/session.test.ts | 8.3 short name vs long name (tmpdir() v
 src/core/agents/core-bridge/core-adapter-accounts.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude: a subscription account gets the mux-shim server thro" | #29
 src/core/agents/core-bridge/core-adapter.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
 src/core/agents/detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "grok cred path is ~/.grok/auth.json" | #29
-src/core/agents/download.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
 src/core/agents/install.test.ts | never exits on Windows, killed by the timeout (run 41849291342) | #29 | hangs
 src/core/agents/instructions.test.ts | expected e/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl" got  to: [\"<session-id>\"], text, interrupt })."; first: "the inbox block names the session id, its inbox file and mes" | #29
 src/core/agents/opencode/core-host.prompts.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "opencode ask mode writes per-tool ask permissions" | #29
@@ -82,18 +78,17 @@ src/core/lsp/install.test.ts | 8.3 short name vs long name (tmpdir() vs realpath
 src/core/memory/agent-memory.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "ensureAgentMemoryFiles creates both files empty, in a privat" | #29
 src/core/plugins/lifecycle.test.ts | unrecognized plugin source: C:\Users\RUNNER~1\AppData\Local\Temp\lifecycle-add-i5BLhz\exte; first: "addPlugin copies a local source into the tree and appends to" | #29
 src/core/project/images.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "write creates the dir 0700 and stores bytes under a uuid.ext" | #29
-src/core/relay/frp-provider.test.ts | never exits on Windows, killed by the timeout (run 41849291342) | #29 | hangs
 src/core/runtime-assets-gc.test.ts | ENOENT: no such file or directory, chmod 'C:\Users\RUNNER~1\AppData\Local\Temp\mux-gc-2lRx; first: "sweepRuntimeAssets > an unremovable dir is skipped; the rest" | #29
 src/core/runtime/index.test.ts | expected "Windows session backend is not initialized" got Received function did not throw; first: "session backend test override can be reset without leaking s" | #29
 src/core/runtime/tmux-backend.test.ts | expected 0 got undefined; first: "tmux session backend > preserves exact argv and env without " | #29
 src/core/session-manager/pane-owner.test.ts | expected "sess-123" got null; first: "reads MUX_SESSION_ID from the process or its child, null whe" | #29
 src/core/session-manager/shim-spawn.test.ts | expected "/src/shim/index.ts" got \\a\\supermux\\supermux\\src\\shim\\index.ts"; first: "shimSpawnSpec > source mode: bun + absolute shim entry path" | #29
 src/core/sessiond/client.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "SessiondBackend > retains the legacy override and executable" | #29
-src/core/sessiond/main.test.ts | expected "already running" got ssiond-4f271678cb008ab37555e48c249b499f-lock"; first: "sessiond main > kernel lock rejects a live owner, leaves no " | #29
 src/core/sessiond/server.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "sessiond server > refuses to replace a non-socket stale endp" | #29
 src/core/terminal/zmx/backend.test.ts | expected true got false; first: "workspace terminal backend contract (zmx) > ensure creates o" | #29
 src/core/terminal/zmx/names.test.ts | symlink without the privilege (#37); first: "zmx name and socket-path limits > a target socket path fits " | #29
 src/core/tunnels/tailscale.test.ts | expected true got false; first: "install with --yes (consent assumed) runs the platform insta" | #29
+src/core/worktree/finish.test.ts | openPrForSession times out at 5 s (git push is slow on the runner); passed on the earlier Bun 1.3.14 runs | #29 | flaky
 src/core/worktree/inventory.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "lists every worktree with its owners (live / archived / orph" | #29
 src/core/worktree/service.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "worktrees whose repo is gone are one orphans summary, paged " | #29
 src/core/worktree/verify.test.ts | expected false got true; first: "runVerify reports pass/fail with output" | #29
