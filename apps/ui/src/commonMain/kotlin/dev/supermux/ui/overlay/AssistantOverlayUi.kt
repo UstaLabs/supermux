@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -30,13 +31,20 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
@@ -65,6 +73,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
@@ -161,13 +170,17 @@ class OverlayUiState {
     var edge by mutableStateOf(Edge.Left)
     /** Dropped on the ✕: out of sight until its next reply. */
     var hidden by mutableStateOf(false)
+    /** What the user just shared from the screen, on its way into the chat's composer. */
+    var shareAttach by mutableStateOf<ComposerExternalAttach?>(null)
+    /** A picture of the screen is being taken: nothing of the overlay may be in it. */
+    var capturing by mutableStateOf(false)
     var voice: OverlayVoiceControl? = null
 
     val speaking: Boolean get() = reply?.let { replyShown < it.text.length } == true
 
     /** Anything for the bubble to show right now. */
     val bubbleVisible: Boolean
-        get() = !hidden && !dragging && !chatOpen && (listening || finishing || micMissing || (reply != null && !replyFolded))
+        get() = !hidden && !capturing && !dragging && !chatOpen && (listening || finishing || micMissing || (reply != null && !replyFolded))
 }
 
 /** The longest stretch of a reply the bubble types out; the rest is one tap away. */
@@ -366,7 +379,8 @@ fun OverlayBubble(
                 }
                 if (ui.locked) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onCancelLocked, modifier = Modifier.testTag("overlay_lock_cancel")) { Text("Cancel") }
+                        // Filled, not outlined: an outline vanishes over whatever app is behind it.
+                        FilledTonalButton(onClick = onCancelLocked, modifier = Modifier.testTag("overlay_lock_cancel")) { Text("Cancel") }
                         Button(onClick = onSendLocked, modifier = Modifier.testTag("overlay_lock_send")) { Text("Send") }
                     }
                 } else {
@@ -424,18 +438,52 @@ private fun Hint(bg: androidx.compose.ui.graphics.Color, fg: androidx.compose.ui
     }
 }
 
+/** The ✕'s circle; [OVERLAY_DROP_BOX] leaves room around it for its growth and shadow. */
+private val DROP_CIRCLE = 64.dp
+
+/** The ✕ target's whole size, its circle centred in it: what the host's window is sized and placed by. */
+val OVERLAY_DROP_BOX = 96.dp
+
 /** The ✕ a dragged head is dropped on to hide it. */
 @Composable
 fun OverlayDropTarget(hot: Boolean, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val grow by animateFloatAsState(if (hot) 1.18f else 1f, label = "drop")
-    Box(
-        modifier.size(64.dp).scale(grow).shadow(8.dp, CircleShape).clip(CircleShape)
-            .background(if (hot) cs.error else cs.inverseSurface.copy(alpha = 0.82f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(Icons.Filled.Close, contentDescription = "Hide", tint = if (hot) cs.onError else cs.inverseOnSurface)
+    Box(modifier.size(OVERLAY_DROP_BOX), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(DROP_CIRCLE).scale(grow).shadow(8.dp, CircleShape).clip(CircleShape)
+                .background(if (hot) cs.error else cs.inverseSurface.copy(alpha = 0.82f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Close, contentDescription = "Hide", tint = if (hot) cs.onError else cs.inverseOnSurface)
+        }
     }
+}
+
+/** "Dockie is hidden · Undo", for a few seconds after it was dropped on the ✕. */
+@Composable
+fun OverlayUndo(name: String, onUndo: () -> Unit, modifier: Modifier = Modifier) {
+    Snackbar(
+        modifier = modifier.widthIn(max = 360.dp).padding(12.dp).testTag("overlay_undo"),
+        action = {
+            TextButton(
+                onClick = onUndo,
+                colors = ButtonDefaults.textButtonColors(contentColor = SnackbarDefaults.actionColor),
+                modifier = Modifier.testTag("overlay_undo_button"),
+            ) { Text("Undo") }
+        },
+    ) { Text("$name is hidden", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+}
+
+/** The composer's "Share what's on screen": the platform asks each time, then attaches a screenshot. */
+@Composable
+fun OverlayShareChip(onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text("Share what's on screen") },
+        leadingIcon = { Icon(Icons.Outlined.Visibility, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) },
+        modifier = Modifier.testTag("overlay_share_screen"),
+    )
 }
 
 /**
@@ -453,6 +501,8 @@ fun OverlayChat(
     onClose: () -> Unit,
     onOpenInApp: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Share what is on screen; null where the platform cannot. */
+    onShareScreen: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val state = rememberChatState(fleet, agent.id)
@@ -462,6 +512,8 @@ fun OverlayChat(
         fleet.markRead(agent.id)
         fleet.markReadOnServer(listOf(agent.id))
     }
+    val shareChip: (@Composable RowScope.() -> Unit)? =
+        if (onShareScreen != null) ({ OverlayShareChip(onClick = onShareScreen) }) else null
     val shape = if (compact) RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp) else RoundedCornerShape(24.dp)
     val headSize = 52.dp
     Box(modifier.testTag("overlay_chat")) {
@@ -508,6 +560,10 @@ fun OverlayChat(
                     onDraftChange = { draft = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     showHeader = false,
+                    // A shared screenshot is staged like a picked photo; the user sends it with their words.
+                    externalAttach = ui.shareAttach,
+                    onExternalAttachConsumed = { ui.shareAttach = null },
+                    composerChips = shareChip,
                 )
             }
         }

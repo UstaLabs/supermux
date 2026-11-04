@@ -1,6 +1,7 @@
 package dev.supermux.android.overlay
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,8 +13,15 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.Image
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -65,16 +73,21 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import dev.supermux.android.AppFleet
 import dev.supermux.android.MainActivity
+import dev.supermux.android.platform.ANDROID_CAPS
 import dev.supermux.android.platform.AndroidHaptics
+import dev.supermux.android.platform.AndroidNotices
 import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.PickerHost
 import dev.supermux.android.platform.QrScanHost
 import dev.supermux.android.push.SupermuxMessagingService
+import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.widthClassFor
+import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
 import dev.supermux.ui.overlay.Edge
+import dev.supermux.ui.overlay.OVERLAY_DROP_BOX
 import dev.supermux.ui.overlay.OverlayAgent
 import dev.supermux.ui.overlay.OverlayBubble
 import dev.supermux.ui.overlay.OverlayChat
@@ -83,15 +96,24 @@ import dev.supermux.ui.overlay.OverlayHead
 import dev.supermux.ui.overlay.OverlayReplies
 import dev.supermux.ui.overlay.OverlayScreen
 import dev.supermux.ui.overlay.OverlayScrim
+import dev.supermux.ui.overlay.OverlayUndo
 import dev.supermux.ui.overlay.OverlayUiState
 import dev.supermux.ui.overlay.OverlayVoice
 import dev.supermux.ui.overlay.Spot
 import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.rememberOverlayRig
+import dev.supermux.ui.overlay.shareImageSize
+import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.lang.ref.WeakReference
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * The assistant overlay on Android (#62): the default Agent as a chat head over other apps.
@@ -104,7 +126,13 @@ import kotlinx.coroutines.launch
  * - the **head**: the living avatar; touch goes through [CompanionGesture] (tap, hold to talk, drag);
  * - the **bubble**: the reply typing out, the words while you talk, the lock's Send / Cancel;
  * - the **✕**: shown while dragging; dropping the head on it hides it until the next reply;
+ * - the **undo**: "hidden · Undo" for a few seconds after that;
  * - the **chat**: a sheet with a scrim on a phone, a card beside the head on a wide screen.
+ *
+ * What only an activity may ask for (the screen-capture consent behind "Share what's on screen", the
+ * pickers behind the chat's attach button) goes through the invisible [OverlayBridgeActivity]. The
+ * chat steps out of its way meanwhile ([goAway]); the head stays, and tapping it drops a request the
+ * user walked away from ([cancelBridge]).
  *
  * Started and stopped by [MainActivity] from the Appearance switch ([sync]); it never starts itself.
  */
@@ -120,6 +148,26 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         private const val HEAD_DP = 56
         private const val KEYBOARD_DP = 290
         private const val MARGIN_DP = 12
+        private const val UNDO_MS = 4_000L
+        private const val SHARE_MAX_EDGE = 1600
+        /** How long the bridge may take to come up before the overlay stops waiting for it. */
+        private const val BRIDGE_WAIT_MS = 2_500L
+        /** How long a picked file's kept read grant lives: ample for its upload. */
+        private const val GRANT_KEEP_MS = 60 * 60_000L
+
+        /** The overlay's windows have no camera to capture with and no save dialog. */
+        private val OVERLAY_CAPS = ANDROID_CAPS.copy(camera = false, saveAs = false)
+
+        /** The running overlay, for [OverlayBridgeActivity]'s answers (same process, main thread). */
+        @SuppressLint("StaticFieldLeak")
+        private var running: AssistantOverlayService? = null
+
+        // The bridge's answers carry the request they answer: one the overlay has given up on is ignored.
+        /** The bridge is up. False: its request was given up on, so it should just go. */
+        internal fun bridgeOpened(request: Int, activity: Activity): Boolean = running?.onBridgeOpened(request, activity) ?: false
+        internal fun shareAllowed(request: Int, resultCode: Int, data: Intent) { running?.ifAsked(request)?.onShareAllowed(resultCode, data) }
+        internal fun shareRefused(request: Int) { running?.ifAsked(request)?.shareDone(null) }
+        internal fun picked(request: Int, uris: List<Uri>) { running?.ifAsked(request)?.onPicked(uris) }
 
         /** The Agent whose head is out right now, or null. The push service skips its notifications. */
         @Volatile
@@ -160,6 +208,24 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     private lateinit var bubble: OverlayWindow
     private lateinit var drop: OverlayWindow
     private var chat: OverlayWindow? = null
+    private var chatCompact = false
+    private var undo: OverlayWindow? = null
+    private val undoGone = Runnable { dropUndo() }
+
+    /** The chat's attach button picks through the bridge ([OverlayBridgeActivity]). */
+    private val picker = PickerHost<List<Uri>>()
+    /**
+     * A request is out with the bridge (the capture consent, a picker): the chat steps out of its way.
+     * The head stays, so a picker the user walked away from is one tap from being dropped ([cancelBridge]).
+     */
+    private var away = false
+    private var sharing = false
+    /** The bridge's current request, and the bridge once it is up. */
+    private var bridgeId = 0
+    private var bridge: WeakReference<Activity>? = null
+    private val bridgeLost = Runnable { cancelBridge(failed = true) }
+    /** Read grants kept for files picked through the bridge, given back after [GRANT_KEEP_MS]. */
+    private val keptGrants = mutableSetOf<Uri>()
 
     private var spot: Spot? = null
     private val gesture by lazy { CompanionGesture(HOLD_MS, slop = px(8), cancelDistance = px(70), lockDistance = px(70)) }
@@ -177,6 +243,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             createWindowContext(display, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
         } else this
         wm = windowContext.getSystemService(WindowManager::class.java)
+        running = this
+        picker.onLaunch = { kind -> if (!runBridge(OverlayBridgeActivity.pick(this, kind))) picker.deliver(null) }
         shared = AppFleet.acquire(this, this)
         startInForeground(fromForeground = false)
 
@@ -193,7 +261,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> ui.hidden = true
-            ACTION_SHOW -> ui.hidden = false
+            ACTION_SHOW -> {
+                cancelBridge()
+                ui.hidden = false
+            }
             else -> if (intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true) startInForeground(fromForeground = true)
         }
         return START_STICKY
@@ -201,7 +272,14 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
 
     override fun onDestroy() {
         showingAgentId = null
+        if (running === this) running = null
+        picker.onLaunch = null
         main.removeCallbacks(hold)
+        main.removeCallbacks(bridgeLost)
+        bridgeId++
+        bridge?.get()?.let { runCatching { it.finishAndRemoveTask() } }
+        releaseGrants(keptGrants)
+        dropUndo()
         runCatching { windowContext.unregisterComponentCallbacks(screenChanges) }
         closeChat()
         listOf(head, bubble, drop).forEach { it.remove() }
@@ -261,9 +339,14 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
 
     // ── windows ──
 
+    /**
+     * One overlay window with its own composition. The lasting ones (head, bubble, ✕) keep theirs while
+     * the service runs, across hide and show; a [oneOff] (a chat, an undo) lets go of it when removed.
+     */
     private inner class OverlayWindow(
         val params: WindowManager.LayoutParams,
         private val ownTouch: Boolean = false,
+        private val oneOff: Boolean = false,
         content: @Composable () -> Unit,
     ) {
         val view: FrameLayout = object : FrameLayout(windowContext) {
@@ -286,7 +369,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             view.setViewTreeViewModelStoreOwner(this@AssistantOverlayService)
             view.addView(
                 ComposeView(windowContext).apply {
-                    setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@AssistantOverlayService))
+                    setViewCompositionStrategy(
+                        if (oneOff) ViewCompositionStrategy.DisposeOnDetachedFromWindow
+                        else ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@AssistantOverlayService),
+                    )
                     setContent { OverlayTheme { content() } }
                 },
             )
@@ -325,8 +411,16 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     ).apply {
         gravity = Gravity.TOP or Gravity.START
         val (cx, cy) = CompanionPlacement.dismissCenter(screen(), px(64))
-        x = (cx - px(40)).toInt()
-        y = (cy - px(40)).toInt()
+        x = (cx - dropHalf()).toInt()
+        y = (cy - dropHalf()).toInt()
+    }
+
+    private fun undoParams() = baseParams(
+        WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+    ).apply {
+        gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        y = (screen().bottomInset + px(8)).toInt()
     }
 
     /** The bubble sits just above the head on its edge, or below it when the head is near the top. */
@@ -353,7 +447,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     @Composable
     private fun OverlayTheme(content: @Composable () -> Unit) {
         val view = LocalView.current
-        val platform = remember(view) { AndroidPlatform(windowContext, PickerHost(), QrScanHost(), AndroidHaptics(view)) }
+        val platform = remember(view) { AndroidPlatform(windowContext, picker, QrScanHost(), AndroidHaptics(view), caps = OVERLAY_CAPS) }
         val appearance by shared.uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(AppearanceMode.SYSTEM)
         val widthDp = windowContext.resources.configuration.screenWidthDp
         HostTheme(
@@ -403,10 +497,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }
         lifecycleScope.launch {
             snapshotFlow { ui.hidden }.distinctUntilChanged().collect { hidden ->
-                head.view.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
-                head.params.flags = if (hidden) head.params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                else head.params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                head.update()
+                syncHead()
+                if (!hidden) dropUndo()
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
             }
         }
@@ -451,8 +543,14 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
 
     private fun handle(intents: List<CompanionGesture.Intent>) {
         for (i in intents) when (i) {
-            CompanionGesture.Intent.Tap -> if (ui.chatOpen) closeChat() else openChat()
+            CompanionGesture.Intent.Tap -> when {
+                // Back from a picker or the consent left open: drop it, the chat returns.
+                away -> cancelBridge()
+                ui.chatOpen -> closeChat()
+                else -> openChat()
+            }
             CompanionGesture.Intent.ListenStart -> {
+                cancelBridge()
                 haptic(HapticFeedbackConstants.LONG_PRESS)
                 closeChat()
                 ui.reply = null
@@ -476,12 +574,13 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             CompanionGesture.Intent.ListenSend -> endTalk(send = true)
             CompanionGesture.Intent.ListenCancel -> endTalk(send = false)
             CompanionGesture.Intent.DragStart -> {
+                cancelBridge()
                 closeChat()
                 ui.dragging = true
                 dragFrom = head.params.x to head.params.y
                 drop.params.apply {
                     val (cx, cy) = CompanionPlacement.dismissCenter(screen(), px(64))
-                    x = (cx - px(40)).toInt(); y = (cy - px(40)).toInt()
+                    x = (cx - dropHalf()).toInt(); y = (cy - dropHalf()).toInt()
                 }
                 drop.show()
             }
@@ -501,6 +600,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     ui.dropHot = false
                     ui.hidden = true
                     snapTo(spot)
+                    offerUndo()
                 } else {
                     val s = CompanionPlacement.snap(screen(), headPx(), px(MARGIN_DP), head.params.x + px(4), head.params.y + px(4))
                     spot = s
@@ -578,7 +678,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 y = (hy + headPx().toInt() - px(560).toInt()).coerceIn((s.topInset + px(8)).toInt(), (s.height - s.bottomInset - px(560) - px(8)).toInt().coerceAtLeast(0))
             }
         }
-        val window = OverlayWindow(params) { Chat(compact) }
+        val window = OverlayWindow(params, oneOff = true) { Chat(compact) }
         if (!compact) {
             window.view.setOnTouchListener { _, e ->
                 if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) closeChat()
@@ -586,8 +686,9 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             }
         }
         chat = window
-        if (compact) head.view.visibility = View.INVISIBLE
+        chatCompact = compact
         window.show()
+        syncHead()
     }
 
     private fun closeChat() {
@@ -595,7 +696,20 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         chat = null
         ui.chatOpen = false
         window.remove()
-        if (!ui.hidden) head.view.visibility = View.VISIBLE
+        syncHead()
+    }
+
+    /**
+     * The head is out unless it is hidden, in a screenshot's way, or riding on the phone sheet (which
+     * draws its own; while the sheet steps aside for the bridge, the head is back).
+     */
+    private fun syncHead() {
+        val shown = !ui.hidden && !ui.capturing && !(chat != null && chatCompact && !away)
+        head.view.visibility = if (shown) View.VISIBLE else View.INVISIBLE
+        val flags = head.params.flags
+        head.params.flags = if (shown) flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        head.update()
     }
 
     @Composable
@@ -612,6 +726,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     onClose = { closeChat() },
                     onOpenInApp = { openInApp(agent.id) },
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = (screenH * 0.66f).dp).fillMaxHeight(),
+                    onShareScreen = { shareScreen() },
                 )
             }
         } else {
@@ -620,6 +735,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 onClose = { closeChat() },
                 onOpenInApp = { openInApp(agent.id) },
                 modifier = Modifier.size(380.dp, 560.dp),
+                onShareScreen = { shareScreen() },
             )
         }
     }
@@ -633,6 +749,202 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             )
         }
+    }
+
+    // ── undo a hide ──
+
+    private fun offerUndo() {
+        dropUndo()
+        val name = currentAgent?.name ?: "Your assistant"
+        val window = OverlayWindow(undoParams(), oneOff = true) {
+            OverlayUndo(name, onUndo = {
+                dropUndo()
+                ui.hidden = false
+            })
+        }
+        undo = window
+        window.show()
+        main.postDelayed(undoGone, UNDO_MS)
+    }
+
+    private fun dropUndo() {
+        main.removeCallbacks(undoGone)
+        undo?.remove()
+        undo = null
+    }
+
+    // ── the bridge: what only an activity may ask for ──
+
+    /**
+     * Opens [OverlayBridgeActivity], then steps out of its way. Started while the chat is still on
+     * screen: an app's visible window is what lets it start an activity from the background.
+     */
+    private fun runBridge(intent: Intent): Boolean {
+        if (away) return false
+        val request = ++bridgeId
+        if (runCatching { startActivity(intent.putExtra(OverlayBridgeActivity.EXTRA_REQUEST, request)) }.isFailure) return false
+        goAway(true)
+        // A start the system quietly refused never answers; don't wait for it.
+        main.postDelayed(bridgeLost, BRIDGE_WAIT_MS)
+        return true
+    }
+
+    /** This service, if [request] is the one still out with the bridge. */
+    private fun ifAsked(request: Int): AssistantOverlayService? = takeIf { away && request == bridgeId }
+
+    private fun onBridgeOpened(request: Int, activity: Activity): Boolean {
+        if (ifAsked(request) == null) return false
+        main.removeCallbacks(bridgeLost)
+        bridge = WeakReference(activity)
+        return true
+    }
+
+    /**
+     * Gives up on the request out with the bridge (it never came up, or the user came back without
+     * answering): its screen goes, a pick comes back empty, the chat returns. [failed] says so.
+     */
+    private fun cancelBridge(failed: Boolean = false) {
+        if (!away) return
+        bridgeId++
+        bridge?.get()?.let { runCatching { it.finishAndRemoveTask() } }
+        when {
+            sharing -> shareDone(null, failed = failed)
+            picker.inFlightId != null -> onPicked(emptyList())
+            else -> goAway(false)
+        }
+    }
+
+    /** Steps the chat out of the way of the bridge's screen (it would cover it), or brings it back. */
+    private fun goAway(away: Boolean) {
+        if (!away) {
+            main.removeCallbacks(bridgeLost)
+            bridge = null
+        }
+        if (this.away == away) return
+        this.away = away
+        chat?.view?.visibility = if (away) View.INVISIBLE else View.VISIBLE
+        syncHead()
+    }
+
+    private fun onPicked(uris: List<Uri>) {
+        goAway(false)
+        if (uris.isNotEmpty()) {
+            keptGrants += uris
+            main.postDelayed({ releaseGrants(uris) }, GRANT_KEEP_MS)
+        }
+        picker.deliver(uris.ifEmpty { null })
+    }
+
+    private fun releaseGrants(uris: Collection<Uri>) {
+        for (uri in uris.toList()) {
+            keptGrants -= uri
+            runCatching { contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
+    }
+
+    // ── share what's on screen ──
+
+    /** Asks every time (the system's consent, through the bridge), then takes one picture. */
+    private fun shareScreen() {
+        if (sharing) return
+        sharing = true
+        if (!runBridge(OverlayBridgeActivity.share(this))) sharing = false
+    }
+
+    /**
+     * The user allowed it. Called while the bridge is still on screen: Android 14+ lets a service take
+     * the screen-capture type only then, and wants it before the projection starts.
+     */
+    private fun onShareAllowed(resultCode: Int, data: Intent) {
+        if (!sharing) return
+        val projection = runCatching {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val capture = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                val now = foregroundServiceType
+                val notification = notification()
+                runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, now or capture) }
+                    // Should the mic be refused this time, sharing still works; opening supermux restores it.
+                    .recoverCatching {
+                        val noMic = now and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE.inv()
+                        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, noMic or capture)
+                    }
+                    .getOrThrow()
+            }
+            getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultCode, data)
+        }.getOrNull()
+        if (projection == null) {
+            shareDone(null, failed = true)
+            return
+        }
+        ui.capturing = true
+        syncHead()
+        dropUndo()
+        // Let the consent dialog leave the screen first.
+        main.postDelayed({ grab(projection) }, 450)
+    }
+
+    /** One frame of the screen, the overlay out of it; then the projection is let go. */
+    private fun grab(projection: MediaProjection) {
+        val (w, h) = displaySize()
+        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        var display: VirtualDisplay? = null
+        var done = false
+        lateinit var timeout: Runnable
+        fun finish(shot: Bitmap?) {
+            if (done) return
+            done = true
+            main.removeCallbacks(timeout)
+            reader.setOnImageAvailableListener(null, null)
+            runCatching { display?.release() }
+            runCatching { projection.stop() }
+            runCatching { reader.close() }
+            lifecycleScope.launch {
+                val png = shot?.let { withContext(Dispatchers.Default) { runCatching { encodeShare(it) }.getOrNull() } }
+                shareDone(png, failed = png == null)
+            }
+        }
+        timeout = Runnable { finish(null) }
+        // Android 14+ wants a callback before the virtual display.
+        projection.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() = finish(null)
+        }, main)
+        reader.setOnImageAvailableListener({ r ->
+            val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
+            val shot = runCatching { image.frameBitmap(w, h) }.getOrNull()
+            image.close()
+            finish(shot)
+        }, main)
+        main.postDelayed(timeout, 3_000)
+        display = runCatching {
+            projection.createVirtualDisplay(
+                "supermux-assistant-share", w, h, windowContext.resources.displayMetrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, main,
+            )
+        }.getOrNull()
+        if (display == null) finish(null)
+    }
+
+    private fun encodeShare(shot: Bitmap): ByteArray {
+        val (w, h) = shareImageSize(shot.width, shot.height, SHARE_MAX_EDGE)
+        val scaled = if (w == shot.width && h == shot.height) shot else Bitmap.createScaledBitmap(shot, w, h, true)
+        return ByteArrayOutputStream().use { out ->
+            scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }
+    }
+
+    /**
+     * Back on screen; a picture goes into the chat's composer as an attachment, to send with your words.
+     * [failed]: it was allowed (or asked for) but no picture came, which the user is told; a "no" is not.
+     */
+    private fun shareDone(png: ByteArray?, failed: Boolean = false) {
+        sharing = false
+        ui.capturing = false
+        goAway(false)
+        if (failed) AndroidNotices(applicationContext).show("Couldn't share the screen.")
+        if (png == null) return
+        val name = "screen-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".png"
+        ui.shareAttach = ComposerExternalAttach(PickedFile(name, "image/png", ByteArrayChunkSource(png)), text = "", send = false)
     }
 
     // ── the screen it lives on ──
@@ -663,10 +975,32 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }
     }
 
+    /** The whole display, bars included: what a screenshot covers. */
+    private fun displaySize(): Pair<Int, Int> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            wm.currentWindowMetrics.bounds.let { it.width() to it.height() }
+        } else {
+            val dm = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels to dm.heightPixels
+        }
+
     private fun px(dp: Int): Float = dp * windowContext.resources.displayMetrics.density
     private fun headPx(): Float = px(HEAD_DP)
+    private fun dropHalf(): Float = OVERLAY_DROP_BOX.value / 2 * windowContext.resources.displayMetrics.density
 
     private fun haptic(kind: Int) {
         head.view.performHapticFeedback(kind)
     }
+}
+
+/** An RGBA_8888 frame as a bitmap of exactly [width]×[height] (its rows can be padded past the width). */
+private fun Image.frameBitmap(width: Int, height: Int): Bitmap {
+    val plane = planes[0]
+    val rowPixels = plane.rowStride / plane.pixelStride
+    val full = Bitmap.createBitmap(rowPixels, height, Bitmap.Config.ARGB_8888)
+    full.copyPixelsFromBuffer(plane.buffer)
+    if (rowPixels == width) return full
+    return Bitmap.createBitmap(full, 0, 0, width, height).also { full.recycle() }
 }

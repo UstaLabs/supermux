@@ -87,9 +87,9 @@ class AndroidPlatform(
     private val captureHost: CaptureHost = CaptureHost(),
     saveHost: SaveHost = SaveHost(),
     permissionHost: PermissionHost = PermissionHost(),
+    /** What this window can do; the assistant overlay's windows have no camera or save dialog. */
+    override val caps: Caps = ANDROID_CAPS,
 ) : Platform {
-
-    override val caps: Caps get() = ANDROID_CAPS
 
     /** The process's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
     override val mediaCache: dev.supermux.media.MediaCache get() = AndroidMedia.cache(context)

@@ -24,4 +24,11 @@ class OverlayStateTest {
         assertEquals(1f, voiceLevel(1f))                // 0 dBFS
         assertEquals(0.5f, voiceLevel(0.031622775f), 0.001f) // −30 dBFS, halfway between −50 and −10
     }
+
+    @Test fun aScreenshotShrinksToItsLongSide() {
+        assertEquals(686 to 1600, shareImageSize(1080, 2520, 1600))  // the Fold's cover screen
+        assertEquals(1600 to 1442, shareImageSize(2184, 1968, 1600)) // and its inner one
+    }
+
+    @Test fun aSmallScreenshotStaysAsItIs() = assertEquals(720 to 1280, shareImageSize(720, 1280, 1600))
 }
