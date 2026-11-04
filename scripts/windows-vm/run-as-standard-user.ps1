@@ -51,7 +51,12 @@ if ($rights -match '^SeBatchLogonRight\s*=') {
 Set-Content -LiteralPath $inf -Value $rights -Encoding Unicode
 secedit /configure /db $db /cfg $inf /areas USER_RIGHTS | Out-Null
 
-foreach ($path in $ReadPaths) { icacls $path /grant "${UserName}:(OI)(CI)RX" /Q | Out-Null }
+# /T applies the grant to what already exists too (the checkout, node_modules), not only to what gets created
+# later; /C goes on past files in use. A failure is printed, never swallowed.
+foreach ($path in $ReadPaths) {
+    $result = icacls $path /grant "${UserName}:(OI)(CI)RX" /T /C /Q 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Output "icacls $path exited $LASTEXITCODE`: $(@($result) | Select-Object -Last 3)" }
+}
 icacls $work /grant "${UserName}:(OI)(CI)M" /Q | Out-Null
 
 # The task runs a wrapper that captures the script's output and exit code into files this job can read.
