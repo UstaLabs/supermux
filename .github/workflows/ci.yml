@@ -199,7 +199,7 @@ jobs:
       needs.changes.outputs.ts == 'true' ||
       needs.changes.outputs.wire == 'true'
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       DO_NOT_TRACK: "1"
     steps:

@@ -55,7 +55,8 @@ foreach ($path in $ReadPaths) { icacls $path /grant "${UserName}:(OI)(CI)RX" /Q 
 icacls $work /grant "${UserName}:(OI)(CI)M" /Q | Out-Null
 
 # The task runs a wrapper that captures the script's output and exit code into files this job can read.
-$argList = ($ScriptArgs | ForEach-Object { Quote $_ }) -join " "
+# Parameter names stay bare ("-Repo"); a quoted "-Repo" would reach the script as a positional value.
+$argList = ($ScriptArgs | ForEach-Object { if ($_ -match '^-[A-Za-z][A-Za-z0-9]*$') { $_ } else { Quote $_ } }) -join " "
 $wrapper = Join-Path $work "run.ps1"
 @"
 `$ErrorActionPreference = 'Continue'
