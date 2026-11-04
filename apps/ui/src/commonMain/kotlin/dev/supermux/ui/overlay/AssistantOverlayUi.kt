@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -198,6 +199,12 @@ class OverlayUiState {
     var shareAttach by mutableStateOf<ComposerExternalAttach?>(null)
     /** A picture of the screen is being taken: nothing of the overlay may be in it. */
     var capturing by mutableStateOf(false)
+    /** Dragged and held still over the screen: letting go shows the Agent what's under it. */
+    var lookArmed by mutableStateOf(false)
+    /** Android's screen-sharing session for looks is on (asked once; ends when stopped or the screen goes off). */
+    var lookSharing by mutableStateOf(false)
+    /** The last ask to share the screen got a "no": offer a screenshot of the user's own instead. */
+    var lookDeclined by mutableStateOf(false)
     var voice: OverlayVoiceControl? = null
 
     val speaking: Boolean get() = reply?.let { replyShown < it.text.length } == true
@@ -334,6 +341,28 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     }
 }
 
+/**
+ * A clock (ms) that ticks [fps] times a second, carrying on from where it was when the rate changes;
+ * 0 stops it. At 60 it ticks with the screen's frames.
+ */
+@Composable
+private fun rememberOverlayClock(fps: Int): Long {
+    var now by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(fps) {
+        if (fps <= 0) return@LaunchedEffect
+        val start = withFrameMillis { it } - now
+        if (fps >= 60) {
+            while (true) withFrameMillis { now = it - start }
+        } else {
+            while (true) {
+                delay(1000L / fps)
+                now = withFrameMillis { it } - start
+            }
+        }
+    }
+    return now
+}
+
 /** The living avatar on its glass circle, with its count and the ring that shows it listening. */
 @Composable
 fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size: Dp, modifier: Modifier = Modifier) {
@@ -356,9 +385,25 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         dozing = dozing,
         awake = ui.pressed || ui.chatOpen,
     )
-    val pulse = rememberInfiniteTransition(label = "overlay-listen")
-    val ring by pulse.animateFloat(0.92f, 1.06f, infiniteRepeatable(tween(550), RepeatMode.Reverse), label = "ring")
-    val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
+    // Its own clock, only as fast as it needs: smooth while you touch it, talk to it or it speaks,
+    // slower while idle, slowest asleep, still while hidden. The avatar draws at this rate instead of
+    // on every screen refresh, which is what an always-on overlay costs in battery.
+    val clock = rememberOverlayClock(
+        when {
+            ui.hidden || ui.capturing -> 0
+            ui.pressed || ui.listening || ui.speaking || ui.dragging || ui.lookArmed -> 60
+            state == "asleep" -> 8
+            else -> 24
+        },
+    )
+    val lift by animateFloatAsState(
+        when {
+            ui.lookArmed -> 1.16f
+            ui.pressed || ui.listening -> 1.08f
+            else -> 1f
+        },
+        label = "lift",
+    )
     Box(modifier.size(size + 8.dp).testTag("overlay_head"), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(size).scale(lift).shadow(10.dp, CircleShape).clip(CircleShape)
@@ -366,16 +411,21 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 .border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), CircleShape),
         )
         if (ui.listening) {
+            val pulse = rememberInfiniteTransition(label = "overlay-listen")
+            val ring by pulse.animateFloat(0.92f, 1.06f, infiniteRepeatable(tween(550), RepeatMode.Reverse), label = "ring")
             Box(
                 Modifier.size(size).scale(ring)
                     .border(3.dp, (if (ui.cancelArmed) cs.error else cs.primary).copy(alpha = 0.7f), CircleShape),
             )
+        } else if (ui.lookArmed) {
+            // Armed to look: a steady ring, in step with the frame around what it will take.
+            Box(Modifier.size(size).scale(lift).border(3.dp, cs.primary, CircleShape))
         }
         val inner = (size.value * 0.82f).toInt()
         // A press perks it up, but not while you hold it to talk: then it is listening, not hovered.
         val hovered = (ui.pressed && !ui.listening) || ui.chatOpen
         if (rig != null) {
-            AvatarRigView(rig, state = state, hovered = hovered, level = ui.level, seed = agent?.id ?: "", size = inner)
+            AvatarRigView(rig, state = state, hovered = hovered, level = ui.level, seed = agent?.id ?: "", size = inner, fixedTime = clock)
         } else if (agent != null) {
             // No avatar of its own: its name-derived one, with the same states.
             AgentAvatar(
@@ -388,6 +438,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 listening = state == "listening",
                 speaking = state == "speaking",
                 level = ui.level,
+                timeMs = clock,
             )
         }
         if (agent?.unread == true && !ui.chatOpen && !ui.listening && !ui.speaking) {
@@ -537,15 +588,70 @@ fun OverlayUndo(name: String, onUndo: () -> Unit, modifier: Modifier = Modifier)
     ) { Text("$name is hidden", maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
-/** The composer's "Share what's on screen": the platform asks each time, then attaches a screenshot. */
+/**
+ * The frame a look takes, shown before it is taken, with what letting go does. Drawn in a window the
+ * size of the frame plus its label above; [frameTop] is where the frame starts in it.
+ */
 @Composable
-fun OverlayShareChip(onClick: () -> Unit) {
-    AssistChip(
-        onClick = onClick,
-        label = { Text("Share what's on screen") },
-        leadingIcon = { Icon(Icons.Outlined.Visibility, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) },
-        modifier = Modifier.testTag("overlay_share_screen"),
-    )
+fun OverlayLookFrame(name: String, frameTop: Dp, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val grow by animateFloatAsState(if (shown) 1f else 0.94f, label = "look-frame")
+    Box(modifier.fillMaxSize().testTag("overlay_look_frame")) {
+        val shape = RoundedCornerShape(14.dp)
+        Box(
+            Modifier.fillMaxSize().padding(top = frameTop).scale(grow)
+                .background(cs.primary.copy(alpha = 0.06f), shape)
+                .border(3.dp, cs.primary, shape),
+        )
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = cs.primary,
+            contentColor = cs.onPrimary,
+            shadowElevation = 4.dp,
+            modifier = Modifier.padding(start = 6.dp),
+        ) {
+            Text(
+                "Let go to show $name this",
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * What the chat's composer says about looks, above its field: that screen sharing is on, with Stop; the
+ * way round a "no" to sharing (a screenshot of your own); otherwise how to show it something.
+ */
+@Composable
+fun OverlayLookChips(ui: OverlayUiState, name: String, onStopSharing: () -> Unit, onAttachScreenshot: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val icon = @Composable { Icon(Icons.Outlined.Visibility, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) }
+    when {
+        ui.lookSharing -> AssistChip(
+            onClick = onStopSharing,
+            label = { Text("Sharing your screen · Stop") },
+            leadingIcon = icon,
+            modifier = Modifier.testTag("overlay_look_stop"),
+        )
+        ui.lookDeclined -> AssistChip(
+            onClick = onAttachScreenshot,
+            label = { Text("Attach a screenshot instead") },
+            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) },
+            modifier = Modifier.testTag("overlay_look_fallback"),
+        )
+        else -> Row(
+            Modifier.padding(horizontal = 4.dp, vertical = 6.dp).testTag("overlay_look_hint"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(Icons.Outlined.Visibility, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Text("Drag $name onto anything and hold to show it here", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
+        }
+    }
 }
 
 /**
@@ -563,8 +669,8 @@ fun OverlayChat(
     onClose: () -> Unit,
     onOpenInApp: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Share what is on screen; null where the platform cannot. */
-    onShareScreen: (() -> Unit)? = null,
+    /** The host's chips above the composer's field (on Android: looks); null = none. */
+    composerChips: (@Composable RowScope.() -> Unit)? = null,
     /** Show another Agent here instead (its id); null hides the switcher. */
     onPickAgent: ((String) -> Unit)? = null,
 ) {
@@ -584,8 +690,6 @@ fun OverlayChat(
         fleet.markRead(agent.id)
         fleet.markReadOnServer(listOf(agent.id))
     }
-    val shareChip: (@Composable RowScope.() -> Unit)? =
-        if (onShareScreen != null) ({ OverlayShareChip(onClick = onShareScreen) }) else null
     val shape = if (compact) RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp) else RoundedCornerShape(24.dp)
     val headSize = 52.dp
     Box(modifier.testTag("overlay_chat").onGloballyPositioned { boxTop = it.boundsInRoot().top }) {
@@ -659,7 +763,7 @@ fun OverlayChat(
                     // A shared screenshot is staged like a picked photo; the user sends it with their words.
                     externalAttach = ui.shareAttach,
                     onExternalAttachConsumed = { ui.shareAttach = null },
-                    composerChips = shareChip,
+                    composerChips = composerChips,
                 )
             }
         }

@@ -82,7 +82,7 @@
         </service>
         <!-- The assistant overlay's windows (overlay/AssistantOverlayService.kt). specialUse: a chat
              head the user turned on; microphone: hold-to-talk while another app is in front;
-             mediaProjection: "Share what's on screen", taken only after the system asked the user. -->
+             mediaProjection: looks (drag it onto something and hold still), once Android has asked. -->
         <service
             android:name=".overlay.AssistantOverlayService"
             android:exported="false"

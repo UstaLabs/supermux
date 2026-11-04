@@ -7,9 +7,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
@@ -28,6 +30,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.view.Display
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -80,6 +83,7 @@ import dev.supermux.android.platform.AndroidNotices
 import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.PickerHost
 import dev.supermux.android.platform.QrScanHost
+import dev.supermux.android.platform.pickedFileFromUri
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.ui.adaptive.InputMode
@@ -88,12 +92,17 @@ import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
 import dev.supermux.ui.overlay.Edge
+import dev.supermux.ui.overlay.LookBlock
+import dev.supermux.ui.overlay.LookRect
+import dev.supermux.ui.overlay.LumaGrid
 import dev.supermux.ui.overlay.OVERLAY_DROP_BOX
 import dev.supermux.ui.overlay.OverlayAgent
 import dev.supermux.ui.overlay.OverlayBubble
 import dev.supermux.ui.overlay.OverlayChat
 import dev.supermux.ui.overlay.OverlayDropTarget
 import dev.supermux.ui.overlay.OverlayHead
+import dev.supermux.ui.overlay.OverlayLookChips
+import dev.supermux.ui.overlay.OverlayLookFrame
 import dev.supermux.ui.overlay.OverlayReplies
 import dev.supermux.ui.overlay.OverlayScreen
 import dev.supermux.ui.overlay.OverlayScrim
@@ -105,10 +114,16 @@ import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.overlayChoiceToStore
 import dev.supermux.ui.overlay.rememberOverlayRig
 import dev.supermux.ui.overlay.shareImageSize
+import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -132,8 +147,11 @@ import java.time.format.DateTimeFormatter
  * - the **undo**: "hidden · Undo" for a few seconds after that;
  * - the **chat**: a sheet with a scrim on a phone, a card beside the head on a wide screen.
  *
- * What only an activity may ask for (the screen-capture consent behind "Share what's on screen", the
- * pickers behind the chat's attach button) goes through the invisible [OverlayBridgeActivity]. The
+ * Looks: drag the head onto something and hold still, and a frame shows what letting go takes; that part
+ * of the screen lands in the chat's composer for the user to send ([armLook], [Look]).
+ *
+ * What only an activity may ask for (the screen-capture consent behind looks, the pickers behind the
+ * chat's attach button) goes through the invisible [OverlayBridgeActivity]. The
  * chat steps out of its way meanwhile ([goAway]); the head stays, and tapping it drops a request the
  * user walked away from ([cancelBridge]).
  *
@@ -147,6 +165,13 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         private const val EXTRA_FOREGROUND = "dev.supermux.overlay.foreground"
         private const val ACTION_SHOW = "dev.supermux.overlay.SHOW"
         private const val ACTION_HIDE = "dev.supermux.overlay.HIDE"
+        private const val ACTION_STOP_LOOK = "dev.supermux.overlay.STOP_LOOK"
+        /** How long a drag holds still before letting go looks rather than moves. */
+        private const val LOOK_MS = 450L
+        /** Logcat tag for the screen-sharing session (`adb logcat -s SupermuxLook`): what it costs and why it ended. */
+        private const val LOOK_LOG = "SupermuxLook"
+        /** On screen off, how long Android gets to end the session itself (15 QPR1+) before we do. */
+        private const val SCREEN_OFF_GRACE_MS = 2_000L
         private const val HOLD_MS = 320L
         private const val HEAD_DP = 56
         private const val KEYBOARD_DP = 290
@@ -169,7 +194,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         /** The bridge is up. False: its request was given up on, so it should just go. */
         internal fun bridgeOpened(request: Int, activity: Activity): Boolean = running?.onBridgeOpened(request, activity) ?: false
         internal fun shareAllowed(request: Int, resultCode: Int, data: Intent) { running?.ifAsked(request)?.onShareAllowed(resultCode, data) }
-        internal fun shareRefused(request: Int) { running?.ifAsked(request)?.shareDone(null) }
+        internal fun shareRefused(request: Int) { running?.ifAsked(request)?.lookRefused() }
         internal fun picked(request: Int, uris: List<Uri>) { running?.ifAsked(request)?.onPicked(uris) }
 
         /** The Agent whose head is out right now, or null. The push service skips its notifications. */
@@ -231,7 +256,9 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     private val keptGrants = mutableSetOf<Uri>()
 
     private var spot: Spot? = null
-    private val gesture by lazy { CompanionGesture(HOLD_MS, slop = px(8), cancelDistance = px(70), lockDistance = px(70)) }
+    private val gesture by lazy {
+        CompanionGesture(HOLD_MS, slop = px(8), cancelDistance = px(70), lockDistance = px(70), lookMs = LOOK_MS, lookSlop = px(16))
+    }
     private var dragFrom = 0 to 0
     private val hold = Runnable { handle(gesture.hold(SystemClock.uptimeMillis())) }
 
@@ -257,6 +284,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         head.view.setOnTouchListener(::onHeadTouch)
         head.show()
         windowContext.registerComponentCallbacks(screenChanges)
+        // Screen sharing for looks ends when the screen goes off, on every Android (15+ does it too).
+        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         watch()
     }
@@ -268,6 +297,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 cancelBridge()
                 ui.hidden = false
             }
+            ACTION_STOP_LOOK -> look?.let { endLook(it, "Stop sharing in the notification") }
             else -> if (intent?.getBooleanExtra(EXTRA_FOREGROUND, false) == true) startInForeground(fromForeground = true)
         }
         return START_STICKY
@@ -279,6 +309,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         picker.onLaunch = null
         main.removeCallbacks(hold)
         main.removeCallbacks(bridgeLost)
+        main.removeCallbacks(dwell)
+        runCatching { unregisterReceiver(screenOff) }
+        hideFrame()
+        look?.let { endLook(it, "the overlay was turned off") }
         bridgeId++
         bridge?.get()?.let { runCatching { it.finishAndRemoveTask() } }
         releaseGrants(keptGrants)
@@ -327,11 +361,26 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val name = currentAgent?.name ?: "Your assistant"
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(if (ui.hidden) "$name is resting" else "$name is in your corner")
-            .setContentText(if (ui.hidden) "It comes back with its next reply." else "Tap it to chat, hold it to talk.")
+            .setContentText(
+                when {
+                    ui.lookSharing -> "Screen sharing is on for looks."
+                    ui.hidden -> "It comes back with its next reply."
+                    else -> "Tap it to chat, hold it to talk."
+                },
+            )
             .setContentIntent(open)
+        if (ui.lookSharing) {
+            val stop = PendingIntent.getService(
+                this, 2,
+                Intent(this, AssistantOverlayService::class.java).setAction(ACTION_STOP_LOOK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.addAction(0, "Stop sharing", stop)
+        }
+        return builder
             .addAction(0, if (ui.hidden) "Show" else "Hide", toggle)
             .setOngoing(true)
             .setSilent(true)
@@ -527,6 +576,12 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 .collect { showingAgentId = it }
         }
         lifecycleScope.launch {
+            // Sharing on or off: the notification offers Stop, or doesn't.
+            snapshotFlow { ui.lookSharing }.distinctUntilChanged().collect {
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+            }
+        }
+        lifecycleScope.launch {
             // Another Agent picked: the quiet notification names it.
             snapshotFlow { agent?.name }.distinctUntilChanged().collect {
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
@@ -561,6 +616,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 handle(gesture.cancel())
             }
         }
+        scheduleDwell()
         return true
     }
 
@@ -615,6 +671,14 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 val hot = CompanionPlacement.overDismiss(screen(), head.params.x + half, head.params.y + half, px(64), px(56))
                 if (hot && !ui.dropHot) haptic(HapticFeedbackConstants.CLOCK_TICK)
                 ui.dropHot = hot
+            }
+            CompanionGesture.Intent.LookArm -> armLook()
+            CompanionGesture.Intent.LookDisarm -> disarmLook()
+            CompanionGesture.Intent.LookDrop -> {
+                ui.dragging = false
+                ui.dropHot = false
+                drop.remove()
+                dropLook()
             }
             CompanionGesture.Intent.DragEnd -> {
                 ui.dragging = false
@@ -749,7 +813,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     onClose = { closeChat() },
                     onOpenInApp = { openInApp(agent.id) },
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = (screenH * 0.66f).dp).fillMaxHeight(),
-                    onShareScreen = { shareScreen() },
+                    composerChips = { LookChips(agent.name) },
                     onPickAgent = { pickAgent(it) },
                 )
             }
@@ -759,7 +823,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 onClose = { closeChat() },
                 onOpenInApp = { openInApp(agent.id) },
                 modifier = Modifier.size(380.dp, 560.dp),
-                onShareScreen = { shareScreen() },
+                composerChips = { LookChips(agent.name) },
                 onPickAgent = { pickAgent(it) },
             )
         }
@@ -833,7 +897,12 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         bridgeId++
         bridge?.get()?.let { runCatching { it.finishAndRemoveTask() } }
         when {
-            sharing -> shareDone(null, failed = failed)
+            sharing -> {
+                sharing = false
+                pendingLook = null
+                goAway(false)
+                if (failed) AndroidNotices(applicationContext).show("Couldn't ask to share the screen.")
+            }
             picker.inFlightId != null -> onPicked(emptyList())
             else -> goAway(false)
         }
@@ -867,109 +936,340 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }
     }
 
-    // ── share what's on screen ──
-
-    /** Asks every time (the system's consent, through the bridge), then takes one picture. */
-    private fun shareScreen() {
-        if (sharing) return
-        sharing = true
-        if (!runBridge(OverlayBridgeActivity.share(this))) sharing = false
-    }
+    // ── looks: drop it on something and hold still, and that part goes to its chat ──
 
     /**
-     * The user allowed it. Called while the bridge is still on screen: Android 14+ lets a service take
-     * the screen-capture type only then, and wants it before the projection starts.
+     * Android's screen-sharing session for looks: asked for once, kept until it's stopped (Android's
+     * sharing chip, Stop in the chat or the notification, or the screen going off). Its mirror is paused
+     * between looks, so nothing of the screen is read unless a look is taken.
      */
-    private fun onShareAllowed(resultCode: Int, data: Intent) {
-        if (!sharing) return
-        val projection = runCatching {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val capture = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                val now = foregroundServiceType
-                val notification = notification()
-                runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, now or capture) }
-                    // Should the mic be refused this time, sharing still works; opening supermux restores it.
-                    .recoverCatching {
-                        val noMic = now and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE.inv()
-                        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, noMic or capture)
-                    }
-                    .getOrThrow()
+    private inner class Look(private val projection: MediaProjection) {
+        private val size = displaySize()
+        private val reader = ImageReader.newInstance(size.first, size.second, PixelFormat.RGBA_8888, 2)
+        private val display: VirtualDisplay
+        /** We are ending it ourselves, so Android's onStop that follows isn't Android's doing. */
+        var ending = false
+        /** Frames that reach the reader while the mirror is paused: 0 means detaching the surface works. */
+        private var pausedFrames = 0
+        private var pausedAt = 0L
+        private val startedAt = SystemClock.uptimeMillis()
+        private var grabs = 0
+
+        init {
+            // Android 14+ wants the callback before the virtual display.
+            projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    main.post { if (!ending) endLook(this@Look, "Android stopped it (its sharing chip, or the lock)") }
+                }
+            }, main)
+            display = projection.createVirtualDisplay(
+                "supermux-assistant-look", size.first, size.second, windowContext.resources.displayMetrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, null, null, main,
+            ) ?: error("no virtual display for the look session")
+            countWhilePaused()
+            Log.i(LOOK_LOG, "session started on Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${size.first}x${size.second}, mirror paused")
+        }
+
+        /** One frame of the screen as it is now: the mirror runs only for as long as that takes. */
+        suspend fun grab(why: String): Bitmap? {
+            val asked = SystemClock.uptimeMillis()
+            if (pausedFrames > 0) Log.w(LOOK_LOG, "$pausedFrames frame(s) arrived while paused: detaching the surface did not stop the mirror")
+            pausedFrames = 0
+            val shot = withTimeoutOrNull(1_500) {
+                suspendCancellableCoroutine { cont ->
+                    runCatching { reader.acquireLatestImage()?.close() }
+                    reader.setOnImageAvailableListener({ r ->
+                        val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
+                        val bmp = runCatching { image.frameBitmap(size.first, size.second) }.getOrNull()
+                        image.close()
+                        pause()
+                        if (cont.isActive) cont.resume(bmp)
+                    }, main)
+                    display.surface = reader.surface
+                    cont.invokeOnCancellation { main.post { pause() } }
+                }
             }
-            getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultCode, data)
-        }.getOrNull()
-        if (projection == null) {
-            shareDone(null, failed = true)
+            grabs++
+            val took = SystemClock.uptimeMillis() - asked
+            if (shot != null) Log.i(LOOK_LOG, "$why: one frame in $took ms (grab $grabs)") else Log.w(LOOK_LOG, "$why: no frame within $took ms")
+            return shot
+        }
+
+        private fun pause() {
+            runCatching { display.surface = null }
+            countWhilePaused()
+        }
+
+        /**
+         * While paused, any frame that still arrives is counted (and dropped), to prove the mirror stopped;
+         * one already on its way when it paused isn't counted.
+         */
+        private fun countWhilePaused() {
+            pausedAt = SystemClock.uptimeMillis()
+            reader.setOnImageAvailableListener({ r ->
+                runCatching { r.acquireLatestImage()?.close() }
+                if (SystemClock.uptimeMillis() - pausedAt > 200) pausedFrames++
+            }, main)
+        }
+
+        fun stop(reason: String) {
+            ending = true
+            reader.setOnImageAvailableListener(null, null)
+            runCatching { display.surface = null }
+            runCatching { display.release() }
+            runCatching { projection.stop() }
+            runCatching { reader.close() }
+            val minutes = (SystemClock.uptimeMillis() - startedAt) / 60_000.0
+            Log.i(LOOK_LOG, "session ended after ${"%.1f".format(minutes)} min, $grabs grab(s), $pausedFrames frame(s) while paused: $reason")
+        }
+    }
+
+    private var look: Look? = null
+    /** Where a look was dropped while Android was still asking to share the screen. */
+    private var pendingLook: LookRect? = null
+    private var frame: OverlayWindow? = null
+    private var lookRect: LookRect? = null
+    private var lookJob: Job? = null
+    private var dwellAt: Long? = null
+    private val dwell = Runnable { onDwell() }
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // Android 15 QPR1+ ends a share on lock by itself; give it the chance, so the log shows who did.
+            val session = look ?: return
+            main.postDelayed({ if (look === session) endLook(session, "screen off (ended by the overlay; Android hadn't)") }, SCREEN_OFF_GRACE_MS)
+        }
+    }
+
+    /** Keeps the hold-still timer on the gesture's due time, without pushing it back on every wobble. */
+    private fun scheduleDwell() {
+        val due = gesture.lookDueAt
+        if (due == dwellAt) return
+        main.removeCallbacks(dwell)
+        dwellAt = due
+        if (due != null) main.postAtTime(dwell, due)
+    }
+
+    private fun headCenter(): Pair<Float, Float> {
+        val half = px(4) + headPx() / 2
+        return head.params.x + half to head.params.y + half
+    }
+
+    /** The drag held still: arm the look, if it's over the screen (not along an edge, not on the ✕). */
+    private fun onDwell() {
+        val (cx, cy) = headCenter()
+        val over = CompanionPlacement.inLookZone(screen(), cx, cy, edgeBand = headPx() + px(MARGIN_DP + 12), dismissOffset = px(64), dismissRadius = px(90))
+        if (!over) return
+        dwellAt = null
+        handle(gesture.dwell(SystemClock.uptimeMillis()))
+    }
+
+    private fun plainFrame(cx: Float, cy: Float): LookRect {
+        val s = screen()
+        return CompanionPlacement.lookFrame(s, cx, cy, s.width * 0.8f, s.height * 0.22f)
+    }
+
+    /** Armed: frame what letting go will take, the block of content under it when the screen can be read. */
+    private fun armLook() {
+        haptic(HapticFeedbackConstants.CONTEXT_CLICK)
+        ui.lookArmed = true
+        val (cx, cy) = headCenter()
+        val session = look
+        if (session == null) {
+            showFrame(plainFrame(cx, cy))
             return
         }
+        lookJob = lifecycleScope.launch {
+            val found = withTimeoutOrNull(500) {
+                val shot = session.grab("frame the look") ?: return@withTimeoutOrNull null
+                withContext(Dispatchers.Default) { blockAround(shot, cx, cy) }
+            }
+            if (ui.lookArmed) showFrame(found ?: plainFrame(cx, cy))
+        }
+    }
+
+    private fun disarmLook() {
+        ui.lookArmed = false
+        lookJob?.cancel()
+        lookJob = null
+        lookRect = null
+        hideFrame()
+    }
+
+    /** Let go while armed: what's in the frame goes to the chat; Android is asked first if it hasn't been. */
+    private fun dropLook() {
+        val (cx, cy) = headCenter()
+        val target = lookRect ?: plainFrame(cx, cy)
+        disarmLook()
+        snapTo(spot)
+        val session = look
+        if (session != null) {
+            takeLook(session, target, settleMs = 150)
+            return
+        }
+        pendingLook = target
+        sharing = true
+        if (!runBridge(OverlayBridgeActivity.share(this))) {
+            sharing = false
+            pendingLook = null
+            AndroidNotices(applicationContext).show("Couldn't ask to share the screen.")
+        }
+    }
+
+    /** The overlay steps out of the picture, one frame is taken, and its framed part goes to the composer. */
+    private fun takeLook(session: Look, rect: LookRect, settleMs: Long) {
         ui.capturing = true
         syncHead()
         dropUndo()
-        // Let the consent dialog leave the screen first.
-        main.postDelayed({ grab(projection) }, 450)
-    }
-
-    /** One frame of the screen, the overlay out of it; then the projection is let go. */
-    private fun grab(projection: MediaProjection) {
-        val (w, h) = displaySize()
-        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-        var display: VirtualDisplay? = null
-        var done = false
-        lateinit var timeout: Runnable
-        fun finish(shot: Bitmap?) {
-            if (done) return
-            done = true
-            main.removeCallbacks(timeout)
-            reader.setOnImageAvailableListener(null, null)
-            runCatching { display?.release() }
-            runCatching { projection.stop() }
-            runCatching { reader.close() }
-            lifecycleScope.launch {
-                val png = shot?.let { withContext(Dispatchers.Default) { runCatching { encodeShare(it) }.getOrNull() } }
-                shareDone(png, failed = png == null)
+        lifecycleScope.launch {
+            delay(settleMs)
+            val shot = session.grab("take the look")
+            ui.capturing = false
+            syncHead()
+            val png = shot?.let { withContext(Dispatchers.Default) { runCatching { encodeLook(it, rect) }.getOrNull() } }
+            if (png == null) {
+                AndroidNotices(applicationContext).show("Couldn't take that look.")
+                return@launch
             }
+            val name = "look-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".png"
+            ui.shareAttach = ComposerExternalAttach(PickedFile(name, "image/png", ByteArrayChunkSource(png)), text = "", send = false)
+            openChat()
         }
-        timeout = Runnable { finish(null) }
-        // Android 14+ wants a callback before the virtual display.
-        projection.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() = finish(null)
-        }, main)
-        reader.setOnImageAvailableListener({ r ->
-            val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
-            val shot = runCatching { image.frameBitmap(w, h) }.getOrNull()
-            image.close()
-            finish(shot)
-        }, main)
-        main.postDelayed(timeout, 3_000)
-        display = runCatching {
-            projection.createVirtualDisplay(
-                "supermux-assistant-share", w, h, windowContext.resources.displayMetrics.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, main,
-            )
-        }.getOrNull()
-        if (display == null) finish(null)
     }
 
-    private fun encodeShare(shot: Bitmap): ByteArray {
-        val (w, h) = shareImageSize(shot.width, shot.height, SHARE_MAX_EDGE)
-        val scaled = if (w == shot.width && h == shot.height) shot else Bitmap.createScaledBitmap(shot, w, h, true)
+    /** The block of content around the head in [shot] (its own head painted out), in screen px; null = none. */
+    private fun blockAround(shot: Bitmap, cx: Float, cy: Float): LookRect? {
+        val step = 4
+        val argb = IntArray(shot.width * shot.height).also { shot.getPixels(it, 0, shot.width, 0, 0, shot.width, shot.height) }
+        val g = LumaGrid.fromArgb(argb, shot.width, shot.height, step)
+        val half = px(4) + headPx() / 2
+        g.blankOut(((cx - half) / step).toInt(), ((cy - half) / step).toInt(), ((cx + half) / step).toInt(), ((cy + half) / step).toInt())
+        val block = LookBlock.around(
+            g, (cx / step).toInt(), (cy / step).toInt(),
+            minGap = (px(14) / step).toInt().coerceAtLeast(3),
+            seed = (half / step).toInt() + 4,
+        ) ?: return null
+        val s = screen()
+        val pad = px(8)
+        val r = LookRect(
+            (block.left * step - pad).coerceAtLeast(0f),
+            (block.top * step - pad).coerceAtLeast(s.topInset),
+            (block.right * step + pad).coerceAtMost(s.width),
+            (block.bottom * step + pad).coerceAtMost(s.height - s.bottomInset),
+        )
+        // Too small to be a thing, or most of the screen: a plain frame says more.
+        if (r.width < px(72) || r.height < px(40) || r.width * r.height > s.width * s.height * 0.6f) return null
+        return r
+    }
+
+    private fun encodeLook(shot: Bitmap, rect: LookRect): ByteArray {
+        val l = rect.left.toInt().coerceIn(0, shot.width - 1)
+        val t = rect.top.toInt().coerceIn(0, shot.height - 1)
+        val r = rect.right.toInt().coerceIn(l + 1, shot.width)
+        val b = rect.bottom.toInt().coerceIn(t + 1, shot.height)
+        val crop = Bitmap.createBitmap(shot, l, t, r - l, b - t)
+        val (w, h) = shareImageSize(crop.width, crop.height, SHARE_MAX_EDGE)
+        val scaled = if (w == crop.width && h == crop.height) crop else Bitmap.createScaledBitmap(crop, w, h, true)
         return ByteArrayOutputStream().use { out ->
             scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
             out.toByteArray()
         }
     }
 
+    /** The frame around what letting go takes, with its label above; it never takes a touch. */
+    private fun showFrame(r: LookRect) {
+        hideFrame()
+        lookRect = r
+        val label = px(32)
+        val top = (r.top - label).coerceAtLeast(0f)
+        val params = baseParams(
+            r.width.toInt(), (r.bottom - top).toInt(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = r.left.toInt()
+            y = top.toInt()
+        }
+        val name = currentAgent?.name ?: "your assistant"
+        val frameTop = ((r.top - top) / windowContext.resources.displayMetrics.density).dp
+        frame = OverlayWindow(params, oneOff = true) { OverlayLookFrame(name, frameTop) }.also { it.show() }
+    }
+
+    private fun hideFrame() {
+        frame?.remove()
+        frame = null
+    }
+
     /**
-     * Back on screen; a picture goes into the chat's composer as an attachment, to send with your words.
-     * [failed]: it was allowed (or asked for) but no picture came, which the user is told; a "no" is not.
+     * Android said yes. Called while the bridge is still on screen: Android 14+ lets a service take the
+     * screen-capture type only then, and wants it before the projection starts. The session stays for
+     * the looks to come; a look dropped while it was asking is taken now.
      */
-    private fun shareDone(png: ByteArray?, failed: Boolean = false) {
+    private fun onShareAllowed(resultCode: Int, data: Intent) {
+        if (!sharing) return
         sharing = false
-        ui.capturing = false
+        val session = runCatching {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val capture = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                val now = foregroundServiceType
+                val notification = notification()
+                runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, now or capture) }
+                    // Should the mic be refused this time, looks still work; opening supermux restores it.
+                    .recoverCatching {
+                        val noMic = now and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE.inv()
+                        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, noMic or capture)
+                    }
+                    .getOrThrow()
+            }
+            Look(getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultCode, data)!!)
+        }.getOrNull()
+        val rect = pendingLook
+        pendingLook = null
         goAway(false)
-        if (failed) AndroidNotices(applicationContext).show("Couldn't share the screen.")
-        if (png == null) return
-        val name = "screen-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".png"
-        ui.shareAttach = ComposerExternalAttach(PickedFile(name, "image/png", ByteArrayChunkSource(png)), text = "", send = false)
+        if (session == null) {
+            AndroidNotices(applicationContext).show("Couldn't share the screen.")
+            return
+        }
+        look = session
+        ui.lookSharing = true
+        ui.lookDeclined = false
+        // The consent dialog leaves the screen first.
+        if (rect != null) takeLook(session, rect, settleMs = 500)
+    }
+
+    /** Android said no: nothing is taken; the chat offers a screenshot of the user's own instead. */
+    private fun lookRefused() {
+        sharing = false
+        pendingLook = null
+        ui.lookDeclined = true
+        goAway(false)
+        openChat()
+    }
+
+    private fun endLook(session: Look, reason: String) {
+        if (look === session) {
+            look = null
+            ui.lookSharing = false
+        }
+        if (!session.ending) session.stop(reason)
+    }
+
+    @Composable
+    private fun LookChips(name: String) {
+        OverlayLookChips(
+            ui, name,
+            onStopSharing = { look?.let { endLook(it, "Stop in the chat") } },
+            onAttachScreenshot = { pickScreenshot() },
+        )
+    }
+
+    /** The way round a "no" to sharing: a screenshot of their own, from the photo picker, into the composer. */
+    private fun pickScreenshot() {
+        lifecycleScope.launch {
+            val uris = picker.pick(PickKind.Images, "overlay-look") ?: return@launch
+            val file = uris.firstOrNull()?.let { pickedFileFromUri(windowContext, it) } ?: return@launch
+            ui.lookDeclined = false
+            ui.shareAttach = ComposerExternalAttach(file, text = "", send = false)
+        }
     }
 
     // ── the screen it lives on ──
@@ -977,6 +1277,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     private val screenChanges = object : ComponentCallbacks {
         override fun onConfigurationChanged(newConfig: Configuration) {
             // Folded ↔ open, or rotated: re-seat everything for the new screen.
+            disarmLook()
             closeChat()
             snapTo(spot)
             drop.remove()
