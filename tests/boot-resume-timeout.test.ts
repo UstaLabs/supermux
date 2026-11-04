@@ -50,7 +50,9 @@ function build() {
 
 test("a session whose resume never settles does not block the sessions after it", async () => {
   const { registry, manager } = build()
-  manager.bootResumeTimeoutMs = 300
+  // Long enough for a resume that does settle to open on a slow runner (on Windows "after" needed more than
+  // 300 ms), far short of the 5 s that would mean the stuck one blocked boot.
+  manager.bootResumeTimeoutMs = 1_500
   const workdir = mkdtempSync(join(tmpDir, "wd-"))
   registry.register({ id: "stuck-1", name: "stuck", workdir, pid: 0, agent: "claude", core: true, agent_session_id: "native-stuck" } as never)
   registry.register({ id: "after-1", name: "after", workdir, pid: 0, agent: "claude", core: true, agent_session_id: "native-after" } as never)
