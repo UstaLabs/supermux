@@ -769,6 +769,11 @@ fun SupermuxApp(
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
+                    // A card whose login was refused: the system login signs in again under
+                    // Providers (the CLI's own login flow), an added account under Accounts.
+                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
+                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
                         Column(Modifier.fillMaxWidth()) {
@@ -780,6 +785,7 @@ fun SupermuxApp(
                                 // above), so the screen must not paint a top bar even when the
                                 // window is narrowed into the Compact width class.
                                 topBarShown = true,
+                                onSignIn = usageSignIn,
                             )
                         }
                     }
@@ -1057,6 +1063,7 @@ fun SupermuxApp(
                                                 actions = usageActions,
                                                 onBack = { ui.goBack() },
                                                 standalone = true,
+                                                onSignIn = usageSignIn,
                                             )
                                         }
                                     }

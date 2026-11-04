@@ -3,6 +3,7 @@ package dev.supermux.ui.accounts
 import dev.supermux.net.AccountDto
 import dev.supermux.net.AccountIdentityDto
 import dev.supermux.net.AccountLoginStateDto
+import dev.supermux.net.AccountUnavailableDto
 import dev.supermux.net.AccountUsageWindowDto
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -101,5 +102,21 @@ class AccountsModelTest {
     @Test fun picker_detail() {
         assertEquals("me@x.dev", accountPickerDetail(system))
         assertEquals("Subscription · me@acme.dev · 5h 62%", accountPickerDetail(work.copy(usage = listOf(AccountUsageWindowDto("five_hour", 62.0), AccountUsageWindowDto("seven_day", 10.0)))))
+    }
+
+    @Test fun an_expired_sign_in_reads_as_such_and_any_other_refusal_keeps_the_apis_words() {
+        val base = AccountDto(id = "cursor:system", agent = "cursor", method = "system", system = true)
+        assertNull(accountUnavailableText(base))
+        assertEquals(
+            "Sign-in expired",
+            accountUnavailableText(base.copy(unavailable = AccountUnavailableDto("Cursor sign-in expired — sign in to Cursor again.", "2026-11-04T10:40:58.000Z", code = "account_expired"))),
+        )
+        assertEquals(
+            "Refused: Your organization has disabled Claude subscription access",
+            accountUnavailableText(base.copy(unavailable = AccountUnavailableDto("Your organization has disabled Claude subscription access", "2026-10-11T09:08:27.000Z"))),
+        )
+        assertTrue(signInExpired(base.copy(unavailable = AccountUnavailableDto("x", "y", code = "account_expired"))))
+        assertFalse(signInExpired(base.copy(unavailable = AccountUnavailableDto("x", "y"))))
+        assertFalse(signInExpired(base))
     }
 }
