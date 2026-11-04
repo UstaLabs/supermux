@@ -761,7 +761,10 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         ...(tokens ? { tokens } : {}),
         ...(cost ? { cost } : {}),
       }]
-      if (frame.is_error === true) {
+      // An interrupted turn (Claude's abort signal fired) ends as error_during_execution with only Claude's own
+      // "[ede_diagnostic] ..." line: no failure. The driver settles the turn as cancelled.
+      const aborted = frame.terminal_reason === "aborted_streaming" || frame.terminal_reason === "aborted_tools"
+      if (frame.is_error === true && !aborted) {
         const message = Array.isArray(frame.errors) ? frame.errors.find(x => typeof x === "string") as string | undefined : undefined
         // 401/403 from the API (e.g. `oauth_not_allowed_for_organization` after a cancelled
         // subscription): the account itself is refused, which Core's account switch acts on.
