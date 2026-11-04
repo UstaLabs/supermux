@@ -173,6 +173,10 @@ jobs:
           node-version: "22"
       - name: Typecheck core package
         run: bun run typecheck:core
+      # @supermux/platform runs on Node 22 as well as Bun (platform-layer spec §3.3): its own tsconfig
+      # (NodeNext, Node's types only) is what catches a Bun-only API in it. Its tests run in `bun test` above.
+      - name: Typecheck platform package
+        run: bun run typecheck:platform
       - name: Build core package
         run: bun run build:core
       # The TypeScript examples against the build, as a project that copied one out would see it.
