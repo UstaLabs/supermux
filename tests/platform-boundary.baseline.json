@@ -374,6 +374,7 @@
     "scripts/mutation-probe.ts": 1,
     "scripts/reclaim-agent-homes.ts": 1,
     "scripts/smoke-core-entries.ts": 1,
+    "scripts/test-windows.ts": 1,
     "src/cli-setup.ts": 5,
     "src/core/agents/claude/auth.ts": 1,
     "src/core/agents/codex/spawn.ts": 1,

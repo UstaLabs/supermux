@@ -141,7 +141,7 @@ export function discoverTestFiles(root: string, roots: readonly string[] = TEST_
     if (!existsSync(join(root, dir))) continue
     for (const path of new Glob("**/*").scanSync({ cwd: join(root, dir), onlyFiles: true })) {
       const file = normalizeTestPath(`${dir}/${path}`)
-      if (file.split("/").includes("node_modules")) continue
+      if (file.split("/").includes("node_modules")) continue // platform-ok: a repo-relative path, already normalised to "/"
       if (TEST_FILE.test(file)) files.push(file)
     }
   }
