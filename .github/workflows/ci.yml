@@ -500,6 +500,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The platform guard reads Kotlin too (tests/platform-boundary.test.ts): run it here so a Kotlin-only push,
+      # which skips the ts lane, is checked as well. It needs no install.
+      - uses: oven-sh/setup-bun@v2
+      - name: Platform guard (no OS decisions outside the platform layer)
+        run: bun test ./tests/platform-boundary.test.ts
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
