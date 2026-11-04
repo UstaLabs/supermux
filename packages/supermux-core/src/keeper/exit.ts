@@ -16,7 +16,7 @@ export function agentExitError(agent: string, exit: KeeperExitStatus | undefined
   const how = !exit ? ': its keeper stopped without reporting how'
     : exit.signal ? ` on ${exit.signal}`
     : exit.code === null ? '' : ` with code ${exitCodeText(exit.code)}`
-  const last = exit?.stderr.at(-1)
+  const last = exit?.stderr.at(-1)?.trim()
   const error = new CoreError('agent_exited', `${agent} process exited${how}${last ? `: ${last}` : ''}`)
   return exit ? Object.assign(error, { exit }) : error
 }

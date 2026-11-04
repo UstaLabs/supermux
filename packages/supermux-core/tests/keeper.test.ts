@@ -6,7 +6,7 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { connectKeeper, keeperAgentRunning, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
+import { agentExitError, connectKeeper, keeperAgentRunning, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
 import type { KeeperLimits } from '../src/keeper/protocol.js'
 
 setDefaultTimeout(20_000)
@@ -310,6 +310,13 @@ test('a journal rewrite whose rename the OS refuses leaves the keeper and the ag
   expect(alive(st.keeperPid)).toBe(true)
   expect(alive(st.agentPid)).toBe(true)
   await shutdownAndAssert(conn, stateDirectory, sessionId)
+})
+
+test('agentExitError says in one line how the agent ended (the last stderr line of a real Bun crash is indented)', () => {
+  const bun = ['panic(main thread): Segmentation fault at address 0x3E800384E75', ' https://bun.report/1.4.4/l_19aa0ec3']
+  expect(agentExitError('Claude', { code: 1, signal: 'SIGSEGV', stderr: bun }).message).toBe('Claude process exited on SIGSEGV: https://bun.report/1.4.4/l_19aa0ec3')
+  expect(agentExitError('Claude', { code: 3221225477, stderr: [] }).message).toBe('Claude process exited with code 0xC0000005')
+  expect(agentExitError('Codex', undefined)).toMatchObject({ code: 'agent_exited', message: 'Codex process exited: its keeper stopped without reporting how' })
 })
 
 test('the exit the keeper reports carries the code, the signal and the last stderr lines; the status keeps them', async () => {
