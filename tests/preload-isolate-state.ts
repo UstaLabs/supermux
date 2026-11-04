@@ -50,6 +50,12 @@ mkdirSync(process.env.HOME, { recursive: true })
 // ...and USERPROFILE: on Windows os.homedir() reads it, not HOME (libuv uv_os_homedir, in Node and Bun alike), so
 // without this a Windows run would use the runner's real profile. Harmless where it is unused.
 process.env.USERPROFILE = process.env.HOME
+// ...and %APPDATA% / %LOCALAPPDATA%: on Windows the agents' config and data folders live there (cursor-agent's login,
+// opencode's store; src/core/agents/detect.ts), not under HOME, so without this a Windows run would read and write the
+// runner's real profile. Created, as they always exist on Windows; nothing reads them elsewhere.
+process.env.APPDATA = join(process.env.HOME, "AppData", "Roaming")
+process.env.LOCALAPPDATA = join(process.env.HOME, "AppData", "Local")
+for (const dir of [process.env.APPDATA, process.env.LOCALAPPDATA]) mkdirSync(dir, { recursive: true })
 // A module that caches HOME at first import (session-manager/spawn-helper) keeps this one for the
 // whole run, so files that set their own HOME later still resolve agent logins here: seed fakes.
 for (const [file, body] of [[".codex/auth.json", { tokens: { access_token: "x", account_id: "a" } }], [".config/cursor/auth.json", { accessToken: "x" }], [".cursor/cli-config.json", {}]] as const) {

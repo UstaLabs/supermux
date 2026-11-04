@@ -450,10 +450,11 @@ test("fetchCursorUsage returns null when cursor-agent has no login", async () =>
 // a different app's login that supermux never runs: an IDE not opened for months answered 401 while the
 // cursor-agent login every Cursor session uses was fine.
 test("by default fetchCursorUsage reads the login cursor-agent sessions use, never the Cursor IDE's", async () => {
-  const xdg = join(tmpDir, "xdg")
-  writeCursorAuth(xdg, { accessToken: "agent-token" })
-  const savedXdg = process.env.XDG_CONFIG_HOME
-  process.env.XDG_CONFIG_HOME = xdg
+  // cursor-agent's config folder: $XDG_CONFIG_HOME on Linux, %APPDATA% on Windows (authCredPath, agents/detect.ts).
+  const config = join(tmpDir, "config")
+  writeCursorAuth(config, { accessToken: "agent-token" })
+  const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, APPDATA: process.env.APPDATA }
+  process.env.XDG_CONFIG_HOME = process.env.APPDATA = config
   let bearer: string | undefined
   globalThis.fetch = (async (_url: any, init: any) => {
     bearer = init?.headers.Authorization
@@ -464,8 +465,11 @@ test("by default fetchCursorUsage reads the login cursor-agent sessions use, nev
     expect(bearer).toBe("Bearer agent-token")
     expect(result!.totalPercentUsed).toBe(12)
   } finally {
-    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME
-    else process.env.XDG_CONFIG_HOME = savedXdg
+    // Assigning undefined would store the string "undefined": delete instead.
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })
 
