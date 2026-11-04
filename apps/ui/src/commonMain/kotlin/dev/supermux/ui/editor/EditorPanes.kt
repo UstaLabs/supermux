@@ -68,6 +68,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
+import dev.supermux.ui.chat.LinkSelectionContainer
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
@@ -376,13 +377,17 @@ fun FilePane(
                         if (absPath != null && rawBytes != null) MarkdownFiles(parentOf(absPath), rawBytes) else null
                     }
                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
-                        MarkdownBody(
-                            doc?.content ?: "",
-                            modifier = Modifier.markdownPreviewColumn(),
-                            linkify = true,
-                            onOpenFile = onOpenFile,
-                            document = true,
-                        )
+                        // Selectable and copyable like a chat reply, links still clickable. Inside
+                        // the scroll, so a selection dragged past the edge scrolls with it.
+                        LinkSelectionContainer {
+                            MarkdownBody(
+                                doc?.content ?: "",
+                                modifier = Modifier.markdownPreviewColumn(),
+                                linkify = true,
+                                onOpenFile = onOpenFile,
+                                document = true,
+                            )
+                        }
                     }
                 }
             }
