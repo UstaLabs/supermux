@@ -106,6 +106,23 @@ try {
     $info = Wait-Host $broker
     Write-Output "SMOKE_BOOT_OK host=$($info.hostId)"
 
+    # 2b. A second broker on the same state directory refuses cleanly (#36): it exits non-zero saying it is already
+    # running, broker.pid still names the first, and the first still answers.
+    $pidFile = Join-Path $state "broker.pid"
+    $firstPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+    $second = Start-Logged @("$Repo\src\main.ts") "broker-second"
+    $null = $second.Handle # keep the handle, or PowerShell reports no ExitCode once it has exited
+    if (-not $second.WaitForExit(60000)) {
+        Stop-Process -Id $second.Id -Force; Show-Log "broker-second"; throw "a second broker did not stop within 60 s"
+    }
+    $secondLog = @("out", "err") | ForEach-Object { Get-Content -LiteralPath (Join-Path $muxHome "broker-second.$_.log") -Raw }
+    if ($second.ExitCode -eq 0 -or (($secondLog -join "`n") -notmatch "already running")) {
+        Show-Log "broker-second"; throw "a second broker exited with $($second.ExitCode) without saying it is already running"
+    }
+    if ((Get-Content -LiteralPath $pidFile -Raw).Trim() -ne $firstPid) { throw "the second broker changed broker.pid" }
+    Wait-Host $broker 30 | Out-Null
+    Write-Output "SMOKE_SECOND_BROKER_REFUSED"
+
     # 3. A session, and its scratch terminal through the WebSocket.
     $seed = Join-Path $muxHome "seed-session.ts"
     @'
