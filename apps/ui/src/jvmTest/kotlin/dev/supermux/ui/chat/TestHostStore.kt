@@ -8,6 +8,7 @@ import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.editor.WalkthroughState
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockRequestHandler
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,15 +41,18 @@ internal object TestWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
 
 /**
  * A [HostStore] with a mock HTTP engine and `connectOnInit = false`, so no WebSocket or socket is
- * ever opened. The chat suites that drive the real panel over a real store use this.
+ * ever opened. The chat suites that drive the real panel over a real store use this. [respondTo]
+ * answers its HTTP calls (every one with `{}` unless a test needs a real answer, e.g. `/fs/stat`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun testHostStore(): HostStore = HostStore(
+internal fun testHostStore(
+    respondTo: MockRequestHandler = { respond("{}", HttpStatusCode.OK) },
+): HostStore = HostStore(
     baseUrl = "ws://test:9898",
     token = "t",
     scope = TestScope(UnconfinedTestDispatcher()),
     deps = HostStoreDeps(
-        httpFactory = { HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) }) },
+        httpFactory = { HttpClient(MockEngine(respondTo)) },
         settings = FakeSettingsStore(),
         clock = FixedClock(),
     ),
