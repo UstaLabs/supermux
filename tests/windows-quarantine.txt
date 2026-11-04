@@ -11,11 +11,13 @@ packages/supermux-core/tests/accounts-core.test.ts | asserts POSIX file modes (0
 packages/supermux-core/tests/accounts-homes.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude home links shared entries to the root, creating missi" | #29
 packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test never sees the typed code, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/accounts-vault.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "file vault: 0700 dir, 0600 files, round trip, delete, missin" | #29
+packages/supermux-core/tests/acp-keeper.test.ts | an unhandled `read ECONNRESET` (node:net close) on keeper detach/re-attach fails whichever such test it lands in (passed in run 41877911651, failed twice in 41883601390) | #29 | flaky
 packages/supermux-core/tests/agents-table.test.ts | expect(received).toBe(expected); first: "README.md's agents table is exactly renderAgentsTable() once" | #29
 packages/supermux-core/tests/antigravity.test.ts | assertions fail, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/auth.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "materializes owner-only credentials and preserves native ses" | #29
 packages/supermux-core/tests/claude-keeper.test.ts | expected true got false; first: "a keeper another process started under its own temp dir, too" | #29
 packages/supermux-core/tests/codex-catalog.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "multiAgentV1Args writes a private v1 catalog and passes it a" | #29
+packages/supermux-core/tests/codex-keeper.test.ts | an unhandled `read ECONNRESET` (node:net close) on keeper detach/re-attach fails whichever such test it lands in (passed in run 41877911651, failed in its re-run) | #29 | flaky
 packages/supermux-core/tests/compiled-entry.test.ts | TypeError: File URL path must be an absolute path; first: "module urls inside a compiled binary are recognised on every" | #29
 packages/supermux-core/tests/configuration.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "optional configuration and history > storage failure rolls b" | #29
 packages/supermux-core/tests/context-drivers.test.ts | runs a POSIX command Windows lacks; first: "opencode: no session context → the launch is byte-for-byte t" | #29
