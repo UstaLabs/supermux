@@ -163,11 +163,12 @@ internal suspend fun HostSupervisor.removeOurDefinitionsLocked(port: Int): Strin
 }
 
 /**
- * Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port].
- * False when it didn't stop: then nothing may be (re)installed or started next to it.
+ * Windows: stop our task's broker in place (no elevation) and wait for it to let go of [port]. The broker is asked
+ * first (its graceful stop request) and killed only if it stays. False when it didn't stop: then nothing may be
+ * (re)installed or started next to it.
  */
 internal suspend fun HostSupervisor.stopWindowsServiceLocked(port: Int): Boolean {
-    val stopped = withContext(io) { BrokerService.stop(osEnv) }
+    val stopped = withContext(io) { BrokerService.stop(osEnv, stateDir, port) }
     log("service stop: ${if (stopped) "the broker is gone" else "the broker is still running"}")
     if (!stopped) return false
     if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after stopping the service")
