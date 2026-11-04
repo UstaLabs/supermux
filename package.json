@@ -23,6 +23,7 @@
     "test:core": "bun test packages/supermux-core/tests",
     "build:core": "bun run --cwd packages/supermux-core build",
     "typecheck:core": "bun run --cwd packages/supermux-core typecheck",
+    "build:platform": "bun run --cwd packages/platform build",
     "typecheck:platform": "bun run --cwd packages/platform typecheck"
   },
   "dependencies": {
