@@ -277,7 +277,6 @@
   "path-shape": {
     "packages/supermux-core/examples/kanban/server.ts": 1,
     "packages/supermux-core/examples/recipes/same-task-three-agents.ts": 1,
-    "packages/supermux-core/src/accounts/homes.ts": 1,
     "packages/supermux-core/src/accounts/registry.ts": 1,
     "packages/supermux-core/src/environment/codex.ts": 1,
     "packages/supermux-core/src/environment/cursor.ts": 1,

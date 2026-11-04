@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs"
 import { stat } from "node:fs/promises"
-import { isAbsolute, join, relative, resolve, sep } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
@@ -33,6 +33,7 @@ import type {
   ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
   SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec, ConversationReset,
 } from "./types.js"
+import { paths } from "@supermux/platform"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
 
@@ -1604,8 +1605,7 @@ function realOrResolved(path: string): string {
 
 /** Whether `inner` is `outer` or inside it. */
 function within(inner: string, outer: string): boolean {
-  const way = relative(outer, inner)
-  return way === "" || (way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way))
+  return paths.isInside(inner, outer)
 }
 
 /** `next` (no instructions) with the session's own instructions from `current` kept (informational; launches use createdInstructions). */

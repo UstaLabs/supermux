@@ -4,6 +4,11 @@ import * as nodePath from "node:path"
 /** A node:path flavour: this host's by default; `posix` or `win32` to decide for another (tests). */
 export type PathFlavor = Pick<typeof nodePath, "relative" | "isAbsolute" | "sep">
 
+/** The node:path flavour of [platform]: win32's rules for Windows, posix's for every other OS. */
+export function flavor(platform: NodeJS.Platform): typeof nodePath.posix {
+  return platform === "win32" ? nodePath.win32 : nodePath.posix
+}
+
 /**
  * Whether [path] is [root] or inside it, on the host's rules: relative() knows the separators, the letter case
  * (Windows ignores it) and the drives. A path on another drive is not inside: relative() hands it back absolute,

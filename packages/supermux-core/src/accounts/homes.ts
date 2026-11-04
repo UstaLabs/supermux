@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, resolve } from "node:path"
 import { CoreError } from "../errors.js"
 import { assertVaultId } from "./vault.js"
 import type { Account, HomeLayout, HomeRoots } from "./types.js"
-import { Unsupported, files } from "@supermux/platform"
+import { Unsupported, files, paths } from "@supermux/platform"
 
 export function claudeRoot(roots: HomeRoots = {}): string {
   return resolve(roots.claudeRoot ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
@@ -56,7 +56,7 @@ export async function ensureHome(homesDirectory: string, account: Pick<Account, 
   await chmod(home, 0o700)
   if (account.isolated || !layout) return home
   const root = resolve(layout.root())
-  if (!isAbsolute(root) || resolve(home).startsWith(root + "/")) throw new CoreError("invalid_options", "Account history root must be absolute and outside the account home")
+  if (!isAbsolute(root) || paths.isInside(resolve(home), root)) throw new CoreError("invalid_options", "Account history root must be absolute and outside the account home")
   for (const entry of layout.shared) {
     if (!entry.name || basename(entry.name) !== entry.name || entry.name === "." || entry.name === "..") throw new CoreError("invalid_options", `Invalid shared entry ${entry.name}`)
     const target = join(root, entry.name)

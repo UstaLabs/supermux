@@ -1,9 +1,9 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs"
-import { dirname, isAbsolute, join, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { requireSpec } from "./spec.js"
 import type { AntigravityEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
-import { Unsupported, files } from "@supermux/platform"
+import { Unsupported, files, paths } from "@supermux/platform"
 
 /**
  * agy finds its config only through $HOME and its shell tool inherits $HOME, so each session runs
@@ -51,15 +51,9 @@ function realpathLoose(path: string): string {
   }
 }
 
-function norm(path: string, platform: NodeJS.Platform): string {
-  return platform === "win32" ? path.toLowerCase() : path
-}
-
-/** `child` equals `parent` or is inside it. */
+/** `child` equals `parent` or is inside it, by [platform]'s rules (Windows: either separator, any letter case). */
 function within(child: string, parent: string, platform: NodeJS.Platform): boolean {
-  const c = norm(child, platform)
-  const p = norm(parent, platform)
-  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep)
+  return paths.isInside(child, parent, paths.flavor(platform))
 }
 
 /** The real ~/.gemini locations (literal and resolved — it may itself be a dotfiles symlink). */

@@ -41,3 +41,12 @@ test("strictly inside excludes the root itself, and keeps `..foo` inside", () =>
   expect(paths.isStrictlyInside("/w", "/w", posix)).toBe(false)
   expect(paths.isStrictlyInside("/x", "/w", posix)).toBe(false)
 })
+
+// Code that decides for a platform it is told (tests run Windows' rules on Linux) asks for that platform's flavour here,
+// instead of importing path.win32 / path.posix itself.
+test("the flavour of a platform: win32's rules for win32, posix's for the rest", () => {
+  expect(paths.isInside("c:\\W\\a", "C:\\w", paths.flavor("win32"))).toBe(true)
+  expect(paths.isInside("/W/a", "/w", paths.flavor("linux"))).toBe(false)
+  expect(paths.flavor("darwin").sep).toBe("/")
+  expect(paths.flavor("win32").sep).toBe("\\")
+})
