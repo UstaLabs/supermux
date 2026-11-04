@@ -1,5 +1,5 @@
 import { existsSync, rmSync, cpSync } from "fs"
-import { basename, isAbsolute, join } from "path"
+import { basename, isAbsolute, join, sep } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { home } from "../../shared/home"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
@@ -22,12 +22,17 @@ const DEFAULT_SCOPES: CliScope[] = ["claude", "codex", "cursor"]
 
 function expandTilde(p: string): string {
   if (p === "~") return home()
-  if (p.startsWith("~/")) return join(home(), p.slice(2))
+  if (p.startsWith("~/") || p.startsWith(`~${sep}`)) return join(home(), p.slice(2))
   return p
 }
 
+/**
+ * A plugin source given as a path on this host: absolute by the runtime's rule (`/x`; on Windows also `C:\x` and
+ * `\\server\share`), under `~`, or relative from `.` / `..` with either of the host's separators.
+ */
 function looksLikePath(spec: string): boolean {
-  return spec.startsWith("/") || spec.startsWith("~") || spec.startsWith("./") || spec.startsWith("../")
+  const from = (prefix: string) => spec.startsWith(`${prefix}/`) || spec.startsWith(`${prefix}${sep}`)
+  return isAbsolute(spec) || spec.startsWith("~") || from(".") || from("..")
 }
 
 /** Parse an `add` source spec into a registry-ready name + source. Pure. */

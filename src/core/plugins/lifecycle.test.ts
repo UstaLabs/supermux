@@ -137,3 +137,11 @@ test("pluginSummaries reports per-CLI compatibility from on-disk manifests", () 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// A path on a Windows host: a drive, a share, or `.\` (the runtime's isAbsolute and separator, not a leading `/`).
+test.skipIf(process.platform !== "win32")("parseAddSource: a Windows path or .\\ is a local source", () => {
+  expect(parseAddSource("C:\\x\\my-plugin").source).toEqual({ type: "local", path: "C:\\x\\my-plugin" })
+  expect(parseAddSource("C:\\x\\my-plugin").name).toBe("my-plugin")
+  expect(parseAddSource(".\\plug").source.type).toBe("local")
+  expect(parseAddSource("\\\\server\\share\\plug").name).toBe("plug")
+})
