@@ -312,6 +312,25 @@ test('a journal rewrite whose rename the OS refuses leaves the keeper and the ag
   await shutdownAndAssert(conn, stateDirectory, sessionId)
 })
 
+test('the exit the keeper reports carries the code, the signal and the last stderr lines; the status keeps them', async () => {
+  const { conn, stateDirectory, sessionId } = await open('exit-report')
+  const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`)
+  conn.write(JSON.stringify({ cmd: 'exit', code: 7, stderr: lines }))
+  expect(await collect(conn, 1)).toEqual([])
+  // The last 20 lines: enough for a crash report, bounded however much the agent wrote.
+  expect(conn.exitStatus()).toEqual({ code: 7, stderr: lines.slice(-20) })
+  const st = await waitStatus(stateDirectory, sessionId, s => s.agentExited === 7)
+  expect(st.agentStderr).toEqual(lines.slice(-20))
+  expect(st.agentSignal).toBeUndefined()
+
+  const killed = await open('exit-signal')
+  const pid = (await waitStatus(killed.stateDirectory, killed.sessionId, s => s.agentPid > 0)).agentPid
+  process.kill(pid, 'SIGKILL')
+  expect(await collect(killed.conn, 1)).toEqual([])
+  expect(killed.conn.exitStatus()).toEqual({ code: 1, signal: 'SIGKILL', stderr: [] })
+  expect((await waitStatus(killed.stateDirectory, killed.sessionId, s => s.agentSignal === 'SIGKILL')).agentSignal).toBe('SIGKILL')
+})
+
 test('shutdown terminates stubborn agent and keeper exits', async () => {
   const { conn, stateDirectory, sessionId } = await open('kill', { MODE: 'stubborn' }, limits({ shutdownTimeoutMs: 50 }))
   const st = await statusOf(stateDirectory, sessionId)

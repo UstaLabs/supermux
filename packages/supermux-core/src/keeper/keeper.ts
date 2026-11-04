@@ -19,6 +19,9 @@ import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagi
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
 
 const STATUS_COALESCE_MS = 250
+/** How much of the agent's stderr the keeper keeps for its exit report (a crash usually says why there). */
+const STDERR_TAIL_LINES = 20
+const STDERR_TAIL_LINE_CHARS = 500
 
 type Parked = { seq: number; line: string; id: string | number; timer: ReturnType<typeof setTimeout> }
 
@@ -123,6 +126,8 @@ async function main() {
   const startedAt = Date.now()
   let meta: Record<string, unknown> = {}
   let agentExited: number | null | undefined
+  let agentSignal: string | undefined
+  const stderrTail: string[] = []
   let statusError: string | undefined
   /** The last problem the keeper went on through (a journal or status write that failed): kept in the status. */
   let warning: string | undefined
@@ -222,7 +227,11 @@ async function main() {
       socket: sockPath,
       journalRewrites,
     }
-    if (agentExited !== undefined) status.agentExited = agentExited
+    if (agentExited !== undefined) {
+      status.agentExited = agentExited
+      if (agentSignal) status.agentSignal = agentSignal
+      if (stderrTail.length) status.agentStderr = [...stderrTail]
+    }
     if (statusError) status.error = statusError
     if (warning) status.warning = warning
     try { writeSecure(statusPath, JSON.stringify(status) + '\n') } catch (error) {
@@ -269,24 +278,36 @@ async function main() {
     // Windows: the keeper has no console, so a console agent (claude.exe) would get a visible one of its own.
     windowsHide: true,
   })
-  if (!captureStderr) agent.stderr?.resume()
-  else {
-    // Some agents (OpenCode with --print-logs) only report provider failures on stderr.
-    let errBuffer = ''
-    agent.stderr?.on('data', (chunk: Buffer) => {
-      errBuffer += chunk.toString('utf8')
-      let nl: number
-      while ((nl = errBuffer.indexOf('\n')) >= 0) {
-        const line = errBuffer.slice(0, nl); errBuffer = errBuffer.slice(nl + 1)
-        if (!line.trim()) continue
-        if (Buffer.byteLength(line) > limits.maxFrameBytes) continue
-        lastSeq += 1
-        const seq = lastSeq
-        appendJournal({ seq, dir: 'err', line })
-        writeStatus()
-        sendClient(client, { type: 'stderr', seq, line })
-      }
-    })
+  // The last stderr lines are always kept for the exit report. Some agents (OpenCode with --print-logs) also report
+  // provider failures only on stderr: with captureStderr, every line is journaled and sent to the client too.
+  let errBuffer = ''
+  agent.stderr?.on('data', (chunk: Buffer) => {
+    errBuffer += chunk.toString('utf8')
+    let nl: number
+    while ((nl = errBuffer.indexOf('\n')) >= 0) {
+      const line = errBuffer.slice(0, nl).replace(/\r$/, ''); errBuffer = errBuffer.slice(nl + 1)
+      if (!line.trim()) continue
+      keepStderr(line)
+      if (!captureStderr) continue
+      if (Buffer.byteLength(line) > limits.maxFrameBytes) continue
+      lastSeq += 1
+      const seq = lastSeq
+      appendJournal({ seq, dir: 'err', line })
+      writeStatus()
+      sendClient(client, { type: 'stderr', seq, line })
+    }
+    // A line still unterminated (a crash may end without a newline) stays bounded, and is kept at exit.
+    if (errBuffer.length > STDERR_TAIL_LINE_CHARS * 4) errBuffer = errBuffer.slice(-STDERR_TAIL_LINE_CHARS)
+  })
+  agent.stderr?.on('end', () => { if (errBuffer.trim()) keepStderr(errBuffer.replace(/\r$/, '')); errBuffer = '' })
+
+  function keepStderr(line: string) {
+    stderrTail.push(line.length > STDERR_TAIL_LINE_CHARS ? line.slice(0, STDERR_TAIL_LINE_CHARS) + '…' : line)
+    if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift()
+  }
+
+  function exitMessage(): KeeperMessage {
+    return { type: 'exit', code: agentExited ?? null, ...(agentSignal ? { signal: agentSignal } : {}), ...(stderrTail.length ? { stderr: [...stderrTail] } : {}) }
   }
 
   function fail(message: string) {
@@ -354,9 +375,10 @@ async function main() {
   agent.on('error', err => fail(err.message))
   agent.on('close', (code, signal) => {
     agentExited = code ?? (signal ? 1 : 0)
+    agentSignal = signal ?? undefined
     writeStatus(true)
     if (client || attachedOnce || shuttingDown) {
-      sendClient(client, { type: 'exit', code: agentExited })
+      sendClient(client, exitMessage())
       finish()
       return
     }
@@ -426,7 +448,7 @@ async function main() {
     if (agentExited !== undefined) {
       // The agent went before this first client came (see 'close'): after its output, its exit, as a client attached
       // all along would have had them; the keeper goes once they are written.
-      sendClient(sock, { type: 'exit', code: agentExited })
+      sendClient(sock, exitMessage())
       sock.end(() => finish())
     }
   }

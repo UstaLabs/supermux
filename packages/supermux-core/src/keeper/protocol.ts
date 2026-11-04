@@ -49,6 +49,9 @@ export type KeeperStatus = {
   firstSeq: number
   ackedSeq: number
   agentExited?: number | null
+  /** Once the agent exited: the signal that ended it (POSIX), and the last lines it wrote to stderr. */
+  agentSignal?: string
+  agentStderr?: string[]
   updatedAt: number
   meta: Record<string, unknown>
   error?: string
@@ -93,7 +96,8 @@ export type KeeperWelcome = {
 export type KeeperFrame = { type: 'frame'; seq: number; line: string; stale?: true }
 export type KeeperParked = { type: 'parked'; seq: number; line: string }
 export type KeeperStderr = { type: 'stderr'; seq: number; line: string }
-export type KeeperExit = { type: 'exit'; code: number | null }
+/** The agent ended: its exit code, the signal that ended it (POSIX), and the last lines it wrote to stderr. */
+export type KeeperExit = { type: 'exit'; code: number | null; signal?: string; stderr?: string[] }
 export type KeeperReplaced = { type: 'replaced' }
 export type KeeperError = { type: 'error'; message: string }
 export type KeeperMessage =

@@ -266,6 +266,12 @@ if (process.env.MODE === 'setup-hang') {
       return
     }
     if (text === 'disconnect') { process.exit(1) }
+    // Dies mid-turn the way a crash does: a few stderr lines (Bun's panic report), no result, exit 3.
+    if (text === 'crash') {
+      process.stderr.write('panic(main thread): Segmentation fault at address 0x0\noh no: Bun has crashed. This indicates a bug in Bun, not your code.\n')
+      setTimeout(() => process.exit(3), 20)
+      return
+    }
     if (text === 'eof') { process.stdout.end(() => process.exit(0)); return }
     if (text === 'malformed') { process.stdout.write('{bad}\n'); return }
     if (text === 'oversize') { process.stdout.write('x'.repeat(5000)); return }
