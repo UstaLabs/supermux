@@ -41,6 +41,9 @@ class DictationEngine(private val context: Context) {
     /** Live transcript updates (delivered on the main thread). */
     var onPartial: ((String) -> Unit)? = null
 
+    /** The recogniser's input meter, in its own dB scale (about −2 silent to 10 loud), main thread. */
+    var onRms: ((Float) -> Unit)? = null
+
     @Volatile
     var transcript: String = ""
         private set
@@ -79,7 +82,9 @@ class DictationEngine(private val context: Context) {
         rec.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onRmsChanged(rmsdB: Float) {
+                onRms?.invoke(rmsdB)
+            }
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
 

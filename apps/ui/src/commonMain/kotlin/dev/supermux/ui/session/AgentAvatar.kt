@@ -54,14 +54,23 @@ internal fun AgentAvatar(
     hovered: Boolean = false,
     size: Int = 34,
     spec: AgentAvatarSpec? = null,
+    /** Voice chat: you are talking to it (it hears you). */
+    listening: Boolean = false,
+    /** Voice chat: it is talking back. */
+    speaking: Boolean = false,
+    /** The live voice level 0..1: yours while [listening], its own while [speaking]; ignored otherwise. */
+    level: Float = 0f,
 ) {
     val look = spec ?: remember(name) { defaultAgentAvatar(name) }
     val state = when {
+        listening -> look.states.listening
         !online -> look.states.asleep
+        speaking -> look.states.speaking
         working -> look.states.working
         unread -> look.states.waiting
         else -> look.states.idle
     }
+    val voice = if (listening || speaking) level.coerceIn(0f, 1f) else 0f
     val idle = look.states.idle
     val speed = state.speed ?: idle.speed ?: 3600
     val t = rememberInfiniteTransition(label = "agent-avatar")
@@ -69,7 +78,7 @@ internal fun AgentAvatar(
     val bounce by t.animateFloat(
         0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bounce",
     )
-    val perk by animateFloatAsState(if (hovered && online) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk")
+    val perk by animateFloatAsState(if ((hovered && online) || listening) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk")
     val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim")
 
     val blink = remember { Animatable(1f) }
@@ -89,11 +98,21 @@ internal fun AgentAvatar(
         val w = this.size.width
         val cx = w / 2
         val motion = state.motion
-        val hop = if (motion == "hop") -bounce * w * 0.07f else 0f
+        val hop = when (motion) {
+            "hop" -> -bounce * w * 0.07f
+            "talk" -> -voice * w * 0.035f // it bobs as it speaks
+            else -> 0f
+        }
         val shake = if (motion == "shake") sin(clock * 6) * w * 0.035f else 0f
-        val tilt = if (motion == "spin") sin(clock) * 14f else 0f
+        val tilt = when (motion) {
+            "spin" -> sin(clock) * 14f
+            "listen" -> 9f + sin(clock) * 2f // leaning in to hear you
+            else -> 0f
+        }
         val breathe = 1f + (state.breathe ?: idle.breathe ?: 0.035f) * sin(clock)
-        val r = w * 0.36f * breathe * (1f + 0.06f * perk)
+        // Listening, it swells with your voice.
+        val swell = if (motion == "listen") 1f + 0.09f * voice else 1f
+        val r = w * 0.36f * breathe * (1f + 0.06f * perk) * swell
         val cy = w * 0.54f + hop + dim * w * 0.03f
         val wobble = state.wobble ?: look.body.wobble
 
@@ -107,6 +126,8 @@ internal fun AgentAvatar(
         val gray = Color(0xFF8A8A8E)
         fun c(hex: String?, fb: Color = Color.Gray) = parseHexColor(hex, fb).let { lerp(it, lerp(gray, it, 0.25f), dim) }
         val colors = look.body.colors.ifEmpty { listOf("#9B87FF") }.map { c(it) }
+
+        if (motion == "listen") drawHearing(colors.last(), cx, cy, r, voice, clock)
 
         translate(left = shake) {
             rotate(tilt, pivot = Offset(cx, cy)) {
@@ -126,7 +147,7 @@ internal fun AgentAvatar(
                     )
                 }
                 look.accessory?.let { drawAccessory(it.type, c(it.color, Color.White), cx, cy, r, clock, behind = false) }
-                drawFace(look, state, cx, cy, r, clock, perk, blink.value, ::c)
+                drawFace(look, state, cx, cy, r, clock, perk, blink.value, voice, ::c)
                 state.badge?.let { drawBadge(it, cx + r * 0.85f, cy - r * 1.05f + sin(clock) * r * 0.06f, r * 0.28f) }
             }
         }
@@ -166,9 +187,25 @@ private fun bodyPath(shape: String, cx: Float, cy: Float, r: Float, wobble: Floa
     return path
 }
 
+/**
+ * Listening: sound arcs on both sides of the head, brighter and further out the louder you speak. They
+ * still show at silence, so the state reads while you pause.
+ */
+private fun DrawScope.drawHearing(color: Color, cx: Float, cy: Float, r: Float, voice: Float, clock: Float) {
+    val stroke = Stroke(width = r * 0.075f, cap = StrokeCap.Round)
+    for (i in 0..1) {
+        val reach = r * (1.12f + 0.16f * i + 0.06f * voice)
+        val alpha = ((0.3f + 0.6f * voice) * (1f - 0.35f * i) * (0.85f + 0.15f * sin(clock * 3 + i))).coerceIn(0f, 1f)
+        val box = Size(reach * 2, reach * 2)
+        val at = Offset(cx - reach, cy - reach)
+        drawArc(color.copy(alpha = alpha), -32f, 64f, false, at, box, style = stroke)
+        drawArc(color.copy(alpha = alpha), 148f, 64f, false, at, box, style = stroke)
+    }
+}
+
 private fun DrawScope.drawFace(
     look: AgentAvatarSpec, state: AgentAvatarSpec.State,
-    cx: Float, cy: Float, r: Float, clock: Float, perk: Float, blink: Float,
+    cx: Float, cy: Float, r: Float, clock: Float, perk: Float, blink: Float, voice: Float,
     c: (String?, Color) -> Color,
 ) {
     val ink = c(look.eyes.color, Color(0xFF1B1530))
@@ -232,6 +269,12 @@ private fun DrawScope.drawFace(
     when (state.mouth ?: look.mouth.style) {
         "none" -> {}
         "o" -> drawCircle(mouthInk, r * (0.07f + 0.03f * (0.5f + 0.5f * sin(clock * 2))), Offset(cx + lookX * 0.5f, my))
+        // Speaking: open with the voice, never quite shut, so it reads between words.
+        "talk" -> {
+            val mw = r * 0.24f
+            val mh = r * (0.06f + 0.2f * voice)
+            drawRoundRect(mouthInk, Offset(cx - mw / 2, my - mh / 2), Size(mw, mh), CornerRadius(mw / 2))
+        }
         "line" -> drawLine(mouthInk, Offset(cx - r * 0.14f, my), Offset(cx + r * 0.14f, my), r * 0.08f, StrokeCap.Round)
         "cat" -> drawPath(Path().apply {
             val k = r * 0.1f
