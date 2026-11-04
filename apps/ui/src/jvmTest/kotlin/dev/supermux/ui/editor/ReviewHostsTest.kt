@@ -182,4 +182,11 @@ class ReviewHostsTest {
         assertEquals("", lineOf(text, 99))
         assertNull(null)
     }
+
+    // A Windows broker sends a nested repo with `\`; an editor key is `/`-separated.
+    @Test fun aNestedRepoFromAWindowsBrokerJoinsWithSlashes() {
+        assertEquals("sub/repo/src/a.ts", repoPath("sub\\repo", "src/a.ts"))
+        assertEquals("sub/repo/a.ts", repoPath("sub/repo", "a.ts"))
+        assertEquals("a.ts", repoPath("", "a.ts"))
+    }
 }
