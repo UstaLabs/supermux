@@ -1,16 +1,16 @@
 // src/core/forge/cloned.ts
 import { execFileSync } from "child_process"
 import { existsSync, readdirSync, statSync, rmSync } from "fs"
-import { dirname, join, resolve, relative, isAbsolute } from "path"
+import { dirname, join, resolve } from "path"
 import { ForgeError } from "./types"
+import { paths } from "@supermux/platform"
 
 export interface ClonedRepo {
   path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number
 }
 
 export function isInsideRoot(root: string, target: string): boolean {
-  const rel = relative(resolve(root), resolve(target))
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
+  return paths.isStrictlyInside(resolve(target), resolve(root))
 }
 
 function dirSize(dir: string): number {

@@ -15,3 +15,8 @@ export function isInside(path: string, root: string, flavor: PathFlavor = nodePa
   if (flavor.isAbsolute(rel)) return false
   return rel !== ".." && !rel.startsWith(`..${flavor.sep}`) && !rel.startsWith("../")
 }
+
+/** [isInside], but never [root] itself: under it, at least one name down. */
+export function isStrictlyInside(path: string, root: string, flavor: PathFlavor = nodePath): boolean {
+  return isInside(path, root, flavor) && flavor.relative(root, path) !== ""
+}

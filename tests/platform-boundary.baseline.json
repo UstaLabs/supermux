@@ -313,7 +313,7 @@
     "src/core/models/discovery.ts": 1,
     "src/core/perf/perf-log.ts": 1,
     "src/core/process/launcher.ts": 3,
-    "src/core/project/paths.ts": 4,
+    "src/core/project/paths.ts": 3,
     "src/core/session-manager/download.ts": 1,
     "src/core/settings/editor-config.ts": 1,
     "src/core/telemetry/sanitize.ts": 1,

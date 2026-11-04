@@ -60,6 +60,7 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -3925,7 +3926,7 @@ export class WebChannel implements Channel {
       const active = this.opts.getSessionsSnapshot().map((s) => s.repo_root ?? s.workdir)
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
       const projects = uniqueKnownWorkdirs([...active, ...archived], home())
-        .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        .filter((p) => !paths.isInside(p, wtRoot))
         // The mux home and agent folders are supermux's own, not projects to pick.
         .filter((p) => !isMuxInternalPath(p))
         .map((p) => ({ path: p }))

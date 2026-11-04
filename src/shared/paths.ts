@@ -1,6 +1,7 @@
-import { isAbsolute, join, relative, resolve } from "path"
+import { join, relative, resolve } from "path"
 import { localEndpoint } from "../core/local-endpoint"
 import { home } from "./home"
+import { paths } from "@supermux/platform"
 
 export const MUX_HOME = process.env.MUX_HOME ?? join(home(), ".mux")
 
@@ -23,9 +24,8 @@ export function agentWorkdir(name: string, muxHome: string = MUX_HOME): string {
  */
 export function isMuxInternalPath(path: string, muxHome: string = MUX_HOME): boolean {
   const p = resolve(path)
-  if (p === resolve(muxHome)) return true
-  const rel = relative(agentWorkdir("", muxHome), p)
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
+  if (relative(resolve(muxHome), p) === "") return true
+  return paths.isStrictlyInside(p, agentWorkdir("", muxHome))
 }
 
 export const STATE_DIR = process.env.MUX_STATE_DIR ?? join(MUX_HOME, "state")

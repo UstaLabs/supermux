@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto"
 import { readFile, stat } from "fs/promises"
-import { dirname, join, sep } from "path"
+import { dirname, join } from "path"
 import { gitAsync } from "../git/exec"
 import { DirCache, type CachedDir } from "./dir-cache"
 import { DirWatchers, type DirWatchersOpts } from "./dir-watchers"
@@ -12,6 +12,7 @@ import { SearchIndexes } from "./search-index"
 import { SubscriptionRegistry } from "./subscriptions"
 import type { DirSnapshot, FsEntry, FsFrame, FsOp, SearchHit } from "./types"
 import { makeLogger } from "../../shared/log"
+import { paths } from "@supermux/platform"
 
 const log = makeLogger("fs")
 
@@ -43,7 +44,7 @@ const dirFrame = (path: string, c: CachedDir): FsFrame => ({
   type: "fs_dir", path, real: c.real, version: c.version, entries: c.entries, ...(c.truncated ? { truncated: c.truncated } : {}),
 })
 
-const isUnder = (root: string, p: string) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
+const isUnder = (root: string, p: string) => paths.isInside(p, root)
 
 const statKey = async (p: string) => {
   const st = await stat(p).catch(() => null)

@@ -237,6 +237,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
+import { paths } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -257,7 +258,7 @@ if (IS_TEST_BROKER) {
   const configuredState = process.env.MUX_STATE_DIR
   const configuredPort = Number(process.env.MUX_WEB_PORT)
   const nestedState = configuredHome && configuredState
-    ? resolve(configuredState).startsWith(resolve(configuredHome) + sep)
+    ? paths.isStrictlyInside(resolve(configuredState), resolve(configuredHome))
     : false
   if (!configuredHome || !configuredState || !nestedState || !Number.isInteger(configuredPort) || configuredPort <= 0 || configuredPort === 9898) {
     log.error("test_broker_isolation_invalid", {

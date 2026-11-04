@@ -29,3 +29,15 @@ test("inside on a POSIX host: exact case, and a sibling sharing a prefix is outs
 test("by default it is this host's rule", () => {
   expect(paths.isInside(process.cwd(), process.cwd())).toBe(true)
 })
+
+// "Under the root, never the root itself": mux-owned worktrees, include-file copies, a clone's target folder.
+// The relative()-based copies took any name starting with `..` (a folder called `..foo`) for "outside".
+test("strictly inside excludes the root itself, and keeps `..foo` inside", () => {
+  expect(paths.isStrictlyInside("C:\\w\\a", "C:\\w", win32)).toBe(true)
+  expect(paths.isStrictlyInside("C:\\w", "C:\\w", win32)).toBe(false)
+  expect(paths.isStrictlyInside("c:\\W\\", "C:\\w", win32)).toBe(false)
+  expect(paths.isStrictlyInside("D:\\w\\a", "C:\\w", win32)).toBe(false)
+  expect(paths.isStrictlyInside("/w/..foo", "/w", posix)).toBe(true)
+  expect(paths.isStrictlyInside("/w", "/w", posix)).toBe(false)
+  expect(paths.isStrictlyInside("/x", "/w", posix)).toBe(false)
+})
