@@ -15,7 +15,6 @@ import dev.supermux.net.AccountIdentityDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.net.AccountUnavailableDto
 import dev.supermux.net.AccountUsageWindowDto
-import dev.supermux.net.SessionAccountResult
 import dev.supermux.state.AccountResult
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -28,8 +27,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The accounts UI (slice A3b): the Settings list, the guided-login sheet's state machine (phases →
- * what it shows; submit and cancel reach the broker) and the session pill's switch.
+ * The accounts UI (slice A3b): the Settings list and the guided-login sheet's state machine (phases →
+ * what it shows; submit and cancel reach the broker). A chat's account switch lives in the
+ * run-settings panel now: `dev.supermux.ui.chat.RunSettingsAccountTest`.
  */
 @OptIn(ExperimentalTestApi::class)
 class AccountsUiTest {
@@ -235,40 +235,6 @@ class AccountsUiTest {
         assertTrue(closed)
     }
 
-    // ── session pill ───────────────────────────────────────────────────────────────────────────
-
-    @Test fun session_pill_switches_and_shows_a_busy_refusal() = runComposeUiTest {
-        val switched = mutableListOf<String>()
-        var busy = true
-        content {
-            SessionAccountPill(
-                agent = "claude",
-                accountId = "claude-work",
-                accountLabel = "Work (Max)",
-                accounts = listOf(claudeSystem, work, ciToken),
-                onSwitch = { id ->
-                    switched += id
-                    if (busy) AccountResult.Failed(409, "session_busy", "Session has an outstanding lifecycle operation")
-                    else AccountResult.Ok(SessionAccountResult(ok = true, session = "s", account = id, accountLabel = "CI token"))
-                },
-            )
-        }
-        waitForIdle()
-        onNodeWithText("Work (Max)").assertIsDisplayed()
-        onNodeWithTag("session-account-pill").performClick()
-        waitForIdle()
-        onNodeWithTag("session-account-item:claude-ci").performClick()
-        waitForIdle()
-        assertEquals(listOf("claude-ci"), switched)
-        onNodeWithTag("session-account-error").assertExists()
-        onNodeWithText("Busy right now — try again after this turn.").assertExists()
-        busy = false
-        onNodeWithTag("session-account-item:claude:system").performClick()
-        waitForIdle()
-        assertEquals(listOf("claude-ci", "claude:system"), switched)
-        onNodeWithTag("session-account-item:claude:system").assertDoesNotExist()
-    }
-
     // ── unavailable (refused) accounts ─────────────────────────────────────────────────────────
 
     private val refusedSystem = claudeSystem.copy(unavailable = AccountUnavailableDto(
@@ -281,67 +247,5 @@ class AccountsUiTest {
         onNodeWithTag("account-unavailable-reason:claude:system").assertIsDisplayed()
         onNodeWithText("Refused: Your organization has disabled", substring = true).assertIsDisplayed()
         onNodeWithTag("account-unavailable:claude-work").assertDoesNotExist()
-    }
-
-    @Test fun session_pill_on_an_unavailable_account_links_to_accounts_and_still_switches() = runComposeUiTest {
-        val switched = mutableListOf<String>()
-        var opened = 0
-        content {
-            SessionAccountPill(
-                agent = "claude",
-                accountId = null,
-                accountLabel = null,
-                accounts = listOf(refusedSystem, work),
-                onSwitch = { id -> switched += id; AccountResult.Ok(SessionAccountResult(ok = true, session = "s", account = id)) },
-                onOpenAccounts = { opened++ },
-            )
-        }
-        waitForIdle()
-        onNodeWithTag("session-account-pill").performClick()
-        waitForIdle()
-        onNodeWithTag("session-account-unavailable").assertExists()
-        onNodeWithTag("account-unavailable-tag:claude:system", useUnmergedTree = true).assertExists()
-        onNodeWithTag("session-account-open-accounts").performClick()
-        waitForIdle()
-        assertEquals(1, opened)
-        // Marked, never blocked: an unavailable account can still be picked (that is the retry).
-        onNodeWithTag("session-account-pill").performClick()
-        waitForIdle()
-        onNodeWithTag("session-account-item:claude-work").performClick()
-        waitForIdle()
-        assertEquals(listOf("claude-work"), switched)
-    }
-
-    @Test fun session_pill_shows_on_the_only_system_login_when_it_is_unavailable() = runComposeUiTest {
-        content {
-            SessionAccountPill(agent = "claude", accountId = null, accountLabel = null, accounts = listOf(refusedSystem), onSwitch = { AccountResult.Failed(null, null, null) })
-        }
-        waitForIdle()
-        onNodeWithTag("session-account-pill").assertIsDisplayed()
-    }
-
-    @Test fun session_pill_hidden_on_the_only_system_login() = runComposeUiTest {
-        content {
-            SessionAccountPill(agent = "codex", accountId = null, accountLabel = null, accounts = listOf(codexSystem), onSwitch = { AccountResult.Failed(null, null, null) })
-        }
-        waitForIdle()
-        onNodeWithTag("session-account-pill").assertDoesNotExist()
-    }
-
-    @Test fun launcher_picker_only_with_a_choice() = runComposeUiTest {
-        var picked: String? = "unset"
-        content {
-            LauncherAccountPicker(agent = "claude", accounts = listOf(claudeSystem, work), selected = null, onSelect = { picked = it })
-            LauncherAccountPicker(agent = "codex", accounts = listOf(claudeSystem, work, codexSystem), selected = null, onSelect = {})
-        }
-        waitForIdle()
-        // The default (system login) is the bare glyph; the label appears once another is picked.
-        onNodeWithTag("account-picker").assertIsDisplayed()
-        onNodeWithText("System login").assertDoesNotExist()
-        onNodeWithTag("account-picker").performClick()
-        waitForIdle()
-        onNodeWithTag("account-picker-item:claude-work").performClick()
-        waitForIdle()
-        assertEquals("claude-work", picked)
     }
 }

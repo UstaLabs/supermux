@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.sample
+import dev.supermux.ui.perf.PerfPanelHost
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -132,6 +135,8 @@ import dev.supermux.ui.shell.windows.RegistryShellWindows
 import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
+import dev.supermux.ui.adaptive.LocalWindowControlsInsets
+import dev.supermux.ui.adaptive.WindowControlsInsets
 import dev.supermux.desktop.shell.macTitleBarDragRegion
 import dev.supermux.desktop.shell.DesktopWindowDragChrome
 import dev.supermux.ui.shell.LocalWindowDragChrome
@@ -364,6 +369,17 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
+    // Card #54: the launch trace starts here; SUPERMUX_PERF=1 also opens the Load Timings panel
+    // and prints every trace event as it happens.
+    run {
+        val perfOn = System.getenv("SUPERMUX_PERF") == "1"
+        dev.supermux.util.PerfTrace.echo = perfOn
+        if (perfOn) dev.supermux.util.PerfTrace.panelVisible.value = true
+        dev.supermux.util.PerfTrace.milestone(
+            "process.start",
+            "uptimeMs" to java.lang.management.ManagementFactory.getRuntimeMXBean().uptime,
+        )
+    }
     // Let Compose paint over the Swing interop children. Must be set before the
     // first Compose window: the flag is read through a memoizing `lazy`, so
     // setting it later is silently ignored.
@@ -890,6 +906,7 @@ fun main() {
             undecorated = linuxMoveResize != null,
         ) {
             if (shuttingDown) return@Window
+            dev.supermux.util.PerfTrace.firstMilestone("desktop.window.composing")
 
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
             // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
@@ -945,6 +962,7 @@ fun main() {
             // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
             // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
             // button in the sidebar band.
+            val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
                     "File",
@@ -1002,6 +1020,10 @@ fun main() {
                         MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
                             ui.sidebarCollapsed = !ui.sidebarCollapsed
                         },
+                        // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
+                        MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
+                            dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
+                        },
                     ),
                 ),
             )
@@ -1028,6 +1050,13 @@ fun main() {
                       customChrome = linuxChrome != null || windowsChrome != null,
                       windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
                   ),
+                  // The OS's own window controls over the content, for a full-window overlay (the
+                  // chat's media viewer lays its top bar in their band, clear of them).
+                  LocalWindowControlsInsets provides when {
+                      isMacOs() -> WindowControlsInsets(band = MacTitleBarHeight, start = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth)
+                      windowsChrome != null -> WindowControlsInsets(band = WindowsTitleBarHeight, end = windowsChrome.captionButtonsWidth)
+                      else -> WindowControlsInsets()
+                  },
               ) {
               Box(
                   Modifier
@@ -1089,12 +1118,15 @@ fun main() {
                     }
                 } else {
                     val scope = rememberCoroutineScope()
+                    // Card #54: last launch's sessions/workspaces, drawn before the socket opens.
+                    val desktopSnapshots = remember { DesktopHostStores.snapshots() }
                     // The multi-host fleet: one connection per paired host, merged into AppShell.
                     val fleet = remember {
                         FleetStore(
                             hostStore,
                             scope,
                             desktopDeps,
+                            snapshots = desktopSnapshots,
                             appFactory = { url, token, onConn ->
                                 HostStore(
                                     url, token, scope, desktopDeps,
@@ -1107,6 +1139,8 @@ fun main() {
                         )
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // Keep that cache current: at most every 20 s while the lists change, off the UI thread.
+                    LaunchedEffect(fleet) { keepDesktopSnapshots(fleet, desktopSnapshots) }
                     // Published up to the tray (session count, the remote host's name/reachability).
                     DisposableEffect(fleet) {
                         pairedFleet = fleet
@@ -1944,6 +1978,8 @@ fun main() {
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
                     ) {
+                        // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
+                        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                         SupermuxApp(
                             fleet = fleet,
                             ui = ui,
@@ -2039,6 +2075,8 @@ fun main() {
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
                         )
+                        PerfPanelHost()
+                        }
                     }
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
@@ -2286,3 +2324,44 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
 /** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
 internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
     if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null
+
+/**
+ * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's
+ * offline cache, so the next launch draws its sidebar before the socket opens. Sampled (at most one
+ * write per 20 s while things change) and written off the UI thread.
+ */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.host.HostSnapshotStore) {
+    combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
+        .sample(20_000)
+        .collect { (sessions, workspaces, projects) ->
+            // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
+            if (sessions.isEmpty() || fleet.archivedPending.value) return@collect
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val owners = fleet.sessionHost.value
+                val wsOwners = fleet.workspaceHost.value
+                val tails = fleet.messages.value
+                // The live sidebar hides a project whose workspaces are all archived; the cache has no
+                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
+                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
+                val archivedOnly = fleet.archivedWorkspaces.value.mapNotNull { it.projectId }.toSet() - liveProjects
+                val now = System.currentTimeMillis()
+                synchronized(cache) {
+                    for (host in fleet.store.list()) {
+                        val mine = sessions.filter { owners[it.id] == host.recordId }
+                        if (mine.isEmpty()) continue
+                        cache.replace(
+                            host.recordId,
+                            mine,
+                            now,
+                            host.version,
+                            workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
+                            projects = projects.filter { it.hostId == host.recordId && it.project.id !in archivedOnly }.map { it.project },
+                            lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
+                        )
+                    }
+                }
+            }
+        }
+}
+

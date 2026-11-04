@@ -1,6 +1,6 @@
 /** Claude headless stream-json mapper. */
 import type { AgentUpdate, SubagentSnapshot } from "../types.js"
-import type { NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
+import type { AgentCommandEntry, NormalizedBody, PlanEntryStatus, SubagentEndedBy, SubagentStats, TaskKind } from "../events/normalized.js"
 import { ACCOUNT_UNAVAILABLE_ERROR } from "../accounts/policy.js"
 import { REASON, SUBAGENT_STATE_METHOD, actionFields, actionsKey, endedReason, shortReason, type SubagentActions } from "../subagent-actions.js"
 
@@ -15,6 +15,30 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Claude's command list (the `initialize` / `reload_plugins` reply and the `commands_changed` push):
+ * `{name, description, argumentHint, aliases, builtin}` rows. Undefined when `value` is not a list.
+ */
+function claudeCommands(value: unknown): AgentCommandEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: AgentCommandEntry[] = []
+  for (const item of value) {
+    const row = rec(item)
+    const name = str(row?.name)
+    if (!row || !name) continue
+    const hint = str(row.argumentHint)
+    const aliases = Array.isArray(row.aliases) ? row.aliases.filter((a): a is string => typeof a === "string" && a !== "") : []
+    out.push({
+      name,
+      ...(typeof row.description === "string" ? { description: row.description } : {}),
+      ...(hint ? { argumentHint: hint } : {}),
+      ...(aliases.length ? { aliases } : {}),
+      ...(row.builtin === true ? { builtin: true } : {}),
+    })
+  }
+  return out
 }
 
 function planStatus(status: unknown): PlanEntryStatus {
@@ -681,6 +705,10 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         }]
       }
       if (subtype && (subtype.startsWith("hook_") || subtype === "hook")) return []
+      if (subtype === "commands_changed") {
+        const commands = claudeCommands(frame.commands)
+        return commands ? [{ kind: "commands-update", commands }] : []
+      }
       if (subtype === "thinking_tokens" || subtype === "thinking") {
         const text = typeof frame.text === "string" ? frame.text : typeof frame.thinking === "string" ? frame.thinking : ""
         return [{ kind: "reasoning", reasoningId: str(frame.uuid) ?? "thinking", redacted: !text, ...(text ? { text } : {}) }]
@@ -749,6 +777,11 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
     if (type === "control_request") {
       // can_use_tool is answered via context.requestPermission; Session emits the event.
       return []
+    }
+    if (type === "control_response") {
+      // The driver forwards the replies that list commands (initialize, reload_plugins).
+      const commands = claudeCommands(rec(rec(frame.response)?.response)?.commands)
+      return commands ? [{ kind: "commands-update", commands }] : []
     }
     return []
   }

@@ -23,7 +23,10 @@ class MockTelegram implements Channel {
 }
 
 const DEV_PATH = `/tmp/devices-xchan-${process.pid}.json`
-const PORT = 18789
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let tg: MockTelegram
 let web: WebChannel
 let log: MessageStore
@@ -53,9 +56,9 @@ beforeEach(async () => {
 
   tg = new MockTelegram()
   web = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [{ name: "ana", workdir: "/h", mute: false, connected: true, agent: "claude" as const }],
     // getSessionLog receives a session name; return messages by UUID
     getSessionLog: (_name) => log.get(anaSessionId),
@@ -73,6 +76,7 @@ beforeEach(async () => {
   // from the message_append event; tests only check entry.text).
   log.on("append", (sessionId, entry) => (web as any).broadcastToAll({ type: "message_append", session: sessionId, entry }))
   await web.start()
+  PORT = web.boundPort
 })
 
 afterEach(async () => {

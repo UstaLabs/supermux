@@ -9,8 +9,8 @@
  *   02 … system + two added (usage meters, isolated) 09 login: done
  *   03 add-account chooser (Claude)                 10 login: failed (account_exists)
  *   04 paste-a-token form                           11 auto-switch on
- *   05 login: starting                              12 new chat: account picker open
- *   06 login: awaiting_user (Codex URL + code)      13 session pill + switch menu
+ *   05 login: starting                              12 new chat: the model pill's Account list
+ *   06 login: awaiting_user (Codex URL + code)      13 chat: the model pill's Account list
  *   07 login: Claude paste-the-code                 14 switch refused (busy) · 15 "Switched to…" notice
  *
  * On the "after" build it also asserts the requests that reach the broker: the login start, the
@@ -332,40 +332,39 @@ async function afterVariant(browser: Browser, storage: Awaited<ReturnType<Browse
     expect(put && JSON.parse(put.body).autoSwitch === true, `autoswitch body ${put?.body}`)
     await shot(page, v, "11-autoswitch-on", "accounts-autoswitch-card")
 
-    // 12 — new chat picker (claude has three accounts).
-    // A compact window carries the account in the AGENT menu; wider ones get their own pill.
-    const compactLauncher = v.width < 600
-    const pickerTag = compactLauncher ? "launcher_agent_pill" : "account-picker"
+    // 12 — new chat (claude has three accounts): the account is a row of the model pill's panel.
     await page.goto(`${baseUrl}/new`, { waitUntil: "domcontentloaded" })
-    await waitTag(page, pickerTag, 60_000)
+    await waitTag(page, "composer-model-pill", 60_000)
     await settle(page, 1500)
     await shot(page, v, "12a-launcher-picker")
-    await tapUntil(page, pickerTag, "account-picker-item:claude-work")
+    await tapUntil(page, "composer-model-pill", "run_settings_account")
+    await tapUntil(page, "run_settings_account", "account-picker-item:claude-work")
     await settle(page)
     await shot(page, v, "12-launcher-picker-open")
     await tap(byTag(page, "account-picker-item:claude-work"))
     await settle(page)
     await shot(page, v, "12b-launcher-picked")
 
-    // 13–15 — the session pill, its switch menu, a busy refusal and the chat notice.
+    // 13–15 — a running chat's account, in the same panel: its list, a busy refusal and the notice.
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" })
     await openSeededSession(page, sessionId)
     await injectServerFrame(page, { type: "session_state", session: sessionId, account: "claude-work", accountLabel: "Work (Max)" })
-    await waitTag(page, "session-account-pill")
+    await waitTag(page, "composer-model-pill")
     await settle(page)
     await shot(page, v, "13a-session-pill")
-    await tapUntil(page, "session-account-pill", "session-account-item:claude:system")
+    await tapUntil(page, "composer-model-pill", "run_settings_account")
+    await tapUntil(page, "run_settings_account", "account-picker-item:claude:system")
     await settle(page)
     await shot(page, v, "13-session-switch-menu")
     stub.switchBusy = true
-    await tap(byTag(page, "session-account-item:claude-ci-token"))
-    await waitTag(page, "session-account-error")
+    await tap(byTag(page, "account-picker-item:claude-ci-token"))
+    await waitTag(page, "run_settings_account_refusal")
     await settle(page)
     await shot(page, v, "14-session-switch-busy")
     const sw = lastCall(stub, "POST", /^\/sessions\/[^/]+\/account$/)
     expect(sw && JSON.parse(sw.body).account === "claude-ci-token", `switch body ${sw?.body}`)
-    // Close the menu with a tap outside it (the transcript's lower half).
-    await page.mouse.click(v.width / 2, v.height * 0.7)
+    // Close the panel with a tap outside it (the transcript's top: the panel rises from the composer).
+    await page.mouse.click(v.width / 2, v.height * 0.12)
     await settle(page, 600)
     await injectServerFrame(page, {
       type: "message_append", session: sessionId,

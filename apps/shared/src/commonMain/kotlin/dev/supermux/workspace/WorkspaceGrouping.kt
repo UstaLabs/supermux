@@ -75,6 +75,8 @@ fun groupWorkspaces(
     projects: List<ProjectRef> = emptyList(),
     hostOf: (WorkspaceDto) -> String = { "" },
     archived: List<WorkspaceDto> = emptyList(),
+    /** The archived rows are not known yet: show no empty project at all (card #54). */
+    hideEmptyProjects: Boolean = false,
     // Kept LAST so existing `groupWorkspaces(ws, home) { isPa }` trailing-lambda callers still bind here.
     isPersonalAssistant: (WorkspaceDto) -> Boolean = { false },
 ): List<WorkspaceGroup> {
@@ -96,7 +98,7 @@ fun groupWorkspaces(
     }
     val used = usedProjectKeys(archived + workspaces.filter { it.status == "archived" }, hostOf)
     result.addAll(
-        resolveGroups(rest, home, projects, hostOf, rowOrder) { key -> showsEmptyProjectLive(key, used) },
+        resolveGroups(rest, home, projects, hostOf, rowOrder) { key -> !hideEmptyProjects && showsEmptyProjectLive(key, used) },
     )
     return result
 }

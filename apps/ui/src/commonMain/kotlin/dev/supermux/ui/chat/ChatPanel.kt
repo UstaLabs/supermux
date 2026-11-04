@@ -79,6 +79,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -231,6 +232,8 @@ data class ChatState(
      * opens its chat on a tap only when it is one of them. A hidden child or a council is in no list.
      */
     val listedSessions: Set<String> = emptySet(),
+    /** The host holds this chat's whole history page and extras (card #54's "fully shown" mark). */
+    val historyLoaded: Boolean = true,
 )
 
 /**
@@ -273,14 +276,14 @@ class ChatActions(
      * the header's Kill does. Null = this client cannot, and the card shows no Stop.
      */
     val endCouncil: ((councilId: String) -> Unit)? = null,
-    /** The session's host's accounts (every agent), live; null until loaded. Drives the header pill. */
+    /** The session's host's accounts (every agent), live; null until loaded. Drives the run-settings Account row. */
     val accounts: kotlinx.coroutines.flow.Flow<List<dev.supermux.net.AccountDto>?> = kotlinx.coroutines.flow.flowOf(null),
     /** Start following [accounts] (the first call fetches GET /accounts). */
     val ensureAccounts: () -> Unit = {},
     /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
     val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
-    /** Opens Settings ▸ Accounts (the pill's link when the session's account is unavailable); null = no link. */
+    /** Opens Settings ▸ Accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
 )
 
@@ -346,6 +349,8 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val sessions by app.sessions.collectAsState()
     val sessionAgent = sessions.find { it.id == sessionId }?.agent
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
+    val loadedChats by app.loadedChats.collectAsState()
+    val historyLoaded = sessionId in loadedChats
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -364,6 +369,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         councils = councilsMap[sessionId].orEmpty(),
         councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
         listedSessions = listedSessions,
+        historyLoaded = historyLoaded,
     )
 }
 
@@ -458,8 +464,20 @@ fun ChatPanel(
     val dead = agent?.state == "dead"
 
     LaunchedEffect(session.id) { actions.ensureMessagesLoaded() }
+    // The session's account lives in the composer's run-settings panel (with or without a header):
+    // which one it runs on, and the switch to another, which outlives the panel.
     val sessionAccounts by actions.accounts.collectAsState(null)
-    LaunchedEffect(actions, showHeader) { if (showHeader) actions.ensureAccounts() }
+    LaunchedEffect(actions) { actions.ensureAccounts() }
+    val accountSwitch = remember(session.id, actions) { SessionAccountSwitch(scope, actions.setAccount) }
+    LaunchedEffect(accountSwitch, session.account) { accountSwitch.clearRefusal() }
+    val runAccount = RunSettingsAccount.forChat(
+        agent = session.agent,
+        accountId = session.account,
+        accountLabel = session.accountLabel,
+        accounts = sessionAccounts,
+        switch = accountSwitch,
+        onOpenAccounts = actions.openAccounts,
+    )
 
     var pendingRespondIds by remember(session.id) { mutableStateOf(setOf<String>()) }
     val liveRequestIds = remember(state.requests) { state.requests.map { it.requestId }.toSet() }
@@ -519,12 +537,40 @@ fun ChatPanel(
     val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
         mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
     }
+    // Card #54: the chat-open trace's two screen marks — the first frame that draws any of this
+    // chat, and the first that draws it with its whole history loaded.
+    SideEffect { dev.supermux.util.PerfTrace.countRecompose("chat") }
+    LaunchedEffect(session.id, timelineItems.isNotEmpty(), state.historyLoaded) {
+        val trace = dev.supermux.util.PerfTrace.chatTrace(session.id) ?: return@LaunchedEffect
+        if (timelineItems.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        dev.supermux.util.PerfTrace.firstMilestone("chat.firstFrame", "items" to timelineItems.size, "messages" to messages.size, trace = trace)
+        if (state.historyLoaded) {
+            dev.supermux.util.PerfTrace.firstMilestone("chat.complete", "items" to timelineItems.size, "messages" to messages.size, "activity" to activity.size, trace = trace)
+        }
+    }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
     // Medium: runs of consecutive tool rows render as one tool-call group.
     val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
     val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
+
+    // ── Media: every picture and clip in this chat — the fullscreen viewer's swipe set ──────────
+    // Markdown host media join only where this chat reads host files, resolved against the same
+    // base folder its markdown images use.
+    val markdownFiles = LocalMarkdownFiles.current
+    val mediaItems = remember(timelineItems, markdownFiles) {
+        chatMediaItems(timelineItems, hostFiles = markdownFiles != null, baseDir = markdownFiles?.baseDir)
+    }
+    val latestMedia by androidx.compose.runtime.rememberUpdatedState(mediaItems)
+    // Who sent each one and when, for the viewer's line under its counter.
+    val mediaEntries = remember(timelineItems) { timelineItems.mapNotNull { (it as? TimelineItem.Msg)?.entry }.associateBy { it.id } }
+    val mediaAgentName = remember(session.agent) { dev.supermux.ui.accounts.agentDisplayName(session.agent) }
+    var viewerKey by remember(session.id) { mutableStateOf<String?>(null) }
+    val mediaOpener = remember(session.id) {
+        ChatMediaOpener { key -> latestMedia.any { it.key == key }.also { found -> if (found) viewerKey = key } }
+    }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
     // transcript's own rows when there is not (Android's phone/tablet chat, which owns its header).
@@ -870,17 +916,6 @@ fun ChatPanel(
                         modifier = Modifier.size(17.dp),
                     )
                 }
-                // The session's account: shown on an added account, or when the agent has more
-                // than one to switch between (dev.supermux.ui.accounts.SessionAccountPill).
-                dev.supermux.ui.accounts.SessionAccountPill(
-                    agent = session.agent,
-                    accountId = session.account,
-                    accountLabel = session.accountLabel,
-                    accounts = sessionAccounts,
-                    onSwitch = actions.setAccount,
-                    onOpenAccounts = actions.openAccounts,
-                    narrow = headerWidth < 460.dp,
-                )
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
                 headerActions()
             }
@@ -960,8 +995,13 @@ fun ChatPanel(
                 },
                 fastMode = (session.fastMode == true).takeIf { fastSupported },
                 onToggleFast = { on -> scope.launch { actions.pickFast(on) } },
-                // Re-fetch when a picker opens so a catalog that changed since open is current.
-                onPickerOpened = { scope.launch { refreshCatalogs() } },
+                account = runAccount,
+                // Re-fetch when a picker opens so a catalog that changed since open is current; an
+                // old refusal of an account switch has nothing left to say.
+                onPickerOpened = {
+                    accountSwitch.clearRefusal()
+                    scope.launch { refreshCatalogs() }
+                },
                 tray = {
                     ComposerFooter(
                         session = session,
@@ -976,7 +1016,10 @@ fun ChatPanel(
         }
 
         val transcript: @Composable (bottomPadding: androidx.compose.ui.unit.Dp) -> Unit = { bottomPad ->
-            androidx.compose.runtime.CompositionLocalProvider(LocalCouncilActivity provides state.councilActivity) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalCouncilActivity provides state.councilActivity,
+                LocalChatMediaViewer provides mediaOpener,
+            ) {
             LazyColumn(
                 state = listState,
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
@@ -1079,6 +1122,18 @@ fun ChatPanel(
                         }
                     }
             }
+        }
+
+        viewerKey?.let { key ->
+            ChatMediaViewer(
+                items = mediaItems,
+                startKey = key,
+                resolve = { item -> chatMediaHandle(item, actions.media, markdownFiles, platform.files::probeMime) },
+                onDismiss = { viewerKey = null },
+                caption = { item ->
+                    mediaEntries[item.entryId]?.let { mediaCaption(it, mediaAgentName, Clock.System.now().toEpochMilliseconds()) }
+                },
+            )
         }
 
         // Body: transcript + composer.

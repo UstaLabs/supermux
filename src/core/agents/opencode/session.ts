@@ -2,11 +2,10 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import type { OpenCodeCommandClient } from "../../slash-commands/types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, OPENCODE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getOpenCodeCoreHost } from "./core-host-provider"
 import type { OpenCodeCoreHost, OpenCodePrepareExtra } from "./core-host"
-import { opencodePluginRoots } from "../../plugins"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR, homeDirName } from "../../../shared/paths"
@@ -14,18 +13,9 @@ import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
-/** Slash-command discovery context for the opencode provider. */
-export type OpenCodeCommandContext = {
-  /** Live ACP adapter does not expose the HTTP SDK client; disk scan is used. */
-  client?: OpenCodeCommandClient
-  /** Enabled plugin roots for the disk-scan preview / client fallback. */
-  pluginDirs: string[]
-}
-
-export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
-  return {
-    pluginDirs: opencodePluginRoots(ctx.sessionName),
-  }
+/** Slash commands: the list OpenCode pushed over ACP (available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }
 
 function resolveHost(explicit?: OpenCodeCoreHost): OpenCodeCoreHost {

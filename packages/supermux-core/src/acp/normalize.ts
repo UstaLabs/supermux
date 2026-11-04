@@ -511,7 +511,14 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       const commands = Array.isArray(value.availableCommands) ? value.availableCommands : []
       const mapped = commands.map(cmd => {
         const row = rec(cmd) ?? {}
-        return { name: str(row.name) ?? "", ...(typeof row.description === "string" ? { description: row.description } : {}) }
+        const hint = str(rec(row.input)?.hint)
+        const meta = rec(row._meta)
+        return {
+          name: str(row.name) ?? "",
+          ...(typeof row.description === "string" ? { description: row.description } : {}),
+          ...(hint ? { argumentHint: hint } : {}),
+          ...(meta ? { _meta: meta } : {}),
+        }
       })
       const encoded = JSON.stringify(mapped)
       if (encoded === lastCommandsJson) return []

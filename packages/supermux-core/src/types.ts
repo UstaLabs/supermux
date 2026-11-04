@@ -122,6 +122,8 @@ export type SessionRecord = {
   id: string
   agent: string
   agentSessionId: string
+  /** The native conversation `agentSessionId` replaced when the agent last reset it (Claude /clear); see ConversationReset. */
+  previousAgentSessionId?: string
   cwd: string
   createdAt: string
   authProfile?: string
@@ -279,7 +281,15 @@ export type DriverContext = {
   subagents?: SubagentSnapshot[]
   /** The session's merged context for this launch; absent when there is none (the launch is then unchanged). */
   sessionContext?: LaunchContext
+  /**
+   * The agent replaced its conversation with a new one in the same process (Claude's /clear). From then on
+   * the runtime's `agentSessionId` is the new id; Core records it, so a resume continues the new conversation.
+   */
+  onConversationReset?(reset: ConversationReset): void
 }
+
+/** `trigger` is the agent's own word for the reset (Claude: "clear"), when it said one. */
+export type ConversationReset = { agentSessionId: string; previousAgentSessionId: string; trigger?: string }
 
 export type CloseMode = "shutdown" | "detach"
 export type CloseOptions = { mode: CloseMode }

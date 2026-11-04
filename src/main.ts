@@ -1,5 +1,6 @@
 // src/main.ts
 import { avatarRev } from "./core/agents/avatar"
+import { PerfLog } from "./core/perf/perf-log"
 import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
@@ -83,13 +84,13 @@ import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { pluginSpawnArgsForKind, ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
+import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
 import { recordFetched } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider } from "./core/slash-commands"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider, sqliteCommandStore } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
 import { resolvePermissionMode } from "./core/agents/permission-modes"
 import { writeRpcWorkerMcpConfig, removeBrokerShimEntries, ensureBrokerShimEntries } from "./core/session-manager/trust"
@@ -389,6 +390,8 @@ process.on("exit", () => releasePidFile(PID_FILE))
 
 // DB creation BEFORE registry
 const dbPath = join(STATE_DIR, "db.sqlite3")
+// Load-time tracing (card #54): off unless MUX_PERF=1 or `bun scripts/perf-timeline.ts on`.
+const perfLog = new PerfLog({ dir: join(STATE_DIR, "perf"), envEnabled: process.env.MUX_PERF === "1" })
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
@@ -453,7 +456,7 @@ const telemetry = new TelemetryService({
   settings,
   url: process.env.MUX_TELEMETRY_URL ?? "https://telemetry.supermux.dev/v1/batch",
   isEnabled: () => telemetryState().enabled,
-  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION), os: process.platform, arch: process.arch },
+  common: { version: BUILD_VERSION, commit: BUILD_COMMIT, installMode: detectUpdateMode(), env: telemetryEnv(BUILD_VERSION, process.env.MUX_TELEMETRY_ENV), os: process.platform, arch: process.arch },
   heartbeat: () => {
     const since = Date.now() - 24 * 3600 * 1000
     return { ...brokerTelemetryProps(), activeSessions24h: [...lastTurnAt.values()].filter((t) => t >= since).length }
@@ -1257,27 +1260,30 @@ function adaptersOfKind(kind: AgentKind): unknown[] {
   return out
 }
 
-const cursorCommandProvider = new CursorCommandProvider()
+// Slash commands come from what each live session's agent reports (card #13): nothing is spawned or
+// prompted to learn them. Lists are stored per agent and folder, for restarts and New Session.
 // Annotated to cut the top-level inference cycle (sessionManager → commandRegistry → runtimes → sessionManager).
 const commandRegistry: CommandRegistry = new CommandRegistry({
   providers: {
     claude: new ClaudeCommandProvider(),
     codex: new CodexCommandProvider(),
-    cursor: cursorCommandProvider,
+    cursor: new CursorCommandProvider(),
     opencode: new OpenCodeCommandProvider(),
     grok: new GrokCommandProvider(),
     antigravity: new AntigravityCommandProvider(),
   },
+  store: sqliteCommandStore(db),
   resolveSession: (name) => {
     const s = registry.resolveName(name)
     if (!s) return undefined
     const kind = ((s.agent ?? "claude") as AgentKind)
     return {
       name: s.name,
+      id: s.id,
       kind,
       workdir: s.workdir,
+      repoRoot: s.repo_root ?? undefined,
       muted: !!s.mute,
-      pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: s.name }),
       agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
@@ -1796,6 +1802,12 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
     agentStateStore.applyEvent(sessionId, "Stop")
+    // Codex pushes no reliable change event (skills/changed never fired, 0.164.0): ask its app-server again,
+    // so a skill the turn added shows up.
+    if (adapter.kind === AgentKind.Codex) {
+      const name = registry.get(sessionId)?.name
+      if (name) void commandRegistry.refresh(name)
+    }
     recordTurnCompleted(sessionId, "completed")
     if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
     if (!ev?.error) {
@@ -1854,6 +1866,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     } else if (ev.event === "available") {
       brokerAccounts.notifyChanged()
     }
+  })
+  // /clear (or /reset, /new) in Claude: the agent goes on in a new, empty conversation and the session stays. The
+  // chat keeps everything above, so it says where the agent's memory now starts.
+  adapter.on("conversation-reset", () => {
+    void notifySession(sessionId, `Context cleared — ${agentDisplayName(adapter.kind)} starts a new conversation and won't remember the messages above`)
   })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
@@ -2496,6 +2513,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   }
   webChannel = new WebChannel({
     updateChecker,
+    perf: perfLog,
     getHostInfo: () => ({
       hostId: hostIdentity.hostId,
       name: advertisedHostName,
@@ -2624,6 +2642,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const s = registry.get(id)
       return messageLog.get(s?.id ?? id, limit)
     },
+    // A message stored before attachments carried sizes gets them on its first request: the
+    // file's header is read once (FileStore remembers it) and the answer carries it.
+    enrichAttachments: async (entries) => {
+      const withFiles = entries as Array<{ attachments?: Array<{ file_id: string }> }>
+      await fileStore.ensureMediaMeta(withFiles.flatMap((e) => e.attachments?.map((a) => a.file_id) ?? []))
+      for (const e of withFiles) if (e.attachments?.length) e.attachments = fileStore.withMediaMeta(e.attachments)
+    },
     getSessionActivity: (id) => {
       const s = registry.get(id)
       return s ? activityStore.get(s.id) : []
@@ -2667,7 +2692,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return commandRegistry.preview({
         kind,
         workdir,
-        pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
         agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
     },
@@ -2945,13 +2969,18 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!dto) throw new Error("workspace not found")
       return dto
     },
-    listArchivedWorkspaces: () => {
+    listArchivedWorkspaces: (o) => {
       const internal = internalSessionIds()
-      return registry.workspaces
+      const rows = registry.workspaces
         .list({ includeArchived: true })
         .filter((w) => w.status === "archived")
         .filter((w) => isVisibleWorkspace(w, internal))
-        .map(toWsDto)
+      if (!o?.slim) return rows.map(toWsDto)
+      // Slim (card #54): no views query per workspace, and no views or layout in the answer.
+      return rows.map((w) => {
+        const { views: _views, layout: _layout, ...rest } = workspaceDto(w, [], projectService.resolve(w))
+        return rest
+      })
     },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
     // Project catalog. The routes broadcast projects_changed after each mutation.
@@ -2959,10 +2988,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Membership input excludes internal workspaces for consistency — they're
     // not sent to clients anyway (see listWorkspaces/listArchivedWorkspaces
     // above), and a resolved membership entry for one would be dead data.
-    getProjectMembership: () => {
+    getProjectMembership: (o) => {
       const internal = internalSessionIds()
       return projectService.membership(
-        registry.workspaces.list({ includeArchived: true }).filter((w) => isVisibleWorkspace(w, internal)),
+        registry.workspaces.list({ includeArchived: o?.includeArchived !== false }).filter((w) => isVisibleWorkspace(w, internal)),
       )
     },
     createProject: (name) => projectService.create(name),

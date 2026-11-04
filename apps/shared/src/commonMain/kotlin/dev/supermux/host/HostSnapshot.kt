@@ -1,6 +1,9 @@
 package dev.supermux.host
 
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.WorkspaceDto
 import kotlinx.serialization.Serializable
 
 /**
@@ -22,4 +25,12 @@ data class HostSnapshot(
     val fetchedAt: Long = 0L,
     /** The host's reported version at capture time (spec §5 `brokerVersion?`), display-only. */
     val brokerVersion: String? = null,
+    /**
+     * Card #54: what the desktop sidebar draws before the socket opens — the live workspaces (with
+     * their projectId applied), the project catalog, and each session's newest message (its preview
+     * line). Empty in a cache written before these existed, or by a platform that keeps only sessions.
+     */
+    val workspaces: List<WorkspaceDto> = emptyList(),
+    val projects: List<ProjectDto> = emptyList(),
+    val lastMessages: Map<String, LogEntry> = emptyMap(),
 )

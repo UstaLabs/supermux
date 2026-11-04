@@ -1,100 +1,43 @@
-import { spawn as defaultSpawn } from "child_process"
-import { makeLogger } from "../../../shared/log"
 import { AgentKind } from "../../../shared/agents"
-import { agentCommand, type AgentCommandProvider, type ProviderCtx, type SlashCommand } from "../types"
+import { agentCommand, pluginOfName, type AgentCommandEntry, type AgentCommandList, type AgentCommandProvider, type CommandOrigin, type ProviderCtx, type ReportedCommandsCtx, type SlashCommand } from "../types"
 
-const log = makeLogger("slash/claude")
+/** Claude shows MCP prompts as "server:prompt (MCP)"; the command itself is "server:prompt". */
+const MCP_SUFFIX = / \(MCP\)$/
+/** Claude ends the description of a folder's own commands and skills with "(project)". */
+const PROJECT_SUFFIX = /\(project\)\s*$/
 
-/** Returns the slash_commands array if `line` is the stream-json system/init frame, else null. */
-export function parseClaudeInitLine(line: string): string[] | null {
-  let msg: any
-  try { msg = JSON.parse(line) } catch { return null }
-  if (msg?.type === "system" && msg?.subtype === "init" && Array.isArray(msg.slash_commands)) {
-    return msg.slash_commands.filter((s: unknown): s is string => typeof s === "string")
+/** Claude's own list (initialize reply, commands_changed push) as composer entries. */
+export function mapClaudeCommands(entries: AgentCommandEntry[]): AgentCommandList {
+  const commands: SlashCommand[] = []
+  const projectIds: string[] = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    // "__remote-workflow" and the like are Claude's own plumbing.
+    if (!entry.name || entry.name.startsWith("_")) continue
+    const mcp = MCP_SUFFIX.test(entry.name)
+    const name = entry.name.replace(MCP_SUFFIX, "")
+    // A plugin's skills are "<plugin>:<skill>"; an MCP prompt's "<server>:" is no plugin.
+    const plugin = mcp ? undefined : pluginOfName(name)
+    const origin: CommandOrigin | undefined = entry.builtin ? { source: "builtin" } : plugin ? { source: "plugin", plugin } : undefined
+    // Claude opens a plugin skill's description with "(<plugin>) ", which the source now says.
+    const description = plugin && entry.description?.startsWith(`(${plugin}) `) ? entry.description.slice(plugin.length + 3) : entry.description
+    const cmd = agentCommand({ name, sigil: "/", description, argumentHint: entry.argumentHint, aliases: entry.aliases, origin })
+    if (seen.has(cmd.id)) continue
+    seen.add(cmd.id)
+    commands.push(cmd)
+    if (entry.description && PROJECT_SUFFIX.test(entry.description)) projectIds.push(cmd.id)
   }
-  return null
+  return { commands, projectIds }
 }
 
-export function claudeNamesToCommands(names: string[]): SlashCommand[] {
-  return names.map((name) => agentCommand({ name, sigil: "/" }))
-}
-
-type SpawnFn = (cmd: string, args: string[], opts: any) => any
-
-// Limits how many `claude --print` probes run at once, so a broker restart with
-// many Claude sessions doesn't fork N ~300MB processes simultaneously.
-class Semaphore {
-  private active = 0
-  private queue: (() => void)[] = []
-  constructor(private max: number) {}
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.max) await new Promise<void>((r) => this.queue.push(r))
-    this.active++
-    try { return await fn() }
-    finally { this.active--; this.queue.shift()?.() }
-  }
-}
-
-// Discovers a Claude session's slash commands by running a one-shot headless
-// probe (`claude --print --output-format stream-json`). The `system/init` frame
-// carries the full authoritative `slash_commands` list (bundled binary skills +
-// ~/.claude/skills + plugin-namespaced) and arrives BEFORE the model turn — so
-// we read only that line, then kill the child (no assistant turn billed).
-// Verified 2026-05-30: 45 commands, ~8s, no billed turn. See the design doc.
+// Reads the list the session's own Claude reported over the stream-json connection Core holds (its initialize
+// reply, then commands_changed pushes). Nothing is spawned and nothing is prompted: the old `claude -p "hi"`
+// probe reached a billed Opus turn in 544 of 548 runs (card #13).
 export class ClaudeCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.Claude
-  private readonly spawn: SpawnFn
-  private readonly timeoutMs: number
-  private readonly sem: Semaphore
-  constructor(opts: { spawn?: SpawnFn; timeoutMs?: number; maxConcurrent?: number } = {}) {
-    this.spawn = opts.spawn ?? (defaultSpawn as unknown as SpawnFn)
-    this.timeoutMs = opts.timeoutMs ?? 25_000
-    this.sem = new Semaphore(opts.maxConcurrent ?? 2)
-  }
 
-  list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    return this.sem.run(() => this.probe(ctx))
-  }
-
-  private probe(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    return new Promise((resolve) => {
-      const args = [
-        "--print", "--output-format", "stream-json", "--verbose",
-        ...ctx.pluginSpawnArgs,
-        "hi", // any prompt; we kill before the model turn runs
-      ]
-      let child: any
-      try {
-        child = this.spawn("claude", args, { cwd: ctx.workdir, env: process.env, stdio: ["pipe", "pipe", "ignore"] })
-      } catch (err: any) {
-        log.debug("claude_probe_spawn_failed", { err: err?.message })
-        return resolve([])
-      }
-      let done = false
-      let buf = ""
-      const finish = (cmds: SlashCommand[]) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        try { child.stdin?.end() } catch {}
-        try { if (!child.killed) child.kill("SIGTERM") } catch {}
-        resolve(cmds)
-      }
-      const timer = setTimeout(() => {
-        log.debug("claude_probe_timeout", { session: ctx.sessionName })
-        finish([])
-      }, this.timeoutMs)
-      child.on("error", () => finish([]))
-      child.on("exit", () => finish([])) // exited before init → empty
-      child.stdout.on("data", (d: Buffer) => {
-        buf += d.toString("utf8")
-        let i: number
-        while ((i = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, i); buf = buf.slice(i + 1)
-          const names = parseClaudeInitLine(line.trim())
-          if (names) return finish(claudeNamesToCommands(names))
-        }
-      })
-    })
+  async list(ctx: ProviderCtx): Promise<AgentCommandList | undefined> {
+    const reported = (ctx.agentContext as ReportedCommandsCtx | undefined)?.commands
+    return reported ? mapClaudeCommands(reported) : undefined
   }
 }

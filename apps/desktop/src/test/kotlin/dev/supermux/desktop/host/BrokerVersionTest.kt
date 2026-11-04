@@ -45,7 +45,15 @@ class BrokerVersionTest {
         val t = Thread { result = BrokerVersion.readBundledBuild(script, killAfterMs = 60_000) }
         val started = System.currentTimeMillis()
         t.start()
-        Thread.sleep(500)
+        // RUNNING, not "half a second later": the probe is registered for killProbes() AND its
+        // script has forked the `sleep`. Kill any earlier and the test races the machine: a probe
+        // not registered yet is not killed at all, and a `sleep` forked after the kill snapshotted
+        // the tree is an orphan holding the pipe open for its full 30 s. Both read as "killProbes
+        // does not work".
+        while (BrokerVersion.liveProbesForTest().none { it.descendants().findAny().isPresent }) {
+            check(System.currentTimeMillis() - started < 10_000) { "the probe never started its child" }
+            Thread.sleep(10)
+        }
         BrokerVersion.killProbes()
         t.join(10_000)
         kotlin.test.assertFalse(t.isAlive, "the probe read is still blocked")

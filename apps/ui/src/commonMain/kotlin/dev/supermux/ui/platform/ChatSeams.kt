@@ -89,6 +89,13 @@ interface FileAccess {
      * their decoder from the suffix) — `attachmentTempName` in `:ui`'s timeline builds it.
      */
     suspend fun stageTemp(name: String, bytes: ByteArray): String?
+
+    /**
+     * A JPEG of the frame a picked clip's [PickedFile.preview] holds — on Android the first frame
+     * the picker already grabbed for the chip — to upload as the clip's poster. Null where the host
+     * makes none (the clip's tile then waits for the viewer's frame, or shows ▶ and its length).
+     */
+    fun posterJpeg(preview: Any?): ByteArray? = null
 }
 
 /**

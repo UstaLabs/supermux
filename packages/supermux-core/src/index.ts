@@ -8,6 +8,7 @@ export type {
   NormalizedBody, EventEnvelope, NativeRef, NativeProtocol, EventOrigin, TurnCompleteReason,
   ToolCallPhase, ToolCategory, PlanEntryStatus, PlanEntryPriority, TaskKind, TaskPhase, CompactionStatus,
   SubagentPhase, SubagentMessaging, SubagentStats, SubagentEndedBy, SubagentActionsSource, SubagentDelivery,
+  AgentCommandEntry,
 } from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper, detachedKeeperHooks } from "./keeper/index.js"
@@ -22,7 +23,7 @@ export type {
   PermissionOptionKind, RequestAnswer, PermissionAnswer, QuestionAnswer, PendingRequest,
   QuestionRequest, QuestionResponse, AnswersHandler, UserQuestionSpec, UserQuestionOption,
   Receipt, SendOptions, SubagentMessageResult, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
-  SessionRecord, SessionState, ForkOptions, ForkSource,
+  SessionRecord, SessionState, ForkOptions, ForkSource, ConversationReset,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,
   PermissionsSpec, PermissionsApplied, ToolKind,

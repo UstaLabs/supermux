@@ -2,7 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import type { GrokAcpCommand } from "../../slash-commands/types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, GROK_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getGrokCoreHost } from "./core-host-provider"
 import type { GrokCoreHost, GrokPrepareExtra } from "./core-host"
@@ -11,19 +11,11 @@ import { randomUUID } from "crypto"
 import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
-import { grokSkillsDirs } from "../../plugins"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
-export type GrokCommandContext = {
-  commands?: GrokAcpCommand[]
-  skillsDirs: string[]
-}
-
-export function commandContext(ctx: CommandContextCtx): GrokCommandContext {
-  return {
-    commands: (ctx.adapter as { availableCommands?: GrokAcpCommand[] } | undefined)?.availableCommands,
-    skillsDirs: grokSkillsDirs(ctx.sessionName),
-  }
+/** Slash commands: what the session's grok reported (initialize, available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }
 
 export type GrokSessionAdapter = CoreAdapter

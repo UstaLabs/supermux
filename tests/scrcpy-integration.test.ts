@@ -15,7 +15,10 @@ function deviceAttached(): boolean {
 const canRun = process.platform === "linux" && hasBin("adb") && hasBin("scrcpy") && deviceAttached()
 
 const DEV_PATH = `/tmp/devices-scrcpy-e2e-${process.pid}.json`
-const PORT = 18844
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel, mgr: DisplayManager, token = ""
 
 beforeEach(async () => {
@@ -24,11 +27,12 @@ beforeEach(async () => {
   token = new DeviceStore(DEV_PATH).mint("e2e").token
   mgr = new DisplayManager({ providers: [new LinuxXvfbProvider(), new MacosScreenProvider()], onAdded: () => {}, onRemoved: () => {} })
   ch = new WebChannel({
-    port: PORT, devicesFile: DEV_PATH, publicUrl: `http://localhost:${PORT}`,
+    port: 0, devicesFile: DEV_PATH, publicUrl: "http://localhost",
     getSessionsSnapshot: () => [], getSessionLog: () => [], setMute: () => {}, onSendFromWeb: () => {},
     getScrcpy: (id: string) => mgr.getScrcpy(id),
   } as any)
   await ch.start()
+  PORT = ch.boundPort
 })
 afterEach(async () => { await mgr.stopAll(); await ch.stop(); if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH) })
 

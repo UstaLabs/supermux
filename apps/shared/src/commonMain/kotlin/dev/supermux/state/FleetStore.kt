@@ -295,6 +295,9 @@ class FleetStore(
 
     val workspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.workspaces }
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.archivedWorkspaces }
+    /** Some host's archived list is still on its way after a `lazyArchived` snapshot (card #54). */
+    val archivedPending: StateFlow<Boolean> =
+        eachHost { it.archivedPending }.map { pending -> pending.any { it } }.stateIn(fleetScope, SharingStarted.Eagerly, false)
     val displays: StateFlow<List<DisplayStream>> = mergedList { it.displays }
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
@@ -605,6 +608,9 @@ class FleetStore(
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         app.bindMedia(recordId)
+        // Card #54: a cache that holds workspaces (the desktop's) draws the sidebar before the
+        // socket opens; one that holds only sessions keeps the older, session-only seed above.
+        snapshots?.get(recordId)?.takeIf { it.workspaces.isNotEmpty() }?.let { app.seedFromCache(it) }
         val conn = HostConn(app)
         // Collectors funnel each host's flows into the merged state, tagged by recordId.
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }
@@ -659,6 +665,7 @@ class FleetStore(
         if (seedHolds) return@publishing
         sessionsByHost[recordId] = sessions
         stageSessions(pub)
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.once("fleet.sessions.published", "sessions" to sessions.size)
     }
 
     private fun onHostMessages(recordId: String, messages: Map<String, List<LogEntry>>) = publishing { pub ->

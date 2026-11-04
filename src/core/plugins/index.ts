@@ -69,17 +69,6 @@ export function sessionPlugins(cli: CliScope, sessionName: string, opts?: Sessio
   return plugins.filter((p) => isActiveForCli(p, cli, sessionName) && isPluginCompatible(cli, p)).map((p) => p.dir)
 }
 
-/** Slash-command discovery probes (claude / cursor read `--plugin-dir` pairs; the others take none). */
-export function pluginSpawnArgsForKind(kind: AgentKind, opts?: SessionPluginsOpts & { sessionName?: string }): string[] {
-  if (kind !== AgentKind.Claude && kind !== AgentKind.Cursor) return []
-  return sessionPlugins(kind, opts?.sessionName ?? "", opts).flatMap((dir) => ["--plugin-dir", dir])
-}
-
-/** Grok slash-command discovery: the skills folders of the session's plugins. */
-export function grokSkillsDirs(sessionName: string, opts?: SessionPluginsOpts): string[] {
-  return sessionPlugins(AgentKind.Grok, sessionName, opts).filter(hasSkillTrees).map((dir) => join(dir, "skills"))
-}
-
 /**
  * Antigravity slash-command discovery: the session's plugin skills, then the skills of the
  * user's own agy plugins (~/.gemini/config/plugins/<name>/skills). The user's dir is only read.
@@ -94,11 +83,6 @@ export function antigravitySkillsDirs(sessionName: string, opts?: SessionPlugins
     opts?.onError?.(`antigravity user plugins unreadable: ${e instanceof Error ? e.message : String(e)}`)
   }
   return [...own, ...user]
-}
-
-/** OpenCode slash-command discovery: the session's plugins that ship an OpenCode JS plugin. */
-export function opencodePluginRoots(sessionName: string, opts?: SessionPluginsOpts): string[] {
-  return sessionPlugins(AgentKind.OpenCode, sessionName, opts).filter((dir) => listOpenCodePluginJs(dir).length > 0)
 }
 
 /**

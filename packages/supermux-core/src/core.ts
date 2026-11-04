@@ -13,7 +13,7 @@ import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
 import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
-import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
+import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
   contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, joinInstructions, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
@@ -31,7 +31,7 @@ import type {
 import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
-  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
+  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec, ConversationReset,
 } from "./types.js"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
@@ -141,6 +141,7 @@ export class Core {
     if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
     if (login?.runner !== undefined && typeof login.runner !== "function") throw new TypeError("accounts.login.runner must be a function")
+    if (login?.schedule !== undefined && typeof login.schedule !== "function") throw new TypeError("accounts.login.schedule must be a function")
     if (accounts.fetch !== undefined && typeof accounts.fetch !== "function") throw new TypeError("accounts.fetch must be a function")
     if (accounts.registry !== undefined) {
       if (!(accounts.registry instanceof AccountRegistry)) throw new TypeError("accounts.registry must be an AccountRegistry")
@@ -841,6 +842,7 @@ export class Core {
       command,
       runner: config.runner ?? defaultLoginRunner,
       timeoutMs: config.timeoutMs ?? LOGIN_TIMEOUT_MS,
+      schedule: config.schedule ?? defaultLoginSchedule,
       precheck: async () => {
         await this.ready()
         if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
@@ -864,7 +866,7 @@ export class Core {
   }
 
   private async openSession(
-    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string },
+    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string; previousAgentSessionId?: string },
     resumeId?: string,
     forkFrom?: ForkSource,
     originalRecord?: SessionRecord,
@@ -897,6 +899,17 @@ export class Core {
     const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
     /** Index just past the last buffered turn content. */
     let afterUpdate = 0
+    /**
+     * The last command list the agent reported while opening (Claude's initialize reply, an ACP push during
+     * session/new). It is state, not turn content, so it is normalized once the Session exists even when its
+     * raw update went out unnormalized.
+     */
+    let heldCommands: AgentUpdate | undefined
+    /**
+     * A new conversation the agent went on in while opening (a re-attach replaying a /clear, or a record one /clear
+     * behind its process): the record is made with it, and the Session reports it once it exists.
+     */
+    let openingReset: ConversationReset | undefined
     let earlyBytes = 0
     let holding = true
     let attachSession!: (value: Session | null) => void
@@ -950,6 +963,7 @@ export class Core {
         onUpdate: update => {
           if (session) session.update(update)
           else if (!discarded) {
+            if (carriesCommands(update)) heldCommands = update
             if (holding) {
               earlyBytes += jsonBytes(update.value)
               if (earlyBytes > EARLY_UPDATE_BYTES) {
@@ -965,6 +979,12 @@ export class Core {
           }
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
+        onConversationReset: reset => {
+          const copied = copyConversationReset(reset)
+          if (!copied || discarded) return
+          if (session) session.conversationReset(copied)
+          else openingReset = copied
+        },
         requestPermission: async (request, signal) => {
           if (discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
           const attached = session ?? await Promise.race([
@@ -995,7 +1015,10 @@ export class Core {
       })
       this.assertOpen()
       if (failed) throw failed
-      if (resumeId && runtime.agentSessionId !== resumeId) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      // Only a new conversation the agent itself reported (openingReset) may replace the one resumed.
+      const reset = openingReset?.agentSessionId === runtime.agentSessionId ? openingReset : undefined
+      if (resumeId && runtime.agentSessionId !== resumeId && !reset) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      const previousAgentSessionId = reset ? reset.previousAgentSessionId : input.previousAgentSessionId
       if (forkFrom && runtime.agentSessionId === forkFrom.agentSessionId) throw new CoreError("fork_identity_unchanged", "Agent reused the source conversation instead of forking")
       if (nonemptyConfiguration(input.configuration) && (!runtime.capabilities.configure || !runtime.configure)) {
         throw new UnsupportedOperation("configure", driver.id)
@@ -1003,6 +1026,7 @@ export class Core {
       const record: SessionRecord = {
         version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
         createdAt: input.createdAt, agentSessionId: runtime.agentSessionId,
+        ...(previousAgentSessionId ? { previousAgentSessionId } : {}),
         ...(input.authProfile ? { authProfile: input.authProfile } : {}),
         ...(input.account ? { account: input.account } : {}),
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
@@ -1046,9 +1070,15 @@ export class Core {
       // Before session.created/resumed, in arrival order (see `early`).
       for (const item of early.splice(0)) {
         if ("activity" in item) session.reportActivity(item.activity)
-        else if (item.normalize) session.update(item.update)
+        else if (item.normalize) {
+          session.update(item.update)
+          if (item.update === heldCommands) heldCommands = undefined
+        }
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
+      if (heldCommands) session.reportHeldCommands(heldCommands)
+      // The latest one: a replay can report it after open() returned, while the record was being saved.
+      if (openingReset) session.conversationReset(openingReset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -1238,7 +1268,10 @@ export class Core {
     const persist = async (context: SessionContext) => {
       // Re-read: other fields (permissions, configuration) may have been saved meanwhile.
       const { context: _context, ...rest } = await this.store.get(id) ?? record
-      const saved: SessionRecord = { ...rest, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
+      // A conversation reset's own save may not have landed yet: the live session names the conversation it runs.
+      const running = this.live.get(id)?.snapshot()
+      const identity = running ? { agentSessionId: running.agentSessionId, ...(running.previousAgentSessionId ? { previousAgentSessionId: running.previousAgentSessionId } : {}) } : {}
+      const saved: SessionRecord = { ...rest, ...identity, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
       await this.store.put(saved)
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context)
@@ -1598,6 +1631,26 @@ const MAX_TIMER_MS = 2 ** 31 - 1
  * supermux() defaults) would be held as parsed objects and normalized in one synchronous burst.
  */
 const EARLY_UPDATE_BYTES = 4 * 1024 * 1024
+
+/**
+ * An update that carries the agent's command list: an ACP `available_commands_update`, or Claude's
+ * `commands_changed` push or a control reply listing `commands` (initialize, reload_plugins).
+ */
+function carriesCommands(update: AgentUpdate): boolean {
+  const value = update.value as { sessionUpdate?: unknown; type?: unknown; subtype?: unknown; response?: { response?: { commands?: unknown } } } | null | undefined
+  if (!value || typeof value !== "object") return false
+  if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
+  if (value.type === "system") return value.subtype === "commands_changed"
+  return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
+
+/** A driver's ConversationReset, copied; undefined unless both ids are nonempty strings. */
+function copyConversationReset(reset: ConversationReset | null | undefined): ConversationReset | undefined {
+  if (!reset || typeof reset !== "object") return
+  const { agentSessionId, previousAgentSessionId, trigger } = reset
+  if (typeof agentSessionId !== "string" || !agentSessionId || typeof previousAgentSessionId !== "string" || !previousAgentSessionId) return
+  return { agentSessionId, previousAgentSessionId, ...(typeof trigger === "string" && trigger ? { trigger } : {}) }
+}
 
 /** An update's size as JSON; one that cannot be measured counts as too big to hold. */
 function jsonBytes(value: unknown): number {

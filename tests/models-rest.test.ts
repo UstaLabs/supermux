@@ -4,7 +4,10 @@ import { WebChannel, __resetAuthFailures } from "../src/channels/web"
 import { DeviceStore } from "../src/channels/web/device-store"
 
 const DEV_PATH = `/tmp/devices-models-rest-${process.pid}.json`
-const PORT = 18917
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let channel: WebChannel
 let token: string
 
@@ -24,9 +27,9 @@ test("GET /models retries discovery when the boot cache is empty", async () => {
   let models: { id: string; displayName: string }[] = []
   let refreshes = 0
   channel = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: `http://127.0.0.1:${PORT}`,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -38,6 +41,7 @@ test("GET /models retries discovery when the boot cache is empty", async () => {
     },
   })
   await channel.start()
+  PORT = channel.boundPort
 
   const res = await fetch(`http://127.0.0.1:${PORT}/models?agent=claude`, {
     headers: { Cookie: `cmux_token=${token}` },
@@ -51,9 +55,9 @@ test("GET /models retries discovery when the boot cache is empty", async () => {
 
 test("GET /agents/models returns the whole catalog in one answer", async () => {
   channel = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: `http://127.0.0.1:${PORT}`,
+    publicUrl: "http://127.0.0.1",
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
     setMute: () => {},
@@ -69,6 +73,7 @@ test("GET /agents/models returns the whole catalog in one answer", async () => {
     }),
   })
   await channel.start()
+  PORT = channel.boundPort
 
   const res = await fetch(`http://127.0.0.1:${PORT}/agents/models`, {
     headers: { Cookie: `cmux_token=${token}` },

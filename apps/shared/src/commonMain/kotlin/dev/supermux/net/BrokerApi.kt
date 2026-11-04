@@ -28,6 +28,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.media.RangeResult
+import dev.supermux.util.PerfTrace
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -412,6 +413,9 @@ data class DraftAttachmentDto(
 
 @Serializable
 data class ReorderSessionsBody(val orderedIds: List<String>)
+
+@Serializable
+data class LinkPosterBody(val poster_file_id: String)
 
 @Serializable
 data class WorkspacesResponse(val workspaces: List<WorkspaceDto> = emptyList())
@@ -1724,6 +1728,11 @@ class BrokerApi(
     private val token: String,
     private val http: HttpClient,
 ) {
+    init {
+        // Card #54: every request this client sends lands in the load-time trace.
+        http.installPerfTrace()
+    }
+
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
@@ -1772,8 +1781,24 @@ class BrokerApi(
      */
     private suspend inline fun <reified T> decode(resp: HttpResponse): T {
         try {
+            val bodyStart = PerfTrace.elapsedMicros()
             val text = resp.bodyAsText()
-            if (resp.status.isSuccess()) return json.decodeFromString(text)
+            if (resp.status.isSuccess()) {
+                val decodeStart = PerfTrace.elapsedMicros()
+                val value: T = json.decodeFromString(text)
+                // Card #54: the body's read and decode, joined to its request by id.
+                resp.call.request.attributes.getOrNull(PerfRequestKey)?.let { perf ->
+                    PerfTrace.event(
+                        "http.body",
+                        "req" to perf.req,
+                        "chars" to text.length,
+                        "bodyMs" to (decodeStart - bodyStart) / 1000.0,
+                        "decodeMs" to (PerfTrace.elapsedMicros() - decodeStart) / 1000.0,
+                        trace = perf.trace,
+                    )
+                }
+                return value
+            }
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
             throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
@@ -1784,8 +1809,14 @@ class BrokerApi(
         }
     }
 
-    private suspend inline fun <reified T> getJson(url: String): T =
-        decode(http.get(url) { authHeader() })
+    /** GET [url] as [T]; [trace] files the request under a chat open rather than the launch (card #54). */
+    private suspend inline fun <reified T> getJson(url: String, trace: String? = null): T =
+        decode(
+            http.get(url) {
+                authHeader()
+                if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
+            },
+        )
 
     /**
      * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
@@ -2112,9 +2143,9 @@ class BrokerApi(
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
         decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
 
-    /** GET /archived-workspaces */
-    suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =
-        getJson<WorkspacesResponse>("$httpBase/archived-workspaces").workspaces
+    /** GET /archived-workspaces; [slim] = without views and layout (card #54). */
+    suspend fun listArchivedWorkspaces(slim: Boolean = false): List<WorkspaceDto> =
+        getJson<WorkspacesResponse>("$httpBase/archived-workspaces${if (slim) "?slim=1" else ""}").workspaces
 
     /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
     suspend fun restoreWorkspace(id: String): WorkspaceDto =
@@ -2962,6 +2993,19 @@ class BrokerApi(
     }
 
     /**
+     * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
+     * device's own uploads). False when the broker refused it, or is older than posters.
+     */
+    suspend fun linkPoster(clipFileId: String, posterFileId: String): Boolean {
+        val resp = http.post("$httpBase/files/${urlEncode(clipFileId)}/poster") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(LinkPosterBody(posterFileId)))
+        }
+        return resp.status.isSuccess()
+    }
+
+    /**
      * GET /files/<id> for bytes [from]..[to], streamed to [sink] as they arrive — the media cache's
      * download, so a 500 MB clip never sits in memory and no single request outlives its timeout.
      * Returns the file's total size, or null on any failure. The broker answers an end past the size
@@ -3095,8 +3139,8 @@ class BrokerApi(
         }).glossary
 
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
-    suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        getJson("$httpBase/sessions/$sessionId/messages")
+    suspend fun archivedLogs(sessionId: String, trace: String? = null): List<LogEntry> =
+        getJson("$httpBase/sessions/$sessionId/messages", trace)
 
     /** GET /search/messages?q= — live sessions' messages containing [q], newest first. */
     suspend fun searchMessages(q: String, limit: Int = 50): List<MessageSearchHit> =
@@ -3104,8 +3148,8 @@ class BrokerApi(
 
     /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
      *  `trimExtras` snapshot leaves out for chats that were not on screen. */
-    suspend fun chatExtras(sessionId: String): ChatExtras =
-        getJson("$httpBase/sessions/$sessionId/chat-extras")
+    suspend fun chatExtras(sessionId: String, trace: String? = null): ChatExtras =
+        getJson("$httpBase/sessions/$sessionId/chat-extras", trace)
 
     /** GET /projects → known project working directories (absolute paths). */
     suspend fun listProjects(): List<String> =
@@ -3555,4 +3599,6 @@ data class ChatExtras(
     val activity: List<dev.supermux.proto.ActivityEvent> = emptyList(),
     val commands: List<dev.supermux.proto.SlashCommand> = emptyList(),
     val commandsResolved: Boolean = false,
+    /** The session's full subagent list (card #54); null from an older broker. */
+    val subagents: List<dev.supermux.proto.Subagent>? = null,
 )

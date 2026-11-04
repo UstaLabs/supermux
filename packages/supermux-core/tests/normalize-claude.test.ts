@@ -16,6 +16,24 @@ describe("claude normalizer", () => {
     ])
   })
 
+  test("commands_changed and a control reply with commands become commands-update", () => {
+    // Shapes from Claude Code 2.1.308: the initialize reply and the commands_changed push.
+    const n = createClaudeNormalizer()
+    const commands = [
+      { name: "code-review", description: "Review", argumentHint: "[pr]", aliases: ["review"], builtin: true },
+      { name: "proj-cmd", description: "A project command (project)", argumentHint: "" },
+      { description: "nameless rows are skipped" },
+    ]
+    const expected = [
+      { name: "code-review", description: "Review", argumentHint: "[pr]", aliases: ["review"], builtin: true },
+      { name: "proj-cmd", description: "A project command (project)" },
+    ]
+    expect(n(native({ type: "system", subtype: "commands_changed", commands }))).toEqual([{ kind: "commands-update", commands: expected }])
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { commands, models: [] } } })))
+      .toEqual([{ kind: "commands-update", commands: expected }])
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { mode: "plan" } } }))).toEqual([])
+  })
+
   test("hooks and command_lifecycle produce no event", () => {
     const n = createClaudeNormalizer()
     expect(n(native({ type: "system", subtype: "hook_started" }))).toEqual([])

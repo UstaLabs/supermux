@@ -66,6 +66,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -85,6 +86,7 @@ import androidx.compose.material3.MaterialTheme
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -116,9 +118,14 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
@@ -137,6 +144,8 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.files.GoToEntry
+import dev.supermux.ui.prefs.LocalUiPrefsOrNull
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.files.GoToFileDebounceMs
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
@@ -151,6 +160,9 @@ import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -264,6 +276,8 @@ class ComposerActions(
      * [MentionLookup]); null rows = the host could not answer. Null = no `@` menu at all.
      */
     val mentionFiles: (suspend (MentionLookup) -> List<GoToEntry>?)? = null,
+    /** Make an uploaded picture an uploaded clip's poster (`POST /files/:clip/poster`); null = never. */
+    val linkPoster: (suspend (clipFileId: String, posterFileId: String) -> Unit)? = null,
 )
 
 /** A `?partial=1` answer as the dictation controller reads it. */
@@ -304,6 +318,7 @@ fun rememberComposerActions(
         mentionFiles = workdir?.takeIf { it.isNotBlank() }?.let { dir ->
             { lookup -> lookupMentionFiles(app.fileSystem, dir, lookup) }
         },
+        linkPoster = { clip, poster -> app.linkPoster(clip, poster) },
     )
 }
 
@@ -328,8 +343,9 @@ data class ComposerTags(
     val stop: String = "composer-stop",
     val banner: String = "composer_banner",
     val micError: String = "composer-mic-error",
-    /** Slash rows are tagged `"$slashItemPrefix${command.name}"`. */
+    /** Slash rows are tagged `"$slashItemPrefix${command.name}"`; the menu itself [slashMenu]. */
     val slashItemPrefix: String = "chat_slash_item_",
+    val slashMenu: String = "chat_slash_menu",
     /** `@` file rows are tagged `"$mentionItemPrefix${relativePath}"`; the menu itself [mentionMenu]. */
     val mentionItemPrefix: String = "chat_mention_item_",
     val mentionMenu: String = "chat_mention_menu",
@@ -624,6 +640,8 @@ fun Composer(
     /** Fast mode on/off for a model that offers it; null hides the toggle. */
     fastMode: Boolean? = null,
     onToggleFast: (Boolean) -> Unit = {},
+    /** The account the chat runs on and the switch to another: the run-settings panel's Account row. Null hides it. */
+    account: RunSettingsAccount? = null,
     /**
      * A model/effort pill was tapped, BEFORE the picker opens. A host that fetches its catalogs
      * lazily (Android under touch — the phone should not spend a request on every chat it opens)
@@ -748,6 +766,18 @@ fun Composer(
         if (idx >= 0 && attachments[idx].runSeq == seq) attachments[idx] = transform(attachments[idx])
     }
 
+    suspend fun uploadPoster(
+        up: suspend (dev.supermux.net.ChunkSource, String, String, String?, (Long, Long) -> Unit) -> String?,
+        clipFileId: String,
+        att: ComposerAttachment,
+    ) {
+        val link = actions.linkPoster ?: return
+        val jpeg = runCatching { platform.files.posterJpeg(att.preview) }.getOrNull() ?: return
+        val name = att.name.substringBeforeLast('.', att.name) + ".jpg"
+        val posterId = runCatching { up(ByteArrayChunkSource(jpeg), name, "image/jpeg", null) { _, _ -> } }.getOrNull() ?: return
+        runCatching { link(clipFileId, posterId) }
+    }
+
     // Start (or restart, on Retry) the resumable upload for one chip, driving Uploading(pct) →
     // Done(fileId) | Failed. Each run gets a fresh [seq] so an older run's callbacks can't win.
     fun launchUpload(id: String) {
@@ -773,6 +803,10 @@ fun Composer(
                     }
                 }
             }
+            // A clip from a phone goes up with its poster — the frame its picker grabbed for the
+            // chip — linked BEFORE the chip is done, so the message names it when it is sent.
+            // Best effort: a poster that fails leaves the clip as it is.
+            if (fileId != null && att.mime.startsWith("video/")) uploadPoster(up, fileId, att)
             updateAtt(id, seq) {
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
                 else it.copy(state = UploadState.Failed)
@@ -897,12 +931,26 @@ fun Composer(
     // this one value, so there is exactly one gate.
     val canSend = sendEnabled ?: canSendComposer(text, attachments, sending)
 
+    // The `/` menu's Recent, per agent and per device: the commands last picked from the menu or
+    // sent spelled out.
+    val prefs = LocalUiPrefsOrNull.current
+    val recentsAgent = sessionAgent?.lowercase()?.takeIf { it.isNotBlank() }
+    val slashRecents by remember(prefs, recentsAgent) {
+        if (prefs != null && recentsAgent != null) prefs.slashRecents(recentsAgent) else flowOf(emptyList<String>())
+    }.collectAsState(emptyList())
+    fun rememberSlashRecent(cmd: SlashCommand) {
+        if (cmd.action != null || prefs == null || recentsAgent == null) return
+        val next = withRecent(slashRecents, cmd.name)
+        scope.launch { prefs.putSlashRecents(recentsAgent, next) }
+    }
+
     // Gather-and-send for an ARBITRARY [text] (not just the hoisted [draft]) — same gating +
     // file_id gather + chip clear the Send button/Enter key use. Parameterized so [externalAttach]
     // can send its own text without racing the hoisted draft's recomposition.
     fun sendWith(text: String) {
         if (sendEnabled ?: canSendComposer(text, attachments, sending)) {
             val fileIds = attachments.mapNotNull { (it.state as? UploadState.Done)?.fileId }
+            sentSlashCommand(text, commands)?.let { rememberSlashRecent(it) }
             onSend(text.trim(), fileIds)
             attachments.clear()
         }
@@ -1024,29 +1072,43 @@ fun Composer(
         onExternalAttachConsumed()
     }
 
-    // ── slash-command menu: the active "/token" at the end of the draft (start-of-line or after
-    //    whitespace), filtering on name OR family, capped at 8. Matching lives in SlashCommands.kt,
-    //    shared with the New Session launcher. ──
+    // ── slash-command menu (card #56): the active "/token" at the end of the draft (start-of-line
+    //    or after whitespace). An empty "/" lists every command in sections, a query ranks them. The
+    //    model lives in SlashCommands.kt, shared with the New Session launcher. ──
     val slashQuery = activeSlashQuery(text)
+    val slashTokenStart = activeSlashTokenStart(text)
     // Remembered: this ran on EVERY recomposition (every keystroke recomposes the whole card).
-    val slashMatches = remember(text, commands, handledControlKinds, chrome.slashInsertOnly) {
-        slashCommandMatches(text, commands) { chrome.slashInsertOnly || it in handledControlKinds }
+    val slashModel = remember(text, commands, handledControlKinds, chrome.slashInsertOnly, slashRecents, sessionAgent) {
+        slashMenu(text, commands, slashRecents, agentLabelOf(sessionAgent)) { chrome.slashInsertOnly || it in handledControlKinds }
     }
+    val slashRows = slashModel?.rows.orEmpty()
     var selectedSlashIndex by remember { mutableIntStateOf(0) }
-    var slashMenuDismissed by remember { mutableStateOf(false) }
-    LaunchedEffect(slashQuery) { selectedSlashIndex = 0; slashMenuDismissed = false }
-    val slashMenuOpen = slashMatches.isNotEmpty() && !slashMenuDismissed
-    val safeSlashIndex = selectedSlashIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
+    // Keys that scroll the list slide rows under a resting pointer; that is not the pointer choosing
+    // one, so hover follows only after the keys have been still a moment.
+    var slashKeyedAt by remember { mutableStateOf(TimeSource.Monotonic.markNow()) }
+    // Esc closes the menu for THAT token: typing on in it does not reopen it, as with `@`.
+    var slashDismissedAt by remember(sessionKey) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(slashQuery) { selectedSlashIndex = 0 }
+    LaunchedEffect(slashTokenStart) { if (slashTokenStart == null) slashDismissedAt = null }
+    val slashMenuOpen = slashModel != null && slashDismissedAt != slashTokenStart
+    val safeSlashIndex = selectedSlashIndex.coerceIn(0, (slashRows.size - 1).coerceAtLeast(0))
+    // A pick of a command that takes arguments shows its hint, dimmed, after the caret until the
+    // text changes.
+    var slashGhost by remember(sessionKey) { mutableStateOf<SlashGhost?>(null) }
+    LaunchedEffect(text) { if (slashGhost != null && slashGhost?.text != text) slashGhost = null }
 
-    // Apply a slash command — shared by a tap and by keyboard Enter. Control commands clear the
-    // token and fire onControl; everything else inserts its text.
+    // Apply a slash command — shared by a click and by Enter/Tab. Control commands clear the token
+    // and fire onControl; everything else inserts its text.
     fun selectSlashCommand(cmd: SlashCommand) {
         haptic.perform(HapticKind.Tick)
         if (cmd.action != null && !chrome.slashInsertOnly) {
             setText(replaceSlashToken(text, ""))
             onControl(cmd)
         } else {
-            setText(replaceSlashToken(text, slashInsertText(cmd)))
+            val next = replaceSlashToken(text, slashInsertText(cmd))
+            setText(next)
+            slashGhost = cmd.argumentHint?.takeIf { it.isNotBlank() }?.let { SlashGhost(next, it) }
+            rememberSlashRecent(cmd)
         }
     }
 
@@ -1302,40 +1364,43 @@ fun Composer(
         }
     }
 
-    // The `/` and `@` menus share one strip: above the card in chat, inside it in the launcher.
-    val menuModifier = if (chrome.slashInsideCard) {
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(cs.surfaceContainerHigh)
-    } else {
-        Modifier
-            .fillMaxWidth()
-            .background(cs.surfaceContainer)
-    }
+    // The `/` and `@` menus share one card: floating above the composer in chat, inside the card in
+    // the launcher. A `/` card wide enough shows the highlighted command in full beside the list.
     val menuOpen = mentionMenuOpen || slashMenuOpen
-    val menuBlock: @Composable () -> Unit = {
+    val agentCommandCount = remember(commands) { commands.count { it.action == null } }
+    val controlCount = remember(commands, handledControlKinds, chrome.slashInsertOnly) {
+        if (chrome.slashInsertOnly) 0 else commands.count { c -> c.action?.kind?.let { it in handledControlKinds } == true }
+    }
+    val menuContent: @Composable (Dp) -> Unit = { width ->
+        val model = slashModel
         if (mentionMenuOpen) {
             FileMentionMenu(
                 rows = mentionRows,
                 selectedIndex = safeMentionIndex,
                 onPick = { pickMention(it, intoFolder = false) },
                 onOpenFolder = { pickMention(it, intoFolder = true) },
-                modifier = menuModifier.testTag(tags.mentionMenu),
+                modifier = Modifier.fillMaxWidth().testTag(tags.mentionMenu),
                 showFolders = mentionRequest is MentionLookup.Search,
                 itemTagPrefix = tags.mentionItemPrefix,
             )
-        } else {
+        } else if (model != null) {
+            val detail = width >= SlashMenuDetailMinWidth
             SlashMenu(
-                matches = slashMatches,
+                model = model,
                 selectedIndex = safeSlashIndex,
-                onSelect = { selectSlashCommand(it) },
-                modifier = menuModifier,
+                onHighlight = { if (slashKeyedAt.elapsedNow() > 400.milliseconds) selectedSlashIndex = it },
+                onPick = { selectSlashCommand(it) },
+                agent = sessionAgent,
+                detail = detail,
+                modifier = Modifier.fillMaxWidth().height(slashMenuHeight(model, detail)).testTag(tags.slashMenu),
                 testTagPrefix = tags.slashItemPrefix,
-                showActionGlyph = !chrome.slashInsertOnly,
+                insertOnly = chrome.slashInsertOnly,
+                agentCommandCount = agentCommandCount,
+                controlCount = controlCount,
             )
         }
     }
+    var composerWidthPx by remember { mutableIntStateOf(0) }
 
     val card: @Composable () -> Unit = {
         Column(
@@ -1459,19 +1524,24 @@ fun Composer(
                                 when (menuKey) {
                                     ComposerMenuKey.Down -> selectedMentionIndex = (safeMentionIndex + 1).coerceAtMost(mentionRows.size - 1)
                                     ComposerMenuKey.Up -> selectedMentionIndex = (safeMentionIndex - 1).coerceAtLeast(0)
+                                    ComposerMenuKey.PageDown -> selectedMentionIndex = (safeMentionIndex + MENU_PAGE).coerceAtMost(mentionRows.size - 1)
+                                    ComposerMenuKey.PageUp -> selectedMentionIndex = (safeMentionIndex - MENU_PAGE).coerceAtLeast(0)
                                     ComposerMenuKey.Pick -> mentionRows.getOrNull(safeMentionIndex)?.let { pickMention(it, intoFolder = false) }
                                     ComposerMenuKey.Complete -> mentionRows.getOrNull(safeMentionIndex)?.let { pickMention(it, intoFolder = true) }
                                     ComposerMenuKey.Dismiss -> mentionDismissedAt = mentionToken?.start
                                 }
                                 true
                             }
-                            slashMenuOpen && menuKey != null && menuKey != ComposerMenuKey.Complete -> {
+                            slashMenuOpen && menuKey != null -> {
+                                slashKeyedAt = TimeSource.Monotonic.markNow()
                                 when (menuKey) {
-                                    ComposerMenuKey.Down -> selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                    ComposerMenuKey.Down -> selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashRows.size - 1)
                                     ComposerMenuKey.Up -> selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                    ComposerMenuKey.Pick -> slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                    ComposerMenuKey.Dismiss -> slashMenuDismissed = true
-                                    ComposerMenuKey.Complete -> Unit
+                                    ComposerMenuKey.PageDown -> selectedSlashIndex = (safeSlashIndex + MENU_PAGE).coerceAtMost(slashRows.size - 1)
+                                    ComposerMenuKey.PageUp -> selectedSlashIndex = (safeSlashIndex - MENU_PAGE).coerceAtLeast(0)
+                                    // Tab picks too: the `/` menu has no folder to open.
+                                    ComposerMenuKey.Pick, ComposerMenuKey.Complete -> slashRows.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it.command) }
+                                    ComposerMenuKey.Dismiss -> slashDismissedAt = slashTokenStart
                                 }
                                 true
                             }
@@ -1524,6 +1594,19 @@ fun Composer(
                                 maxLines = 2,
                             )
                         }
+                        // The picked command's argument hint, laid out after the text in the field's
+                        // own style so it starts exactly at the caret.
+                        slashGhost?.takeIf { it.text == text }?.let { ghost ->
+                            BasicText(
+                                text = buildAnnotatedString {
+                                    withStyle(SpanStyle(color = Color.Transparent)) { append(ghost.text) }
+                                    withStyle(
+                                        SpanStyle(color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontFamily = MonoFontFamily, fontSize = 13.sp),
+                                    ) { append(ghost.hint) }
+                                },
+                                style = fieldTextStyle,
+                            )
+                        }
                         inner()
                     }
                 }
@@ -1541,7 +1624,7 @@ fun Composer(
 
                 if (chrome.slashInsideCard && menuOpen) {
                     Spacer(Modifier.height(8.dp))
-                    menuBlock()
+                    BoxWithConstraints(Modifier.fillMaxWidth().composerMenuCard(raised = false)) { menuContent(maxWidth) }
                 }
 
                 if (toolbar != null) {
@@ -1554,9 +1637,9 @@ fun Composer(
                         val permissionState = permissionModes.takeIf { it.isNotEmpty() }?.let {
                             RunSettingsPermission(it, sessionPermissionMode, onSetPermissionMode)
                         }
-                        // ONE row: + · the run-settings pill (model · effort · fast · mode behind one
-                        // panel) and — only when the mode is NOT the agent's default — the mode as a
-                        // tinted status chip; mic · send on the right.
+                        // ONE row: + · the run-settings pill (model · effort · fast · account · mode
+                        // behind one panel) and — only when the mode is NOT the agent's default — the
+                        // mode as a tinted status chip; mic · send on the right.
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -1568,7 +1651,7 @@ fun Composer(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (showModelPill || showReasoningPill || fastMode != null || permissionState != null) {
+                                if (showModelPill || showReasoningPill || fastMode != null || permissionState != null || account != null) {
                                     RunSettingsControl(
                                         pointer = pointer,
                                         compact = compactToolbar,
@@ -1588,6 +1671,7 @@ fun Composer(
                                         onToggleFast = onToggleFast,
                                         modifier = Modifier.weight(1f, fill = false),
                                         permission = permissionState,
+                                        account = account,
                                     )
                                 }
                                 if (permissionState?.current?.default == false) {
@@ -1631,11 +1715,8 @@ fun Composer(
                 onFiles = { stageFiles(it) },
             ),
     ) {
-        if (!chrome.slashInsideCard) {
-            if (menuOpen) {
-                menuBlock()
-                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
-            } else if (slashQuery != null && !commandsResolved) {
+        if (!chrome.slashInsideCard && !menuOpen) {
+            if (slashQuery != null && !commandsResolved) {
                 // A fresh session whose command set hasn't resolved yet.
                 Text(
                     text = "Loading commands…",
@@ -1693,11 +1774,19 @@ fun Composer(
                 onCancel = { dictation.discardMic() },
             )
         }
-        ComposerContextMenu(
-            pasteEnabled = attachBound,
-            onPasteImage = { launchPasteImages() },
-            content = card,
-        )
+        // The card is the menu popover's anchor: the menu floats over the chat, just above it.
+        Box(Modifier.fillMaxWidth().onSizeChanged { composerWidthPx = it.width }) {
+            ComposerContextMenu(
+                pasteEnabled = attachBound,
+                onPasteImage = { launchPasteImages() },
+                content = card,
+            )
+            if (!chrome.slashInsideCard && menuOpen && inputFocused && composerWidthPx > 0) {
+                val composerWidth = with(LocalDensity.current) { composerWidthPx.toDp() }
+                val width = if (mentionMenuOpen) mentionMenuWidth(composerWidth) else slashMenuWidth(composerWidth)
+                ComposerMenuPopover(width) { menuContent(width) }
+            }
+        }
         if (tray != null) {
             // The context line (branch, detail) as quiet captions under the card — no box around it.
             Box(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp)) { tray() }

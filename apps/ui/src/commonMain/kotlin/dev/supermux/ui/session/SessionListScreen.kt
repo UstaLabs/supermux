@@ -86,6 +86,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -93,6 +94,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -223,6 +225,8 @@ fun SessionListScreen(
     /** Archived sessions folded into Settled (web task-list parity) — [SessionListMode.Fleet]. */
     archived: List<ArchivedDto> = emptyList(),
     archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+    /** The archived rows are still loading (card #54): no empty project groups until they land. */
+    archivedPending: Boolean = false,
     archivedActiveId: String? = null,
     /** Every broker call this screen makes (cluster F1). */
     actions: SessionListActions = SessionListActions(),
@@ -358,11 +362,23 @@ fun SessionListScreen(
             locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> (loc.path.trimEnd('/') + "/").startsWith(root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces) {
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces) { w ->
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
+        }
+    }
+    // Card #54: the launch trace's "workspaces on screen" and "Agents on screen" marks, and how
+    // often the sidebar recomposes (any live frame that changes what it reads can).
+    SideEffect { dev.supermux.util.PerfTrace.countRecompose("sidebar") }
+    val agentRowCount = groups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces?.size ?: 0
+    LaunchedEffect(groups.isNotEmpty(), agentRowCount > 0) {
+        if (groups.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        dev.supermux.util.PerfTrace.firstMilestone("ui.workspaces.drawn", "workspaces" to visibleWorkspaces.size, "groups" to groups.size)
+        if (agentRowCount > 0) {
+            dev.supermux.util.PerfTrace.firstMilestone("ui.agents.drawn", "agents" to agentRowCount, "pictures" to agentAvatars.size)
         }
     }
     /** hostId → the project ids that have a rendered group (Move up/down neighbours). */

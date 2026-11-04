@@ -287,16 +287,30 @@ pub fn main(init: std.process.Init) !void {
 
     run(&state);
 
-    // Last words matter: a detach reason or an exit the broker has not read
-    // yet is the difference between closing a tab and retrying. Drain what we
-    // can, bounded, then go.
-    var spins: usize = 0;
-    while (state.out.pending() > 0 and spins < 300) : (spins += 1) {
+    // The daemon connection is finished with; let it go before waiting on anyone.
+    if (state.sock >= 0) {
+        _ = close(state.sock);
+        state.sock = -1;
+    }
+
+    // LAST WORDS ARE OWED IN FULL. A detach reason, a lost target or an exit
+    // the broker has not read yet is the difference between closing a tab and
+    // retrying — and cut short it is worse than unsaid: the broker reads a
+    // frame that stops half-way as a corrupt stream ("helper stream ended with
+    // N bytes of a partial frame"), a NON-recoverable protocol failure in place
+    // of the recoverable one being reported. That is what a fixed 300 x 1 ms
+    // drain produced whenever the broker took longer than that to read the
+    // backlog, as a loaded machine does. So wait for the broker itself: until
+    // it has read every byte, or its end of the pipe is gone. Neither wait can
+    // outlive it — a live broker reads a helper's stdout to EOF, one that exits
+    // closes the pipe, and one that is done with us kills us.
+    while (state.out.pending() > 0) {
         if (!state.out.flush(STDOUT)) break;
         if (state.out.pending() == 0) break;
-        _ = usleep(1000);
+        var fds = [_]std.posix.pollfd{.{ .fd = STDOUT, .events = std.posix.POLL.OUT, .revents = 0 }};
+        _ = std.posix.poll(&fds, -1) catch break;
+        if (fds[0].revents & std.posix.POLL.OUT == 0) break; // ERR/HUP: the broker is gone
     }
-    if (state.sock >= 0) _ = close(state.sock);
     std.process.exit(state.status);
 }
 
@@ -531,7 +545,7 @@ fn cmdCreate(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
     // somebody else's session would be exactly the collision we refuse.
     if (ipc.connectSession(socket_path)) |fd| {
         defer _ = close(fd);
-        verifyTarget(state.gpa, fd, name, 2000) catch |err| {
+        verifyTargetOnce(state.gpa, fd, name, 2000) catch |err| {
             return state.fail(id, mapVerifyError(err), @errorName(err));
         };
         return state.ok(id orelse 0);
@@ -555,7 +569,7 @@ fn cmdCreate(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
     while (waited < 10_000) : (waited += 100) {
         if (ipc.connectSession(socket_path)) |fd| {
             defer _ = close(fd);
-            if (verifyTarget(state.gpa, fd, name, 500)) {
+            if (verifyTargetOnce(state.gpa, fd, name, 500)) {
                 return state.ok(id orelse 0);
             } else |err| {
                 if (err == error.TargetMismatch) {
@@ -709,25 +723,37 @@ fn cmdAttach(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
         return state.fail(id, if (gone) "target-not-found" else "backend-unavailable", @errorName(err));
     };
 
+    // THE HANDSHAKE READS INTO THIS VIEWER'S OWN STREAM BUFFER. The daemon
+    // broadcasts to every connection while we wait for our label, so the read
+    // that brings LabelData in can bring the START of the next frame with it.
+    // A buffer local to the handshake took that head away when it was freed,
+    // and the loop below then began parsing in the middle of a frame: payload
+    // bytes read as a header (a flood of 'A's declares a ~1 GiB frame), so
+    // nothing was delivered again — no restore, no output, and in the end only
+    // "daemon closed the connection". What follows the label stays here, on a
+    // frame boundary, for `readSocket` to carry on from.
+    var sock_in = ipc.SocketBuffer.init(state.gpa) catch {
+        _ = close(fd);
+        return state.fail(id, "backend-unavailable", "out of memory");
+    };
+
     // IDENTITY BEFORE ANYTHING ELSE. Until this passes we have not said who we
     // are, so a wrong session is left exactly as we found it — no label
     // written, no BrokerHello, no output forwarded to a viewer that would be
     // rendering another workspace's shell.
-    verifyTarget(state.gpa, fd, name, 2000) catch |err| {
+    verifyTarget(&sock_in, fd, name, 2000) catch |err| {
+        sock_in.deinit();
         _ = close(fd);
         return state.fail(id, mapVerifyError(err), @errorName(err));
     };
 
     state.target = state.gpa.dupe(u8, name) catch {
+        sock_in.deinit();
         _ = close(fd);
         return state.fail(id, "backend-unavailable", "out of memory");
     };
     state.sock = fd;
-    state.sock_in = ipc.SocketBuffer.init(state.gpa) catch {
-        _ = close(fd);
-        state.sock = -1;
-        return state.fail(id, "backend-unavailable", "out of memory");
-    };
+    state.sock_in = sock_in;
     setNonBlocking(fd);
 
     // Opt in. The name re-registers the label we just verified (a no-op by
@@ -763,10 +789,13 @@ fn mapVerifyError(err: anyerror) []const u8 {
 /// because we have not opted in yet: the restore snapshot the daemon takes at
 /// BrokerHello is built from its own terminal, which has already consumed
 /// every byte broadcast before this point.
-fn verifyTarget(gpa: std.mem.Allocator, fd: i32, name: []const u8, budget_ms: i32) VerifyError!void {
+///
+/// `sb` belongs to the CALLER and is left holding whatever arrived after the
+/// label, from the next frame boundary on. A caller that keeps reading this
+/// connection must carry on from it (see `cmdAttach`); one that only needed
+/// the answer uses `verifyTargetOnce`.
+fn verifyTarget(sb: *ipc.SocketBuffer, fd: i32, name: []const u8, budget_ms: i32) VerifyError!void {
     ipc.send(fd, .LabelGet, "") catch return error.Disconnected;
-    var sb = ipc.SocketBuffer.init(gpa) catch return error.Disconnected;
-    defer sb.deinit();
 
     var waited: i32 = 0;
     while (waited < budget_ms) : (waited += 100) {
@@ -787,6 +816,15 @@ fn verifyTarget(gpa: std.mem.Allocator, fd: i32, name: []const u8, budget_ms: i3
         }
     }
     return error.Timeout;
+}
+
+/// `verifyTarget` for a connection that is closed as soon as it has answered
+/// (`create` adopting a session, `kill`): nothing more is read from it, so
+/// what came after the label can go with the buffer.
+fn verifyTargetOnce(gpa: std.mem.Allocator, fd: i32, name: []const u8, budget_ms: i32) VerifyError!void {
+    var sb = ipc.SocketBuffer.init(gpa) catch return error.Disconnected;
+    defer sb.deinit();
+    return verifyTarget(&sb, fd, name, budget_ms);
 }
 
 /// How much of a frame one `list` chunk may fill before it is flushed.
@@ -1006,7 +1044,7 @@ fn cmdKill(state: *State, obj: std.json.ObjectMap, id: ?i64) void {
         return state.fail(id, "backend-unavailable", @errorName(err));
     };
     defer _ = close(fd);
-    verifyTarget(state.gpa, fd, name, 2000) catch |err| {
+    verifyTargetOnce(state.gpa, fd, name, 2000) catch |err| {
         return state.fail(id, mapVerifyError(err), @errorName(err));
     };
     ipc.send(fd, .Kill, "") catch |err| {

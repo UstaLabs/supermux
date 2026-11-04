@@ -1,5 +1,5 @@
 import type { AgentEvent, BrokerRequest, RequestSubagent, ToolCallEvent } from "../types"
-import type { EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
+import type { AgentCommandEntry, EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { answerLabel, mapPermissionRequest, mapUserQuestion } from "./request-map"
 import {
   createCodexNativeItemState,
@@ -13,7 +13,7 @@ export type NormalizedBridgeOpts = {
   agent: string
   emit: (event: AgentEvent) => void
   onUsage?: (rateLimits: unknown) => void
-  onCommands?: (commands: { name: string; description?: string }[]) => void
+  onCommands?: (commands: AgentCommandEntry[]) => void
 }
 
 function rec(value: unknown): Record<string, unknown> | undefined {

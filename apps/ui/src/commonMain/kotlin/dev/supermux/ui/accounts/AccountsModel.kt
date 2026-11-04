@@ -117,6 +117,21 @@ fun usageWindowText(window: AccountUsageWindowDto, now: Long? = null): String {
     }
 }
 
+/** "Subscription · 5h 62%" — the second line of an account in a picker (the busiest window only). */
+internal fun accountPickerDetail(account: AccountDto): String {
+    val parts = mutableListOf<String>()
+    if (account.system) {
+        parts += account.identity?.email?.takeIf { it.isNotBlank() } ?: "This machine's login"
+    } else {
+        methodLabel(account.method)?.let { parts += it }
+        account.identity?.email?.takeIf { it.isNotBlank() && it != account.label }?.let { parts += it }
+    }
+    account.usage.maxByOrNull { it.usedPercent }?.let {
+        parts += "${usageWindowName(it.name)} ${kotlin.math.round(it.usedPercent.coerceIn(0.0, 100.0)).toInt()}%"
+    }
+    return parts.joinToString(" · ")
+}
+
 /** An agent's accounts in Settings order: the system login first, then by creation. */
 fun accountsFor(all: List<AccountDto>, agent: String): List<AccountDto> =
     all.filter { it.agent == agent }.sortedWith(compareByDescending<AccountDto> { it.system }.thenBy { it.createdAt })

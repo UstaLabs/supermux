@@ -98,10 +98,20 @@ internal fun <T> imageEntries(entries: List<T>, mimeOf: (T) -> String?): List<T>
  * contract returns, [openExternally] stages the bytes in our own `cacheDir/attachments` and hands
  * out a `content://` URI with a read grant.
  */
+/** A poster is a small picture: good enough at this quality, a few tens of KB. */
+private const val POSTER_JPEG_QUALITY = 82
+
 internal class AndroidFileAccess(
     private val context: Context,
     private val saveHost: SaveHost,
 ) : FileAccess {
+    /** The first frame the picker already grabbed for a clip's chip ([mediaPreview]), as a JPEG. */
+    override fun posterJpeg(preview: Any?): ByteArray? {
+        val frame = preview as? android.graphics.Bitmap ?: return null
+        val out = java.io.ByteArrayOutputStream()
+        return if (frame.compress(android.graphics.Bitmap.CompressFormat.JPEG, POSTER_JPEG_QUALITY, out)) out.toByteArray() else null
+    }
+
 
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
         val safeName = safeFileName(name)

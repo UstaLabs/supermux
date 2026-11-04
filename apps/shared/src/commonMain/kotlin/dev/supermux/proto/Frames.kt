@@ -124,6 +124,16 @@ data class Attachment(
     val mime: String? = null,
     val size: Long? = null,
     val name: String? = null,
+    /**
+     * The DISPLAYED size (EXIF orientation and a clip's rotation applied) and a clip's length,
+     * read by the broker from the file's own header — known before anything is downloaded. Absent
+     * for a file that is not media, and from a broker older than these fields.
+     */
+    val width: Int? = null,
+    val height: Int? = null,
+    val duration_ms: Long? = null,
+    /** The picture the sending phone made of a clip: another broker file, fetched like any picture. */
+    val poster_file_id: String? = null,
 )
 
 /** Composer text + attachments saved on a draft session. */
@@ -343,8 +353,27 @@ data class SlashCommand(
     val sigil: String = "/",
     val description: String? = null,
     val insertText: String? = null,
+    /** The agent's own hint for the arguments, e.g. "[interval] [prompt]". */
+    val argumentHint: String? = null,
+    /** Other names the agent accepts for the command ("review" for "code-review"). */
+    val aliases: List<String> = emptyList(),
+    /**
+     * Where the command comes from — [SOURCE_BUILTIN], [SOURCE_PLUGIN], [SOURCE_PROJECT] or
+     * [SOURCE_USER] — and only when the agent (or the folder it was read from) says so. Null means
+     * nobody vouched for one, and the menu shows none rather than a guess.
+     */
+    val source: String? = null,
+    /** With [source] "plugin": the plugin's name. */
+    val plugin: String? = null,
     val action: ControlAction? = null,
-)
+) {
+    companion object {
+        const val SOURCE_BUILTIN = "builtin"
+        const val SOURCE_PLUGIN = "plugin"
+        const val SOURCE_PROJECT = "project"
+        const val SOURCE_USER = "user"
+    }
+}
 
 /**
  * The workspace layout tree (spec §5.3). A polymorphic sealed interface keyed by
@@ -511,6 +540,13 @@ sealed interface ServerFrame {
          * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
          */
         val partialExtras: List<String>? = null,
+        /** The broker is tracing load times (card #54): ship ours (`client_logs`, category "perf"). */
+        val perf: Boolean = false,
+        /**
+         * The `subscribe` asked for `lazyArchived` and the broker left [archivedWorkspaces] (and
+         * their [projectMembership]) out; fetch `GET /archived-workspaces?slim=1` (card #54).
+         */
+        val archivedLazy: Boolean = false,
     ) : ServerFrame
 
     /**
@@ -974,6 +1010,10 @@ sealed interface ClientFrame {
     @Serializable @SerialName("fs_sub")
     data class FsSub(val path: String, val since: String? = null) : ClientFrame
 
+    /** App log lines for the broker's log; category "perf" is the load-time trace (card #54). */
+    @Serializable @SerialName("client_logs")
+    data class ClientLogs(val entries: List<ClientLogEntry>, val meta: JsonObject? = null) : ClientFrame
+
     @Serializable @SerialName("fs_unsub")
     data class FsUnsub(val path: String) : ClientFrame
 
@@ -992,3 +1032,7 @@ sealed interface ClientFrame {
     @Serializable @SerialName("lsp_close")
     data class LspClose(val session: String, val serverId: String) : ClientFrame
 }
+
+/** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
+@Serializable
+data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)

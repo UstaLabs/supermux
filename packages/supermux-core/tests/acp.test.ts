@@ -34,6 +34,28 @@ function classifyActivity(update: AgentUpdate): AcpActivityHint | undefined {
   return from(frame.params?.update)
 }
 setDefaultTimeout(20_000)
+/** Resolves once [check] holds; the limit only turns an event that never comes into a clear failure. */
+async function until(check: () => boolean | Promise<boolean>, what: string, ms = 10_000) {
+  const start = Date.now()
+  while (!(await check())) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(r => setTimeout(r, 10))
+  }
+}
+/**
+ * The fixture's record of the answer it got to [tool]'s permission request. The fixture writes it
+ * once that answer has crossed back to it, some time after the host gave it: wait for the record.
+ */
+async function answer(trace: string, tool: string): Promise<any> {
+  let found: any
+  await until(async () => {
+    // Complete lines only: the fixture may be appending one right now.
+    const lines = (await readFile(trace, 'utf8').catch(() => '')).split('\n').slice(0, -1).map(x => JSON.parse(x))
+    found = lines.find(x => x.tool === tool)
+    return found !== undefined
+  }, `the fixture to record the answer to ${tool}`)
+  return found
+}
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
 const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(), captureStderr: false,classifyActivity,permissions: TEST_ACP_PERMISSIONS,...extra})
 function context(extra: Partial<DriverContext> = {}): DriverContext { return {sessionId:'core-1',cwd:process.cwd(),signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),requestAnswers:async()=>({outcome:'cancelled' as const}),...extra} }
@@ -200,7 +222,8 @@ test('replay coalesced history does not start activity; live load burst does', a
     onActivity: n => activity.push({ ...n }),
   }))
   try {
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // The live burst comes from the fixture a little after load answered.
+    await until(() => activity.some(a => a.id === 'live-1' && a.phase === 'completed'), 'live-1 to end')
     expect(updates.some(u => u.replay === true && u.protocol === 'native' && u.value?.params?.update?.sessionUpdate === 'user_message_chunk')).toBe(true)
     expect(activity.filter(a => a.id === 'hist-1')).toEqual([])
     expect(activity.filter(a => a.id === 'live-1').map(a => a.phase)).toEqual(['started', 'completed'])
@@ -228,7 +251,8 @@ test('owned prompt reports overlapping native activity without a second receipt'
   const r = await driver().open(context({ onActivity: n => activity.push({ ...n }) }))
   try {
     expect(await r.prompt([{ type: 'text', text: 'handoff' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
-    await new Promise(resolve => setTimeout(resolve, 40))
+    // auto-2 starts as the prompt answers and may land after it.
+    await until(() => activity.some(a => a.id === 'auto-2' && a.phase === 'completed'), 'auto-2 to end')
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started', 'auto-2:completed'])
   } finally { await r.close({ mode: "shutdown" }) }
 })
@@ -239,7 +263,8 @@ test('owned prompt response does not complete a later native generation', async 
   try {
     expect(await r.prompt([{ type: 'text', text: 'handoff-delay' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started'])
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // The fixture ends auto-2 itself, 300 ms after starting it.
+    await until(() => activity.some(a => a.id === 'auto-2' && a.phase === 'completed'), 'auto-2 to end')
     expect(activity.map(a => `${a.id}:${a.phase}`)).toEqual(['owned-1:started', 'owned-1:completed', 'auto-2:started', 'auto-2:completed'])
   } finally { await r.close({ mode: "shutdown" }) }
 })
@@ -250,17 +275,20 @@ test('autonomous interrupt retries until vendor end and does not leak into the n
   const activity: any[] = []
   const r = await driver({ TRACE: trace, AUTONOMOUS_ON_OPEN: '1', AUTONOMOUS_HOLD: '1', NATIVE_SLOW: '1', TURN_ID: 'auto-1' }, { cancelRetryIntervalMs: 25, cancelRetryTimeoutMs: 500 }).open(context({ onActivity: n => activity.push(n) }))
   try {
-    const wait = Date.now()
-    while (!activity.some(a => a.phase === 'started') && Date.now() - wait < 1000) await new Promise(r => setTimeout(r, 10))
-    expect(activity.some(a => a.phase === 'started')).toBe(true)
+    await until(() => activity.some(a => a.phase === 'started'), 'auto-1 to start')
     await r.interrupt()
     const after = async () => (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // The vendor end: the retried cancel that finds auto-1 armed ends it, and the retries stop.
+    await until(() => activity.some(a => a.phase === 'completed'), 'auto-1 to end')
+    // A cancel sent just before that end may still be on its way; the fixture answers a prompt
+    // only after recording every message sent before it, so the count below is final.
+    expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     const cancels = (await after()).filter(x => x.cancel === true)
     expect(cancels[0]?.nativeTurn).toBe(false)
     expect(cancels.some(x => x.nativeTurn === true)).toBe(true)
     expect(cancels.length).toBeGreaterThan(1)
     const cancelCount = cancels.length
+    // Room for a retry that leaked past the end (they come every 25 ms) to show up.
     await new Promise(resolve => setTimeout(resolve, 80))
     expect(await r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
     await r.interrupt()
@@ -299,13 +327,10 @@ test('interrupt of autonomous native denies later permission for that generation
   }))
   try {
     expect(await r.prompt([{ type: 'text', text: 'auto-perm-hold' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
-    const wait = Date.now()
-    while (!activity.some(a => a.id === 'auto-B' && a.phase === 'started') && Date.now() - wait < 1000) await new Promise(r => setTimeout(r, 10))
+    await until(() => activity.some(a => a.id === 'auto-B' && a.phase === 'started'), 'auto-B to start')
     await r.interrupt()
     release()
-    await new Promise(r => setTimeout(r, 80))
-    const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
-    const perm = lines.find(x => x.tool === 'auto-perm')
+    const perm = await answer(trace, 'auto-perm')
     expect(perm?.permissionResponse?.outcome?.outcome).toBe('cancelled')
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
 })
@@ -376,12 +401,9 @@ test('ending native A cancels its pending permission while B is still active', a
   }))
   try {
     expect(await r.prompt([{ type: 'text', text: 'overlap-perm' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
-    const wait = Date.now()
-    while (!activity.some(a => a.id === 'own-A' && a.phase === 'completed') && Date.now() - wait < 1000) await new Promise(r => setTimeout(r, 10))
+    await until(() => activity.some(a => a.id === 'own-A' && a.phase === 'completed'), 'own-A to end')
     release()
-    await new Promise(r => setTimeout(r, 80))
-    const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
-    const perm = lines.find(x => x.tool === 'a-perm')
+    const perm = await answer(trace, 'a-perm')
     expect(perm?.permissionResponse?.outcome?.outcome).toBe('cancelled')
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
 })
@@ -416,12 +438,9 @@ test('native activity end cancels pending permission even if host later allows',
   }))
   try {
     expect(await r.prompt([{ type: 'text', text: 'auto-perm-late' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
-    const wait = Date.now()
-    while (!activity.some(a => a.id === 'auto-B' && a.phase === 'completed') && Date.now() - wait < 1000) await new Promise(r => setTimeout(r, 10))
+    await until(() => activity.some(a => a.id === 'auto-B' && a.phase === 'completed'), 'auto-B to end')
     release()
-    await new Promise(r => setTimeout(r, 80))
-    const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
-    const perm = lines.find(x => x.tool === 'late-perm')
+    const perm = await answer(trace, 'late-perm')
     expect(perm?.permissionResponse?.outcome?.outcome).toBe('cancelled')
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
 })

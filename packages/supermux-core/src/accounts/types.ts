@@ -194,6 +194,7 @@ export type LoginSpawn = { command: string; args: string[]; env: Record<string, 
 
 export interface LoginProcess {
   onOutput(listener: (chunk: string) => void): void
+  /** Once the process has exited and all of its output has gone to onOutput (a failed login reports its end). */
   onExit(listener: (code: number | null) => void): void
   write(data: string): void
   /** Terminates the whole process group. */
@@ -209,4 +210,9 @@ export type LoginConfig = {
   commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor" | "antigravity", string>>
   /** Whole login, including the user's part. Default 1800000 (30 min): a link opened on a phone takes a while. */
   timeoutMs?: number
+  /**
+   * Starts that timeout: calls `fire` after `ms`, returns what stops it. Default: a timer that does not keep the
+   * process alive. A test passes its own to fire it when it chooses, not when a loaded machine gets there.
+   */
+  schedule?: (fire: () => void, ms: number) => () => void
 }
