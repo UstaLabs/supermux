@@ -78,6 +78,7 @@ import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
+import dev.supermux.ui.chat.LinkSelectionContainer
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
@@ -527,17 +528,20 @@ fun EditorPanel(
                                         else MarkdownFiles(parentOf(editorAbsolutePath(workdir, activeTab.path))) { abs -> fs.raw(abs) }
                                     }
                                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
-                                        MarkdownBody(
-                                            text = activeTab.content,
-                                            modifier = Modifier.markdownPreviewColumn(),
-                                            document = true,
-                                            linkify = true,
-                                            onOpenFile = { ref ->
-                                                val open = onOpenFile
-                                                if (open != null) open(ref)
-                                                else revealFile(ref.path, ref.line, ref.endLine)
-                                            },
-                                        )
+                                        // Selectable as in FilePane's preview (inside the scroll).
+                                        LinkSelectionContainer {
+                                            MarkdownBody(
+                                                text = activeTab.content,
+                                                modifier = Modifier.markdownPreviewColumn(),
+                                                document = true,
+                                                linkify = true,
+                                                onOpenFile = { ref ->
+                                                    val open = onOpenFile
+                                                    if (open != null) open(ref)
+                                                    else revealFile(ref.path, ref.line, ref.endLine)
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }

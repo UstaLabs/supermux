@@ -1,0 +1,100 @@
+---
+title: Streaming a chat
+description: Build a chat on any supported agent. Stream replies, queue messages, stop a turn, and restart your server without losing it.
+---
+
+This guide follows the [chat example](/core/examples), a small server with a web page, in the order you'd build it.
+
+## Set up the core
+
+```ts
+import { supermux } from "@supermux/core"
+
+const core = supermux({
+  stateDirectory: "/home/me/.supermux-chat",
+  agents: { claude: { model: "opus" }, codex: {} },
+})
+```
+
+Each key under `agents` turns that agent on. A `model` set here applies to every session of that agent. Codex, Grok Build and Antigravity can also switch model per session (see [Session](/core/api/session)).
+
+## One observer for everything
+
+```ts
+core.subscribe(event => {
+  switch (event.type) {
+    case "session.event": {
+      const { native: _native, ...body } = event.event // the vendor payload isn't needed in the UI
+      send(event.sessionId, body)
+      break
+    }
+    case "session.stateChanged": send(event.sessionId, { state: event.state }); break
+    case "session.failed": send(event.sessionId, { error: event.error.message }); break
+    case "message.completed": send(event.sessionId, { messageId: event.messageId, result: event.result }); break
+  }
+})
+```
+
+- `assistant-delta` events are live only: show them, then replace them with `assistant-message`.
+- Store everything else if you want transcripts. Events aren't a durable log.
+
+## Send a message
+
+```ts
+const session = await core.sessions.resume(id) // open, detached or closed: it comes back either way
+const { state, paused } = session.snapshot()
+if (state === "interrupting") throw new Error("Still stopping the last turn")
+if (paused) session.pending.continue() // a Stop pauses the queue
+const { messageId, completed } = await session.send({ content: [{ type: "text", text }], whenBusy: "queue" })
+```
+
+- `whenBusy: "queue"` waits for the current turn; `"reject"` fails with `session_busy` instead.
+- The queue holds up to `limits.maxPending` messages (128 by default).
+- An `idempotencyKey` makes a retried send return the same receipt.
+
+A new session is `core.sessions.create({ id, agent, cwd })`. The id is yours, and must be new: records stay after close.
+
+## Stop a turn
+
+```ts
+const { status } = await session.interrupt({ pending: "discard" }) // "stopped" | "already_idle" | "unconfirmed"
+```
+
+`pending: "discard"` also cancels the queued messages; `"keep"` keeps them. Either way the queue is paused until you call `session.pending.continue()`, so the next send above resumes it.
+
+## Steer (Codex)
+
+Codex can take a message into the turn it's working on:
+
+```ts
+if (session.capabilities().steer && session.snapshot().state === "running") {
+  await session.steer({ content: [{ type: "text", text: "Use the v2 endpoint" }] })
+}
+```
+
+## Restart without losing turns
+
+```ts
+// On shutdown, let go of the agents but keep them running:
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => core.close({ agents: "detach" }).then(() => process.exit(0)))
+}
+
+// On start, pick the open sessions back up:
+for (const { id } of await core.sessions.list()) {
+  if (open.has(id)) core.sessions.resume(id).catch(error => console.error(id, error.message))
+}
+```
+
+A turn that was running when your server stopped carries on behind its [keeper](/core/concepts/keeper). When you resume, you get what you missed.
+
+While detaching, the receipts of running turns complete as `cancelled`, even though the agent goes on. Don't show that as the turn's real end.
+
+Only one process can use a state directory at a time: a second one fails with `state_locked` on its first call.
+
+## Close for good
+
+```ts
+await core.sessions.close(id, { mode: "shutdown" }) // stop the agent
+await core.sessions.forget(id)                      // delete its record and keeper folder
+```

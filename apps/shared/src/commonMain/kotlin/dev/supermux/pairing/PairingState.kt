@@ -9,7 +9,9 @@
 package dev.supermux.pairing
 
 import dev.supermux.auth.SecureTokenStore
+import dev.supermux.host.PairingPayload
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.PairClaimResult
 import dev.supermux.net.PairUrl
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -22,8 +24,12 @@ import kotlinx.coroutines.launch
 sealed interface PairingUiState {
     data object Idle : PairingUiState
     data object Validating : PairingUiState
-    /** Validated against the broker; awaiting the trust-on-first-connect confirmation. */
-    data class Confirm(val pair: PairUrl, val deviceName: String) : PairingUiState
+    /**
+     * Awaiting the trust-on-first-connect confirmation. A link was validated against the broker and
+     * [pair] carries its token. A [claim] has not been sent anywhere yet: [pair] is the address it will
+     * be redeemed on, with no token, and [deviceName] is the name this device will register as.
+     */
+    data class Confirm(val pair: PairUrl, val deviceName: String, val claim: PairingPayload? = null) : PairingUiState
     data class Error(val message: String) : PairingUiState
     /** Persisted; the gate can flip to the live app. */
     data object Paired : PairingUiState
@@ -64,13 +70,14 @@ class InMemoryPairingTokenStore : PairingTokenStore {
 }
 
 /**
- * Owns the first-connect pairing flow: parse an input (URL / deep link / manual host+token) →
- * validate it against the broker via the native `/pair.json` (with a `/me` fallback for the
- * resolved device name) → on the user's TOFU confirm, persist BOTH the base URL and token into
- * [store].
+ * Owns the first-connect pairing flow: read an input with [PairingCode] (the desktop host's claim
+ * QR, a pairing link, a deep link, manual host+token) → validate a link against the broker via the
+ * native `/pair.json` (with a `/me` fallback for the resolved device name) → on the user's TOFU
+ * confirm, persist BOTH the base URL and token into [store]. A claim is redeemed on that confirm,
+ * through the same [redeem] Add host uses, and the token it returns is what gets persisted.
  *
  * Validation uses a throwaway [BrokerApi] built with the candidate base+token; nothing is
- * persisted until [confirmPersist].
+ * persisted (and no claim redeemed) until [confirm].
  *
  * @param scope caller-owned (Android passed `viewModelScope`, desktop a composition scope).
  * @param httpFactory builds the throwaway probe client, LAZILY — a [PairingState] that never
@@ -79,12 +86,17 @@ class InMemoryPairingTokenStore : PairingTokenStore {
  * @param probeOverride injectable network seam (mirrors [dev.supermux.state.HostStore]'s
  *   `sendFrameOverride`/`apiOverride`) — tests inject a fake to assert state transitions without
  *   a live broker.
+ * @param deviceName what this device registers as when it redeems a claim — the same platform name
+ *   Add host offers.
+ * @param claimOverride injectable `POST /pair/claim` (mirrors [dev.supermux.state.FleetStore]'s).
  */
 class PairingState(
     private val store: PairingTokenStore,
     private val scope: CoroutineScope,
     httpFactory: () -> HttpClient = { error("PairingState: no httpFactory — pass one to probe a broker") },
     private val probeOverride: (suspend (PairUrl) -> String?)? = null,
+    private val deviceName: String = "This device",
+    private val claimOverride: (suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?)? = null,
 ) {
     private var httpOrNull: HttpClient? = null
     private val buildHttp = httpFactory
@@ -101,19 +113,26 @@ class PairingState(
     }
 
     /**
-     * Parse [input] and validate it against the broker. On success transitions to
-     * [PairingUiState.Confirm] (does NOT persist — that waits for the TOFU confirm).
-     * On any failure transitions to [PairingUiState.Error].
+     * Read [input] and, for a link, validate it against the broker. On success transitions to
+     * [PairingUiState.Confirm] (does NOT persist — that waits for the TOFU confirm). A claim goes
+     * straight to Confirm: it is redeemed only once confirmed, so a dismissed dialog leaves the
+     * one-time code usable. On any failure transitions to [PairingUiState.Error].
      */
     fun validate(input: String, fallbackBase: String? = fallbackBaseUrl()) {
-        val parsed = PairUrl.parse(input, fallbackBase)
-        if (parsed == null) {
-            _state.value = PairingUiState.Error(
+        when (val code = PairingCode.parse(input, fallbackBase)) {
+            is PairingCode.Token -> validatePair(code.pair)
+            is PairingCode.Claim -> {
+                val url = code.payload.claimUrl
+                _state.value = if (url == null) {
+                    PairingUiState.Error("That pairing link has no host URL.")
+                } else {
+                    PairingUiState.Confirm(PairUrl(PairUrl.normalize(url), token = ""), deviceName, code.payload)
+                }
+            }
+            null -> _state.value = PairingUiState.Error(
                 "Couldn't read a token from that — paste the full pairing link (it contains ?t=…).",
             )
-            return
         }
-        validatePair(parsed)
     }
 
     /** Validate an already-parsed [PairUrl] (e.g. from a `supermux://pair` deep link). */
@@ -146,6 +165,28 @@ class PairingState(
         return runCatching { candidate.me() }.getOrNull()
             ?.takeIf { it.paired }
             ?.let { it.device?.ifBlank { "this broker" } ?: "this broker" }
+    }
+
+    /**
+     * The TOFU confirm of the pending [PairingUiState.Confirm]: a link's token is persisted as it is;
+     * a claim is redeemed first and the token it returns is persisted. A failed redemption (expired or
+     * used claim, another host answering) is an [PairingUiState.Error] and persists nothing.
+     */
+    fun confirm() {
+        val pending = _state.value as? PairingUiState.Confirm ?: return
+        val claim = pending.claim ?: return confirmPersist(pending.pair)
+        _state.value = PairingUiState.Validating
+        scope.launch {
+            when (val r = claim.redeem(pending.deviceName) { url, secret, name -> claimAt(url, secret, name) }) {
+                is ClaimRedemption.Redeemed -> confirmPersist(PairUrl(PairUrl.normalize(r.url), r.result.deviceToken))
+                is ClaimRedemption.Failed -> _state.value = PairingUiState.Error(r.message)
+            }
+        }
+    }
+
+    private suspend fun claimAt(url: String, secret: String, name: String): PairClaimResult? {
+        claimOverride?.let { return it(url, secret, name) }
+        return runCatching { BrokerApi(url, "", http()).pairClaim(secret, name) }.getOrNull()
     }
 
     /** TOFU confirm: persist host+token atomically, then mark Paired. */

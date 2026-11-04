@@ -12,12 +12,20 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
 import dev.supermux.net.DisplayStream
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
@@ -86,6 +94,7 @@ class ViewHostTest {
         modifier: Modifier = Modifier,
         chatHeaderMode: ChatHeaderMode = defaultChatHeaderMode(),
         onOpenFile: (String, Int?, Int?) -> Unit = { _, _, _ -> },
+        previewMode: Boolean = false,
         workspaceTerminalContent: (@Composable (() -> dev.supermux.net.TerminalClient, Modifier) -> Unit)? = null,
     ) {
         ViewHost(
@@ -100,6 +109,7 @@ class ViewHostTest {
             chatState = { sid -> rememberChatState(app, sid) },
             chatActions = { s -> rememberChatActions(app, s) },
             onOpenFile = onOpenFile,
+            previewModeFor = { previewMode },
             workspaceTerminalContent = workspaceTerminalContent
                 ?: { _, mod -> Box(mod.fillMaxSize()) { Text("term-stand-in") } },
         )
@@ -296,6 +306,17 @@ class ViewHostTest {
         assertNull(workspaceOpenPath(FilePathRef("/w"), "/w"))
     }
 
+    @Test
+    fun aPreviewLinkIsTriedInItsFilesFolderThenAtTheWorkspaceRoot() {
+        assertEquals(listOf("docs/setup.md", "setup.md"), tappedPathCandidates(FilePathRef("setup.md"), "/w", relativeTo = "/w/docs"))
+        assertEquals(listOf("README.md", "/README.md"), tappedPathCandidates(FilePathRef("../README.md"), "/w", relativeTo = "/w/docs"))
+        assertEquals(listOf("/etc/hosts"), tappedPathCandidates(FilePathRef("/etc/hosts"), "/w", relativeTo = "/w/docs"))
+        // A file at the root: one place to look.
+        assertEquals(listOf("a.md"), tappedPathCandidates(FilePathRef("a.md"), "/w", relativeTo = "/w"))
+        // A chat tap has no folder of its own: the workspace root only, as before.
+        assertEquals(listOf("src/a.kt"), tappedPathCandidates(FilePathRef("src/a.kt"), "/w"))
+    }
+
     /**
      * End-to-end through the REAL transcript. The conversion above is unit-tested, but nothing
      * proved a click on a rendered file-path ref actually reaches it — and "the parameter was never
@@ -320,6 +341,55 @@ class ViewHostTest {
         onNodeWithText("src/main.kt:42").performTouchInput { click(Offset(4f, 4f)) }
         waitForIdle()
         assertEquals(listOf(Triple<String, Int?, Int?>("src/main.kt", 42, null)), opened.toList())
+    }
+
+    // ── The same click in a file's markdown PREVIEW (#69: the file pane passed no handler) ───────
+
+    /** A host whose file system has every file except the absolute paths in [missing]. */
+    private fun appWithFiles(missing: Set<String>): HostStore = testHostStore { request ->
+        val json = headersOf(HttpHeaders.ContentType, "application/json")
+        val path = request.url.parameters["path"]
+        when {
+            !request.url.encodedPath.endsWith("/fs/stat") -> respond("{}", HttpStatusCode.OK)
+            path in missing -> respond("""{"error":"ENOENT","message":"no such file"}""", HttpStatusCode.NotFound, json)
+            else -> respond("""{"name":"f","type":"file","real":"$path"}""", HttpStatusCode.OK, json)
+        }
+    }
+
+    /**
+     * A relative link in a preview is tried in the markdown file's own folder first (what markdown
+     * means), then at the workspace root (where an agent's paths start); one in neither is reported,
+     * as a tap in the transcript is.
+     */
+    @Test
+    fun aFileLinkClickedInAMarkdownPreviewOpensThatFile() = runComposeUiTest {
+        val app = appWithFiles(missing = setOf("/w/docs/src/main.kt", "/w/docs/gone.md", "/w/gone.md"))
+        val platform = platform()
+        val opened = mutableListOf<Triple<String, Int?, Int?>>()
+        setPlatformContent(platform) {
+            host(
+                app,
+                view("editor", mapOf("mode" to "file", "path" to "docs/guide.md")),
+                documents = store("[setup](setup.md)\n\n`src/main.kt:42`\n\n[gone](gone.md)\n"),
+                previewMode = true,
+                onOpenFile = { p, line, endLine -> opened.add(Triple(p, line, endLine)) },
+            )
+        }
+        waitForIdle()
+        fun clickLink(link: String, until: () -> Boolean) {
+            onNode(hasText(link) and hasAnyAncestor(hasTestTag("editor_preview"))).performMouseInput { click(Offset(4f, 4f)) }
+            runCatching { waitUntil(timeoutMillis = 5_000) { until() } }
+        }
+
+        clickLink("setup") { opened.size == 1 }
+        clickLink("src/main.kt:42") { opened.size == 2 }
+        clickLink("gone") { platform.notices.shown.isNotEmpty() }
+
+        assertEquals(
+            listOf(Triple<String, Int?, Int?>("docs/setup.md", null, null), Triple<String, Int?, Int?>("src/main.kt", 42, null)),
+            opened.toList(),
+        )
+        assertEquals(listOf("File not found: gone.md"), platform.notices.shown.toList())
     }
 
     // ── A `display` view is minted with a BLANK id on both hosts ─────────────────────────────

@@ -1,0 +1,46 @@
+---
+title: Delegate work
+description: An agent starts a helper on any agent and model, gives it a task, and hears back when it's done.
+---
+
+When an agent delegates, it starts a helper: a session of its own, on whichever agent and model fits the job. The helper works in the background and reports back to the agent that started it.
+
+## What a helper is
+
+- **Its own session.** It has its own agent, model and conversation. It doesn't appear in your sidebar.
+- **In the same project.** It works in the same folder as the agent that started it, or in a new git worktree branched from its current branch.
+- **On autopilot.** It runs at an access level that never stops to ask, because no one is watching its chat. See [Staying in control](/orchestration/control).
+- **On the best account.** It runs on its agent's account with the most room left.
+
+## Getting the result back
+
+The helper reports to the agent that started it by sending it a message. The report shows up in that chat, and the agent carries on with it.
+
+If a helper finishes without reporting, supermux reminds it once. If it still says nothing, supermux tells the agent that started it, along with the helper's last message. supermux also tells it if a helper crashes, stops with an error, or is stopped by someone else.
+
+There's no time limit. A helper can work as long as its task needs.
+
+## What you see
+
+Each helper gets a card in the chat of the agent that started it:
+
+- its name, agent and model,
+- the task it was given,
+- what it's doing right now, with a running clock,
+- and its result when it's done.
+
+Expand the card to read the whole thread. Two controls sit at the bottom:
+
+- **Message box**: write to the helper directly, as if you were in its own chat.
+- **Stop**: stop the helper. The card then says **stopped by you**, and the agent that started it is told.
+
+While helpers work, a strip above the composer shows what's still running. Tap a helper there to jump to its card. In the sidebar, the session's row shows a tag like "2 agents".
+
+The agents' own built-in subagents, like Claude Code's, show up as the same kind of card.
+
+## Good to know
+
+- Helpers never send you notifications. Ask the agent that started them for a summary.
+- What a helper writes stays in its own log. Only what it sends back reaches the chat you see.
+- A session keeps its latest 20 finished helper cards. Running ones always stay.
+- Worktrees made for helpers stay on disk until you clean them up in **Settings ▸ Worktrees**.

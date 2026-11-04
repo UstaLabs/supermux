@@ -65,6 +65,7 @@ import {
   migrateSettingsCredentials,
   parseAccountsSettings,
   setAccountsAutoSwitchSource,
+  setAccountsChangedListener,
   sharedAccounts,
   toApiError,
   type AccountAgent,
@@ -87,8 +88,8 @@ import { TtsAudioStreams } from "./core/tts/audio-stream"
 import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
-import { getUsageStore, isUsageProvider, type UsageFetched } from "./core/usage/store"
-import { recordFetched } from "./core/accounts/provider-usage"
+import { getUsageStore, isUsageProvider, type UsageFailed, type UsageFetched } from "./core/usage/store"
+import { clearSignInMark, recordFailed, recordFetched, systemSignInExpired } from "./core/accounts/provider-usage"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider, AntigravityCommandProvider, sqliteCommandStore } from "./core/slash-commands"
 import { AgentKind, agentDisplayName } from "./shared/agents"
@@ -156,7 +157,8 @@ import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
-import { AgentNotInstalledError, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
+import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
+import { startFailureNotice } from "./core/agents/start-failure"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
@@ -627,11 +629,22 @@ const brokerAccounts = new BrokerAccounts({
   refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
 })
 // Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
-// once the saved windows are loaded (a fetch can land first at boot).
+// once the saved windows are loaded (a fetch can land first at boot). A provider that refused the login
+// (an expired Cursor sign-in) marks the account unavailable; a fetch that works again clears that mark.
 getUsageStore().on("fetched", (e: UsageFetched) => {
   void recordFetched(sharedAccounts().usage, e)
+    .then((changed) => { if (changed) brokerAccounts.notifyChanged() })
     .catch((err) => log.warn("provider_usage_record_failed", { provider: e.provider, account: e.account, err: String(err) }))
 })
+getUsageStore().on("failed", (e: UsageFailed) => {
+  void recordFailed(sharedAccounts().usage, e)
+    .then((changed) => { if (changed) brokerAccounts.notifyChanged() })
+    .catch((err) => log.warn("provider_usage_record_failed", { provider: e.provider, account: e.account, err: String(err) }))
+})
+// Agent statuses read the marks synchronously (detectAgentStatuses): have them in memory from boot.
+void sharedAccounts().usage.load()
+// A session that opened onto a login its agent refused (Cursor's expired sign-in) marks the account there.
+setAccountsChangedListener(() => brokerAccounts.notifyChanged())
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
 void (async () => {
@@ -644,20 +657,31 @@ void (async () => {
   }
   await brokerAccounts.refreshLabels()
 })()
+/**
+ * The agent's own login just succeeded (Settings ▸ Providers): an expired sign-in's mark goes at once, since
+ * Settings reads the statuses again right after, and the usage is read again with the new login.
+ */
+async function signedInAgain(kind: AgentKind): Promise<void> {
+  const { usage } = sharedAccounts()
+  await usage.load()
+  if (clearSignInMark(usage, `${kind}:system`)) brokerAccounts.notifyChanged()
+  if (isUsageProvider(kind)) await getUsageStore().refresh([kind], { force: true })
+}
 /** `account` + `accountLabel` on every session frame (system account when none is set). */
 function sessionAccountFields(s: { agent?: string; account?: string | null }): { account: string; accountLabel: string } {
   const account = s.account || `${s.agent ?? "claude"}:system`
   return { account, accountLabel: brokerAccounts.label(account) }
 }
-/** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. */
-const detectAgentStatuses = () => detectAllAgents(
+/** Every agent kind's install/auth status — GET /agents/status and the /agents/models catalog. A login
+ *  its provider refused reads as signed out (`signInExpired`), whatever credential file is still on disk. */
+const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
     home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
     appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     env: process.env,
   },
-)
+), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
 /** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
 function assertAgentInstalled(kind: AgentKind): void {
   const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
@@ -3412,7 +3436,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
-      if (st.phase === "success") void refreshAgentModels(kind)
+      if (st.phase === "success") {
+        void refreshAgentModels(kind)
+        void signedInAgain(kind).catch((err) => log.warn("signed_in_again_failed", { kind, err: String(err) }))
+      }
     },
   })
   channels.web = webChannel as Channel
@@ -3986,7 +4013,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
     const resumed = await resumeSuspendedSession(session)
     if (!resumed) {
-      await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
+      const text = startFailureNotice("resume", session.name, sessionManager.resumeFailure(session.id), `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`)
+      await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
       return
     }
   }
@@ -4176,7 +4204,7 @@ if (webChannel) {
       await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
       if (!resumed) {
-        await notifySession(targetSession.id, `Failed to resume session "${targetSession.name}".`)
+        await notifySession(targetSession.id, startFailureNotice("resume", targetSession.name, sessionManager.resumeFailure(targetSession.id)))
         return
       }
     }
@@ -4210,7 +4238,7 @@ if (webChannel) {
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
       webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
       let started: ReturnType<typeof registry.resolveName>
-      let notInstalled: AgentNotInstalledError | undefined
+      let spawnError: unknown
       try {
         const spawned = await spawnSession({
           workdir: draftSnapshot.workdir,
@@ -4221,7 +4249,7 @@ if (webChannel) {
         })
         started = registry.resolveName(spawned.name)
       } catch (err: any) {
-        if (err instanceof AgentNotInstalledError) notInstalled = err
+        spawnError = err
         log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
       }
       if (!started) {
@@ -4248,7 +4276,7 @@ if (webChannel) {
         })
         // The draft row was restored just above, so the session exists again and
         // the notice has a home.
-        await notifySession(draftSnapshot.id, notInstalled ? notInstalled.message : `Failed to start session "${draftSnapshot.name}".`)
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, spawnError))
         return
       }
       inbound = { ...msg, target_session_id: started.id }

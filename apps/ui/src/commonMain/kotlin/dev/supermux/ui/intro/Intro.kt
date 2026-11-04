@@ -285,7 +285,7 @@ fun OnboardingFlow(
         is PairingUiState.Confirm -> PairTofuDialog(
             pair = s.pair,
             deviceName = s.deviceName,
-            onConfirm = { pairing.confirmPersist(s.pair) },
+            onConfirm = { pairing.confirm() },
             onDismiss = { pairing.cancelConfirm() },
         )
         is PairingUiState.Paired -> LaunchedEffect(Unit) { onPaired() }

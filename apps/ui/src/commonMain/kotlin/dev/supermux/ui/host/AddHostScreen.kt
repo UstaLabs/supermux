@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.host.PairingPayload
 import dev.supermux.net.PairUrl
+import dev.supermux.pairing.PairingCode
 import dev.supermux.state.AddHostResult
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -123,19 +124,17 @@ fun AddHostScreen(
 
     fun claimInput(raw: String) {
         error = null; info = null
-        val payload = PairingPayload.parse(raw)
-        if (payload != null) {
-            busy = true
-            scope.launch { handle(onClaim(payload, deviceName.trim().ifBlank { defaultDeviceName })) }
-            return
+        when (val code = PairingCode.parse(raw)) {
+            is PairingCode.Claim -> {
+                busy = true
+                scope.launch { handle(onClaim(code.payload, deviceName.trim().ifBlank { defaultDeviceName })) }
+            }
+            is PairingCode.Token -> {
+                busy = true
+                scope.launch { handle(onClaimLegacy(code.pair)) }
+            }
+            null -> error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
         }
-        val legacy = PairUrl.parse(raw)
-        if (legacy == null) {
-            error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
-            return
-        }
-        busy = true
-        scope.launch { handle(onClaimLegacy(legacy)) }
     }
 
     LaunchedEffect(pendingScans) { pendingScans.collect { claimInput(it) } }

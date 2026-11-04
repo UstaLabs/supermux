@@ -21,6 +21,8 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.util.TransportPolicy
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
+import dev.supermux.pairing.ClaimRedemption
+import dev.supermux.pairing.redeem
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.Attachment
@@ -988,22 +990,14 @@ class FleetStore(
 
     /**
      * Claim a host from a scanned/pasted [PairingPayload]: POST /pair/claim, ABORT if the returned
-     * `host.hostId` differs from the payload's (identity-mismatch guard), then persist via the store
-     * and open its connection. Mirrors Android AppViewModel.addHost.
+     * `host.hostId` differs from the payload's (identity-mismatch guard — [redeem], the same check
+     * the first-run connect page uses), then persist via the store and open its connection. Mirrors
+     * Android AppViewModel.addHost.
      */
     suspend fun addHost(payload: PairingPayload, deviceName: String): AddHostResult {
-        val url = payload.relayUrl ?: payload.directUrl
-            ?: return AddHostResult.Error("That pairing link has no host URL.")
-        val res = claim(url, payload.claimSecret, deviceName)
-            ?: return AddHostResult.Error("The host rejected the pairing — the claim is expired or already used.")
-        if (res.deviceToken.isBlank()) return AddHostResult.Error("The host didn't return a device token.")
-        // Anti-MITM (spec §3.4): require an EXACT, non-empty hostId match — a missing/blank returned
-        // id is a failure, not a pass (otherwise a MITM broker omitting `host` would be accepted).
-        val returned = res.host?.hostId
-        if (returned.isNullOrBlank() || returned != payload.hostId) {
-            return AddHostResult.Error(
-                "Host identity mismatch (link ${payload.hostId}, got ${returned?.ifBlank { null } ?: "none"}) — aborting.",
-            )
+        val res = when (val r = payload.redeem(deviceName) { url, secret, name -> claim(url, secret, name) }) {
+            is ClaimRedemption.Failed -> return AddHostResult.Error(r.message)
+            is ClaimRedemption.Redeemed -> r.result
         }
         val host = synchronized(lock) {
             store.addOrUpdate(

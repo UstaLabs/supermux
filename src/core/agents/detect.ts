@@ -13,6 +13,8 @@ export interface AgentStatus {
   kind: AgentKind
   installed: boolean
   authed: boolean
+  /** The provider refused the login on disk (see applySignInExpiry): `authed` is false, sign in again. */
+  signInExpired?: boolean
   /** Kind-derived behavior flags for login UIs — clients must not branch on
    *  `kind` for behavior (see core/agents/capabilities.ts). */
   capabilities: AgentAuthCapabilities
@@ -158,6 +160,16 @@ export class AgentNotInstalledError extends Error {
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
   return ALL_KINDS.map((k) => detectAgent(k, probes, paths))
+}
+
+/**
+ * `authed` only says a credential is on disk, and a CLI keeps its file after the login expires (an old
+ * cursor-agent auth.json). A login its provider refused (`signInExpired(kind)`: the agent's system account
+ * carries the `account_expired` mark) is not signed in: `authed` false and `signInExpired` true, so the
+ * agent's login is offered again instead of "Ready".
+ */
+export function applySignInExpiry(statuses: AgentStatus[], signInExpired: (kind: AgentKind) => boolean): AgentStatus[] {
+  return statuses.map((s) => (s.authed && signInExpired(s.kind) ? { ...s, authed: false, signInExpired: true } : s))
 }
 
 /**

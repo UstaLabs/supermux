@@ -1,0 +1,95 @@
+---
+title: Normalized events
+description: One event stream for every agent. Text, tools, plans, subagents and usage look the same whichever agent produced them.
+---
+
+Each agent speaks its own protocol. The core turns what they send into one set of events, so your UI handles a tool call the same way for Claude Code as for Codex. The vendor's original payload rides along on every event.
+
+## Subscribe
+
+```ts
+const unsubscribe = core.subscribe(event => {
+  if (event.type === "session.event") render(event.sessionId, event.event)
+})
+```
+
+One observer sees every session. Events are live notifications, not a durable log: store what you want to keep. An observer that throws is reported to `onObserverError`, if you passed one.
+
+## Core events
+
+| Event | When |
+|---|---|
+| `session.created`, `session.resumed` | A session was created or came back. Carries its `record`. |
+| `session.stateChanged` | The session's `state` changed: `idle`, `running`, `interrupting`, `closing`, `closed` or `failed`. |
+| `session.event` | A [normalized event](#normalized-events) from the agent or the core. |
+| `session.update` | A raw update from the agent, in its own protocol. |
+| `session.failed` | The session's runtime failed. |
+| `message.accepted`, `message.started`, `message.completed` | Your message was queued, started, and finished (with its `result`). |
+| `account.switched`, `account.exhausted`, `account.unavailable`, `account.available`, `account.refreshed` | See [Accounts](/core/concepts/accounts). |
+| `tool.called`, `tool.finished` | A tool from your own [MCP server](/core/api/mcp) ran. |
+| `context.updated`, `context.degraded` | The session's skills, plugins or MCP servers changed, or some couldn't be applied. |
+
+## Normalized events
+
+A `session.event` carries an envelope and a body:
+
+```ts
+{
+  sessionId, agent, seq, ts, turnId?, origin: "live" | "replay",
+  native: { protocol, method?, payload },   // the vendor's original frame
+  kind: "tool-call", callId: "…", tool: "Bash", phase: "started", category: "execute", …
+}
+```
+
+The body kinds:
+
+| Kind | What it is |
+|---|---|
+| `turn-start`, `turn-complete` | A turn began, or ended (`reason: "ok"` or `"interrupt"`). |
+| `assistant-delta`, `assistant-message` | Part of the reply as it streams, and the full message. |
+| `reasoning-delta`, `reasoning` | The model's reasoning, when the agent shares it. |
+| `tool-call` | A tool call, with `phase` (`started`, `updated`, `completed`, `failed`), a `category` like `edit` or `execute`, and its input and output. |
+| `command-output` | Output of a running command, by `callId`. |
+| `file-diff` | A file change, with its diff. |
+| `web-search`, `mcp-tool` | A web search, or a call to an MCP tool. |
+| `plan` | The agent's to-do list, with each entry's status. |
+| `task` | Background work: a shell, a subagent, a monitor. |
+| `subagent` | A subagent started, made progress, or finished. |
+| `permission-request` | The agent needs approval. See [Permissions](/core/concepts/permissions). |
+| `user-question` | The agent asks a question, with options. |
+| `request-resolved` | A request was answered or cancelled. |
+| `permission-auto` | A request was answered automatically by the session's policy. |
+| `permissions-update` | The session's permissions changed, `now` or from the `next-turn`. |
+| `usage` | Tokens, context size, cost and rate limits, where the agent reports them. |
+| `compaction` | The agent compacted its context. |
+| `commands-update`, `mode-update`, `session-info` | The agent's slash commands, mode or model, title or folder changed. |
+| `warning`, `error` | Something went wrong; `error` may say if it's `recoverable`. |
+
+Any body can carry a `subagentId` when it comes from a subagent.
+
+Not every agent sends every kind. Antigravity, for example, sends no reasoning, plans, diffs or subagents. A frame the core doesn't recognize arrives only as a raw `session.update`.
+
+<Callout title="Coming in the next release">
+The code after 0.17.1 adds a `conversation-reset` event (Claude Code's `/clear` starts a new conversation and the session follows it) and richer `commands-update` entries with argument hints and aliases.
+</Callout>
+
+## Order
+
+For a message you send:
+
+1. `message.accepted`
+2. `session.stateChanged` → `running`, then `turn-start`
+3. `message.started`
+4. the turn's events
+5. `message.completed`, then `session.stateChanged` → `idle`, then the final messages and `turn-complete`
+
+So `await completed` can resolve before the last events of the turn. Wait for `turn-complete` to act on the whole turn.
+
+A turn the agent starts on its own (for example when a background task finishes) has `turn-start` and `turn-complete` but no `message.*` events.
+
+`seq` counts events per `Session` object, and `turnId` is `turn:1`, `turn:2`… A resumed session is a new object, so both start over.
+
+## Replay
+
+- `origin: "live"`: happening now, or caught up from the keeper after you re-attached.
+- `origin: "replay"`: history the agent replays when it loads a conversation. The core never normalizes replayed history when it opens a session.

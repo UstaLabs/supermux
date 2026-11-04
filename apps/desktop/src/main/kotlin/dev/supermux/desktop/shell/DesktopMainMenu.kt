@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -317,7 +318,7 @@ fun LinuxSidebarChrome(
     menu: List<MainMenuGroup>,
     menuState: MainMenuState,
     collapsed: Boolean,
-    onCollapse: () -> Unit,
+    onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -326,9 +327,9 @@ fun LinuxSidebarChrome(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MainMenuButton(menu, menuState)
-        if (!collapsed) {
+        run {
             IconButton(
-                onClick = onCollapse,
+                onClick = onToggle,
                 modifier = Modifier
                     .size(LinuxTitleBarHeight)
                     .pointerHoverIcon(PointerIcon.Hand)
@@ -337,9 +338,9 @@ fun LinuxSidebarChrome(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.MenuOpen,
-                    contentDescription = "Hide sidebar",
+                    contentDescription = if (collapsed) "Show sidebar" else "Hide sidebar",
                     tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(16.dp).graphicsLayer { scaleX = if (collapsed) -1f else 1f },
                 )
             }
         }

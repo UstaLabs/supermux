@@ -1,0 +1,30 @@
+{
+  "title": "supermux core",
+  "description": "Build on @supermux/core",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "---Concepts---",
+    "concepts/drivers",
+    "concepts/keeper",
+    "concepts/events",
+    "concepts/accounts",
+    "concepts/permissions",
+    "---Guides---",
+    "guides/streaming",
+    "guides/approvals",
+    "guides/resuming",
+    "guides/accounts",
+    "---API reference---",
+    "api/index",
+    "api/core",
+    "api/session",
+    "api/events",
+    "api/drivers",
+    "api/mcp",
+    "api/errors",
+    "---Examples---",
+    "examples"
+  ]
+}

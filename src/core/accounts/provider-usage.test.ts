@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { UsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
-import { fetchGrokUsage, type ClaudeUsage, type CodexUsage, type GrokUsage } from "../usage/index"
-import { policyWindows, recordFetched, recordProviderUsage } from "./provider-usage"
+import { fetchGrokUsage, type ClaudeUsage, type CodexUsage, type CursorUsage, type GrokUsage } from "../usage/index"
+import { clearSignInMark, policyWindows, recordFailed, recordFetched, recordProviderUsage, systemSignInExpired } from "./provider-usage"
 
 const dirs: string[] = []
 const realFetch = globalThis.fetch
@@ -164,4 +164,54 @@ test("a fetch that lands before the saved windows are loaded merges with them, n
     { name: "seven_day_opus", usedPercent: 100, resetsAt },
   ])
   await usage.flush()
+})
+
+const cursorUsage: CursorUsage = {
+  totalPercentUsed: 12, totalSpendCents: 0, includedCents: 0, limitCents: 0, spendAvailable: false,
+  billingCycleStart: "", billingCycleEnd: "", billingCycleEndIso: null,
+}
+const SIGN_IN_EXPIRED = { provider: "cursor" as const, account: "cursor:system", message: "Cursor sign-in expired — sign in to Cursor again.", code: "account_expired" }
+
+test("a provider that refused the login marks the account unavailable in its words; a working fetch clears that mark", async () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  expect(await recordFailed(usage, SIGN_IN_EXPIRED)).toBe(true)
+  expect(usage.unavailable("cursor:system")).toEqual({ reason: SIGN_IN_EXPIRED.message, since: expect.any(Date), code: "account_expired" })
+  // Already marked: nothing changed, so nobody needs telling again.
+  expect(await recordFailed(usage, SIGN_IN_EXPIRED)).toBe(false)
+  expect(await recordFetched(usage, { provider: "cursor", account: "cursor:system", data: cursorUsage })).toBe(true)
+  expect(usage.unavailable("cursor:system")).toBeUndefined()
+  expect(await recordFetched(usage, { provider: "cursor", account: "cursor:system", data: cursorUsage })).toBe(false)
+  await usage.flush()
+})
+
+test("only a sign-in failure marks an account, and a working fetch leaves a refusal a turn saw alone", async () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  expect(await recordFailed(usage, { ...SIGN_IN_EXPIRED, account: "cursor-a", code: "account_refresh_failed" })).toBe(false)
+  expect(usage.unavailable("cursor-a")).toBeUndefined()
+  // A turn's 403: the usage endpoint answering says nothing about the subscription access a turn needs.
+  usage.markUnavailable("claude:system", "Your organization has disabled Claude subscription access")
+  expect(await recordFetched(usage, { provider: "claude", account: "claude:system", data: claude })).toBe(false)
+  expect(usage.unavailable("claude:system")?.reason).toBe("Your organization has disabled Claude subscription access")
+  await usage.flush()
+})
+
+test("clearSignInMark: a fresh sign-in clears an expired sign-in's mark, never another refusal", () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  usage.markUnavailable("cursor:system", SIGN_IN_EXPIRED.message, new Date(), "account_expired")
+  usage.markUnavailable("claude:system", "Your organization has disabled Claude subscription access")
+  expect(clearSignInMark(usage, "cursor:system")).toBe(true)
+  expect(usage.unavailable("cursor:system")).toBeUndefined()
+  expect(clearSignInMark(usage, "cursor:system")).toBe(false)
+  expect(clearSignInMark(usage, "claude:system")).toBe(false)
+  expect(usage.unavailable("claude:system")).toBeDefined()
+})
+
+test("systemSignInExpired reads the agent's system login's sign-in mark only", () => {
+  const usage = new UsageStore(join(scratch(), "usage.json"))
+  usage.markUnavailable("cursor:system", SIGN_IN_EXPIRED.message, new Date(), "account_expired")
+  usage.markUnavailable("claude:system", "Your organization has disabled Claude subscription access")
+  usage.markUnavailable("codex-work", "Codex login expired; sign in again", new Date(), "account_expired")
+  expect(systemSignInExpired(usage, "cursor")).toBe(true)
+  expect(systemSignInExpired(usage, "claude")).toBe(false)
+  expect(systemSignInExpired(usage, "codex")).toBe(false)
 })

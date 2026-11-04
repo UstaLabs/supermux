@@ -181,6 +181,8 @@ import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.groupWorkspaces
+import dev.supermux.ui.panes.TAB_STRIP_HEIGHT
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
@@ -767,6 +769,11 @@ fun SupermuxApp(
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
+                    // A card whose login was refused: the system login signs in again under
+                    // Providers (the CLI's own login flow), an added account under Accounts.
+                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
+                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
                         Column(Modifier.fillMaxWidth()) {
@@ -778,6 +785,7 @@ fun SupermuxApp(
                                 // above), so the screen must not paint a top bar even when the
                                 // window is narrowed into the Compact width class.
                                 topBarShown = true,
+                                onSignIn = usageSignIn,
                             )
                         }
                     }
@@ -931,6 +939,57 @@ fun SupermuxApp(
                             )
                         }
 
+                    // The collapsed sidebar (#57): the list's own groups, drawn as a rail.
+                    val sidebarRail: @Composable () -> Unit = {
+                        val railNow = rememberRailClock()
+                        val railWorkspaces = if (hostViews.size > 1 && hostFilter != null) {
+                            workspaces.filter { workspaceHostOf(it) == hostFilter }
+                        } else workspaces
+                        val railGroups = remember(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, sessions) {
+                            val roles = sessions.associate { it.id to it.role }
+                            groupWorkspaces(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces) { w ->
+                                val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+                                sid != null && roles[sid] == "personal_assistant"
+                            }
+                        }
+                        val railModel = remember(railGroups, sessions, agentState, lastBySession, lastRead, ui.selectedId, railNow) {
+                            sidebarRailModel(railGroups, sessions.associateBy { it.id }, agentState, lastBySession, lastRead, ui.selectedId, railNow)
+                        }
+                        SidebarRail(
+                            model = railModel,
+                            avatars = agentAvatars,
+                            onNewSession = onNewSession,
+                            onOpenSession = { sid -> ui.selectSession(sid) },
+                            onShowSidebar = { ui.sidebarCollapsed = false },
+                            footer = {
+                                HostSwitcher(
+                                    hosts = hostViews,
+                                    sessions = sessions,
+                                    sessionHost = sessionHost,
+                                    selected = hostFilter,
+                                    onSelect = { id ->
+                                        setHostFilter(id)
+                                        id?.let { fleet.setActiveHost(it) }
+                                    },
+                                    onAddHost = { ui.openAddHost() },
+                                    onRenameHost = listActions.renameHost,
+                                    onForgetHost = listActions.forgetHost,
+                                    compact = true,
+                                )
+                                RailSettingsButton(
+                                    appearance = appearance,
+                                    onToggleTheme = onToggleTheme,
+                                    onUsage = { ui.openUsage() },
+                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onSettings = { ui.openSettings() },
+                                    usageOpen = ui.usageOpen,
+                                    onUsageDismiss = { ui.closeUsage() },
+                                    usageContent = usagePopoverBody,
+                                )
+                            },
+                        )
+                    }
+
                     val routeOnBack: () -> Unit = {
                         when (ui.currentRoute) {
                             is Route.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
@@ -971,6 +1030,7 @@ fun SupermuxApp(
                                     sidebarTopPad = sidebarTopPad,
                                     sidebarChrome = sidebarChrome,
                                     sidebarList = sidebarList,
+                                    sidebarRail = sidebarRail,
                                     launcherPane = launcherPane,
                                     onNewSession = onNewSession,
                                     onTearOutTab = onTearOutTab,
@@ -1003,6 +1063,7 @@ fun SupermuxApp(
                                                 actions = usageActions,
                                                 onBack = { ui.goBack() },
                                                 standalone = true,
+                                                onSignIn = usageSignIn,
                                             )
                                         }
                                     }
@@ -1276,6 +1337,7 @@ private fun ShellHome(
     sidebarTopPad: Dp,
     sidebarChrome: @Composable BoxScope.(sidebarWidth: Dp, collapsed: Boolean) -> Unit,
     sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit,
+    sidebarRail: @Composable () -> Unit,
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
@@ -1356,7 +1418,7 @@ private fun ShellHome(
             // edge and its divider drifted apart during every drag.)
             var resizing by remember { mutableStateOf(false) }
             var dragStartWidth by remember { mutableStateOf(0.dp) }
-            val targetWidth = if (ui.sidebarCollapsed) 64.dp else ui.sidebarWidth
+            val targetWidth = if (ui.sidebarCollapsed) RAIL_WIDTH else ui.sidebarWidth
             val springWidth by animateDpAsState(
                 targetValue = targetWidth,
                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
@@ -1374,31 +1436,48 @@ private fun ShellHome(
             ) {
                 // ── Sidebar: collapsed rail, or the full list ──
                 val collapsed = ui.sidebarCollapsed
+                // Collapsed under a title band (macOS, the custom Linux/Windows chrome), the band
+                // above the rail belongs to what is beside it: one row of window controls, sidebar
+                // toggle and tabs, in the tab strip's colour and at its height — or the launcher's,
+                // which paints the sidebar's tone up to the top. The rail starts below the band.
+                val railUnderBand = collapsed && sidebarTopPad > 0.dp
+                val bandColor = if (ui.launcherOpen) cs.surfaceContainerHigh else cs.surfaceContainerLow
+                // No title band (iPad, Android, the web, a system-framed desktop): the sidebar gets
+                // a band of its own and the toggle sits in it in BOTH states, the same spot the
+                // desktop's title-band toggle never leaves (#57).
+                val ownBand = sidebarTopPad <= 0.dp
                 Box(
                     Modifier
                         .width(animatedWidth)
                         .fillMaxHeight()
-                        .background(cs.surfaceContainerHigh)
-                        .clipToBounds()
-                        .then(if (sidebarTopPad > 0.dp) Modifier.padding(top = sidebarTopPad) else Modifier),
+                        .background(if (railUnderBand) bandColor else cs.surfaceContainerHigh)
+                        .clipToBounds(),
                 ) {
-                    if (collapsed) {
-                        SessionsRail(
-                            sessions = sessions,
-                            selectedId = ui.selectedId,
-                            agentState = agentState,
-                            onSelect = { ui.selectSession(it) },
-                            onExpand = { ui.sidebarCollapsed = false },
-                            onNewSession = onNewSession,
-                            lastBySession = lastBySession,
-                            lastRead = lastRead,
-                        )
-                    } else {
-                        // requiredWidth keeps the list at its full width while the narrower
-                        // animating parent clips it during the reveal.
-                        Box(Modifier.requiredWidth(ui.sidebarWidth).fillMaxHeight()) {
-                            sidebarList(false, null)
+                    Box(
+                        Modifier.fillMaxSize().then(
+                            when {
+                                railUnderBand -> Modifier.padding(top = TAB_STRIP_HEIGHT)
+                                sidebarTopPad > 0.dp -> Modifier.padding(top = sidebarTopPad)
+                                else -> Modifier.padding(top = SIDEBAR_BAND)
+                            },
+                        ),
+                    ) {
+                        if (collapsed) {
+                            sidebarRail()
+                        } else {
+                            // requiredWidth keeps the list at its full width while the narrower
+                            // animating parent clips it during the reveal.
+                            Box(Modifier.requiredWidth(ui.sidebarWidth).fillMaxHeight()) {
+                                sidebarList(false, null)
+                            }
                         }
+                    }
+                    if (ownBand) {
+                        SidebarBandToggle(
+                            collapsed = collapsed,
+                            onToggle = { ui.sidebarCollapsed = !collapsed },
+                            modifier = Modifier.align(Alignment.TopStart),
+                        )
                     }
                 }
 
@@ -1422,7 +1501,8 @@ private fun ShellHome(
                 Box(
                     Modifier
                         .align(Alignment.TopStart)
-                        .offset(x = 64.dp)
+                        .offset(x = RAIL_WIDTH)
+                        .padding(top = if (sidebarTopPad > 0.dp) TAB_STRIP_HEIGHT else 0.dp)
                         .width(1.dp)
                         .fillMaxHeight()
                         .background(cs.outlineVariant),

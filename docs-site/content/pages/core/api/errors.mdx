@@ -1,0 +1,112 @@
+---
+title: Errors
+description: Every error code, and the mistakes that cause the common ones.
+---
+
+The library throws `CoreError`, with a `code` you can switch on. `UnsupportedOperation` is a `CoreError` with the code `unsupported_operation`.
+
+```ts
+import { CoreError } from "@supermux/core"
+
+try {
+  await core.sessions.create({ id, agent, cwd })
+} catch (error) {
+  if (error instanceof CoreError && error.code === "session_exists") { /* pick a new id */ }
+  else throw error
+}
+```
+
+Option checks are plain `TypeError`s instead: everything `supermux()`, `createCore()` and the driver factories validate, and `interrupt()` or `close()` without a mode. Errors a driver throws itself, like a setup timeout from Claude Code or Codex, are passed on unchanged.
+
+## Codes
+
+### Input and options
+
+| Code | When |
+|---|---|
+| `invalid_options` | An option of `createCore()`, the accounts or a vault is invalid. |
+| `invalid_input` | An argument is wrong: an unknown configuration key, an answer of the wrong kind, an `optionId` the request doesn't have. |
+| `invalid_session_id` | A session id isn't letters, digits, `_` and `-`, up to 128. |
+| `invalid_workdir` | `cwd` isn't an existing absolute folder, or contains (or sits inside) the state directory. |
+| `invalid_auth_profile` | The profile doesn't exist, or belongs to another agent. |
+| `unknown_agent` | No agent with that id is registered. |
+
+### Sessions
+
+| Code | When |
+|---|---|
+| `session_exists` | A session with that id is already saved. Records stay after `close`; only `forget` removes them. |
+| `session_busy` | The session is occupied: not idle for `configure` or `fork`, a `whenBusy: "reject"` send, or another operation on its id is running. |
+| `session_not_found` | No saved session has that id. |
+| `session_closed` | The `Session` is closed. |
+| `session_failed` | The session's runtime failed. Close it and resume it. |
+| `session_not_running` | `steer()` with no turn to steer. |
+| `queue_full` | The queue already holds `limits.maxPending` messages. |
+| `idempotency_conflict` | An `idempotencyKey` came back with different input. |
+| `request_not_found` | No pending request has that id. |
+| `keeper_unconfirmed` | A keeper didn't answer, so the core couldn't tell if its agent still runs. |
+| `resume_identity_changed`, `session_identity` | A resume came back on a different conversation than the saved one. |
+| `fork_identity_unchanged` | The agent reused the conversation instead of forking it. |
+| `activity_overflow` | Too much background activity at once; the session fails. |
+| `core_closed` | A new call after the core began closing. |
+| `unsupported_operation` | The agent can't do that. The message says which. |
+
+### State directory
+
+| Code | When |
+|---|---|
+| `state_locked` | Another process holds the state directory. A lock left by a process that's gone is reclaimed. |
+| `state_unsafe` | A symbolic link, or a file of another user, where the core reads or writes. |
+| `invalid_session_record` | A saved record can't be read. |
+| `store_closed` | The store was used after the core released it. |
+
+### Accounts
+
+| Code | When |
+|---|---|
+| `unknown_account` | No account has that id. |
+| `account_exists` | That id exists, or the same rotating login is already held by another account. |
+| `account_expired` | A Codex token account expired and can't be refreshed. |
+| `account_secret_missing` | The account's secret isn't in the vault. |
+| `account_home_conflict` | An account home already exists and isn't empty. |
+| `account_refresh_failed` | Refreshing a Codex token failed. |
+| `account_identity_mismatch` | A guided login signed in as another email than asked for. |
+| `login_failed`, `login_timeout`, `login_cancelled` | A guided login failed, ran out of time, or was cancelled. |
+| `invalid_account_id`, `invalid_account_record` | A bad account id, or an unreadable accounts file. |
+
+### Context, tools and subagents
+
+| Code | When |
+|---|---|
+| `invalid_context` | A malformed context or patch. Instructions can't change after the session is created. |
+| `context_unsupported` | The agent can't apply an item of the context, for example skills on Cursor. |
+| `missing_mcp_servers` | A session names an MCP server that isn't registered with this core. |
+| `mcp_socket_in_use` | Another live core owns this state directory's MCP socket. |
+| `subagent_not_found`, `subagent_unavailable` | An unknown subagent, or an action the agent can't do right now. |
+
+### Drivers and host
+
+| Code | When |
+|---|---|
+| `setup_timeout` | An ACP agent didn't start within `setupTimeoutMs`. |
+| `protocol_version`, `auth_method` | An ACP agent speaks another protocol version, or doesn't offer that sign-in method. |
+| `connection_closed` | The connection to an ACP agent closed. |
+| `aborted` | An operation was cut short because the core was closing. |
+| `conversation_lost` | Antigravity no longer has the conversation. Start a new session. |
+| `runtime_closed`, `busy` | A runtime was used after it closed, or an ACP agent got a prompt while one is running. |
+| `already_live`, `host_closing` | From the `Host` layer. |
+
+## Common mistakes
+
+| You see | Why | Fix |
+|---|---|---|
+| `invalid_workdir` running the Quickstart | You ran it from your home folder, and the state directory is under it. | Run it from a project folder. |
+| `session_exists` | You reused an id from an earlier run. | Use a new id, or `forget()` the old one. |
+| `unsupported_operation` on `configuration: { model }` | Only Codex, Grok Build and Antigravity switch model per session. | Set `model` for the agent in `supermux()`. |
+| A turn that never ends | A permission request or question is waiting. | Answer it, refuse it, or interrupt. |
+| `invalid_input` "optionId is not among the request options" | A fixed option id; ACP agents use their own. | Match options by `kind`. |
+| Messages don't run after Stop | `interrupt()` pauses the queue. | Call `session.pending.continue()`. |
+| `core.sessions.live(id)` is `undefined` | It starts nothing. | Use `core.sessions.resume(id)`. |
+| Agents still running after your script ended | No `core.close({ agents: "shutdown" })`. | Close with `shutdown`, or `sessions.close(id, { mode: "shutdown" })`. |
+| `forget()` fails with `session_busy` | The agent still runs behind its keeper. | `sessions.close(id, { mode: "shutdown" })` first. |
+| `state_locked` | Another process uses the state directory. | One process per state directory. |

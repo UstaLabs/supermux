@@ -12,6 +12,9 @@ import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
 import { Registry } from "../../session-manager/registry"
 import { CoreAdapter } from "../core-bridge/core-adapter"
+import { AccountRegistry, UsageStore } from "../../../../packages/supermux-core/src/accounts/index.js"
+import { memoryVault } from "../../../../packages/supermux-core/src/index.js"
+import { ACCOUNT_AGENTS, resetSharedAccountsForTests, setAccountsChangedListener } from "../../accounts/broker-accounts"
 
 const ctx = (adapter?: CoreAdapter): ApplyConfigCtx => ({
   sessionEffort: () => undefined,
@@ -260,5 +263,85 @@ describe("cursor core spawn/resume dialect", () => {
     const sessionHome = reg.get(result.session_id)!.agent_home!
     expect(existsSync(join(sessionHome, ".cursor", "mcp.json"))).toBe(true)
     expect(child.ocCalls[0]?.options.env?.HOME).toBe(sessionHome)
+  })
+})
+
+// What cursor-agent's ACP server answers session/new and session/load with once its login expired or was
+// revoked (captured 2026-11-04 with an expired token): JSON-RPC -32000, ACP's auth_required.
+function authRequired(): Error {
+  return Object.assign(new Error("Authentication required"), {
+    name: "RequestError",
+    code: -32000,
+    data: { message: "Authentication required. Please run 'agent login' first, then call authenticate() with methodId 'cursor_login'." },
+  })
+}
+
+function refusingFactory(error: () => Error) {
+  const opens: DriverContext[] = []
+  const factory = (_gopts: CursorOptions, _overrides: SessionConfiguration): AgentDriver => ({
+    id: "cursor",
+    async open(ctx) { opens.push(ctx); throw error() },
+  })
+  return { factory, opens }
+}
+
+describe("a login Cursor refuses", () => {
+  let usage: UsageStore
+  let changed = 0
+  beforeEach(() => {
+    const dir = mkdtempSync(join(tmpdir(), "mux-cur-accounts-"))
+    dirs.push(dir)
+    const registry = new AccountRegistry(join(dir, "state"), [...ACCOUNT_AGENTS], { vault: memoryVault() })
+    usage = new UsageStore(join(registry.directory, "usage.json"))
+    resetSharedAccountsForTests({ registry, usage })
+    changed = 0
+    setAccountsChangedListener(() => { changed++ })
+  })
+  afterEach(() => {
+    resetSharedAccountsForTests()
+    setAccountsChangedListener(() => {})
+  })
+
+  test("a new chat fails as account_expired in plain words and marks the account its login is refused on", async () => {
+    const child = refusingFactory(authRequired)
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
+    dirs.push(workdir)
+    const failure = await spawn({ registry: registry(), bind: async () => {}, tmuxSession: "mux", cursorHost: host }, {
+      workdir, requestedName: "cur-expired", agent: AgentKind.Cursor, id: "broker-id-expired",
+    }).then(() => undefined, (err: unknown) => err as Error & { code?: string })
+    expect(failure?.code).toBe("account_expired")
+    expect(failure?.message).toBe("Cursor sign-in expired — sign in to Cursor again.")
+    expect(usage.unavailable("cursor:system")).toEqual({ reason: "Cursor sign-in expired — sign in to Cursor again.", since: expect.any(Date), code: "account_expired" })
+    // Every client reloads its accounts once: Settings, the chat's account pill.
+    expect(changed).toBe(1)
+  })
+
+  test("a resume fails the same way, and does not start a fresh conversation in its place", async () => {
+    const child = refusingFactory(authRequired)
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
+    dirs.push(workdir)
+    const sessionHome = mkdtempSync(join(tmpdir(), "mux-cur-home-"))
+    dirs.push(sessionHome)
+    const failure = await resumeCursorSession({ cursorHost: host }, {
+      id: "row-expired", name: "cur-expired", workdir, agent_home: sessionHome, agent_session_id: "native-1",
+    }).then(() => undefined, (err: unknown) => err as Error & { code?: string })
+    expect(failure?.code).toBe("account_expired")
+    expect(child.opens.map((o) => o.resumeId)).toEqual(["native-1"])
+    expect(usage.unavailable("cursor:system")?.code).toBe("account_expired")
+  })
+
+  test("any other failure to open passes through as it was, and marks nothing", async () => {
+    const child = refusingFactory(() => Object.assign(new Error("Internal error"), { code: -32603, data: { message: "boom" } }))
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
+    dirs.push(workdir)
+    const failure = await spawn({ registry: registry(), bind: async () => {}, tmuxSession: "mux", cursorHost: host }, {
+      workdir, requestedName: "cur-broken", agent: AgentKind.Cursor, id: "broker-id-broken",
+    }).then(() => undefined, (err: unknown) => err as Error & { code?: unknown })
+    expect(failure?.code).toBe(-32603)
+    expect(usage.unavailable("cursor:system")).toBeUndefined()
+    expect(changed).toBe(0)
   })
 })

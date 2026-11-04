@@ -238,3 +238,16 @@ test("environment: account mode gives codex and cursor sessions no credential co
   expect(existsSync(join(cursorHome, ".cursor", "cli-config.json"))).toBe(true)
   expect(cursor.env.CURSOR_API_KEY).toBeUndefined()
 })
+
+test("usage store: an unavailable mark keeps its code across a restart; a mark without one has none", async () => {
+  const file = join(await scratch(), "usage.json")
+  const first = new UsageStore(file)
+  await first.load()
+  expect(first.markUnavailable("cursor:system", "Cursor sign-in expired — sign in to Cursor again.", new Date("2026-11-04T10:40:58.000Z"), "account_expired")).toBe(true)
+  expect(first.markUnavailable("claude:system", "Your organization has disabled Claude subscription access", new Date("2026-11-04T10:41:00.000Z"))).toBe(true)
+  await first.flush()
+  const second = new UsageStore(file)
+  await second.load()
+  expect(second.unavailable("cursor:system")).toEqual({ reason: "Cursor sign-in expired — sign in to Cursor again.", since: new Date("2026-11-04T10:40:58.000Z"), code: "account_expired" })
+  expect(second.unavailable("claude:system")).toEqual({ reason: "Your organization has disabled Claude subscription access", since: new Date("2026-11-04T10:41:00.000Z") })
+})

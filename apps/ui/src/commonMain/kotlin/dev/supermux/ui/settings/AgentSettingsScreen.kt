@@ -124,6 +124,8 @@ internal fun normalizeInstallState(state: String?): String = when (state?.lowerc
 }
 
 internal fun statusLabel(status: AgentInstallStatus): String = when {
+    // The CLI still has its credential file, but the provider refused the login: sign in again.
+    status.signInExpired -> "Sign-in expired — sign in again"
     status.authed -> "Authenticated"
     !status.installed -> "Not installed"
     status.kind == "opencode" -> "Ready · free tier"

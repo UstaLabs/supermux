@@ -741,6 +741,9 @@ data class UsageResponse(
      *  it could not reach without a message, and a null map VALUE is not something
      *  `coerceInputValues` can rescue (it only defaults properties). */
     val errors: Map<String, String?> = emptyMap(),
+    /** Why a provider's [errors] entry, when the broker knows: `account_expired` = its login was refused,
+     *  sign in again. Absent on older brokers. */
+    val errorCodes: Map<String, String?> = emptyMap(),
     /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
     val fetchedAt: Map<String, String?> = emptyMap(),
     /** live | agent | local | cache — where each provider's current data came from. */
@@ -767,6 +770,8 @@ data class AccountUsage(
     val cursor: CursorUsage? = null,
     val grok: GrokUsage? = null,
     val error: String? = null,
+    /** Why [error], when the broker knows (`account_expired`: the login was refused). */
+    val errorCode: String? = null,
     val fetchedAt: String? = null,
     val refreshing: Boolean = false,
 )
@@ -1274,6 +1279,8 @@ data class AgentInstallStatus(
     val kind: String = "",
     val installed: Boolean = false,
     val authed: Boolean = false,
+    /** The provider refused the login on disk (an expired sign-in): [authed] is false, sign in again. */
+    val signInExpired: Boolean = false,
 )
 
 /** Broker-owned background job for installing one agent CLI. */
@@ -1320,6 +1327,8 @@ data class AccountUnavailableDto(
     val reason: String = "",
     /** ISO-8601. */
     val since: String = "",
+    /** A refusal clients act on: `account_expired` = the login must be signed in again. */
+    val code: String? = null,
 )
 
 /** Who an account is signed in as (whatever the agent's login exposes). */

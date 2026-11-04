@@ -165,6 +165,30 @@ class AgentSettingsScreenTest {
         onNodeWithTag("agent_row_cursor").assertIsDisplayed()
     }
 
+    // An expired sign-in still leaves the CLI's credential file on disk; the broker reports the provider's
+    // refusal (#63), so the row asks for the sign-in again instead of reading "Ready".
+    @Test fun an_expired_sign_in_reads_as_such_and_its_row_opens_on_the_sign_in() = runComposeUiTest {
+        val expired = { listOf(AgentInstallStatus(kind = "cursor", installed = true, authed = false, signInExpired = true)) }
+        agentContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen(agentStatuses = expired)() } }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_row_cursor").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("Sign-in expired — sign in again").assertIsDisplayed()
+        onNodeWithText("Ready").assertDoesNotExist()
+        onNodeWithTag("agent_login_start_cursor").assertIsDisplayed()
+    }
+
+    @Test fun status_label_names_an_expired_sign_in_before_anything_else() {
+        assertEquals("Sign-in expired — sign in again", statusLabel(AgentInstallStatus(kind = "cursor", installed = true, authed = false, signInExpired = true)))
+        assertEquals("Authenticated", statusLabel(AgentInstallStatus(kind = "cursor", installed = true, authed = true)))
+    }
+
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
         agentContent {

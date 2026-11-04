@@ -6,6 +6,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.net.HostIdentity
+import dev.supermux.net.PairClaimResult
 import dev.supermux.pairing.InMemoryPairingTokenStore
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -79,6 +81,31 @@ class OnboardingScreenTest {
     }
 
     // ── TOFU ──────────────────────────────────────────────────────────────────────────────────
+
+    @Test fun a_pasted_claim_is_redeemed_only_on_confirm() = runComposeUiTest {
+        val store = InMemoryPairingTokenStore()
+        var redeemed = 0
+        val claim = """{"v":1,"action":"pair","hostId":"amsfen6cjgpd7pjqw6nimlahvy","name":"studio",""" +
+            """"directUrl":"http://192.168.1.20:9898","claimSecret":"s3cret"}"""
+        val pairing = testPairing(store, claim = { _, _, name ->
+            redeemed++
+            PairClaimResult(host = HostIdentity(hostId = "amsfen6cjgpd7pjqw6nimlahvy"), deviceToken = "minted", name = name)
+        })
+        setPlatformContent(FakePlatform(), widthClass = WindowWidthClass.Expanded) {
+            OnboardingScreen(pairing = pairing, onPaired = {})
+        }
+        waitForIdle()
+        onNodeWithTag("onboarding_paste_field").performTextInput(claim)
+        onNodeWithTag("onboarding_paste_submit").performClick()
+        waitForIdle()
+        onNodeWithTag("pair_tofu_dialog").assertIsDisplayed()
+        assertEquals(0, redeemed)
+        onNodeWithTag("pair_tofu_confirm").performClick()
+        waitForIdle()
+        assertEquals(1, redeemed)
+        assertEquals("minted", store.load())
+        assertEquals("ws://192.168.1.20:9898", store.loadBaseUrl())
+    }
 
     @Test fun a_pasted_link_validates_into_the_tofu_dialog_and_persists_only_on_confirm() = runComposeUiTest {
         val store = InMemoryPairingTokenStore()

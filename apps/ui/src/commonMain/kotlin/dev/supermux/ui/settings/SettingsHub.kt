@@ -126,12 +126,15 @@ enum class SettingsExtra(val label: String, val desc: String) {
  * @property topBarShown true when the hub already painted a `TopAppBar` for this detail — a slot
  *   that could carry its own `Scaffold`/`TopAppBar` (every settings screen can, because Android's
  *   standalone routes still need one) must only draw it when this is false.
+ * @property onOpenSection move the hub to another section, as a rail click or an index tap would
+ *   (Accounts' "Sign in again" opens Providers). Honors the dirty guard.
  */
 @Immutable
 class SettingsSlotScope internal constructor(
     val onClose: () -> Unit,
     val onDirtyChange: (Boolean) -> Unit,
     val topBarShown: Boolean,
+    val onOpenSection: (SettingsSection) -> Unit = {},
 )
 
 /** Which detail the hub is showing. */
@@ -276,11 +279,13 @@ fun SettingsHub(
     // `rememberUpdatedState` so the remembered scope always runs the CURRENT `leave()`.
     val leaveNow = rememberUpdatedState<() -> Unit> { leave() }
     val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
+    val openNow = rememberUpdatedState<(SettingsSection) -> Unit> { open(Target.Sec(it)) }
     val scope = remember(compact) {
         SettingsSlotScope(
             onClose = { leaveNow.value() },
             onDirtyChange = { dirtyNow.value(it) },
             topBarShown = compact,
+            onOpenSection = { openNow.value(it) },
         )
     }
 

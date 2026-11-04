@@ -1,5 +1,6 @@
 package dev.supermux.ui.intro
 
+import dev.supermux.net.PairClaimResult
 import dev.supermux.net.PairUrl
 import dev.supermux.pairing.InMemoryPairingTokenStore
 import dev.supermux.pairing.PairingState
@@ -19,10 +20,13 @@ import kotlinx.coroutines.flow.map
 internal fun testPairing(
     store: PairingTokenStore = InMemoryPairingTokenStore(),
     probe: suspend (PairUrl) -> String? = { "my-laptop" },
+    claim: (suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?)? = null,
 ) = PairingState(
     store = store,
     scope = CoroutineScope(Dispatchers.Unconfined),
     probeOverride = probe,
+    deviceName = "Test phone",
+    claimOverride = claim,
 )
 
 /** A [SettingsStore] that also counts writes, for "written exactly once" assertions. */

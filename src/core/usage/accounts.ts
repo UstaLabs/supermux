@@ -6,7 +6,6 @@
 // also refreshes an expiring Codex token) and points the same fetchers at it. API-key accounts
 // are billed per token and have no quota to show; OpenCode's usage is local totals, not per login.
 
-import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import type { Account, Materialized } from "../../../packages/supermux-core/src/accounts/index.js"
 import { CODEX_TOKEN_ENV } from "../../../packages/supermux-core/src/accounts/adapters/codex.js"
@@ -18,6 +17,7 @@ import {
   fetchCodexUsageWithToken,
   fetchCursorUsageWithToken,
   fetchGrokUsage,
+  readCursorAccessToken,
 } from "./index"
 import type { UsageProvider } from "./store"
 
@@ -50,10 +50,8 @@ export async function fetchUsageForEnv(
       return null
     case "cursor": {
       if (!env.XDG_CONFIG_HOME) return null
-      const path = join(env.XDG_CONFIG_HOME, "cursor", "auth.json")
-      if (!existsSync(path)) return null
-      const token = JSON.parse(readFileSync(path, "utf-8"))?.accessToken
-      return typeof token === "string" && token ? fetchCursorUsageWithToken(token) : null
+      const token = readCursorAccessToken(join(env.XDG_CONFIG_HOME, "cursor", "auth.json"))
+      return token ? fetchCursorUsageWithToken(token) : null
     }
     case "grok":
       return env.GROK_AUTH_PATH ? fetchGrokUsage(env.GROK_AUTH_PATH) : null
