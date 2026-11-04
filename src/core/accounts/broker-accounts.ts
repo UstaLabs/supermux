@@ -110,8 +110,11 @@ export type AccountView = {
   system: boolean
   createdAt: string
   usage: UsageWindowView[]
-  /** The agent's API refused this account (401/403) and no turn has completed on it since. A label, never a block. */
-  unavailable?: { reason: string; since: string }
+  /**
+   * The agent's API refused this account (401/403) and no turn has completed on it since. A label, never a
+   * block. `code` names a refusal clients act on (`account_expired`: offer "Sign in again").
+   */
+  unavailable?: { reason: string; since: string; code?: string }
   /** The account "Auto" would start a new session of this agent on now (decision #18). */
   auto?: boolean
 }
@@ -136,7 +139,7 @@ export function toAccountView(account: Account, usage: UsageStore): AccountView 
     system: account.method === "system",
     createdAt: account.createdAt,
     usage: windows.map((w) => ({ name: w.name, usedPercent: w.usedPercent, ...(w.resetsAt ? { resetsAt: w.resetsAt.toISOString() } : {}) })),
-    ...(unavailable ? { unavailable: { reason: unavailable.reason, since: unavailable.since.toISOString() } } : {}),
+    ...(unavailable ? { unavailable: { reason: unavailable.reason, since: unavailable.since.toISOString(), ...(unavailable.code ? { code: unavailable.code } : {}) } } : {}),
   }
 }
 

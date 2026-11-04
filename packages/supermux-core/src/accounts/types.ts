@@ -113,9 +113,10 @@ export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
 /**
  * An account the agent's API refused (401/403: login revoked, subscription access disabled, ...).
  * A label, never a block: a session may still be put on it by hand. Cleared by the next turn that
- * completes on it, or by removing the account.
+ * completes on it, or by removing the account. `code` names a refusal the host can act on
+ * (`account_expired`: the login must be signed in again).
  */
-export type AccountUnavailable = { reason: string; since: Date }
+export type AccountUnavailable = { reason: string; since: Date; code?: string }
 
 export type AccountsOptions = {
   /**

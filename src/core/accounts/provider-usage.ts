@@ -1,9 +1,13 @@
 // Provider usage (the Usage screen's fetches) as the account policy's windows (decision #18): Auto and
 // the limit switch pick by them. Live Claude and Codex sessions report their windows themselves; Grok
 // reports none, so its weekly credits reach the policy only this way.
-import { BALANCE_WINDOW, type UsageStore as AccountUsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
+import { BALANCE_WINDOW, systemAccountId, type UsageStore as AccountUsageStore } from "../../../packages/supermux-core/src/accounts/index.js"
 import type { UsageWindow } from "../../../packages/supermux-core/src/accounts/types.js"
 import type { ClaudeUsage, CodexUsage, GrokUsage, UsageWindow as ProviderWindow } from "../usage/index"
+import type { UsageFailed } from "../usage/store"
+
+/** The code of a refusal that says "sign this login in again" (Core's CoreError code, the usage fetchers'). */
+export const SIGN_IN_EXPIRED = "account_expired"
 
 /** The provider's usage as policy windows, named like the agents' own rate-limit events; undefined when there is none to record. */
 export function policyWindows(provider: string, data: unknown): UsageWindow[] | undefined {
@@ -59,11 +63,35 @@ export function recordProviderUsage(usage: AccountUsageStore, provider: string, 
 
 /**
  * The usage store's "fetched" listener: records the fetch once `usage` holds its saved windows. A merge
- * before that load would make the load skip the account, and its saved windows would be lost.
+ * before that load would make the load skip the account, and its saved windows would be lost. The login
+ * answered, so a sign-in mark (see recordFailed) is cleared; any other mark is a turn's refusal, which a
+ * usage endpoint answering does not undo. True when a mark was cleared (the Accounts screens need telling).
  */
-export async function recordFetched(usage: AccountUsageStore, fetched: { provider: string; account: string; data: unknown }): Promise<void> {
+export async function recordFetched(usage: AccountUsageStore, fetched: { provider: string; account: string; data: unknown }): Promise<boolean> {
   await usage.load()
   recordProviderUsage(usage, fetched.provider, fetched.account, fetched.data)
+  return clearSignInMark(usage, fetched.account)
+}
+
+/** Clears `account`'s mark when it is an expired sign-in's (the login works again); false when there was none. */
+export function clearSignInMark(usage: AccountUsageStore, account: string): boolean {
+  return usage.unavailable(account)?.code === SIGN_IN_EXPIRED && usage.clearUnavailable(account)
+}
+
+/** Whether `agent`'s own login (its system account) carries an expired sign-in's mark. */
+export function systemSignInExpired(usage: AccountUsageStore, agent: string): boolean {
+  return usage.unavailable(systemAccountId(agent))?.code === SIGN_IN_EXPIRED
+}
+
+/**
+ * The usage store's "failed" listener: a provider that refused the login itself (`account_expired`) marks
+ * the account unavailable in its words, Core's own mark, which Settings ▸ Accounts, the chat's account pill
+ * and Auto already read. Other failures say nothing about the login. True when the mark is new.
+ */
+export async function recordFailed(usage: AccountUsageStore, failed: Pick<UsageFailed, "account" | "message" | "code">): Promise<boolean> {
+  if (failed.code !== SIGN_IN_EXPIRED) return false
+  await usage.load()
+  return usage.markUnavailable(failed.account, failed.message, new Date(), failed.code)
 }
 
 function toWindow(name: string, window: ProviderWindow | null | undefined): UsageWindow | undefined {
