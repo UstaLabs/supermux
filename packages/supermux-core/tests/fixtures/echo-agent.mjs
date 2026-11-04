@@ -16,7 +16,11 @@ createInterface({ input: process.stdin }).on('line', line => {
     return
   }
   if (m.cmd === 'oversize') { process.stdout.write('x'.repeat(Number(m.n ?? 5000)) + '\n'); return }
-  if (m.cmd === 'exit') { process.exit(m.code ?? 0); return }
+  if (m.cmd === 'exit') {
+    for (const line of m.stderr ?? []) process.stderr.write(line + '\n')
+    setTimeout(() => process.exit(m.code ?? 0), m.stderr ? 20 : 0)
+    return
+  }
   if (typeof m.method === 'string' && 'id' in m) {
     const delay = Number(m.delay ?? 0)
     const go = () => send({ id: m.id, result: m.result ?? { ok: true } })

@@ -6,6 +6,9 @@ import { mapPendingRequest, toCoreAnswer } from "./request-map"
 import { inboundAttachments, isImageAttachment } from "../attachment-meta"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { makeLogger } from "../../../shared/log"
+import { agentDisplayName } from "../../../shared/agents"
+import { exitCodeText } from "../../../../packages/supermux-core/src/keeper/exit.js"
+import type { KeeperExitStatus } from "../../../../packages/supermux-core/src/keeper/client.js"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "./normalized-bridge"
@@ -203,6 +206,28 @@ export function agentFailure(err: Error): Error {
   return new Error(detail, { cause: err })
 }
 
+/**
+ * What the user reads when an agent's process is gone (#71): what happened, that the conversation is saved, and that
+ * the next message restarts it. How the process ended (exit code or signal, its last stderr line) goes in brackets.
+ */
+export function crashNotice(kind: AgentKind, error: Error): Error {
+  const cause = error instanceof CoreError && error.code === "session_failed" && error.cause instanceof Error ? error.cause : error
+  const detail = crashDetail(cause)
+  return new Error(`${agentDisplayName(kind)} stopped unexpectedly${detail ? ` (${detail})` : ""}. Your conversation is saved; your next message restarts it.`, { cause: error })
+}
+
+function crashDetail(error: Error): string | undefined {
+  const plain = (text: string) => text.trim().replace(/[.\s]+$/, "")
+  // Core's own "Session runtime failed; close and resume it" says nothing the user can act on.
+  if (error instanceof CoreError && error.code === "session_failed") return undefined
+  if (!(error instanceof CoreError && error.code === "agent_exited")) return plain(error.message) || undefined
+  const exit = (error as { exit?: KeeperExitStatus }).exit
+  if (!exit) return "its keeper process stopped"
+  const how = exit.signal ? `stopped by ${exit.signal}` : exit.code === null ? undefined : `exit code ${exitCodeText(exit.code)}`
+  const last = exit.stderr.at(-1)
+  return [how, last ? plain(last) : undefined].filter(Boolean).join(": ") || undefined
+}
+
 function withAttachedFile(prompt: string, label: string): string {
   return prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
 }
@@ -265,6 +290,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private handingOver = 0
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
+  /** The failure that failureEmitted stands for: a crash after another failure in the same turn is still told. */
+  private emittedFailure?: Error
+  /** Reopening the session after its agent crashed failed: the next input (or Agent supervision) tries again. */
+  private reviveFailed = false
   /** Why the running turn failed (decision #17): its first failure, sent with its turn-complete. */
   private turnFailure?: Error
   /** The running turn's failure was already told with a turn-failed event (an unconfirmed stall). */
@@ -658,6 +687,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       }
       const session = this.stopped || this.starting || this.stopping ? undefined : this.current()
       const state = session?.snapshot().state
+      // The reopen after a crash failed: its registration is spent, so revive again with a new one.
+      if (this.reviveFailed && !session && !this.stopped) return this.revive(undefined)
       if (!session || (state !== "failed" && state !== "closed") || this.core.sessions.reopening(this.id)) return this.start()
       return this.revive(session)
     }
@@ -668,9 +699,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
    * new host registration, like restartNative. A close that fails leaves the host slot in
    * failed-cleanup, which the new registration's start retries first. A stop() meanwhile wins.
    */
-  private async revive(session: Session): Promise<void> {
+  private async revive(session: Session | undefined): Promise<void> {
     const generation = this.startEpoch
-    this.nativeSessionId = session.snapshot().agentSessionId
+    if (session) this.nativeSessionId = session.snapshot().agentSessionId
     this.restarting = (async () => {
       await this.handle.stop({ mode: "shutdown" }).catch(() => {})
       this.session = undefined
@@ -680,11 +711,19 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.handle = this.reregister({ model: this._model, effort: this._effort, fast: this._fast, permissionMode: this._permissionMode })
       await this.start()
     })()
-    try { await this.restarting } finally { this.restarting = undefined }
+    try {
+      await this.restarting
+      this.reviveFailed = false
+    } catch (err) {
+      // start() moves startEpoch on: only a stop() meanwhile (which sets stopped) means nobody wants it back.
+      if (!this.stopped) this.reviveFailed = true
+      throw err
+    } finally { this.restarting = undefined }
   }
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.reviveFailed = false
     this.startEpoch++
     this.inputEpoch++
     this.disarmStall()
@@ -737,6 +776,15 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     await previous.catch(() => {})
     this.failureEmitted = false
     try {
+      // Its agent crashed ("Claude process exited"), or reopening it after that failed: this input reopens the same
+      // conversation (resume) instead of failing on the dead session. Inbox delivery revives first; the user's own
+      // messages come straight here.
+      if (!this.stopped && (this.reviveFailed || this.sessionSnapshotState() === "failed")) {
+        try { await this.resume() } catch (err) {
+          const reason = asError(err).message.trim().replace(/[.\s]+$/, "")
+          throw new CoreError("restart_failed", `${agentDisplayName(this.kind)} could not be restarted (${reason}). Your conversation is saved; your next message tries again.`, { cause: err })
+        }
+      }
       await this.settleReopen()
       this.assertLive(epoch)
       const content = await this.buildContent(text, meta, epoch)
@@ -815,6 +863,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     const generation = this.startEpoch
     const session = this.current()
     if (!session) return
+    // A crashed session runs nothing to stop (its next message restarts it).
+    if (session.snapshot().state === "failed") return
     this.disarmStall()
     let result: InterruptResult
     try {
@@ -1154,6 +1204,13 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       return
     }
     if (event.type === "session.failed") {
+      const exit = (event.error as { exit?: KeeperExitStatus }).exit
+      log.warn("session_failed", {
+        session: this.sessionName, session_id: this.id, agent: this.kind, err: event.error.message,
+        ...(exit ? { exit_code: exit.code, ...(exit.signal ? { signal: exit.signal } : {}), stderr: exit.stderr.slice(-5) } : {}),
+      })
+      // Told even when the turn already failed for another reason (a usage limit, then the process died).
+      if (this.emittedFailure !== event.error) this.failureEmitted = false
       this.noteTurnFailure(event.error)
       this.surfaceFailure(event.error)
       // The core session itself failed: unlike "error" (also a failed turn), this means the agent is
@@ -1248,12 +1305,20 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   private surfaceFailure(error: Error, opts: { completeTurn?: boolean } = {}): void {
     if (!this.failureEmitted) {
       this.failureEmitted = true
-      this.emit("error", { kind: "error", error: agentFailure(error) })
+      this.emittedFailure = error
+      this.emit("error", { kind: "error", error: this.userFacing(error) })
     }
     this.disarmStall()
     this.bridge.flush()
     if (opts.completeTurn === false) return
     this.endTurn()
+  }
+
+  /** A failure as the user reads it: one that left the session dead (its agent crashed) is told in plain words. */
+  private userFacing(error: Error): Error {
+    if (error instanceof CoreError && error.code === "restart_failed") return error
+    const crash = error instanceof CoreError && (error.code === "agent_exited" || error.code === "session_failed")
+    return crash || this.sessionSnapshotState() === "failed" ? crashNotice(this.kind, error) : agentFailure(error)
   }
 
   /** The running turn failed. Its first failure counts: a later stall or crash does not replace it. */

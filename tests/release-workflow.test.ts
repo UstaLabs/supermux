@@ -352,3 +352,9 @@ test("the Windows CI lane pins the same Bun as the Windows release", () => {
   expect(laneBun, "the windows lane in ci.yml pins no bun-version").toBeDefined()
   position(`bun-version: "${laneBun}"`)
 })
+
+test("a release attaches its iOS build to the internal TestFlight group only; external review is opt-in", () => {
+  const job = workflow.slice(workflow.indexOf("  assign-testflight:"))
+  expect(job).toContain("TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}")
+  expect(job).not.toMatch(/TESTFLIGHT_GROUP: "[^"]*Developer Beta/)
+})

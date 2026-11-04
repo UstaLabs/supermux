@@ -425,7 +425,7 @@ test("what connectKeeper takes and returns, and connectKeeper itself, are marked
       if (named && ts.getJSDocTags(statement).some(tag => tag.tagName.text === "experimental")) tagged.add(named)
     }
   }
-  for (const name of ["connectKeeper", "ConnectKeeperOptions", "KeeperConnection", "KeeperFrameEvent", "KeeperSpec", "KeeperLimits", "KeeperWelcome", "FrameShape"]) {
+  for (const name of ["connectKeeper", "ConnectKeeperOptions", "KeeperConnection", "KeeperExitStatus", "KeeperFrameEvent", "KeeperSpec", "KeeperLimits", "KeeperWelcome", "FrameShape"]) {
     expect({ name, experimental: tagged.has(name) }).toEqual({ name, experimental: true })
   }
 })

@@ -1360,7 +1360,11 @@ jobs:
       #                    train normally clears straight through, which is what keeps this fast.
       # The external group and the review details it needs are created by
       # `bun scripts/testflight-external-setup.ts` (idempotent, run once per app).
-      TESTFLIGHT_GROUP: "Smoke Test,Developer Beta"
+      # Ahmet's rule (2026-11-04): no build goes to the EXTERNAL group, which submits it for Beta App
+      # Review, without his own word. So a release attaches to the internal group only; to send one
+      # to external testers, set the repo variable TESTFLIGHT_GROUPS="Smoke Test,Developer Beta"
+      # for that run (or attach it in App Store Connect).
+      TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
