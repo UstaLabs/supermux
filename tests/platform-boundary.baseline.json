@@ -57,7 +57,7 @@
     "src/core/transcription/whisper.ts": 2,
     "src/core/tts/engines/codex-pronunciation.ts": 1,
     "src/core/tunnels/cloudflared.ts": 1,
-    "src/core/usage/index.ts": 7,
+    "src/core/usage/index.ts": 9,
     "src/core/usage/local.ts": 2,
     "src/main.ts": 7
   },
@@ -127,6 +127,8 @@
     "apps/ui/src/commonMain/kotlin/dev/supermux/ui/session/SessionListScreen.kt": 2,
     "apps/ui/src/commonMain/kotlin/dev/supermux/ui/settings/GitHostingScreen.kt": 1,
     "apps/ui/src/commonMain/kotlin/dev/supermux/ui/settings/WorktreesSettingsScreen.kt": 1,
+    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/SidebarRail.kt": 1,
+    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/ViewHost.kt": 1,
     "apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/WorkspacePanes.kt": 1,
     "apps/ui/src/commonMain/kotlin/dev/supermux/ui/update/AppUpdate.kt": 1,
     "apps/web/src/wasmJsMain/kotlin/dev/supermux/web/auth/CookieSession.kt": 1,
@@ -272,6 +274,7 @@
     "src/core/tunnels/public-url.ts": 1,
     "src/core/tunnels/tailscale.ts": 2,
     "src/core/update/apply.ts": 4,
+    "src/core/usage/index.ts": 1,
     "src/main.ts": 15,
     "src/shared/preflight.ts": 3
   },
@@ -282,12 +285,11 @@
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 2,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopMedia.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopPlatform.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/HostOs.kt": 3,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/WindowChromeInsets.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/DesktopUpdateSource.kt": 4
+    "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/DesktopUpdateSource.kt": 2
   },
   "path-shape": {
     "packages/supermux-core/examples/kanban/server.ts": 1,
@@ -427,8 +429,7 @@
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/ChildProcess.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/TrayIcons.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 3,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/DesktopUpdateSource.kt": 3,
+    "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/DesktopUpdateSource.kt": 1,
     "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1
   }
 }
