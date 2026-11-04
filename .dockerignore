@@ -47,3 +47,6 @@ workspace
 
 # Local supermux state (should never be in the repo, but just in case)
 .mux
+
+# The documentation website (docs-site/) is a separate static site, not part of the image
+docs-site

@@ -1,0 +1,88 @@
+---
+title: Access levels
+description: Decide what an agent may do without asking you, and answer its requests from any device.
+---
+
+An access level decides what the agent can do on its own and what it has to ask you about first. Each agent has its own set of levels, named the way that agent names them.
+
+<Callout type="warn" title="Every agent starts at full access">
+By default each agent runs at its most open level: it edits files and runs commands without asking. Pick a stricter level for work where you want to approve each step.
+</Callout>
+
+## Choose a level
+
+Open the run settings pill in the composer and look at **Mode**. The list is titled **What can the agent do without asking?** Each option says what it does, and the default is marked **· default**.
+
+You can choose it when you start a session, and change it while the session runs. The change applies straight away. Codex and Antigravity pick it up from their next turn.
+
+When a session isn't on the agent's default, a small chip with the level's name sits next to the pill, so you can see it at a glance.
+
+## The levels per agent
+
+<Tabs items={['Claude Code', 'Codex', 'Cursor', 'OpenCode', 'Grok', 'Antigravity']}>
+<Tab value="Claude Code">
+| Level | What it does |
+|---|---|
+| **Bypass** (default) | Never asks before using a tool. |
+| **Accept edits** | Edits files without asking; asks for other tools. |
+| **Ask** | Asks before tool calls. |
+| **Plan** | Looks around and proposes a plan, without editing. |
+| **Auto** | Approves routine calls by itself and asks about the rest. |
+| **Don't ask** | Refuses instead of asking. |
+</Tab>
+<Tab value="Codex">
+| Level | What it does |
+|---|---|
+| **Full access** (default) | Never asks, no sandbox. |
+| **Auto** | Works in the project without asking; asks to go outside it, for example to use the network. |
+| **Ask** | Asks before each command, except trusted read-only ones. |
+| **Read only** | No edits and no commands with side effects; asks to do more. |
+</Tab>
+<Tab value="Cursor">
+| Level | What it does |
+|---|---|
+| **Force** (default) | Approves tools by itself. |
+| **Auto-review** | Approves tools by itself. Cursor's own reviewer isn't available inside supermux. |
+| **Ask** | Asks before tool calls. |
+| **Plan** | Refuses edits. |
+| **Q&A** | Explains only. |
+</Tab>
+<Tab value="OpenCode">
+| Level | What it does |
+|---|---|
+| **Allow** (default) | Edits, runs commands and fetches web pages without asking. |
+| **Ask** | Asks before edits, commands and web fetches. |
+| **Ask bash** | Asks only before running commands. |
+| **Read only** | Reads only, in OpenCode's plan mode. |
+</Tab>
+<Tab value="Grok">
+| Level | What it does |
+|---|---|
+| **Always approve** (default) | Approves tool calls by itself. |
+| **Ask** | Asks before tool calls. |
+</Tab>
+<Tab value="Antigravity">
+| Level | What it does |
+|---|---|
+| **Bypass** (default) | Skips all permission checks. |
+| **Accept edits** | Edits files without asking; other gated tools are refused. |
+| **Plan** | Proposes a plan, without editing. |
+| **Default** | Antigravity's own rules. It can't ask inside supermux, so gated tools are refused and reported. |
+</Tab>
+</Tabs>
+
+## Answer a request
+
+When the agent needs your OK, a card appears just above the composer. It shows what the agent wants to do, for example the exact command, and says **Waiting for you**. The agent waits until you answer, from any of your devices.
+
+The buttons come from the agent. They're usually:
+
+- **Allow once**: allow this one call.
+- **Allow always**: allow this kind of call from now on, when the agent offers it.
+- **Reject once**: refuse it. Tap it once to add an optional note telling the agent why, then again to send.
+
+Agents can also ask you questions. Claude Code, Codex and Grok show them as a card with options. Answer and press **Submit**, or **Decline**.
+
+## Agents started by other agents
+
+Sessions that an agent starts in the background can't wait for a person, so they only get levels that never ask. See [Staying in control](/orchestration/control).

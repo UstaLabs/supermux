@@ -1,0 +1,67 @@
+---
+title: Examples
+description: Runnable examples, from a one-turn script to a full chat app and a kanban board of agents.
+---
+
+Every example lives in [packages/supermux-core/examples](https://github.com/UstaLabs/supermux/tree/main/packages/supermux-core/examples). The `.mjs` scripts also ship inside the npm package.
+
+## Apps
+
+### Chat
+
+![The chat example: Claude Code and Codex sessions, a permission prompt, and a restart that picks the running turn back up](/images/core/chat.gif)
+
+A chat in the style of T3 Code: a sidebar of sessions, streaming replies, tool cards, diffs, permission cards, Stop, subagents, and a restart that keeps running turns.
+
+```sh
+npx degit UstaLabs/supermux/packages/supermux-core/examples/chat my-chat
+cd my-chat
+npm install
+npm install @supermux/core@latest
+node server.ts
+```
+
+It prints `listening on http://127.0.0.1:4321/?token=…`. Open that address. It needs Node 22.18 or newer, and finds the agent CLIs on your `PATH` (or pass `--agents`).
+
+### Kanban
+
+![The kanban example: each card is one agent in its own worktree, moving to Needs you and Review](/images/core/kanban.gif)
+
+A board where each card is one agent in its own git worktree and branch. A card moves to **Needs you** when the agent asks something, and to **Review** with its diff when it's done. Done commits; Discard deletes.
+
+```sh
+npx degit UstaLabs/supermux/packages/supermux-core/examples/kanban my-board
+cd my-board
+npm install
+npm install @supermux/core@latest
+node server.ts --repo /path/to/repo
+```
+
+The repository must be outside `/tmp`.
+
+<Callout type="warn" title="Install the latest version after copying">
+The copied examples ask for `@supermux/core` `^0.1.0`, so a plain `npm install` gets version 0.1.0. The extra `npm install @supermux/core@latest` above brings them to the current release.
+</Callout>
+
+## Recipes
+
+Small scripts for real jobs, in [examples/recipes](https://github.com/UstaLabs/supermux/tree/main/packages/supermux-core/examples/recipes):
+
+| Recipe | What it does | Run |
+|---|---|---|
+| `same-task-three-agents.ts` | Gives Claude Code and Codex (and Grok Build if you ask) the same task, each in its own worktree and branch, and commits each result. | `node same-task-three-agents.ts "Add a --verbose flag" --repo ~/projects/app` |
+| `ci-review.ts` | A read-only Codex review of `git diff <base>...HEAD`, printed to stdout. | `node ci-review.ts --base origin/main` |
+| `deploy-tool.ts` | A tool of your own, written with `mcpServer()` and `tool()`, that Claude Code or Codex calls. | `node deploy-tool.ts` |
+
+`same-task-three-agents.ts` runs its agents without asking for permission, so run it on a repository you're happy for them to change.
+
+## Scripts
+
+| Script | What it shows | Run |
+|---|---|---|
+| `real-agents.mjs` | One turn on a real agent, streaming the reply and refusing anything it asks. | `node examples/real-agents.mjs claude "Reply with pong"` |
+| `console.mjs` | An interactive console: create or re-attach to a session, print every event, and type `/allow`, `/reject`, `/interrupt`, `/steer`, `/detach` and more. | `bun examples/console.mjs --agent codex --cwd /path/to/project --state ~/.supermux-console --session demo` |
+| `lifecycle.mjs` | A generic ACP agent from create to resume. | `bun examples/lifecycle.mjs /path/to/acp-agent` |
+| `custom-driver.mjs` | A driver of your own. No CLI or network needed. | `node examples/custom-driver.mjs` |
+
+Run the scripts from a clone of the repository, after `bun install && bun run build:core`, or from the package folder after `bun run build`. Each needs the agent CLI it uses installed and signed in.

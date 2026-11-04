@@ -1,0 +1,91 @@
+---
+title: Install on your computer
+description: Download the desktop app for Mac, Windows or Linux. The first launch sets this computer up to run your agents.
+---
+
+The desktop app is where you work with your agents, and it can also run them on this computer. Want supermux on a machine without a screen instead? See [Install on a server](/getting-started/server).
+
+## Download
+
+| Platform | Download |
+|---|---|
+| macOS (Apple silicon) | [supermux-desktop-macos.dmg](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) |
+| Windows (x64) | [supermux-windows.msi](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-windows.msi) |
+| Linux (x64) | [supermux-linux.deb](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb) |
+| iPhone, iPad | [App Store](https://apps.apple.com/app/supermux/id6782643917) |
+| Android | [supermux-android.apk](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) |
+
+The phone apps come in when you [pair your devices](/getting-started/pair-devices).
+
+## Install the app
+
+<Tabs items={['macOS', 'Windows', 'Linux']}>
+<Tab value="macOS">
+Open the `.dmg` and drag **Supermux Desktop** into Applications, then open it.
+
+The Mac app needs Apple silicon. macOS asks for the microphone the first time you dictate, and may ask for local network access, which the app uses to reach your computers and devices.
+</Tab>
+<Tab value="Windows">
+Run the `.msi`. It adds a desktop shortcut and a **supermux** entry in the Start menu.
+
+The installer isn't signed yet, so Windows SmartScreen may warn about an unknown publisher. Choose **More info**, then **Run anyway**.
+
+Agents run natively on Windows. You don't need WSL.
+</Tab>
+<Tab value="Linux">
+Install the `.deb` package:
+
+```sh
+sudo apt install ./supermux-linux.deb
+```
+
+You'll find **supermux** in your app menu under Development. Videos play inside the chat when GStreamer is installed (`gstreamer1.0-plugins-base`, `-good` and `-libav`). Without it, a video shows as a download instead.
+</Tab>
+</Tabs>
+
+## The first launch
+
+<Steps>
+<Step>
+### Let it set up this computer
+
+You'll see **Setting up this computer as a host…**. A host is a computer that runs your agents. Here, that's this one.
+</Step>
+<Step>
+### Keep the QR code for your phone
+
+When it's ready, the app says **This computer is ready to host your agents. Scan the QR with your phone.** Leave it open if you want to [pair your phone](/getting-started/pair-devices) now.
+</Step>
+<Step>
+### Choose whether it keeps running
+
+**Keep running in the background** is on by default. Your agents stay reachable after you quit the app, sign out or restart.
+</Step>
+<Step>
+### Click Done
+
+The sidebar opens with a **Start a new session** card. Next: [your first session](/getting-started/first-session).
+</Step>
+</Steps>
+
+Below the QR code, the app tells you how your phone will reach this computer. **Remote access is on through relay.supermux.dev** means it works from anywhere, not just at home. See [Reach your computer from anywhere](/devices/remote-access).
+
+<Callout title="Already run supermux on a server?">
+Click **Connect to a different broker instead** and paste a pairing link from that server. This computer then only shows your sessions; it doesn't run agents itself.
+</Callout>
+
+## Git is optional
+
+Agents work without git. Git adds worktrees, diffs and change tracking.
+
+If git is missing, the first launch offers to install it: **Install Apple's developer tools — optional** on a Mac, or **Install git — optional** on Windows. You can also skip it and use **Install…** on the banner later.
+
+On Linux, install git with your package manager, for example `sudo apt install git`.
+
+## Closing and quitting
+
+Closing the window keeps supermux running in the menu bar or system tray, so your sessions carry on. To stop it, choose **Quit supermux** from that menu. On a Linux desktop without a system tray, closing the window quits instead.
+
+If **Keep running in the background** is off, quitting asks first, because it stops your running sessions.
+
+You can change all of this later in **Settings ▸ Hosting**. See [Desktop app](/devices/desktop).

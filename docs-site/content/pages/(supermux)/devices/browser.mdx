@@ -1,0 +1,35 @@
+---
+title: In a browser
+description: Open supermux in any browser. Your computer serves the app; there's nothing to install.
+---
+
+The computer that runs your agents also serves the supermux web app. Open its address in a browser, pair once, and you have the same workspace as the desktop and phone apps.
+
+## Find the address
+
+- **Desktop app**: **Settings ▸ Hosting ▸ Address** shows the **Local** address for your home network and the **Remote** one that works from anywhere.
+- **Server install**: `http://localhost:8787` on the server itself, or the link that `supermux pair` prints.
+- **Docker**: `http://localhost:8787`.
+
+## Pair the browser
+
+Open a pairing link and you're in. Get one from **Settings ▸ Devices ▸ Add device** on a device you've already paired, or run `supermux pair laptop` on a server. A brand-new install pairs the first browser that opens it automatically. See [Pair your devices](/getting-started/pair-devices).
+
+## Install it as an app
+
+The web app can be installed like a regular app, with its own icon and window, using your browser's install or **Add to Home Screen** option.
+
+## Notifications
+
+The first time, a strip offers **Enable notifications for agent replies**. Choose **Enable**, then allow notifications when the browser asks.
+
+<Check>
+iOS Safari only allows web push for sites added to the Home Screen (Apple's rule, not in supermux code). Confirm the iPhone flow before adding a sentence about it here.
+</Check>
+
+## What's different in a browser
+
+- No camera button: attach photos from your files instead.
+- Views can't move into separate windows.
+- The web app updates together with supermux on your computer, so there's nothing to update in the browser.
+- It needs a connection to your computer; there's no offline mode.
