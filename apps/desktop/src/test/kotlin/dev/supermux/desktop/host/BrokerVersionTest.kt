@@ -38,9 +38,7 @@ class BrokerVersionTest {
         assertFalse(BrokerVersion.isNewer(found = "99999999999.0.0", bundled = "1.0.0"))
 
     @Test fun killProbesEndsARunningVersionProbe() {
-        val script = kotlin.io.path.createTempFile("slow-broker", ".sh")
-        java.nio.file.Files.writeString(script, "#!/bin/sh\nsleep 30\n")
-        script.toFile().setExecutable(true)
+        val script = slowExecutable(30)
         var result: String? = "unset"
         val t = Thread { result = BrokerVersion.readBundledBuild(script, killAfterMs = 60_000) }
         val started = System.currentTimeMillis()
