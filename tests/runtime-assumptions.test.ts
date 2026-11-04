@@ -2,7 +2,7 @@
 // around, after checking it (see the platform-layer spec, §3.2). If a Bun upgrade changes one, this file goes red
 // before users notice. The Windows lane runs it too, so a fact that differs on Windows shows up there.
 import { expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -41,6 +41,37 @@ test.skipIf(process.platform !== "win32")("Bun refuses a .cmd argument that cmd.
     }
     expect(run).toThrow()
     expect(output).not.toContain("INJECTED")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Folder links are junctions on Windows (files.linkDirectory, #37). Two things the code relies on there, unverified when
+// they were written (platform-layer spec A.3 "Links"): readlink gives the target back as it was given (Antigravity and
+// the account homes compare it to decide whether a link is current; a `\\?\` prefix or another case would rebuild
+// links at every prepare and never clean one up), and a recursive delete removes the link, never what it points to (a
+// delete that followed a junction would take the user's plugins or history with it).
+test("readlink of a folder link gives back the target as it was given", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mux-junction-"))
+  try {
+    mkdirSync(join(dir, "target"))
+    symlinkSync(join(dir, "target"), join(dir, "link"), "junction")
+    expect(readlinkSync(join(dir, "link"))).toBe(join(dir, "target"))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a recursive delete removes a folder link, never what it points to", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mux-junction-"))
+  try {
+    mkdirSync(join(dir, "target"))
+    writeFileSync(join(dir, "target", "precious.txt"), "keep me")
+    mkdirSync(join(dir, "doomed"))
+    symlinkSync(join(dir, "target"), join(dir, "doomed", "link"), "junction")
+    rmSync(join(dir, "doomed"), { recursive: true, force: true })
+    expect(existsSync(join(dir, "doomed"))).toBe(false)
+    expect(readFileSync(join(dir, "target", "precious.txt"), "utf8")).toBe("keep me")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
