@@ -323,6 +323,9 @@ class HostStore(
         _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val muxHome: StateFlow<String?> =
         _state.map { it.muxHome }.stateIn(projectionScope, SharingStarted.Eagerly, null)
+    /** The broker host's home folder: each host's own, where `inferHomeDir` guesses one from a path. */
+    val homeDir: StateFlow<String?> =
+        _state.map { it.homeDir }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentStateWithAgents() }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
