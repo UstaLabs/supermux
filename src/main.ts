@@ -43,6 +43,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { claimBroker } from "./core/session-manager/broker-instance"
+import { writeStopToken } from "./core/session-manager/stop-token"
 import { releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
@@ -382,6 +383,9 @@ await claimBroker(STATE_DIR, PID_FILE).catch((error: unknown) => {
   process.exit(1)
 })
 process.on("exit", () => releasePidFile(PID_FILE))
+// The per-boot token of the desktop app's graceful stop request (POST /internal/stop): on Windows, where every
+// external stop is otherwise TerminateProcess, it is how the broker gets to run gracefulShutdown.
+const STOP_TOKEN = writeStopToken(STATE_DIR)
 
 // Schema downgrade guard: refuse to start if state was written by a newer build.
 // Must run BEFORE openDb so we never touch a DB we can't safely migrate.
@@ -2596,6 +2600,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     staticDir: STATIC_DIR,
     staticEmbedded: EMBEDDED_STATIC,
     internalSecret: INTERNAL_SECRET,
+    stopToken: STOP_TOKEN,
+    onStopRequest: () => { void gracefulShutdown("stop-request") },
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())

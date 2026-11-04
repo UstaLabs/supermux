@@ -1,6 +1,7 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { timingSafeEqual } from "node:crypto"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
@@ -477,6 +478,13 @@ export interface WebChannelOpts {
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
   internalSecret?: string
+  /**
+   * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
+   * carrying it in `x-supermux-stop-token` stops the broker gracefully: the desktop app's stop on Windows, where every
+   * external stop is otherwise TerminateProcess.
+   */
+  stopToken?: string
+  onStopRequest?: () => void
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -2445,6 +2453,22 @@ export class WebChannel implements Channel {
       const authResult = this.requireAuth(req)
       if (!authResult.ok) return new Response("unauthorized", { status: 401 })
       return Response.json(this.lastClientFrames)
+    }
+
+    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
+      // Machine-to-machine: the desktop app (same user) read the token from the state directory. Nothing else knows it.
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      const given = req.headers.get("x-supermux-stop-token") ?? ""
+      const expected = this.opts.stopToken
+      const ok = given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+      if (!ok) {
+        log.warn("stop_request_rejected", { hasToken: given !== "" })
+        return new Response("forbidden", { status: 403 })
+      }
+      log.info("stop_request_accepted")
+      const stop = this.opts.onStopRequest
+      setTimeout(() => stop(), 0) // after this response has gone out
+      return new Response("stopping", { status: 202 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
