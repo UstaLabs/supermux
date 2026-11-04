@@ -26,6 +26,7 @@ packages/supermux-core/tests/detached.test.ts | expected true got false; first: 
 packages/supermux-core/tests/environment-claude.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareClaudeEnvironment > mcp.json matches the fixture byte" | #29
 packages/supermux-core/tests/environment-grok.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "config rewrite is idempotent" | #29
 packages/supermux-core/tests/environment-opencode.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareOpenCodeEnvironment opencode.json matches the former " | #29
+packages/supermux-core/tests/integration.test.ts | keeper status did not appear, no echo of 2 (intermittent: passed in run 41849291342, failed in 41856835329) | #29 | flaky
 packages/supermux-core/tests/keeper-links.test.ts | no echo of 2; first: "a link planted where the keeper stages a journal rewrite is " | #29
 packages/supermux-core/tests/keeper-lost.test.ts | The agent did not start: ENOENT: no such file or directory, uv_spawn 'C:\Users\RUNNER~1\Ap; first: "opencode: resume with a host MCP server whose keeper dies in" | #29
 packages/supermux-core/tests/keeper-socket.test.ts | file locked or denied (EACCES); first: "keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, " | #29
@@ -124,7 +125,6 @@ tests/reconcile-startup.test.ts | file locked or denied (EBUSY); first: "reconci
 tests/registry.test.ts | file locked or denied (EBUSY); first: "session lifecycle > register a session" | #29
 tests/repo-scanner.test.ts | expected "" got neradmin\AppData\Local\Temp\cmux-scan-mfrSga"; first: "scanRepos > workdir itself is a repo → relPath empty string" | #29
 tests/resolve-download-attachment.test.ts | file locked or denied (EBUSY); first: "synthetic 32-hex file_id resolves directly via FileStore (no" | #29
-tests/runtime-assumptions.test.ts | expected ppData\Local\Temp\mux-test-state-TxqLCv\home" got s\RUNNER~1\AppData\Local\Temp\mux-not-a-home"; first: "Bun's os.homedir() ignores HOME and USERPROFILE set after st" | #29
 tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "session search returns sessions by message text, filtered + " | #29
 tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
 tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29

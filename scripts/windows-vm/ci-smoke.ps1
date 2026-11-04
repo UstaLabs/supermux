@@ -87,6 +87,15 @@ function Invoke-Probe([string]$Mode) {
     if ($LASTEXITCODE -ne 0) { Show-Log "broker"; Show-Log "sessiond"; throw "the terminal probe ($Mode) failed with $LASTEXITCODE" }
 }
 
+# What this user can read in the checkout, three ways, so a failure below says whose it is.
+$entry = Join-Path $Repo "src\core\sessiond\main.ts"
+$psRead = try { $null -ne (Get-Content -LiteralPath $entry -TotalCount 1) } catch { $_.Exception.Message }
+Write-Output "SMOKE_DIAG powershell-read=$psRead"
+Write-Output ("SMOKE_DIAG acl=" + ((icacls $entry) -join " ; "))
+$env:DIAG_PATH = $entry
+$bunRead = & $Bun -e "try { require('fs').readFileSync(process.env.DIAG_PATH, 'utf8'); console.log('ok') } catch (e) { console.log(String(e.code) + ' ' + e.message) }" 2>&1
+Write-Output ("SMOKE_DIAG bun-read=" + ($bunRead -join " "))
+
 $sessiond = $null
 $broker = $null
 try {
