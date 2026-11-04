@@ -11,6 +11,7 @@ import {
   parseQuarantine,
   quarantineFromReport,
   resultsForChunk,
+  splitRun,
   verdict,
   type FileResult,
 } from "./test-windows"
@@ -36,11 +37,12 @@ describe("normalizeTestPath", () => {
 })
 
 describe("parseQuarantine", () => {
-  test("reads file, reason, card and the optional flaky mark; skips comments and blanks", () => {
-    const text = "# header\n\nsrc\\a.test.ts | uses /bin/sh | #29\r\nsrc/b.test.ts | timing | #29 | flaky\n"
+  test("reads file, reason, card and the optional flags; skips comments and blanks", () => {
+    const text = "# header\n\nsrc\\a.test.ts | uses /bin/sh | #29\r\nsrc/b.test.ts | timing | #29 | flaky\nsrc/c.test.ts | waits on a pipe | #29 | hangs | flaky\n"
     expect(parseQuarantine(text)).toEqual([
-      { file: "src/a.test.ts", reason: "uses /bin/sh", card: "#29", flaky: false },
-      { file: "src/b.test.ts", reason: "timing", card: "#29", flaky: true },
+      { file: "src/a.test.ts", reason: "uses /bin/sh", card: "#29", flaky: false, hangs: false },
+      { file: "src/b.test.ts", reason: "timing", card: "#29", flaky: true, hangs: false },
+      { file: "src/c.test.ts", reason: "waits on a pipe", card: "#29", flaky: true, hangs: true },
     ])
   })
 
@@ -48,8 +50,9 @@ describe("parseQuarantine", () => {
     expect(() => parseQuarantine("# c\nsrc/a.test.ts | no card")).toThrow(/line 2/)
   })
 
-  test("the only fourth field is 'flaky'", () => {
+  test("the only flags are 'flaky' and 'hangs'", () => {
     expect(() => parseQuarantine("a.test.ts | r | #29 | sometimes")).toThrow(/line 1/)
+    expect(() => parseQuarantine("a.test.ts | r | #29 | hangs | hangs")).toThrow(/line 1/)
   })
 
   test("a file listed twice is an error", () => {
@@ -83,7 +86,7 @@ describe("verdict", () => {
   )
   const results: FileResult[] = [
     { file: "a/new.test.ts", status: "failed" },
-    { file: "a/known.test.ts", status: "failed" },
+    { file: "a/known.test.ts", status: "timeout" },
     { file: "a/fixed.test.ts", status: "passed" },
     { file: "a/flaky.test.ts", status: "passed" },
     { file: "a/ok.test.ts", status: "passed" },
@@ -114,12 +117,13 @@ describe("chunk", () => {
 })
 
 describe("quarantineFromReport", () => {
-  test("keeps known reasons, adds new failures, drops fixed files, keeps flaky ones; round-trips", () => {
-    const existing = parseQuarantine("a/known.test.ts | uses sh | #29\na/fixed.test.ts | r | #29\na/flaky.test.ts | r | #29 | flaky")
+  test("keeps known entries and flags, adds new failures, marks a new timeout as hanging, drops fixed files", () => {
+    const existing = parseQuarantine("a/known.test.ts | uses sh | #29 | hangs\na/fixed.test.ts | r | #29\na/flaky.test.ts | r | #29 | flaky")
     const text = quarantineFromReport(
       [
         { file: "a/known.test.ts", status: "failed" },
         { file: "a/new.test.ts", status: "failed" },
+        { file: "a/stuck.test.ts", status: "timeout" },
         { file: "a/fixed.test.ts", status: "passed" },
         { file: "a/flaky.test.ts", status: "passed" },
       ],
@@ -128,10 +132,21 @@ describe("quarantineFromReport", () => {
     )
     expect(text.startsWith("#")).toBe(true)
     expect(parseQuarantine(text)).toEqual([
-      { file: "a/flaky.test.ts", reason: "r", card: "#29", flaky: true },
-      { file: "a/known.test.ts", reason: "uses sh", card: "#29", flaky: false },
-      { file: "a/new.test.ts", reason: "fails on Windows (first seen 2026-11-04)", card: "#29", flaky: false },
+      { file: "a/flaky.test.ts", reason: "r", card: "#29", flaky: true, hangs: false },
+      { file: "a/known.test.ts", reason: "uses sh", card: "#29", flaky: false, hangs: true },
+      { file: "a/new.test.ts", reason: "fails on Windows (first seen 2026-11-04)", card: "#29", flaky: false, hangs: false },
+      { file: "a/stuck.test.ts", reason: "hangs on Windows (first seen 2026-11-04)", card: "#29", flaky: false, hangs: true },
     ])
+  })
+})
+
+describe("splitRun", () => {
+  test("files quarantined as hanging run alone, outside the chunks", () => {
+    const quarantine = parseQuarantine("a/stuck.test.ts | r | #29 | hangs\na/known.test.ts | r | #29")
+    expect(splitRun(["a/ok.test.ts", "a/stuck.test.ts", "a/known.test.ts"], quarantine)).toEqual({
+      chunked: ["a/ok.test.ts", "a/known.test.ts"],
+      alone: ["a/stuck.test.ts"],
+    })
   })
 })
 

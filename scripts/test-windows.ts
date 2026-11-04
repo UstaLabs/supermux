@@ -14,8 +14,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-export type QuarantineEntry = { file: string; reason: string; card: string; flaky: boolean }
-export type FileStatus = "passed" | "failed" | "unreported"
+export type QuarantineEntry = { file: string; reason: string; card: string; flaky: boolean; hangs: boolean }
+export type FileStatus = "passed" | "failed" | "timeout" | "unreported"
 export type FileResult = { file: string; status: FileStatus }
 export type SuiteCounts = { tests: number; failures: number; errors: number }
 export type Verdict = { newFailures: string[]; nowPassing: string[]; staleEntries: string[]; quarantinedFailing: string[] }
@@ -24,14 +24,19 @@ const ROOT = resolve(import.meta.dir, "..")
 const TEST_ROOTS = ["src", "packages", "tests", "scripts"]
 // bun test's own default names: *.test.*, *_test.*, *.spec.*, *_spec.* for .js/.jsx/.ts/.tsx.
 const TEST_FILE = /[._](test|spec)\.(js|jsx|ts|tsx)$/
-const CHUNK_TIMEOUT_MS = 20 * 60_000
-const FILE_TIMEOUT_MS = 5 * 60_000
+// A file that hangs on Windows (waiting on something POSIX) costs a whole chunk's timeout, then its own: keep both
+// short. Files the quarantine marks "hangs" skip the chunks and run alone with a shorter one still.
+const CHUNK_SIZE = 20
+const CHUNK_TIMEOUT_MS = 8 * 60_000
+const FILE_TIMEOUT_MS = 2 * 60_000
+const HANG_TIMEOUT_MS = 90_000
 
 const HEADER = `# Test files that fail on Windows today. scripts/test-windows.ts (the \`windows\` lane in ci.yml) runs them anyway:
 # - a file NOT listed here that fails is a new Windows regression, and fails the lane;
 # - a listed file that now passes fails the lane too: take it off. The list only shrinks.
-# Format: <test file> | <why it fails on Windows> | <card>[ | flaky]
-# "flaky" exempts a file that fails only sometimes from the "now passes" check.
+# Format: <test file> | <why it fails on Windows> | <card>[ | flaky][ | hangs]
+# "flaky" exempts a file that fails only sometimes from the "now passes" check; "hangs" runs a file that never
+# finishes on Windows alone, with a short timeout, instead of letting it stall a chunk.
 # Refresh from a CI run's report (the windows-test-report artifact):
 #   bun scripts/test-windows.ts --from-report windows-test-report.json --write-quarantine tests/windows-quarantine.txt
 `
@@ -41,22 +46,24 @@ export function normalizeTestPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "")
 }
 
-/** `<file> | <why> | <card>[ | flaky]` per line; `#` comments and blank lines are skipped. */
+const FLAGS = new Set(["flaky", "hangs"])
+
+/** `<file> | <why> | <card>[ | flaky][ | hangs]` per line; `#` comments and blank lines are skipped. */
 export function parseQuarantine(text: string): QuarantineEntry[] {
   const entries: QuarantineEntry[] = []
   const seen = new Set<string>()
   for (const [index, raw] of text.split(/\r?\n/).entries()) {
     const line = raw.trim()
     if (!line || line.startsWith("#")) continue
-    const parts = line.split("|").map(part => part.trim())
-    const [file, reason, card, flag] = parts
-    if (!file || !reason || !card || parts.length > 4 || (flag !== undefined && flag !== "flaky")) {
-      throw new Error(`windows quarantine line ${index + 1}: want "<file> | <reason> | <card>[ | flaky]", got: ${raw}`)
+    const [file, reason, card, ...flags] = line.split("|").map(part => part.trim())
+    const badFlags = flags.some(flag => !FLAGS.has(flag)) || new Set(flags).size !== flags.length
+    if (!file || !reason || !card || badFlags) {
+      throw new Error(`windows quarantine line ${index + 1}: want "<file> | <reason> | <card>[ | flaky][ | hangs]", got: ${raw}`)
     }
     const path = normalizeTestPath(file)
     if (seen.has(path)) throw new Error(`windows quarantine line ${index + 1}: ${path} is listed twice`)
     seen.add(path)
-    entries.push({ file: path, reason, card, flaky: flag === "flaky" })
+    entries.push({ file: path, reason, card, flaky: flags.includes("flaky"), hangs: flags.includes("hangs") })
   }
   return entries
 }
@@ -64,7 +71,7 @@ export function parseQuarantine(text: string): QuarantineEntry[] {
 export function formatQuarantine(entries: readonly QuarantineEntry[]): string {
   const lines = [...entries]
     .sort((a, b) => a.file.localeCompare(b.file))
-    .map(e => [e.file, e.reason, e.card, ...(e.flaky ? ["flaky"] : [])].join(" | "))
+    .map(e => [e.file, e.reason, e.card, ...(e.flaky ? ["flaky"] : []), ...(e.hangs ? ["hangs"] : [])].join(" | "))
   return `${HEADER}\n${lines.join("\n")}${lines.length ? "\n" : ""}`
 }
 
@@ -149,7 +156,9 @@ export function quarantineFromReport(results: readonly FileResult[], existing: r
     const file = normalizeTestPath(result.file)
     const entry = known.get(file)
     if (result.status !== "passed") {
-      entries.push(entry ?? { file, reason: `fails on Windows (first seen ${today})`, card: "#29", flaky: false })
+      const hangs = result.status === "timeout"
+      const reason = `${hangs ? "hangs" : "fails"} on Windows (first seen ${today})`
+      entries.push(entry ?? { file, reason, card: "#29", flaky: false, hangs })
     } else if (entry?.flaky) {
       entries.push(entry)
     }
@@ -157,7 +166,16 @@ export function quarantineFromReport(results: readonly FileResult[], existing: r
   return formatQuarantine(entries)
 }
 
-function runBunTest(files: readonly string[], junit: string | undefined, timeoutMs: number): number {
+/** Quarantined files marked "hangs" run alone, outside the chunks. */
+export function splitRun(files: readonly string[], quarantine: readonly QuarantineEntry[]): { chunked: string[]; alone: string[] } {
+  const hanging = new Set(quarantine.filter(entry => entry.hangs).map(entry => entry.file))
+  return {
+    chunked: files.filter(file => !hanging.has(normalizeTestPath(file))),
+    alone: files.filter(file => hanging.has(normalizeTestPath(file))),
+  }
+}
+
+function runBunTest(files: readonly string[], junit: string | undefined, timeoutMs: number): { code: number; timedOut: boolean } {
   const args = ["test", "--isolate"]
   if (junit) args.push("--reporter=junit", `--reporter-outfile=${junit}`)
   args.push(...files.map(file => `./${file}`))
@@ -169,7 +187,13 @@ function runBunTest(files: readonly string[], junit: string | undefined, timeout
     stderr: "inherit",
     timeout: timeoutMs,
   })
-  return run.exitCode ?? 1
+  // Killed by the timeout: no exit code, a signal instead.
+  return { code: run.exitCode ?? 1, timedOut: run.exitCode === null }
+}
+
+function runAlone(file: string, timeoutMs: number): FileStatus {
+  const run = runBunTest([file], undefined, timeoutMs)
+  return run.timedOut ? "timeout" : run.code === 0 ? "passed" : "failed"
 }
 
 function summary(v: Verdict, results: readonly FileResult[], quarantine: readonly QuarantineEntry[]): string {
@@ -191,7 +215,7 @@ function summary(v: Verdict, results: readonly FileResult[], quarantine: readonl
 function parseArgs(argv: readonly string[]) {
   const opt = {
     quarantine: join(ROOT, "tests", "windows-quarantine.txt"),
-    chunk: 40,
+    chunk: CHUNK_SIZE,
     report: "",
     fromReport: "",
     writeQuarantine: "",
@@ -222,28 +246,41 @@ async function main(argv: readonly string[]): Promise<number> {
   }
   const files = discoverTestFiles(ROOT)
   const quarantine = existsSync(opt.quarantine) ? parseQuarantine(readFileSync(opt.quarantine, "utf8")) : []
+  const { chunked, alone } = splitRun(files, quarantine)
   const work = mkdtempSync(join(tmpdir(), "mux-win-tests-"))
   const results: FileResult[] = []
+  // Written after every chunk, so a run the job's own timeout cancels still leaves what it found.
+  const report = () => {
+    if (opt.report) writeFileSync(opt.report, `${JSON.stringify({ results, verdict: verdict(results, quarantine, files) }, null, 2)}\n`)
+  }
+  const started = Date.now()
+  const elapsed = () => `${Math.round((Date.now() - started) / 1000)}s`
   try {
-    for (const [index, group] of chunk(files, opt.chunk).entries()) {
-      console.log(`\n── chunk ${index + 1}: ${group.length} files ──`)
+    for (const file of alone) {
+      console.log(`\n── ${file}: quarantined as hanging, run alone (${elapsed()}) ──`)
+      results.push({ file, status: runAlone(file, HANG_TIMEOUT_MS) })
+    }
+    report()
+    for (const [index, group] of chunk(chunked, opt.chunk).entries()) {
+      console.log(`\n── chunk ${index + 1}: ${group.length} files (${elapsed()}) ──`)
       const junit = join(work, `chunk-${index}.xml`)
-      const exit = runBunTest(group, junit, CHUNK_TIMEOUT_MS)
+      const run = runBunTest(group, junit, CHUNK_TIMEOUT_MS)
       const chunkResults = resultsForChunk(group, existsSync(junit) ? parseJunit(readFileSync(junit, "utf8")) : new Map())
       // A non-zero exit that no file accounts for (an error between tests, a crash at teardown): find the file.
-      const unexplained = exit !== 0 && chunkResults.every(r => r.status === "passed")
+      const unexplained = run.code !== 0 && chunkResults.every(r => r.status === "passed")
       for (const result of chunkResults) {
         if (result.status !== "unreported" && !unexplained) continue
-        console.log(`\n── re-running ${result.file} on its own ──`)
-        result.status = runBunTest([result.file], undefined, FILE_TIMEOUT_MS) === 0 ? "passed" : "failed"
+        console.log(`\n── re-running ${result.file} on its own (${elapsed()}) ──`)
+        result.status = runAlone(result.file, FILE_TIMEOUT_MS)
       }
       results.push(...chunkResults)
+      report()
     }
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
   const v = verdict(results, quarantine, files)
-  if (opt.report) writeFileSync(opt.report, `${JSON.stringify({ results, verdict: v }, null, 2)}\n`)
+  report()
   console.log(summary(v, results, quarantine))
   return failed(v) ? 1 : 0
 }
