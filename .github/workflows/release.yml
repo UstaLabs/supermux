@@ -772,8 +772,9 @@ jobs:
         run: ./gradlew.bat :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2
         with:
-          # Bun's ConPTY/EOF behavior is a native-Windows release gate.
-          bun-version: "1.3.14"
+          # Bun's ConPTY/EOF behavior is a native-Windows release gate, checked on every PR by ci.yml's windows lane
+          # at this same version. 1.4.x refuses a .cmd argument cmd.exe would split into a second command; 1.3.14 ran it.
+          bun-version: "1.4.4"
       - name: Install broker dependencies
         working-directory: .
         run: bun install
