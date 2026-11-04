@@ -20,10 +20,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.window.ComposeUIViewController
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.host.IosHostStores
-import dev.supermux.host.PairingPayload
 import dev.supermux.host.workspaceForSession
 import dev.supermux.net.PairUrl
 import dev.supermux.net.iosHttpFactory
+import dev.supermux.pairing.PairingCode
 import dev.supermux.pairing.PairingState
 import dev.supermux.pairing.asPairingStore
 import dev.supermux.proto.ServerFrame
@@ -206,6 +206,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                         store = SecureTokenStore().asPairingStore(),
                         scope = appScope,
                         httpFactory = { deps.httpFactory(null) },
+                        deviceName = UIDevice.currentDevice.name,
                     )
                 }
                 val deepLink = remember(openedUrl) {
@@ -386,16 +387,12 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
 }
 
 /**
- * Whether [raw] is a pairing link at all.
- *
- * Both forms the Add host screen accepts, asked in the same order it asks them: the current
- * `PairingPayload` QR/link payload, then the legacy `supermux://pair?t=` / `https://…/pair?t=`
- * URL. Anything else — a `supermux://` URL that means something other than pairing, a link the
+ * Whether [raw] is a pairing link at all — read by [PairingCode], the parser the Add host screen
+ * uses. Anything else — a `supermux://` URL that means something other than pairing, a link the
  * system handed us by mistake — is ignored rather than dropped into the Add host screen, where it
  * would render as "that isn't a valid supermux pairing link" for a link the user never pasted.
  */
-private fun isPairLink(raw: String): Boolean =
-    PairingPayload.parse(raw) != null || PairUrl.parse(raw) != null
+private fun isPairLink(raw: String): Boolean = PairingCode.parse(raw) != null
 
 /**
  * Whether this device is paired with anything.

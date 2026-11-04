@@ -9,10 +9,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.PairingPayload
+import dev.supermux.pairing.PairingCode
 import dev.supermux.ui.widgets.qrBitmap
 import kotlin.test.Test
 import kotlinx.coroutines.flow.first
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -55,6 +57,19 @@ class HostWizardTest {
         )
         val parsed = assertNotNull(PairingPayload.parse(encodePairingPayload(payload)))
         assertEquals("https://abc.relay.supermux.dev", parsed.relayUrl)
+    }
+
+    @Test fun the_phones_first_run_connect_page_reads_the_wizards_qr_as_a_claim() {
+        // Card #59: the first-run page reads through PairingCode, not PairingPayload alone, and used
+        // to answer "Couldn't read a token from that…" to exactly this QR.
+        for (relay in listOf(null, "https://h-$validHostId.relay.supermux.dev")) {
+            val json = encodePairingPayload(
+                buildPairingPayload(validHostId, "This computer", "claim-3", "http://127.0.0.1:9898", relay),
+            )
+            val claim = assertIs<PairingCode.Claim>(PairingCode.parse(json), "relay=$relay")
+            assertEquals("claim-3", claim.payload.claimSecret)
+            assertEquals(relay, claim.payload.relayUrl)
+        }
     }
 
     @Test fun rejectsAForeignRelayOrigin() {
