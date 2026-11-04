@@ -151,6 +151,7 @@ import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
+import dev.supermux.ui.shell.RAIL_WIDTH
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ChromeOs
 import dev.supermux.desktop.shell.DesktopMenuBar
@@ -1053,6 +1054,7 @@ fun main() {
                       ChromeOs.of(),
                       customChrome = linuxChrome != null || windowsChrome != null,
                       windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
+                      macTrafficLights = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth,
                   ),
                   // The OS's own window controls over the content, for a full-window overlay (the
                   // chat's media viewer lays its top bar in their band, clear of them).
@@ -2020,7 +2022,7 @@ fun main() {
                                     Box(
                                         Modifier
                                             .align(Alignment.TopStart)
-                                            .width(if (collapsed) 64.dp else sidebarWidth)
+                                            .width(if (collapsed) RAIL_WIDTH else sidebarWidth)
                                             .height(LinuxTitleBarHeight)
                                             .macTitleBarDragRegion("sidebar-band"),
                                     )
@@ -2028,23 +2030,26 @@ fun main() {
                                         menu = mainMenu,
                                         menuState = mainMenuState,
                                         collapsed = collapsed,
-                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        onToggle = { ui.sidebarCollapsed = !collapsed },
                                         modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
                                     )
                                 }
-                                if (isMacOs() && !collapsed) {
-                                    // Native window-drag handle: the empty sidebar band under the
-                                    // traffic lights. Layout-only Box (draws nothing, no pointer
-                                    // input); the toggle punches itself out.
+                                if (isMacOs()) {
+                                    // Native window-drag handle: the empty band under the traffic
+                                    // lights. Layout-only Box (draws nothing, no pointer input);
+                                    // the toggle punches itself out. Collapsed, the tab strip's
+                                    // own drag region takes over past the rail.
                                     Box(
                                         Modifier
                                             .align(Alignment.TopStart)
-                                            .width(sidebarWidth)
+                                            .width(if (collapsed) RAIL_WIDTH else sidebarWidth)
                                             .height(MacTitleBarHeight)
                                             .macTitleBarDragRegion("sidebar-band"),
                                     )
+                                    // The same toggle in both states, in the same place (#57).
                                     MacSidebarToggle(
-                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        collapsed = collapsed,
+                                        onToggle = { ui.sidebarCollapsed = !collapsed },
                                         modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
                                     )
                                 }

@@ -3,6 +3,7 @@
 // window still reads as a window against the desktop.
 package dev.supermux.desktop.shell
 
+import kotlin.math.roundToInt
 import dev.supermux.ui.shell.LocalWindowDragLayer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -254,8 +255,10 @@ private fun BoxScope.ResizeHandles(start: (WmMoveResizeDirection) -> Unit) {
 /**
  * Keeps this element's content out from under the window buttons: when the element sits in the
  * top band flush with the window's right edge (the top-right tab strip), its content is inset by
- * [LocalWindowChromeInsets]' end width. Its own size and background are unchanged, so the strip
- * still runs to the edge behind the buttons. A no-op where the insets are zero.
+ * [LocalWindowChromeInsets]' end width; when it starts under the controls at the band's start
+ * (the top-left strip beside the collapsed rail), by the part of their start width it overlaps.
+ * Its own size and background are unchanged, so the strip still runs to the edges behind the
+ * buttons. A no-op where the insets are zero.
  */
 fun Modifier.avoidWindowControls(): Modifier = this then AvoidWindowControlsElement
 
@@ -276,18 +279,35 @@ private class AvoidWindowControlsNode :
     CompositionLocalConsumerModifierNode {
     // Read in measure: a change re-measures the content.
     private var endInsetPx by mutableIntStateOf(0)
+    private var startInsetPx by mutableIntStateOf(0)
 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
-        val inset = if (constraints.hasBoundedWidth) endInsetPx.coerceAtMost(constraints.maxWidth) else 0
+        val inset = if (constraints.hasBoundedWidth) (startInsetPx + endInsetPx).coerceAtMost(constraints.maxWidth) else 0
+        val start = startInsetPx.coerceAtMost(inset)
         val placeable = measurable.measure(constraints.offset(horizontal = -inset))
         val width = (placeable.width + inset).coerceIn(constraints.minWidth, constraints.maxWidth)
-        return layout(width, placeable.height) { placeable.place(0, 0) }
+        return layout(width, placeable.height) { placeable.place(start, 0) }
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
         val insets = currentValueOf(LocalWindowChromeInsets)
         val next = endInsetFor(coordinates, insets)
         if (next != endInsetPx) endInsetPx = next
+        val nextStart = startInsetFor(coordinates, insets)
+        if (nextStart != startInsetPx) startInsetPx = nextStart
+    }
+
+    /**
+     * Only the part of the start controls this element actually sits under: a strip that starts
+     * at the window's left edge clears all of them, one that starts after the collapsed rail
+     * clears the rest, and one past them (the expanded sidebar) clears nothing.
+     */
+    private fun startInsetFor(coordinates: LayoutCoordinates, insets: ChromeInsets): Int {
+        if (insets.start <= 0.dp) return 0
+        val density = currentValueOf(LocalDensity)
+        val pos = coordinates.positionInRoot()
+        val startPx = with(density) { insets.start.toPx() }
+        return if (pos.y < with(density) { insets.band.toPx() } && pos.x < startPx) (startPx - pos.x).roundToInt() else 0
     }
 
     private fun endInsetFor(coordinates: LayoutCoordinates, insets: ChromeInsets): Int {

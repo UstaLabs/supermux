@@ -105,6 +105,9 @@ import kotlinx.coroutines.flow.collectLatest
  * [PaneDropOverlay] is shown in a [Popup] above it (a Popup also paints over a
  * platform interop child, should a pane ever embed one again).
  */
+/** The view tab strip's height. The collapsed sidebar's title band matches it. */
+val TAB_STRIP_HEIGHT = 32.dp
+
 @Composable
 fun PaneHost(
     layout: LayoutNode,
@@ -714,7 +717,7 @@ fun PaneTabStrip(
     Box(
         modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(TAB_STRIP_HEIGHT)
             .background(cs.surfaceContainerLow)
             .onGloballyPositioned { coords ->
                 if (groupId.isNotEmpty()) {
