@@ -1,0 +1,71 @@
+---
+title: Quickstart
+description: Run Claude Code and Codex from a script, stream their answers, and approve what they ask.
+---
+
+## Install
+
+```sh
+npm i @supermux/core
+```
+
+You need Node 22 or newer (22.18+ to run `.ts` files directly), or Bun. Install and sign in to the agent CLIs you want to use: `claude`, `codex`, `cursor-agent`, `opencode`, `grok`, `agy`.
+
+## Your first program
+
+```ts title="quickstart.ts"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import { supermux } from "@supermux/core"
+
+const core = supermux({
+  stateDirectory: join(homedir(), ".supermux"), // outside every folder an agent works in
+  agents: { claude: {}, codex: {} },
+})
+
+core.subscribe(e => {
+  if (e.type !== "session.event") return
+  if (e.event.kind === "assistant-delta") process.stdout.write(e.event.text)
+  if (e.event.kind === "permission-request") {
+    const allow = e.event.options.find(o => o.kind === "allow_once")
+    if (allow) core.sessions.live(e.sessionId)?.requests.respond(e.event.requestId, { optionId: allow.id })
+  }
+})
+
+for (const agent of ["claude", "codex"]) {
+  // The id is yours. A session's record stays after close, so every run needs new ids.
+  const session = await core.sessions.create({ id: `${agent}-${Date.now()}`, agent, cwd: process.cwd() })
+  const { completed } = await session.send({ content: [{ type: "text", text: "Make the failing test pass" }], whenBusy: "queue" })
+  console.log(agent, await completed)
+}
+await core.close({ agents: "shutdown" })
+```
+
+Run it from a project folder:
+
+```sh
+node quickstart.ts
+```
+
+## What just happened
+
+- **`supermux()`** builds a core with every option you left out filled in. `console.log(defaults)` prints them all. `createCore()` takes the same drivers with every option spelled out, for full control. See [Core](/core/api/core).
+- **`core.subscribe()`** gets every event of every session. `assistant-delta` is a piece of the reply as it streams. See [Events](/core/concepts/events).
+- **Permission defaults are each CLI's own asking mode**, so anything the agent needs approved reaches your code as a `permission-request` event. This script approves everything once; a real app would ask a person. See [Permissions](/core/concepts/permissions).
+- **`session.send()`** returns a receipt. `completed` resolves when the turn ends.
+- **`core.close({ agents: "shutdown" })`** stops the agents. Without it they keep running behind their keepers after your script exits.
+
+## Where the state lives
+
+The state directory holds the session records and each session's [keeper](/core/concepts/keeper). Keep it outside every folder an agent can write: its working directory, `/tmp` and `$TMPDIR`.
+
+`supermux()` refuses a working directory that contains the state directory or sits inside it. That's why you run this from a project folder, not from your home folder, when the state is under `~`.
+
+## Next steps
+
+<Cards>
+  <Card title="Streaming a chat" href="/core/guides/streaming">Queue messages, stop a turn, steer, restart without losing work.</Card>
+  <Card title="Tool calls and approvals" href="/core/guides/approvals">Show what the agent does and let a person decide.</Card>
+  <Card title="Resuming" href="/core/guides/resuming">Detach on shutdown and pick a running turn back up.</Card>
+  <Card title="Examples" href="/core/examples">A full chat app and a kanban board to copy from.</Card>
+</Cards>

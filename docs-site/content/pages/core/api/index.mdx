@@ -1,0 +1,41 @@
+---
+title: Entry points
+description: What each import path of @supermux/core exposes.
+---
+
+The package is ESM only. Import from the root, or from a subpath for a driver or a helper. The root doesn't re-export the drivers.
+
+| Import | What's in it |
+|---|---|
+| `@supermux/core` | `supermux`, `defaults`, `createCore`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, `createHost`, `createHostProvider`, `fileVault`, `memoryVault`, the keeper helpers, and every type. See [Core](/core/api/core) and [Session](/core/api/session). |
+| `@supermux/core/claude` | `claude()`, `claudeRelayPrompt()`, `ClaudeOptions` |
+| `@supermux/core/codex` | `codex()`, `codexPolicyArgs()`, `CodexOptions` and its types |
+| `@supermux/core/agents` | `grok()`, `opencode()`, `cursor()`, `createGrokClassifyActivity()` and their options. `@supermux/core/cursor` is the same module. |
+| `@supermux/core/antigravity` | `antigravity()`, `permissionFlags()`, `antigravityArgs()`, `createAntigravityNormalizer()` |
+| `@supermux/core/acp` | `acp()`, a driver for any ACP agent, and its helpers |
+| `@supermux/core/accounts` | Account types, `AccountRegistry`, vaults, account homes, usage and login helpers |
+| `@supermux/core/environment` | `prepare*Environment()` helpers that build session-private homes and config, for example `prepareAntigravityEnvironment()` |
+| `@supermux/core/mcp` | `mcpServer()`, `tool()` and their types. See [MCP tools](/core/api/mcp). |
+| `@supermux/core/mcp-bridge` | The bridge script that agents run to reach your tools. The core runs it for you. |
+| `@supermux/core/auth` | Deprecated. Use [accounts](/core/concepts/accounts) instead. |
+
+The `supermux-core` package on npm is an alias that re-exports the same paths, except `mcp-bridge`.
+
+## Two ways to build a core
+
+```ts
+import { supermux } from "@supermux/core"
+const core = supermux({ stateDirectory, agents: { claude: {}, codex: {} } })
+```
+
+```ts
+import { createCore } from "@supermux/core"
+import { claude } from "@supermux/core/claude"
+const core = createCore({ stateDirectory, agents: [claude({ /* every option spelled out */ })], limits: { /* … */ } })
+```
+
+`supermux()` is the convenient form: it fills in every option you leave out. `createCore()` and the driver factories have no defaults at all; a missing option fails and names the option. See [Core](/core/api/core) and [Drivers](/core/api/drivers).
+
+## Beyond this reference
+
+These pages cover the API an app uses day to day. The package's own [API.md](https://github.com/UstaLabs/supermux/blob/main/packages/supermux-core/API.md) also documents session context (instructions, skills, plugins and MCP servers per session), the environment helpers, the `Host` layer and the keeper protocol.

@@ -10,10 +10,10 @@ bun install
 bun run dev        # http://localhost:3000
 ```
 
-Pages are MDX files in `content/docs/`:
+Pages are MDX files in `content/pages/`:
 
-- `content/docs/(supermux)/`: the **supermux** tab, for people who use supermux. User level, no internals.
-- `content/docs/core/`: the **supermux core** tab, for developers building on `@supermux/core`.
+- `content/pages/(supermux)/`: the **supermux** tab, for people who use supermux. User level, no internals.
+- `content/pages/core/`: the **supermux core** tab, for developers building on `@supermux/core`.
 
 Each folder's `meta.json` sets the order of the sidebar. A page must be listed there to appear.
 

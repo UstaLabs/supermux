@@ -1,0 +1,54 @@
+---
+title: Models, effort and fast mode
+description: Choose the model and how hard it thinks, per session, and change them while you work.
+---
+
+Every session has its own model and effort level. You set them when you start the session and can change them at any time.
+
+## The run settings pill
+
+The composer's toolbar has one pill that shows the current choice, for example **Opus 5.5 · high**. Click or tap it to open the run settings. With a mouse it opens as a small panel; on a phone it slides up from the bottom.
+
+There you'll find:
+
+- **The model list**, with a **Search models…** field. Star the models you use most to keep them at the top.
+- **Default**, which leaves the choice to the agent.
+- **Effort**, for agents that have it.
+- **Fast mode**, on models that support it.
+- **Account** and **Mode**: see [Accounts](/agents/accounts) and [Access levels](/agents/access-levels).
+
+Typing `/model` in the composer opens the same list.
+
+## Where the models come from
+
+supermux asks each agent which models your sign-in can use, and refreshes the list every 15 minutes. So the list matches your plan: a new model shows up without updating supermux.
+
+OpenCode's list depends on the providers you've connected to it.
+
+## Effort
+
+Effort is how much the model thinks before it answers. More effort is slower and uses more of your limits.
+
+| Agent | Levels |
+|---|---|
+| Claude Code | low, medium, high, xhigh, max |
+| Codex | What each model supports |
+| Grok | What each model supports, on models that have it |
+| Cursor, OpenCode, Antigravity | Pick a model instead. Antigravity puts the level in the model's name. |
+
+A new session uses the level you picked last time for that agent. If you've never picked one, it starts on **high** where that exists.
+
+## Fast mode
+
+Fast mode asks for faster answers on models that offer it:
+
+- **Claude Code**: on Opus 4.8 and newer Opus models.
+- **Codex**: on models with OpenAI's priority tier.
+
+Turn it on with **Fast mode** in the run settings of a running session. A bolt appears on the pill while it's on.
+
+## Changing settings while the agent works
+
+You can change the model, effort and fast mode in the middle of a session. Claude Code, Codex, Grok and Antigravity pick up the change when the current turn ends, so nothing is cut off. Cursor and OpenCode switch right away.
+
+If a change can't be applied, the old settings come back and the chat says why.

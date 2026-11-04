@@ -1,0 +1,70 @@
+---
+title: Accounts and usage limits
+description: Add more than one account per agent, pick one per session, and keep working when one hits its limit.
+---
+
+Each agent starts with the account you signed in with on this computer, the **System login**. You can add more: a work and a personal subscription, a teammate's spare seat, or an API key.
+
+## Add an account
+
+Open **Settings ▸ Accounts**. Each agent has its own group with an **Add account** button.
+
+| Agent | Ways to add one |
+|---|---|
+| Claude Code | **Sign in with Claude**, **Paste a token** (from `claude setup-token`), or **API key** |
+| Codex | **Sign in with ChatGPT**, or **API key** |
+| Cursor | **Sign in with Cursor**, or **API key** |
+| Grok | **Sign in with Grok**, or **API key** |
+| Antigravity | **Sign in with Google**, or **API key** (Gemini) |
+| OpenCode | **API key** |
+
+<Check>
+Two add-account paths look broken by code reading (not tested live): an OpenCode API-key account (the app never sends the provider id the host requires), and a Claude subscription account on Windows (`homes.ts:80-81` refuses the shared files; the app never sends `isolated`). Test both before this table ships as is.
+</Check>
+
+Signing in works like the first sign-in: open the sign-in page, approve, and enter or paste the code if asked. The account is named after its email. When you paste a token or key, you can give it a name yourself, like "Work".
+
+Every account shows its usage right in the list, for example **5h 62% · resets in 1h 24m**.
+
+<Callout title="One agent, one history">
+For Claude Code and Codex, extra accounts share the agent's history and setup on this computer, so a session can move between accounts and keep its conversation. Only the sign-in is separate.
+</Callout>
+
+## Pick the account for a session
+
+When an agent has more than one account, the run settings show an **Account** row. For a new session it's titled **Start this chat on**, with these choices:
+
+- **Auto** (the default): the account with the most room left right now.
+- Any account by name.
+
+**Auto** looks at each account's usage and how soon its limits reset. It skips accounts that are at their limit or not working. Accounts on API keys don't have limits to compare.
+
+In a running session the row is **Run this chat on**. Pick another account to move the session there. It happens between turns, and the conversation carries on.
+
+## Keep going at a usage limit
+
+Turn on **Switch accounts automatically** in **Settings ▸ Accounts**. It's off by default.
+
+When an account hits its usage limit, or stops working, the session moves to the best other account of the same agent once the current turn has ended. Then supermux tells the agent to continue from where it stopped. You'll see a line in the chat like **Switched to Work — usage limit reached**.
+
+This works for Claude Code and Codex at their usage limits, for Grok when its credits run out, and for Claude Code, Grok and Antigravity when an account's sign-in is refused. Cursor accounts never switch automatically.
+
+If no other account has room, the chat says so, for example **Usage limit reached on Work — no other claude account is available**.
+
+## See your usage
+
+Click **Usage** in the sidebar's footer, or choose **Usage** from the sidebar's **⋮** menu. It shows each account's limits and when they reset:
+
+- **Claude Code**: the 5-hour and 7-day windows, and extra usage.
+- **Codex**: your plan's windows, per-model limits and credits.
+- **Cursor**: the billing cycle and spend.
+- **Grok**: your credits.
+- **OpenCode**: tokens and sessions used on this computer.
+
+Antigravity doesn't report usage. Accounts on API keys show **Billed per token, so there is no usage limit to show.**
+
+Bars turn amber at 60% and red at 85%. The numbers refresh every few minutes, or when you press **Refresh**.
+
+## Remove an account
+
+Click the bin icon on the account. Sessions that use it need another account to continue. The **System login** can't be removed: it's this computer's own sign-in.

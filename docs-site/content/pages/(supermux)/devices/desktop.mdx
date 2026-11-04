@@ -1,0 +1,55 @@
+---
+title: Desktop app
+description: Run your agents on this computer, keep them going in the background, and work in as many windows as you like.
+---
+
+The desktop app for macOS, Windows and Linux does two jobs. It's where you work with your sessions, and it can run your agents on this computer, which is called hosting. It also works as a window onto agents running somewhere else.
+
+## Hosting
+
+Hosting settings live in **Settings ▸ Hosting**, on the desktop only:
+
+- **Host on this computer**: your agents run here, and your phone and other devices connect to it. When it's off, the app only connects to other computers.
+- **Keep running in the background**: your agents stay reachable after you quit the app, sign out or restart. On Windows, turning it on asks for permission once.
+- **Remote access through relay**: lets your devices reach this computer from anywhere. See [Reach your computer from anywhere](/devices/remote-access).
+- **Address**: the **Local** and **Remote** addresses of this computer, with **Copy**.
+- **Pair a device…**: shows a QR code for a new phone or tablet.
+- **Restart** and **Show log**, for when something's wrong.
+
+Turning hosting off asks **Stop hosting?** first, because it stops your running sessions. Your data stays in `~/.mux`.
+
+If supermux was already installed on this computer from the terminal, the app offers to manage it. Choose **Manage it** to let the app keep it updated, or **Leave it alone**.
+
+## Keep this computer awake
+
+A computer that sleeps can't run agents. **Keep this computer awake** stops it from sleeping while supermux runs; the screen can still turn off. It's on by default in the desktop app.
+
+- **Also on battery**: keeps it awake on a laptop that's unplugged too.
+- **Even with the lid closed** (Mac laptops): keeps a MacBook working with its lid shut. macOS asks for your password once to install a small helper. A closed laptop can get hot, so don't put it in a bag while this is on.
+
+After a restart, supermux starts when you log in. To start it without anyone at the keyboard, turn on Automatic Login in **System Settings ▸ Users & Groups**.
+
+## The menu bar and system tray
+
+supermux keeps an icon in the menu bar (Mac) or the system tray (Windows, Linux). Its menu shows whether supermux is running and how many sessions it has, and offers:
+
+- **Open supermux**
+- **Restart**
+- **Keep running in the background**, **Keep this computer awake** and, on Mac laptops, **Even with the lid closed**
+- **Quit supermux**
+
+Closing the window keeps supermux in the menu bar or tray. Clicking the icon brings the window back and opens the session that notified you last. On a Linux desktop without a system tray, closing the window quits instead.
+
+## Windows and tabs
+
+Each workspace can show several views side by side: chats, files, changes and terminals. Drag a tab to the edge of a pane to split it.
+
+To move work into its own window, right-click a tab and choose **Move to New Window**, or press <Kbd>Ctrl</Kbd> <Kbd>Shift</Kbd> <Kbd>N</Kbd> (<Kbd>⌘</Kbd> <Kbd>Shift</Kbd> <Kbd>N</Kbd> on a Mac). The **File** menu can also move a whole workspace or group to a new window.
+
+## Notifications
+
+While the app is running, it shows a system notification when an agent replies, unless you're already looking at that chat or the session is muted. See [Notifications](/devices/notifications).
+
+## Updates
+
+When a new version is out, a card appears at the foot of the sidebar with **What's new** and **Install**. You can also choose **File ▸ Check for Updates…**. Updating the app doesn't stop your agents. See [Updates](/running/updates).

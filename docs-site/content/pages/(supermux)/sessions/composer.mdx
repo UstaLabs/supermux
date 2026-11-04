@@ -1,0 +1,65 @@
+---
+title: The composer
+description: Send messages, run / commands, mention files with @, and attach photos and files.
+---
+
+The composer is the box at the bottom of every chat. Its hint says what it can do: **Ask anything · @ to add files · / for commands**.
+
+## Send a message
+
+- On a keyboard, <Kbd>Enter</Kbd> sends and <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> starts a new line.
+- On a phone's on-screen keyboard, Return adds a new line. Tap the send button to send.
+
+While the agent works, the send button turns into **Stop**, which interrupts it. You can still send another message with a keyboard:
+
+- **Codex** takes it into the turn it's working on.
+- **The other agents** queue it and read it when the current turn ends.
+
+If you're offline, your message waits and goes out when you're back online.
+
+## Run settings
+
+The pill in the toolbar holds the session's agent settings: the model, effort, fast mode, account and access level. See [Models](/agents/models), [Access levels](/agents/access-levels) and [Accounts](/agents/accounts).
+
+Under the composer you'll also find:
+
+- **Detail**: how much of the agent's work the chat shows. **Low** shows messages only, **Medium** adds short tool lines, **High** shows every command and edit.
+- **The branch**: the session's git branch, with **Fetch**, **Pull** and **Push** (or **Publish** for a new branch).
+
+## / commands
+
+Type `/` at the start of a line, or after a space, to open the command menu. It lists:
+
+- **supermux's own commands**, like `/model` to pick a model, `/stop` to interrupt the agent, and `/mute` to silence notifications from the session,
+- **the agent's own commands**, like Claude Code's or Cursor's slash commands, and Codex's skills (which start with `$`),
+- **skills and commands from your plugins**, grouped by plugin,
+- **commands from this project** and **your own skills**.
+
+An empty `/` shows your recent commands first. Keep typing to filter; the menu understands abbreviations and also searches descriptions. Use <Kbd>↑</Kbd> <Kbd>↓</Kbd> to move, <Kbd>Enter</Kbd> or <Kbd>Tab</Kbd> to pick, <Kbd>Esc</Kbd> to close.
+
+On a wide screen, the side of the menu shows the highlighted command in full: what it does, where it comes from and how to use it. supermux's own commands run right away. The agent's commands are put into the composer so you can add to them before you send.
+
+## Mention files with @
+
+Type `@` to pick a file or folder from the project:
+
+- `@` on its own lists the project's top folder.
+- `@src/` lists that folder. Picking a folder keeps the menu open, so you can keep going.
+- Anything else searches the whole project by name.
+
+The mention goes into your message as plain text, like `@src/server.ts`. Claude Code reads the file into the conversation by itself; the other agents open it with their own tools.
+
+## Attach photos and files
+
+- **With a mouse**: click **+** to pick files, drag files onto the chat, or paste an image with <Kbd>Ctrl</Kbd> <Kbd>V</Kbd> (<Kbd>⌘</Kbd> <Kbd>V</Kbd>).
+- **On a phone or tablet**: tap **+** for **Photos**, **Files**, **Camera** or **Record video**, or **Paste** an image you've copied.
+
+Files upload as soon as you add them and show a percentage while they do. A failed upload says **Retry**; tap it. You can attach any kind of file, up to 500 MB each.
+
+Claude Code and Codex see images directly. The other agents get the file's location on the computer and open it themselves.
+
+## Files back from the agent
+
+Agents can send you files too: screenshots, recordings, documents. Pictures and videos show right in the chat, and a tap opens them full screen. Other files show as a card you can download or open.
+
+They can also draw diagrams. Mermaid diagrams appear as pictures you can zoom, with a **Show source** button.

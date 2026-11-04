@@ -1,0 +1,77 @@
+---
+title: The six agents
+description: supermux runs the coding agents you already use. Install them and sign in from the app.
+---
+
+supermux isn't an agent itself. It runs the agent programs made by Anthropic, OpenAI and others, on your own computer, with your own plans.
+
+<AgentGrid />
+
+You can use any of them in any session, side by side.
+
+## Install an agent
+
+You don't need to install anything by hand. supermux runs each vendor's own installer for you, for your user only, without admin rights. That works on macOS, Windows and Linux.
+
+There are two places to do it:
+
+- **The launcher.** When no agent is installed, starting a session shows **Choose an agent**. Pick one and click **Install**.
+- **Settings ▸ Providers.** Each agent has a row. One that's missing shows **Install**.
+
+An install usually takes about a minute.
+
+## Sign in
+
+Open **Settings ▸ Providers** and expand the agent. Choose **Authorize via link**, then **Start authorization**.
+
+<Steps>
+<Step>
+Click **Open sign-in page**. It opens the agent's own sign-in page in your browser, on whichever device you're using.
+</Step>
+<Step>
+Approve the request. Codex and Grok show a code to enter on that page. Claude Code and Antigravity give you a code to paste back into supermux instead.
+</Step>
+<Step>
+Wait for **Authorized successfully.** The row now says **Authenticated**.
+</Step>
+</Steps>
+
+Because the sign-in page opens on your own device, this works even when supermux runs on a server without a screen.
+
+<Callout title="Codex">
+Codex signs in with a device code. Turn on **Allow device code login** in ChatGPT under **Settings → Security** first.
+</Callout>
+
+## What each agent needs
+
+| Agent | Sign in with | Or use |
+|---|---|---|
+| Claude Code | Your Claude Pro or Max subscription | A token from `claude setup-token`, or an Anthropic API key |
+| Codex | Your ChatGPT account | An OpenAI API key |
+| Cursor | Your Cursor subscription | A Cursor API key |
+| OpenCode | Nothing: free models work right away | Keys for more providers, in its own section |
+| Grok | Your Grok subscription | An API key, added in **Settings ▸ Accounts** |
+| Antigravity | Your Google account | A Gemini API key |
+
+API keys are billed per token by the provider. Subscriptions use the limits of your plan. To use more than one account per agent, see [Accounts and usage limits](/agents/accounts).
+
+## What differs between agents
+
+Most of supermux works the same for every agent. A few things depend on what the agent itself supports:
+
+| | Claude Code | Codex | Cursor | OpenCode | Grok | Antigravity |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Choose the effort level | ✓ | ✓ | | | ✓ | |
+| Fast mode | ✓ | ✓ | | | | |
+| Asks you questions in the chat | ✓ | ✓ | | | ✓ | |
+| Switches account at a usage limit | ✓ | ✓ | | | ✓ | ✓ |
+
+Antigravity can't stop to ask you anything when it runs inside supermux. A tool that would need your approval is refused, and the agent reports it.
+
+<Check>
+The account-switch row follows the code: Grok switches when xAI reports its credits are used up (HTTP 402) or the login is refused, and Antigravity when its login is refused. The README's table only ticks Claude Code and Codex. Keep the code's version, or trim it to match the README?
+</Check>
+
+## Changing the agent of a session
+
+A session keeps the agent it started with. To hand the work to another agent, open the chat's **⋮** menu and choose **Continue in new conversation**. The new session works in the same folder, and its agent is told to read the old conversation first.

@@ -1,0 +1,50 @@
+---
+title: Overview
+description: Build your own app on Claude Code, Codex, Cursor, OpenCode, Grok Build and Antigravity, with one TypeScript API for sessions, events and permission prompts.
+---
+
+`@supermux/core` is the library that supermux runs every agent session on. It runs each agent's own CLI on your machine, with the login that CLI already has, and gives your code one API for sessions, events, permission prompts and subagents.
+
+Every session's agent runs behind a small keeper process, so your app can crash, restart or redeploy and pick a running turn back up.
+
+```sh
+npm i @supermux/core
+```
+
+## What it handles for you
+
+- **One event stream for six agents:** text, reasoning, tool calls, command output, file diffs, plans, subagents and token usage arrive as the same [normalized events](/core/concepts/events), each with the vendor's original payload attached.
+- **Sessions that outlive your process:** the agent keeps working when your process exits, and `core.sessions.resume(id)` reconnects to the running turn and replays what you missed. See [The keeper](/core/concepts/keeper).
+- **Permission prompts and questions as events:** you answer them with `session.requests.respond()`. Nothing is approved behind your back. See [Permissions](/core/concepts/permissions).
+- **Messages while the agent works:** they queue until the current turn ends. Interrupt, and, where the agent supports it, steer, fork, switch model and read history.
+- **Your functions as tools:** `mcpServer()` and `tool()` with zod schemas give any of the six agents a tool that runs in your process. See [MCP tools](/core/api/mcp).
+- **Several logins per agent:** pick an account per session, and switch automatically at a usage limit. See [Accounts](/core/concepts/accounts).
+
+## The six agents
+
+| Agent | CLI | Protocol | Resume | Steer | Fork | Model switch | History | Questions |
+|---|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Claude Code | `claude` | Claude stream-json | ✓ | | | | | ✓ |
+| Codex | `codex app-server` | Codex app-server JSON-RPC | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Grok Build | `grok agent stdio` | ACP | ✓ | | | ✓ | | ✓ |
+| OpenCode | `opencode acp` | ACP | ✓ | | | | | |
+| Cursor | `cursor-agent acp` | ACP | ✓ | | | | | |
+| Antigravity | `agy` | agy stream-json | ✓ | | | ✓ | | |
+
+Every agent can be detached and re-attached. `session.capabilities()` is the truth for a live session. See [Drivers](/core/concepts/drivers) for the full table.
+
+## Good to know
+
+- **Requirements:** Node 22 or newer, or Bun. The package is ESM only. Install and sign in to the agent CLIs you want to use.
+- **Linux and macOS.** Native Windows isn't supported, because the keepers talk over Unix sockets.
+- **No server.** The library starts no HTTP server. Your process talks to each keeper over a Unix socket, and the keeper talks to the agent over stdin and stdout.
+- **No sandbox of its own.** Agents run as your user; only the CLIs' own permission modes and sandboxes limit them.
+- **Your users' own accounts.** It runs the unmodified vendor CLIs with the user's own login. A product you ship must have each user sign in with their own account, under each vendor's terms.
+- **Pre-1.0.** The API can change between minor versions. Releases follow supermux's version numbers; this documentation covers 0.17.1.
+
+The package is MIT licensed. Its source, with a longer API.md and REFERENCE.md, is in [packages/supermux-core](https://github.com/UstaLabs/supermux/tree/main/packages/supermux-core).
+
+<Cards>
+  <Card title="Quickstart" href="/core/quickstart">Run two agents from a script in a few lines.</Card>
+  <Card title="Examples" href="/core/examples">A chat app, a kanban board, recipes.</Card>
+</Cards>

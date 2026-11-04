@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-const root = new URL('../content/docs', import.meta.url).pathname;
+const root = new URL('../content/pages', import.meta.url).pathname;
 const files = [];
 (function walk(dir) {
   for (const name of readdirSync(dir)) {

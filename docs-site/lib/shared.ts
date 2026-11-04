@@ -13,7 +13,7 @@ export const gitConfig = {
   user: 'UstaLabs',
   repo: 'supermux',
   branch: 'main',
-  contentDir: 'docs-site/content/docs',
+  contentDir: 'docs-site/content/pages',
 };
 
 export const links = {

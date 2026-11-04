@@ -1,0 +1,48 @@
+---
+title: Privacy and telemetry
+description: What stays on your computer, what leaves it, and the anonymous usage events you can turn off.
+---
+
+supermux runs on a computer you own. There's no supermux account, and supermux doesn't keep a copy of your work anywhere else.
+
+## What stays on your computer
+
+- **Your code** and the projects your agents work on.
+- **Credentials**: your agents' sign-ins and API keys stay where each agent keeps them.
+- **History**: every session's messages, in `~/.mux`.
+- **Memory**: the Markdown files in `~/.mux`.
+
+## What leaves it, and where it goes
+
+| What | Where | When |
+|---|---|---|
+| Your prompts and code your agents read | The agent's own provider, like Anthropic or OpenAI | Whenever an agent works. This is the agent program's own connection, as if you ran it yourself. |
+| Your app's traffic | The supermux relay | When you use the relay to reach your computer. See below. |
+| Notifications | supermux's push service, then Apple or Google | When an agent replies. Encrypted end to end. |
+| Voice | The speech engine you've chosen | When you dictate. See [Voice](/sessions/voice). |
+| Anonymous usage events | `telemetry.supermux.dev` | Unless you turn them off. See below. |
+
+## The relay
+
+The relay lets your devices reach your computer from anywhere. Traffic is encrypted on the way to the relay and on the way from it, but the relay server handles it unencrypted in between. If you don't want that, turn the relay off and use your own VPN or tunnel. See [Reach your computer from anywhere](/devices/remote-access).
+
+## Pairing
+
+- There are no accounts. Each device pairs once, with a QR code or a link.
+- One install belongs to one person. Teammates each run their own.
+- Every request needs a paired device. **Settings ▸ Devices** lists them, and **Revoke** cuts one off at once.
+- The very first device to connect to a fresh install is trusted automatically. After that, only a pairing link or code gets a device in.
+
+## Anonymous usage events
+
+supermux on your computer sends anonymous usage events: which agents, models, apps and features you use. Never your prompts, code, file paths or names. The apps themselves don't send anything.
+
+Each install has a random ID that isn't tied to your machine, your accounts or you.
+
+- **See what's sent**: **Settings ▸ System ▸ View recent events** shows the last 50 events, exactly as they were sent. [TELEMETRY.md](https://github.com/UstaLabs/supermux/blob/main/TELEMETRY.md) lists every field.
+- **Turn it off**: switch off **Send anonymous usage events** in **Settings ▸ System**. Events that haven't been sent yet are deleted.
+- **On a server**: set `MUX_TELEMETRY=0` (or `DO_NOT_TRACK=1`) in `~/.mux/state/.env` and restart supermux. That always wins over the switch in the app.
+
+<Check>
+The published privacy page at supermux.dev/privacy (24 June 2026) still says supermux runs no servers and collects nothing. That no longer matches the telemetry, the relay and the push service described here. Update it, or reconcile this page with it.
+</Check>

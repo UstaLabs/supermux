@@ -1,0 +1,58 @@
+---
+title: Your first session
+description: Pick a folder, choose an agent, and send your first message.
+---
+
+A session is one conversation with one agent, working in one folder. Here's how to start one.
+
+<Steps>
+<Step>
+### Open the launcher
+
+Click **Start a new session** at the top of the sidebar. On a desktop you can also press <Kbd>Ctrl</Kbd> <Kbd>N</Kbd> (<Kbd>⌘</Kbd> <Kbd>N</Kbd> on a Mac).
+</Step>
+<Step>
+### Choose a folder
+
+The first time, supermux asks **Where should your agents work?**
+
+- **Open a folder**: use a project you already have.
+- **Create a new project**: start from an empty folder.
+
+You can also type a path. After that, the launcher remembers your projects and picks the one you used last.
+</Step>
+<Step>
+### Install an agent, if you haven't
+
+If no agent is installed yet, the launcher shows **Choose an agent**. Pick one and click **Install**. It takes about a minute.
+
+Then sign in to it in **Settings ▸ Providers**. See [The six agents](/agents) for what each one needs.
+</Step>
+<Step>
+### Check the run settings
+
+The pill in the composer's toolbar shows the agent and model, for example **Opus 5.5 · high**. Click it to change the agent, the [model and effort](/agents/models), the [access level](/agents/access-levels) and the [account](/agents/accounts).
+
+The launcher remembers your model, effort and access level for each agent.
+</Step>
+<Step>
+### Decide about the worktree
+
+In a git repository, a second pill decides where the agent works. With **Run in isolated worktree** on, the agent gets its own copy of the repo on a fresh branch, so your own working copy stays untouched. It's on by default.
+
+Pick a **Base branch** to start from, or switch it off to work in the folder itself. See [Projects and sessions](/sessions#worktrees).
+</Step>
+<Step>
+### Send your first message
+
+Type what you want in **What should the agent do?** and press **Start session**. The chat opens and the agent gets to work.
+</Step>
+</Steps>
+
+## While it works
+
+- The sidebar row shows a spinner while the agent works, and a ring with a dot once it has finished and you haven't looked yet.
+- You get a [notification](/devices/notifications) when it replies, so you can leave and come back.
+- If the agent asks for permission, a card appears above the composer and the agent waits for you. See [Access levels](/agents/access-levels).
+
+Not ready to start? **Save draft** keeps the message without starting an agent.

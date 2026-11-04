@@ -1,0 +1,47 @@
+---
+title: Review changes
+description: Read what an agent changed, comment on it line by line, and send your review back in one go.
+---
+
+The **Changes** view shows everything a session has changed, as a diff. Click **+** in the tab bar and choose **Changes**: it opens beside your chat.
+
+## Read the diff
+
+Files are grouped by repository, with how many lines were added and removed. You can:
+
+- switch between **Show inline** and **Show side by side**,
+- show the files as a list or a tree,
+- wrap long lines.
+
+The **Base** decides what the changes are compared to:
+
+- **Session start** (default): everything since the session began.
+- **Uncommitted (HEAD)**: only what isn't committed yet.
+- **Previous commit**: one commit at a time.
+- **Another branch**: everything compared to a branch you pick.
+
+To undo one change, use **Revert this change** in its gutter.
+
+## Comment to the agent
+
+Click **+** next to any line to leave a comment, like you would on a pull request. Add as many as you like, across files.
+
+When you're done, press **Submit review**. All your comments go to the agent in one message, each with the code it's about. The agent fixes them and answers in each comment's thread, and can mark threads resolved.
+
+Comments follow the code if it moves. If the code is gone, the comment shows as outdated.
+
+## Walkthroughs
+
+An agent can walk you through its changes: a short slideshow of steps, each pointing at a part of the diff. When it makes one, the chat says **Open walkthrough →**. You can comment on walkthrough steps too.
+
+## Push and pull
+
+The session's branch sits under the composer. Click it for **Fetch**, **Pull** and **Push**, or **Publish** for a branch that isn't on the server yet.
+
+<Check>
+The README says "Review before merge: Read the diff, comment inline to the agent, then merge, open a PR, or discard." Merge, open PR and discard live in the Finish flow, whose button was removed from workspace chats in commit `f776cf36d`; only Android's chat for sessions without a workspace still shows it. Today a session can push its branch from the composer, but there's no merge or PR button. Bring Finish back, or drop it from the README.
+</Check>
+
+## GitHub and GitLab
+
+Connect your GitHub or GitLab account in **Settings ▸ Git hosting** to clone and create repositories right from the launcher's project picker. You can import the login from the `gh` or `glab` command, or use a personal access token.

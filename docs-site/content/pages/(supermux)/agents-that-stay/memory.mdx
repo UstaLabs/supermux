@@ -1,0 +1,59 @@
+---
+title: Memory
+description: One shared memory for every agent and session, kept as plain Markdown files on your computer.
+---
+
+Each agent program keeps what it learns to itself. supermux gives all of them one memory instead: Markdown files on the computer that runs your agents, in `~/.mux`.
+
+![A Claude Code session saves what billing-api needs to start to ~/.mux/domains/billing.md, and a Codex session started afterwards reads it](/images/app/memory.gif)
+
+## How it works
+
+- **Write once:** sessions save what they learn to a file per topic, for example `~/.mux/domains/billing.md`.
+- **Read everywhere:** every new session starts with the list of topics, whichever agent runs it, and reads the topics that matter for its task.
+- **Search:** sessions can search the memory, and look up what past sessions did.
+
+So a fix that Claude Code found yesterday is there for a Codex session today.
+
+For Claude Code and Codex, supermux turns off their own built-in memory, so `~/.mux` is the one place everything goes.
+
+## What's in `~/.mux`
+
+| File | What it holds |
+|---|---|
+| `domains/<topic>.md` | Notes on one topic, added over time with a date on each. |
+| `domains/<topic>.digest.md` | A tidy summary of a topic, written by the [nightly curator](#the-nightly-curator). |
+| `domains/_inbox.md` | Notes that don't belong to a topic yet. |
+| `agents.md` | The list of topics every session starts with. supermux rebuilds it from the topic files. |
+| `conventions.md` | Rules for every agent on every project. Write your own rules here. |
+| `personal/` | Who you are and how you like to work. Only your [Agents](/agents-that-stay) read it. |
+| `agent-memory/<id>.md` | Each Agent's own memory. No other session reads it. |
+
+The list of topics takes each topic's one-line summary from a `description:` line at the top of its file. Edit that line, not `agents.md`, which is rebuilt.
+
+## See and edit the memory
+
+It's all plain text. Open the files in any editor on that computer, or ask an agent to change them, for example "forget what you saved about the old API". There's no memory screen in the app.
+
+## An Agent's own memory
+
+Every [Agent](/agents-that-stay) also has a private memory file, `~/.mux/agent-memory/<id>.md`. It writes down what it learns about its own work and about how you want it to behave. The memory belongs to the Agent, not its name: it stays when you rename the Agent, and comes back when you restore it from the archive.
+
+## The nightly curator
+
+Over time, topic files grow. The curator tidies them once a day. It reads the last 24 hours of conversations, keeps what's worth keeping, and writes the summaries (`*.digest.md`) that sessions read first. Then it posts a short digest of what changed.
+
+Set it up in **Settings ▸ Curator**:
+
+- **Nightly curator**: turns it on. It's off by default.
+- **Run at**: the time, in the host's local time.
+- **Agent**: which agent runs it, with its model and effort.
+- **Run now**: runs it once, right away.
+
+Press **Save** after a change. **Next run** shows when it will run.
+
+<Check>
+The curator's prompt runs `bun ~/projects/supermux/scripts/dump-last-24h.ts` and then commits and pushes `~/.mux` with git (`prompts/knowledge-curator.md:8,85-89`). A packaged install has neither that checkout nor a git repo in `~/.mux`, so it likely fails there. Verify on a fresh install before this section stays as it is.
+</Check>
+
+Without the curator, memory still works: sessions keep writing and reading the topic files. Only the summaries aren't written.
