@@ -295,6 +295,15 @@ test("parseAntigravityLoginUrl prefers the Google URL; a lone docs link is not a
   expect(parseAntigravityLoginUrl("Open https://example.com/auth?x=1 then paste the authorization code")).toBe("https://example.com/auth?x=1")
 })
 
+test("parseAntigravityLoginUrl under a Windows ConPTY: a cursor move after the URL ends it", () => {
+  // Shape captured from agy 1.5.0 under Bun's ConPTY on Windows 11 (2026-11-04): the blank line after the URL
+  // is drawn as ESC[5;1H, and the URL used to end in "…stateWaiting".
+  const google = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=d2FEsf"
+  const output = `Authentication required. Please visit the URL to log in:\r\n  ${google}\x1b[5;1HWaiting for authentication (timeout 60s)...\r\n`
+    + `\x1b]0;C:\\Users\\Tester\\AppData\\Local\\agy\\bin\\agy.exe\x07\x1b[?25hOr, paste the authorization code here and press Enter:\r\n`
+  expect(parseAntigravityLoginUrl(output)).toBe(google)
+})
+
 test("duplicate identity (the system login) → account_exists naming it; temp dir removed, nothing promoted", async () => {
   const { core, roots, stateDirectory, pending } = await setup({ identity: { email: "me@x.io", accountId: "acct-system" } })
   await mkdir(roots.codexRoot, { recursive: true })

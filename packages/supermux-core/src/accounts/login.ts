@@ -30,9 +30,13 @@ const URLS_RE = new RegExp(URL_RE.source, "g")
 const CODE_RE = /\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+// A Windows ConPTY draws line breaks and runs of blanks as cursor moves (ESC[5;1H, ESC[3C), not as
+// characters: keep them as a line break or a space, or the next line's text runs into a URL.
+const CURSOR_LINE_RE = /\x1b\[[0-9;]*[ABEFHfd]/g
+const CURSOR_COLUMN_RE = /\x1b\[[0-9;]*[CGX]/g
 
 export function stripAnsi(text: string): string {
-  return text.replace(OSC_RE, "").replace(ANSI_RE, "")
+  return text.replace(OSC_RE, "").replace(CURSOR_LINE_RE, "\n").replace(CURSOR_COLUMN_RE, " ").replace(ANSI_RE, "")
 }
 
 /** Device-code logins (codex, grok): a URL and an `XXXX-XXXX` code, once both have appeared. */
