@@ -141,6 +141,40 @@ test('process death leaves keeper; reattach seeds owned turn and asks for the co
   expect(alive(info.agentPid)).toBe(false)
 })
 
+test('a prompt started as a re-attached owned turn completes is written to Claude, not refused as already running', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-reattach-next-'))
+  dirs.push(stateDirectory)
+  const info = await runAttach({
+    KEEPER_STATE_DIR: stateDirectory,
+    KEEPER_SESSION_ID: 'k1',
+    KEEPER_PROMPT: 'hang-then-result',
+    CLAUDE_FIXTURE: fixture,
+  })
+  let r: Awaited<ReturnType<ReturnType<typeof libraryClaude>['open']>> | undefined
+  let next: Promise<{ stopReason: string }> | undefined
+  const started = new Set<string>()
+  // Core starts the input queued behind the owned turn inside onActivity(completed): its drain is synchronous.
+  // Like Core, only the activity that was reported started counts (a prompt's own completion is not one).
+  r = await libraryClaude({ keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({
+    sessionId: 'k1',
+    resumeId: info.sessionId,
+    onActivity: n => {
+      if (n.phase === 'started') { started.add(n.id); return }
+      if (n.phase !== 'completed' || !started.delete(n.id)) return
+      next = r ? r.prompt([{ type: 'text', text: 'hello' }], new AbortController().signal) : Promise.reject(new Error('completed before open returned'))
+    },
+  }))
+  try {
+    for (let i = 0; i < 400 && !next; i++) await new Promise(x => setTimeout(x, 20))
+    expect(next).toBeDefined()
+    expect(await next).toEqual({ stopReason: 'end_turn' })
+  } finally {
+    await r.close({ mode: 'shutdown' })
+  }
+  await waitDead(info.keeperPid)
+  await waitDead(info.agentPid)
+})
+
 test('parked can_use_tool is delivered to the reattached host', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'clk-park-'))
   dirs.push(stateDirectory)
