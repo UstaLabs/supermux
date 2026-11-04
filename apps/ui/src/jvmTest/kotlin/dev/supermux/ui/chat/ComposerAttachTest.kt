@@ -1,5 +1,6 @@
 package dev.supermux.ui.chat
 
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -410,6 +411,48 @@ class ComposerAttachTest {
         }
         waitUntil(timeoutMillis = 5_000L) { consumed }
         assertEquals(0, uploadCalls)
+        onAllNodesWithTag("composer-chip").assertCountEquals(0)
+    }
+
+    // Stage-only (the assistant overlay's "Share what's on screen"): the file becomes a chip exactly as
+    // a pick would, the request is consumed, and nothing is sent: the user sends it with their words.
+    @Test fun externalAttach_stageOnly_stagesWithoutSending() = runComposeUiTest {
+        var sendCalls = 0
+        var consumed = false
+        val tmp = tempFile("screen.txt")
+        setPlatformContent(FakePlatform()) {
+            Composer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> sendCalls++ },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-screen" },
+                externalAttach = ComposerExternalAttach(picked(tmp), "", send = false),
+                onExternalAttachConsumed = { consumed = true },
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { consumed }
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("composer-chip").fetchSemanticsNodes().size == 1 }
+        assertEquals(0, sendCalls)
+    }
+
+    // A host's own attach chip sits above the field even with nothing staged.
+    @Test fun leadingChips_showWithNothingStaged() = runComposeUiTest {
+        setPlatformContent(FakePlatform()) {
+            Composer(
+                draft = "",
+                onDraftChange = {},
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> },
+                onInterrupt = {},
+                onUpload = { _, _, _, _, _ -> "file-x" },
+                leadingChips = { Text("Share what's on screen") },
+            )
+        }
+        onNodeWithText("Share what's on screen").assertExists()
         onAllNodesWithTag("composer-chip").assertCountEquals(0)
     }
 
