@@ -68,6 +68,8 @@ fun InlineNameField(
     onDone: (name: String, refocusTree: Boolean) -> Unit,
     onCancel: (refocusTree: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** The folder the name goes in: its host's name rules apply. */
+    inFolder: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
@@ -79,7 +81,7 @@ fun InlineNameField(
     var hadFocus by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val name = field.text
-    val invalid = validateNewName(name, siblings, current)
+    val invalid = validateNewName(name, siblings, current, inFolder)
     val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
 
     fun cancel(refocus: Boolean) {
