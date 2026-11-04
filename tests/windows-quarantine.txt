@@ -1,0 +1,8 @@
+# Test files that fail on Windows today. scripts/test-windows.ts (the `windows` lane in ci.yml) runs them anyway:
+# - a file NOT listed here that fails is a new Windows regression, and fails the lane;
+# - a listed file that now passes fails the lane too: take it off. The list only shrinks.
+# Format: <test file> | <why it fails on Windows> | <card>[ | flaky]
+# "flaky" exempts a file that fails only sometimes from the "now passes" check.
+# Refresh from a CI run's report (the windows-test-report artifact):
+#   bun scripts/test-windows.ts --from-report windows-test-report.json --write-quarantine tests/windows-quarantine.txt
+
