@@ -88,3 +88,34 @@ describe("compare", () => {
     expect(countHits(hits)).toEqual({ "os-check": { "src/a.ts": 2 }, "path-shape": { "src/a.ts": 1 } })
   })
 })
+
+describe("sourceFiles", () => {
+  test("finds the Kotlin main sources of app modules and editor plugins, not their tests", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const { dirname, join } = await import("node:path")
+    const { sourceFiles } = await import("./platform-boundary")
+    const root = mkdtempSync(join(tmpdir(), "mux-guard-"))
+    try {
+      for (const file of [
+        "apps/ui/src/commonMain/kotlin/A.kt",
+        "apps/ui/src/jvmTest/kotlin/ATest.kt",
+        "apps/editor-plugins/lsp/src/jvmMain/kotlin/B.kt",
+        "apps/desktop/src/test/kotlin/CTest.kt",
+        "src/core/x.ts",
+        "src/core/x.test.ts",
+        "packages/supermux-core/tests/y.ts",
+      ]) {
+        mkdirSync(join(root, dirname(file)), { recursive: true })
+        writeFileSync(join(root, file), "")
+      }
+      expect(sourceFiles(root).map(f => f.file)).toEqual([
+        "apps/editor-plugins/lsp/src/jvmMain/kotlin/B.kt",
+        "apps/ui/src/commonMain/kotlin/A.kt",
+        "src/core/x.ts",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

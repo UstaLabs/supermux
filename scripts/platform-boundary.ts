@@ -187,7 +187,9 @@ export function sourceFiles(root: string = ROOT): { file: string; lang: Lang }[]
   }
   const apps = join(root, "apps")
   if (existsSync(apps)) {
-    for (const src of new Glob("{*,editor-plugins/*}/src").scanSync({ cwd: apps, onlyFiles: false })) {
+    // Two patterns, not "{*,editor-plugins/*}/src": Bun's Glob matches nothing when a brace alternative holds a "/".
+    const modules = ["*/src", "editor-plugins/*/src"].flatMap(pattern => [...new Glob(pattern).scanSync({ cwd: apps, onlyFiles: false })])
+    for (const src of modules) {
       for (const path of new Glob("*/**/*.kt").scanSync({ cwd: join(apps, src) })) {
         const set = norm(path).split("/")[0]!
         if (/test$/i.test(set)) continue
