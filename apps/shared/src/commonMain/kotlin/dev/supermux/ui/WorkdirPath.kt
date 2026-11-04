@@ -1,6 +1,6 @@
 package dev.supermux.ui
 
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 
 /** Map an agent-mentioned path to a workdir-relative path for the editor API.
  *  Returns "" for the workdir root, or null when the path is outside the workdir.

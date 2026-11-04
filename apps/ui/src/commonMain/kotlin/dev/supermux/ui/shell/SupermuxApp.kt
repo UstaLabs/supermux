@@ -101,6 +101,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot
 import dev.supermux.host.viewingSurfaceVisible
@@ -114,7 +115,6 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.session.asSettledSession
 import dev.supermux.session.formatWorkdir
-import dev.supermux.session.inferHomeDir
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostProject
 import dev.supermux.state.HostStore

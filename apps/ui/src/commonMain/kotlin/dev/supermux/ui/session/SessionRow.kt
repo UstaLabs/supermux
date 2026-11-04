@@ -62,14 +62,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.SectionKey
 import dev.supermux.session.effectiveUserStatus
 import dev.supermux.session.formatWorkdir
-import dev.supermux.session.inferHomeDir
-import dev.supermux.session.pathLeaf
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.ui.TestIds

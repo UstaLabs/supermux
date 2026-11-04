@@ -69,4 +69,51 @@ class HostPathsTest {
         assertFalse(sameHostPath("C:\\proj\\i.txt", "C:\\proj\\\u0130.txt"))
         assertTrue(sameHostPath("C:\\proj\\FILE", "c:\\PROJ\\file"))
     }
+
+    @Test fun leafOnEitherSeparator() {
+        assertEquals("app", pathLeaf("C:\\Users\\me\\app\\"))
+        assertEquals("x", pathLeaf("/home/u/x/"))
+        assertEquals("TunnelWho", pathLeaf("D:\\Projects\\TunnelWho"))
+        assertEquals("erydor", pathLeaf("…\\yasinemre\\erydor"))
+        assertEquals("plain", pathLeaf("plain"))
+    }
+
+    @Test fun parentStaysInThePathsOwnSpellingAndStopsAtARoot() {
+        assertEquals("C:\\Users", hostParent("C:\\Users\\me"))
+        assertEquals("C:\\", hostParent("C:\\Users"))
+        assertNull(hostParent("C:\\"))
+        assertEquals("/home", hostParent("/home/me"))
+        assertEquals("/", hostParent("/home"))
+        assertNull(hostParent("/"))
+        assertEquals("\\\\server\\share", hostParent("\\\\server\\share\\app"))
+        assertNull(hostParent("\\\\server\\share"))
+        assertEquals("C:/Users", hostParent("C:/Users/me"))
+    }
+
+    @Test fun joinUsesTheRootsSeparatorForABrokerRelativePath() {
+        assertEquals("C:\\Users\\me\\app\\src\\Main.kt", hostJoin("C:\\Users\\me\\app", "src/Main.kt"))
+        assertEquals("C:\\app\\a.kt", hostJoin("C:\\app\\", "a.kt"))
+        assertEquals("/home/me/app/src/Main.kt", hostJoin("/home/me/app", "src/Main.kt"))
+        assertEquals("/home/me/app", hostJoin("/home/me/app", ""))
+    }
+
+    @Test fun normaliseResolvesDotsAndSeparatorsInTheHostsStyle() {
+        assertEquals("C:\\Users\\me\\proj\\src", normalizeHostPath("c:\\Users\\me\\proj/./lib/../src/"))
+        assertEquals("C:\\", normalizeHostPath("C:/"))
+        assertEquals("/a/c", normalizeHostPath("/a//b/../c/"))
+        assertEquals("/", normalizeHostPath("/"))
+        assertEquals("\\\\server\\share\\x", normalizeHostPath("\\\\server\\share\\y\\..\\x"))
+    }
+
+    @Test fun fileUriFollowsTheHost() {
+        assertEquals("file:///C:/Users/me/my%20app/a.kt", hostFileUri("C:\\Users\\me\\my app\\a.kt"))
+        assertEquals("file:///home/me/a%23b.kt", hostFileUri("/home/me/a#b.kt"))
+        assertEquals("file://server/share/a.kt", hostFileUri("\\\\server\\share\\a.kt"))
+    }
+
+    @Test fun inferHomeDirReadsBothHosts() {
+        assertEquals("C:\\Users\\me", inferHomeDir("C:\\Users\\me\\proj"))
+        assertEquals("/home/me", inferHomeDir("/home/me/proj"))
+        assertNull(inferHomeDir("/srv/proj"))
+    }
 }

@@ -110,6 +110,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
 import dev.supermux.chat.parseChatTs
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ProxyDto
@@ -122,7 +123,6 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import kotlinx.serialization.json.JsonObject
-import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.state.HostStore
 import dev.supermux.ui.ChatDetailLevel

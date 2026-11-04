@@ -38,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 
 /** One breadcrumb: its label and the folder it roots the tree at. */
 data class Crumb(val label: String, val path: String)

@@ -109,6 +109,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
@@ -130,8 +132,6 @@ import dev.supermux.session.SessionGroup
 import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.groupSessions
-import dev.supermux.session.inferHomeDir
-import dev.supermux.session.pathLeaf
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread

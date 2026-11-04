@@ -48,7 +48,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable

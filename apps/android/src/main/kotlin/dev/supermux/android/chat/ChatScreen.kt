@@ -115,7 +115,7 @@ import dev.supermux.ui.editor.EditorPanel
 import dev.supermux.ui.editor.EditorPanelActions
 import dev.supermux.ui.editor.EditorPanelState
 import dev.supermux.ui.editor.PendingEditorOpen
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toEditorPath
 import dev.supermux.ui.terminal.TerminalTabs
