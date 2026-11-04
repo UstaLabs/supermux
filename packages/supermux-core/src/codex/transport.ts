@@ -1,5 +1,6 @@
 import { TextDecoder } from 'node:util'
 import { connectKeeper, type KeeperConnection } from '../keeper/client.js'
+import { agentExitError } from '../keeper/exit.js'
 import type { KeeperWelcome } from '../keeper/protocol.js'
 
 type Pending = { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -89,7 +90,7 @@ export async function transport(
         for await (const ev of conn.frames) {
           if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq)
         }
-        if (!closed) fail(new Error('Codex process exited'), true)
+        if (!closed) fail(agentExitError('Codex', conn.exitStatus()), true)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         if (closed) return

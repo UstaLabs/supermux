@@ -185,6 +185,20 @@ describe("claude normalizer", () => {
     expect(err[1]).not.toHaveProperty("errorType")
   })
 
+  test("result: a turn Claude ended because it was interrupted is not an error (real 2.1.308 frames)", () => {
+    // After an interrupt control request: error_during_execution with Claude's own diagnostic, and terminal_reason
+    // aborted_streaming (stopped while the model answered) or aborted_tools (stopped while a tool ran).
+    const n = createClaudeNormalizer()
+    for (const [terminal_reason, stop_reason] of [["aborted_streaming", "tool_use"], ["aborted_tools", "tool_use"], ["aborted_streaming", null]] as const) {
+      const out = n(native({
+        type: "result", subtype: "error_during_execution", is_error: true, terminal_reason, stop_reason,
+        errors: [`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=${stop_reason}`],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }))
+      expect(out.map(e => e.kind)).toEqual(["usage"])
+    }
+  })
+
   test("result: a 401/403 API error marks the account unavailable (real cancelled-subscription frame)", () => {
     const n = createClaudeNormalizer()
     const text = "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"

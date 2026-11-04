@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { createHost } from "../../../../packages/supermux-core/src/index.js"
 import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, DriverContextSupport, Host, PermissionsSpec, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
+import { agentExitError } from "../../../../packages/supermux-core/src/keeper/exit.js"
+import { agentDisplayName } from "../../../shared/agents"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 
@@ -2292,9 +2294,109 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
     expect(fake.opens[1]?.resumeId).toBe("native-keep")
     await adapter.send("after")
     expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "after"])
-    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual(["child died"])
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([`${agentDisplayName(kind)} stopped unexpectedly (child died). ${CRASH_TAIL}`])
   })
 }
+
+// The user's own messages (app, Telegram, WhatsApp) reach send() directly, not through inbox delivery: the
+// next one after a crash brings the agent back on the same conversation instead of "Session runtime failed".
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: the next message to a session whose agent crashed reopens the same conversation and runs`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    await adapter.send("before")
+    fake.failRuntime(agentExitError(agentDisplayName(kind), { code: 1, stderr: [] }))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    await adapter.send("is something wrong?")
+    expect(fake.opens.map((o) => o.resumeId)).toEqual([undefined, "native-keep"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "is something wrong?"])
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([`${agentDisplayName(kind)} stopped unexpectedly (exit code 1). ${CRASH_TAIL}`])
+    expect(adapter.isAlive()).toBe(true)
+  })
+}
+
+// What the user reads when the agent's process dies (#71; Ahmet: words only, no buttons): what happened, that the
+// conversation is saved, and that the next message restarts it. How the process ended goes in brackets.
+const CRASH_TAIL = "Your conversation is saved; your next message restarts it."
+
+test("claude: a crash is told in plain words, with how the process exited and its last stderr line, and logged", async () => {
+  const fake = fakeAgentDriver("claude", { nativeId: "native-keep" })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  const crash = agentExitError("Claude", { code: 3221225477, stderr: ["panic(main thread): Segmentation fault at address 0x0", "oh no: Bun has crashed."] })
+  const logged = await stderrDuring(async () => {
+    fake.failRuntime(crash)
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    await flush()
+  })
+  expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([
+    `Claude stopped unexpectedly (exit code 0xC0000005: oh no: Bun has crashed). ${CRASH_TAIL}`,
+  ])
+  const line = logged.split("\n").find((l) => l.includes("session_failed"))
+  expect(line).toContain('"session":"s1"')
+  expect(line).toContain('"exit_code":3221225477')
+  expect(line).toContain("Segmentation fault")
+})
+
+test("claude: a crash after the turn already failed for something else is still told", async () => {
+  const fake = fakeAgentDriver("claude", { nativeId: "native-keep" })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.failNextPrompt(new Error("You've hit your session limit"))
+  await adapter.send("hi")
+  await flush()
+  fake.failRuntime(agentExitError("Claude", { code: 1, stderr: [] }))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  await flush()
+  expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([
+    "You've hit your session limit",
+    `Claude stopped unexpectedly (exit code 1). ${CRASH_TAIL}`,
+  ])
+})
+
+test("claude: a crash whose keeper said nothing, and Stop on a crashed session (nothing runs: no error)", async () => {
+  const fake = fakeAgentDriver("claude", { nativeId: "native-keep" })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.failRuntime(agentExitError("Claude", undefined))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  await expect(adapter.interrupt()).resolves.toBeUndefined()
+  await flush()
+  expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([
+    `Claude stopped unexpectedly (its keeper process stopped). ${CRASH_TAIL}`,
+  ])
+})
+
+test("claude: a restart that fails says so, and the next message tries again", async () => {
+  const fake = fakeAgentDriver("claude", { nativeId: "native-keep" })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  await adapter.send("before")
+  fake.failRuntime(agentExitError("Claude", { code: 1, stderr: [] }))
+  await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+  fake.rejectResume(new Error("Account claude-1 was not found"))
+  await adapter.send("is something wrong?")
+  fake.rejectResume(undefined)
+  await adapter.send("again")
+  expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([
+    `Claude stopped unexpectedly (exit code 1). ${CRASH_TAIL}`,
+    "Claude could not be restarted (Account claude-1 was not found). Your conversation is saved; your next message tries again.",
+  ])
+  expect(fake.opens.map((o) => o.resumeId)).toEqual([undefined, "native-keep", "native-keep"])
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "again"])
+  expect(adapter.isAlive()).toBe(true)
+})
 
 test("claude: resume() leaves a live session alone, and two resume() calls after a crash reopen it once", async () => {
   const kind = "claude" as const

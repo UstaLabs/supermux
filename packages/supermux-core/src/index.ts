@@ -13,7 +13,7 @@ export type {
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper, detachedKeeperHooks } from "./keeper/index.js"
 export type {
-  StopKeeperLimits, ConnectKeeperOptions, KeeperConnection, KeeperFrameEvent, KeeperSpec, KeeperLimits, KeeperWelcome, FrameShape,
+  StopKeeperLimits, ConnectKeeperOptions, KeeperConnection, KeeperExitStatus, KeeperFrameEvent, KeeperSpec, KeeperLimits, KeeperWelcome, FrameShape,
 } from "./keeper/index.js"
 export { CORE_SUBCOMMANDS } from "./self-entry.js"
 export type {

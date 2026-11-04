@@ -57,6 +57,17 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('a Claude process that dies mid-turn: the error says how it exited and the last line it wrote to stderr', async () => {
+  const exits: Error[] = []
+  const r = await driver().open(ctx({ onExit: e => { exits.push(e) } }))
+  try {
+    const failure: any = await r.prompt(input('crash'), signal()).then(() => undefined, (e: unknown) => e)
+    expect(failure).toMatchObject({ code: 'agent_exited', message: 'Claude process exited with code 3: oh no: Bun has crashed. This indicates a bug in Bun, not your code.' })
+    expect(failure.exit).toEqual({ code: 3, stderr: ['panic(main thread): Segmentation fault at address 0x0', 'oh no: Bun has crashed. This indicates a bug in Bun, not your code.'] })
+    expect(exits).toEqual([failure])
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('the initialize reply reaches the host as a native update carrying the command list', async () => {
   // Claude 2.1.308 lists its slash commands in the initialize reply; no prompt is needed (card #13).
   const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
