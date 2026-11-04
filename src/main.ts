@@ -42,7 +42,8 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
-import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
+import { claimBroker } from "./core/session-manager/broker-instance"
+import { releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
@@ -370,7 +371,16 @@ try {
   }
 } catch {}
 
-acquirePidFile(PID_FILE)
+// One broker per state directory (#36): the kernel lock first, then broker.pid. A second broker stops here, before
+// it touches broker.pid, .core.lock or the port, so the first keeps everything it holds. An older broker (no lock)
+// is still caught by broker.pid.
+await claimBroker(STATE_DIR, PID_FILE).catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+  if ((error as { code?: string }).code === "already_running") log.error("broker_already_running", { stateDir: STATE_DIR })
+  else log.error("broker_claim_failed", { error: message })
+  console.error(message)
+  process.exit(1)
+})
 process.on("exit", () => releasePidFile(PID_FILE))
 
 // Schema downgrade guard: refuse to start if state was written by a newer build.

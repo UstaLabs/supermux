@@ -247,7 +247,7 @@
     "src/core/session-manager/pid-file.ts": 1,
     "src/core/sessiond/client.ts": 1,
     "src/core/sessiond/job-object.ts": 1,
-    "src/core/sessiond/main.ts": 3,
+    "src/core/sessiond/main.ts": 2,
     "src/core/sessiond/secret.ts": 3,
     "src/core/sessiond/server.ts": 1,
     "src/core/terminal/manager.ts": 1,

@@ -59,3 +59,18 @@ test("sessiond's endpoint names are kept", () => {
   expect(lock.pipeName("sessiond", "C:\\Users\\me\\.mux\\state")).toMatch(/^\\\\\.\\pipe\\supermux-sessiond-[0-9a-f]{32}-lock$/)
   expect(lock.pipeName("sessiond", "C:\\Users\\me\\.mux\\state")).toBe(lock.pipeName("sessiond", "c:/users/ME/.mux/state"))
 })
+
+// Holding the lock is not a reason to stay alive: a process that has nothing else to do exits, and its lock with it.
+test("the lock does not keep its process alive", async () => {
+  const dir = scope()
+  const child = spawn(process.execPath, ["-e", `
+    const { lock } = await import("@supermux/platform")
+    await lock.singleInstance("test", ${JSON.stringify(dir)})
+  `], { stdio: "ignore" })
+  const exited = await Promise.race([
+    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3_000)),
+  ])
+  if (!exited) child.kill("SIGKILL")
+  expect(exited).toBe(true)
+}, 10_000)

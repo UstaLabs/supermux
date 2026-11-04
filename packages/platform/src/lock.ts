@@ -7,7 +7,7 @@ import { createHash } from "node:crypto"
 import { connect, createServer, type Server, type Socket } from "node:net"
 import { isAbsolute, normalize, resolve, win32 } from "node:path"
 
-/** A held lock. Releasing it twice is harmless; dying releases it too. */
+/** A held lock. Releasing it twice is harmless; exiting releases it too, and it never keeps the process alive. */
 export interface InstanceLock {
   release(): Promise<void>
 }
@@ -54,6 +54,8 @@ export async function singleInstance(name: string, scope: string, options: Singl
     if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") throw new AlreadyRunning(name)
     throw error
   }
+  // The binding is the lock; it is not a reason to stay alive. A process with nothing else to do exits, lock and all.
+  server.unref()
   let released = false
   return {
     async release() {
