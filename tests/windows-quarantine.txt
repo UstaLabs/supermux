@@ -1,8 +1,15 @@
 # Test files that fail on Windows today. scripts/test-windows.ts (the `windows` lane in ci.yml) runs them anyway:
 # - a file NOT listed here that fails is a new Windows regression, and fails the lane;
 # - a listed file that now passes fails the lane too: take it off. The list only shrinks.
-# Format: <test file> | <why it fails on Windows> | <card>[ | flaky]
-# "flaky" exempts a file that fails only sometimes from the "now passes" check.
+# Format: <test file> | <why it fails on Windows> | <card>[ | flaky][ | hangs]
+# "flaky" exempts a file that fails only sometimes from the "now passes" check; "hangs" runs a file that never
+# finishes on Windows alone, with a short timeout, instead of letting it stall a chunk.
 # Refresh from a CI run's report (the windows-test-report artifact):
 #   bun scripts/test-windows.ts --from-report windows-test-report.json --write-quarantine tests/windows-quarantine.txt
 
+packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test never sees the typed code, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/acp.test.ts | a turn times out at 20 s, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/antigravity.test.ts | assertions fail, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/claude.test.ts | native create times out at 20 s, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+src/core/agents/core-bridge/core-adapter.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
+src/core/agents/download.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
