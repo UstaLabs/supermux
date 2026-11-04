@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -101,6 +102,7 @@ import dev.supermux.ui.overlay.OverlayUiState
 import dev.supermux.ui.overlay.OverlayVoice
 import dev.supermux.ui.overlay.Spot
 import dev.supermux.ui.overlay.rememberOverlayAgent
+import dev.supermux.ui.overlay.overlayChoiceToStore
 import dev.supermux.ui.overlay.rememberOverlayRig
 import dev.supermux.ui.overlay.shareImageSize
 import dev.supermux.ui.platform.PickedFile
@@ -108,6 +110,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -462,15 +465,29 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         )
     }
 
+    /** This device's pick of Agent (picked in the chat's header), wrapped so "not read yet" differs from "none". */
+    private class Choice(val id: String?)
+    private val choices by lazy { shared.uiPrefs.assistantOverlayAgent.map { Choice(it) } }
+
     @Composable
     private fun Head() {
         val fleet = shared.fleet
-        val seen = rememberOverlayAgent(fleet)
+        val choice by choices.collectAsState(null)
+        val seen = rememberOverlayAgent(fleet, chosenId = choice?.id, ready = choice != null)
         SideEffect { agent = seen }
         val rig = rememberOverlayRig(fleet, seen?.id)
         OverlayReplies(fleet, seen, ui)
-        seen?.let { OverlayVoice(fleet, it.id, ui) }
+        // Keyed: another Agent gets its own dictation, from scratch.
+        seen?.let { key(it.id) { OverlayVoice(fleet, it.id, ui) } }
         OverlayHead(seen, rig, ui, size = HEAD_DP.dp)
+    }
+
+    /** Shows [id] from now on, on this device; picking the default Agent goes back to following the default. */
+    private fun pickAgent(id: String) {
+        val defaultId = shared.fleet.sessions.value.firstOrNull { it.role == "personal_assistant" && it.isDefault == true }?.id
+        ui.reply = null
+        ui.thinking = false
+        lifecycleScope.launch { shared.uiPrefs.putAssistantOverlayAgent(overlayChoiceToStore(id, defaultId)) }
     }
 
     @Composable
@@ -508,6 +525,12 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             snapshotFlow { agent?.takeIf { it.connected && !ui.hidden }?.id }
                 .distinctUntilChanged()
                 .collect { showingAgentId = it }
+        }
+        lifecycleScope.launch {
+            // Another Agent picked: the quiet notification names it.
+            snapshotFlow { agent?.name }.distinctUntilChanged().collect {
+                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+            }
         }
         lifecycleScope.launch {
             // A reply that arrives while it is hidden brings it back, bubble first.
@@ -727,6 +750,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     onOpenInApp = { openInApp(agent.id) },
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = (screenH * 0.66f).dp).fillMaxHeight(),
                     onShareScreen = { shareScreen() },
+                    onPickAgent = { pickAgent(it) },
                 )
             }
         } else {
@@ -736,6 +760,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 onOpenInApp = { openInApp(agent.id) },
                 modifier = Modifier.size(380.dp, 560.dp),
                 onShareScreen = { shareScreen() },
+                onPickAgent = { pickAgent(it) },
             )
         }
     }

@@ -13,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,14 +21,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
@@ -51,6 +58,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,11 +66,15 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.sessionListShowsUnread
+import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.chat.ChatPanel
 import dev.supermux.ui.chat.ComposerExternalAttach
@@ -85,6 +98,9 @@ import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.sessionPreviewPlainText
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlin.time.Clock
 
 /** The default Agent as the overlay shows it. */
@@ -101,17 +117,21 @@ data class OverlayAgent(
     val session: SessionInfo,
 )
 
-/** The default Agent ("Make default" picks it), or the first Agent when none is marked; null = none. */
+/**
+ * The Agent the overlay shows: [chosenId] (picked on this device in its chat's header) while it exists,
+ * else the default Agent ("Make default" picks it), else the first; null = none, or [ready] is false
+ * (the device's choice isn't read yet, so it doesn't flash the default first).
+ */
 @Composable
-fun rememberOverlayAgent(fleet: FleetStore): OverlayAgent? {
+fun rememberOverlayAgent(fleet: FleetStore, chosenId: String? = null, ready: Boolean = true): OverlayAgent? {
     val sessions by fleet.sessions.collectAsState()
     val agentState by fleet.agentState.collectAsState()
     val messages by fleet.messages.collectAsState()
     val lastRead by fleet.lastRead.collectAsState()
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
-    val s = sessions.firstOrNull { it.role == "personal_assistant" && it.isDefault == true }
-        ?: sessions.firstOrNull { it.role == "personal_assistant" }
+    if (!ready) return null
+    val s = pickOverlayAgent(sessions.filter { it.role == "personal_assistant" }, chosenId, { it.id }, { it.isDefault == true })
         ?: return null
     LaunchedEffect(s.id) { fleet.ensureMessagesLoaded(s.id) }
     val working = agentState[s.id]?.busy == true
@@ -154,10 +174,14 @@ class OverlayUiState {
     var lockArmed by mutableStateOf(false)
     /** The words heard so far. */
     var heard by mutableStateOf("")
-    /** The live voice level 0..1 the avatar's mouth follows. */
+    /** The voice level 0..1 the avatar moves with: [levelTarget], smoothed (see [smoothLevel]). */
     var level by mutableFloatStateOf(0f)
+    /** The voice right now: yours while listening, the reply's stand-in while it types out. */
+    var levelTarget by mutableFloatStateOf(0f)
     /** Talking stopped; waiting for the last words before sending. */
     var finishing by mutableStateOf(false)
+    /** Your words were sent and the answer hasn't come yet: the avatar works meanwhile. */
+    var thinking by mutableStateOf(false)
     /** No mic: say so instead of listening. */
     var micMissing by mutableStateOf(false)
     var reply by mutableStateOf<OverlayReply?>(null)
@@ -186,6 +210,9 @@ class OverlayUiState {
 /** The longest stretch of a reply the bubble types out; the rest is one tap away. */
 private const val BUBBLE_CHARS = 150
 
+/** How long it works after you talked before giving up on an answer. */
+private const val THINKING_MAX_MS = 90_000L
+
 /**
  * Pops the bubble when the Agent replies (unless its chat is open), types it out while the avatar
  * speaks, then folds it into the count after a while. Hosted once, in the head's composition.
@@ -201,6 +228,7 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
             ui.reply = OverlayReply(ev.entry.id, agent.name, text)
             ui.replyShown = 0
             ui.replyFolded = false
+            ui.thinking = false
         }
     }
     val reply = ui.reply
@@ -209,8 +237,12 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
         val shown = minOf(r.text.length, BUBBLE_CHARS)
         while (ui.replyShown < shown) {
             delay(40)
-            ui.replyShown = minOf(shown, ui.replyShown + 3)
+            val next = minOf(shown, ui.replyShown + 3)
+            // Its mouth moves with the words as they appear.
+            ui.levelTarget = speechLevel(r.text.subSequence(ui.replyShown, next))
+            ui.replyShown = next
         }
+        ui.levelTarget = 0f
         ui.replyShown = r.text.length
         delay(7_000)
         ui.replyFolded = true
@@ -242,8 +274,24 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     dictation.onLive = { latest = it; ui.heard = it }
     dictation.currentText = { latest }
     LaunchedEffect(mic, ui.listening) {
-        if (!ui.listening) { ui.level = 0f; return@LaunchedEffect }
-        mic.level?.collect { ui.level = voiceLevel(it) }
+        if (!ui.listening) { ui.levelTarget = 0f; return@LaunchedEffect }
+        // Recording for the broker meters the mic; the on-device recogniser meters itself.
+        val recorded = mic.level?.map { voiceLevel(it) } ?: emptyFlow()
+        val recognised = mic.liveTranscript?.level ?: emptyFlow()
+        merge(recorded, recognised).collect { ui.levelTarget = it }
+    }
+    // The shown level follows the voice, frame by frame, only while there is a voice to follow.
+    // Derived: a reply typing out changes `speaking`'s inputs every few frames, not its value.
+    val voiced by remember(ui) { derivedStateOf { ui.listening || ui.speaking } }
+    LaunchedEffect(voiced) {
+        var last = withFrameMillis { it }
+        while (voiced || ui.level > 0.001f) {
+            withFrameMillis { now ->
+                ui.level = smoothLevel(ui.level, if (voiced) ui.levelTarget else 0f, (now - last).toFloat())
+                last = now
+            }
+        }
+        ui.level = 0f
     }
     LaunchedEffect(ui.finishing, dictation.active, dictation.transcribing) {
         if (ui.finishing && !dictation.active && !dictation.transcribing) {
@@ -251,8 +299,15 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
             ui.finishing = false
             ui.heard = ""
             latest = ""
-            if (text.isNotEmpty()) fleet.sendMessage(agentId, text)
+            if (text.isNotEmpty()) {
+                ui.thinking = true
+                fleet.sendMessage(agentId, text)
+            }
         }
+    }
+    LaunchedEffect(ui.thinking) {
+        // An answer that never comes (a failed send, a reply with no text) must not leave it working.
+        if (ui.thinking) { delay(THINKING_MAX_MS); ui.thinking = false }
     }
     LaunchedEffect(ui.micMissing) {
         if (ui.micMissing) { delay(3_500); ui.micMissing = false }
@@ -294,6 +349,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
     val state = overlayAvatarState(
         listening = ui.listening,
         speaking = ui.speaking,
+        thinking = ui.finishing || ui.thinking,
         online = agent?.online ?: false,
         working = agent?.working ?: false,
         unread = agent?.unread ?: false,
@@ -316,16 +372,22 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
             )
         }
         val inner = (size.value * 0.82f).toInt()
+        // A press perks it up, but not while you hold it to talk: then it is listening, not hovered.
+        val hovered = (ui.pressed && !ui.listening) || ui.chatOpen
         if (rig != null) {
-            AvatarRigView(rig, state = state, hovered = ui.pressed || ui.chatOpen, level = ui.level, seed = agent?.id ?: "", size = inner)
+            AvatarRigView(rig, state = state, hovered = hovered, level = ui.level, seed = agent?.id ?: "", size = inner)
         } else if (agent != null) {
+            // No avatar of its own: its name-derived one, with the same states.
             AgentAvatar(
                 agent.name,
                 online = state != "asleep",
                 working = state == "working",
                 unread = state == "waiting",
-                hovered = ui.pressed || ui.listening || ui.chatOpen,
+                hovered = hovered,
                 size = inner,
+                listening = state == "listening",
+                speaking = state == "speaking",
+                level = ui.level,
             )
         }
         if (agent?.unread == true && !ui.chatOpen && !ui.listening && !ui.speaking) {
@@ -503,8 +565,18 @@ fun OverlayChat(
     modifier: Modifier = Modifier,
     /** Share what is on screen; null where the platform cannot. */
     onShareScreen: (() -> Unit)? = null,
+    /** Show another Agent here instead (its id); null hides the switcher. */
+    onPickAgent: ((String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val sessions by fleet.sessions.collectAsState()
+    val agents = remember(sessions) { sessionsByUserOrder(sessions.filter { it.role == "personal_assistant" }) }
+    val canSwitch = onPickAgent != null && agents.size > 1
+    var switcherOpen by remember { mutableStateOf(false) }
+    // Where the header ends, so the switcher drops down right under the name.
+    var boxTop by remember { mutableFloatStateOf(0f) }
+    var headerBottom by remember { mutableFloatStateOf(0f) }
     val state = rememberChatState(fleet, agent.id)
     val actions = rememberChatActions(fleet, agent.id)
     var draft by remember(agent.id) { mutableStateOf("") }
@@ -516,7 +588,7 @@ fun OverlayChat(
         if (onShareScreen != null) ({ OverlayShareChip(onClick = onShareScreen) }) else null
     val shape = if (compact) RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp) else RoundedCornerShape(24.dp)
     val headSize = 52.dp
-    Box(modifier.testTag("overlay_chat")) {
+    Box(modifier.testTag("overlay_chat").onGloballyPositioned { boxTop = it.boundsInRoot().top }) {
         Surface(
             shape = shape,
             color = cs.surfaceContainerLow,
@@ -530,11 +602,35 @@ fun OverlayChat(
                     }
                 }
                 Row(
-                    Modifier.fillMaxWidth().padding(start = if (compact) headSize + 22.dp else 16.dp, end = 4.dp, top = 6.dp, bottom = 4.dp),
+                    Modifier.fillMaxWidth().padding(start = if (compact) headSize + 16.dp else 10.dp, end = 4.dp, top = 6.dp, bottom = 4.dp)
+                        .onGloballyPositioned { headerBottom = it.boundsInRoot().bottom },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(agent.name, style = MaterialTheme.typography.titleMedium, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    // Its name is the switcher: tap it to show another Agent here (the head's own
+                    // gestures are taken: tap chats, hold talks, drag moves).
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                            .clickable(enabled = canSwitch, onClickLabel = "Switch Agent") { switcherOpen = !switcherOpen }
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .testTag("overlay_agent_name"),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                agent.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = cs.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (canSwitch) {
+                                Icon(
+                                    if (switcherOpen) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = cs.onSurfaceVariant,
+                                )
+                            }
+                        }
                         Text(
                             when {
                                 agent.working -> "working…"
@@ -571,6 +667,83 @@ fun OverlayChat(
             // It rides on the sheet's edge: the same avatar, now awake and attentive.
             Box(Modifier.padding(start = 18.dp).size(headSize)) {
                 OverlayHead(agent, rig, ui, size = headSize - 8.dp)
+            }
+        }
+        if (switcherOpen && canSwitch) {
+            // A tap anywhere else in the chat closes it.
+            Box(
+                Modifier.matchParentSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    switcherOpen = false
+                },
+            )
+            OverlayAgentSwitcher(
+                fleet = fleet,
+                agents = agents,
+                currentId = agent.id,
+                onPick = { id ->
+                    switcherOpen = false
+                    if (id != agent.id) onPickAgent?.invoke(id)
+                },
+                modifier = Modifier.padding(
+                    start = if (compact) headSize + 10.dp else 6.dp,
+                    top = with(density) { (headerBottom - boxTop).coerceAtLeast(0f).toDp() },
+                ),
+            )
+        }
+    }
+}
+
+/** The Agents to show in the overlay instead, each with its own avatar; the one shown is ticked. */
+@Composable
+private fun OverlayAgentSwitcher(
+    fleet: FleetStore,
+    agents: List<SessionInfo>,
+    currentId: String,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    val sessions by fleet.sessions.collectAsState()
+    val rigs = rememberAgentAvatars(sessions, apiFor = { fleet.appFor(it)?.api })
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = cs.surfaceContainerHigh,
+        shadowElevation = 10.dp,
+        modifier = modifier.widthIn(min = 220.dp, max = 300.dp).testTag("overlay_agent_switcher"),
+    ) {
+        Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+            Text(
+                "Show in the overlay",
+                style = MaterialTheme.typography.labelMedium,
+                color = cs.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+            for (a in agents) {
+                val on = a.id == currentId
+                val asleep = a.status != null && a.status != "active"
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .background(if (on) cs.secondaryContainer.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Transparent)
+                        .clickable { onPick(a.id) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("overlay_agent_${a.id}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    val rig = rigs[a.id]
+                    if (rig != null) {
+                        AvatarRigView(rig, state = if (asleep) "asleep" else "idle", seed = a.id, size = 32)
+                    } else {
+                        AgentAvatar(a.name, online = !asleep, working = false, size = 32)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, style = MaterialTheme.typography.bodyLarge, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (a.isDefault == true) {
+                            Text("Default", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                        }
+                    }
+                    if (on) Icon(Icons.Filled.Check, contentDescription = "Shown now", tint = cs.primary)
+                }
             }
         }
     }

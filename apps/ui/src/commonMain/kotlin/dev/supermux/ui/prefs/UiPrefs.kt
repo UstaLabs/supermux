@@ -207,6 +207,12 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putAssistantOverlay(value: Boolean) =
         settings.putString(SettingsKeys.ASSISTANT_OVERLAY, value.toString())
 
+    /** The Agent the overlay shows on this device (a session id); null = the default Agent. */
+    val assistantOverlayAgent: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_AGENT)
+
+    suspend fun putAssistantOverlayAgent(sessionId: String?) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_AGENT, sessionId)
+
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =
         settings.string(SettingsKeys.TEXT_SCALE).map { raw ->

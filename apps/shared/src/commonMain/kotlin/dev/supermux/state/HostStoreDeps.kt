@@ -73,6 +73,9 @@ object SettingsKeys {
     /** "true"/"false": the assistant overlay (#62, experimental), the default Agent floating over
      *  other apps. Per device, never synced; unset = off. */
     const val ASSISTANT_OVERLAY = "appearance:assistantOverlay"
+    /** The Agent the assistant overlay shows on this device (a session id), picked in its chat's
+     *  header. Per device, never synced; unset = the default Agent. */
+    const val ASSISTANT_OVERLAY_AGENT = "appearance:assistantOverlayAgent"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping
