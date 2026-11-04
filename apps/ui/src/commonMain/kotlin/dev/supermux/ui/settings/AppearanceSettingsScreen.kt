@@ -41,6 +41,8 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import kotlinx.coroutines.delay
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -232,6 +234,7 @@ private fun AppearanceSettingsBody(
                     )
                 }
             }
+            if (caps.assistantOverlay) AssistantOverlayRow()
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -275,6 +278,67 @@ private fun AppearanceSettingsBody(
                     steps = 7,
                     modifier = Modifier.testTag("appearance_text_scale_slider"),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The assistant overlay switch (#62, experimental): the default Agent floating over other apps. Turning
+ * it on walks through the two permissions it needs, in context: "Display over other apps" (a system
+ * page; the switch turns on once you come back with it allowed) and the mic for hold-to-talk (asked,
+ * never required: tap-to-chat works without it).
+ */
+@Composable
+private fun AssistantOverlayRow() {
+    val cs = MaterialTheme.colorScheme
+    val prefs = LocalUiPrefs.current
+    val host = LocalPlatform.current.assistantOverlay ?: return
+    val scope = rememberCoroutineScope()
+    val on by prefs.assistantOverlay.collectAsState(false)
+    var waiting by remember { mutableStateOf(false) }
+    // The system page has no result: look again until it is allowed (or the switch is let go).
+    LaunchedEffect(waiting) {
+        while (waiting) {
+            delay(600)
+            if (host.canDrawOverOtherApps()) {
+                waiting = false
+                host.requestMic()
+                prefs.putAssistantOverlay(true)
+            }
+        }
+    }
+    Column(Modifier.fillMaxWidth().testTag("appearance_overlay_row"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Assistant overlay", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
+                Text(
+                    "Experimental. Your default Agent floats over other apps: tap it to chat, hold it to talk.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = on || waiting,
+                onCheckedChange = { want ->
+                    when {
+                        !want -> { waiting = false; scope.launch { prefs.putAssistantOverlay(false) } }
+                        host.canDrawOverOtherApps() -> scope.launch { host.requestMic(); prefs.putAssistantOverlay(true) }
+                        else -> { waiting = true; host.openPermissionPage() }
+                    }
+                },
+                modifier = Modifier.testTag("appearance_overlay_switch"),
+            )
+        }
+        if (waiting) {
+            Text(
+                "Allow \u201cDisplay over other apps\u201d for supermux, then come back here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSurfaceVariant,
+            )
+            TextButton(onClick = { host.openPermissionPage() }, modifier = Modifier.testTag("appearance_overlay_allow")) {
+                Text("Open the setting again")
             }
         }
     }

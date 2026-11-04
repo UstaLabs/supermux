@@ -200,6 +200,13 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putDynamicColor(value: Boolean) =
         settings.putString(SettingsKeys.DYNAMIC_COLOR, value.toString())
 
+    /** The assistant overlay (#62, experimental): the default Agent floating over other apps. Off unless turned on. */
+    val assistantOverlay: Flow<Boolean> =
+        settings.string(SettingsKeys.ASSISTANT_OVERLAY).map { it?.toBooleanStrictOrNull() ?: false }
+
+    suspend fun putAssistantOverlay(value: Boolean) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY, value.toString())
+
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =
         settings.string(SettingsKeys.TEXT_SCALE).map { raw ->
