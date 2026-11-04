@@ -47,6 +47,9 @@ process.env.MUX_WORKTREES_ROOT = join(stateDir, "worktrees")
 // shim, and once the worktree was deleted, every new session started without supermux tools.
 process.env.HOME = join(stateDir, "home")
 mkdirSync(process.env.HOME, { recursive: true })
+// ...and USERPROFILE: on Windows os.homedir() reads it, not HOME (libuv uv_os_homedir, in Node and Bun alike), so
+// without this a Windows run would use the runner's real profile. Harmless where it is unused.
+process.env.USERPROFILE = process.env.HOME
 // A module that caches HOME at first import (session-manager/spawn-helper) keeps this one for the
 // whole run, so files that set their own HOME later still resolve agent logins here: seed fakes.
 for (const [file, body] of [[".codex/auth.json", { tokens: { access_token: "x", account_id: "a" } }], [".config/cursor/auth.json", { accessToken: "x" }], [".cursor/cli-config.json", {}]] as const) {
