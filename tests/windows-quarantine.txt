@@ -125,7 +125,6 @@ tests/reconcile-startup.test.ts | file locked or denied (EBUSY); first: "reconci
 tests/registry.test.ts | file locked or denied (EBUSY); first: "session lifecycle > register a session" | #29
 tests/repo-scanner.test.ts | expected "" got neradmin\AppData\Local\Temp\cmux-scan-mfrSga"; first: "scanRepos > workdir itself is a repo → relPath empty string" | #29
 tests/resolve-download-attachment.test.ts | file locked or denied (EBUSY); first: "synthetic 32-hex file_id resolves directly via FileStore (no" | #29
-tests/runtime-assumptions.test.ts | expected ppData\Local\Temp\mux-test-state-TxqLCv\home" got s\RUNNER~1\AppData\Local\Temp\mux-not-a-home"; first: "Bun's os.homedir() ignores HOME and USERPROFILE set after st" | #29
 tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "session search returns sessions by message text, filtered + " | #29
 tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
 tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29
