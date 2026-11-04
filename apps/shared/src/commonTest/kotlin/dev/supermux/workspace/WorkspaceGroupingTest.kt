@@ -377,4 +377,23 @@ class WorkspaceGroupingTest {
         val groups = groupWorkspaces(emptyList(), home = "/home/u", projects = listOf(proj("p1", "Any")))
         assertEquals(listOf("Any"), groups.map { it.label })
     }
+
+    // Each host's own home shortens its folders: a Mac's /Users/ahmet/site reads ~/site beside a Linux box's
+    // /home/ahmet/proj, not …/ahmet/site under the one home the app used to guess for the whole fleet.
+    @Test
+    fun eachHostsFoldersShortenUnderThatHostsOwnHome() {
+        val box = ws("w1", "a", "/home/ahmet/proj")
+        val mac = ws("w2", "b", "/Users/ahmet/site")
+        val homes = mapOf("box" to "/home/ahmet", "mac" to "/Users/ahmet")
+        val groups = groupWorkspaces(
+            listOf(box, mac), home = "/home/ahmet",
+            hostOf = { if (it.id == "w1") "box" else "mac" }, homeOf = { homes[it] },
+        )
+        assertEquals(listOf("~/proj", "~/site"), groups.map { it.label })
+        val archived = groupArchivedWorkspaces(
+            listOf(mac.copy(status = "archived")), home = "/home/ahmet",
+            hostOf = { "mac" }, homeOf = { homes[it] },
+        )
+        assertEquals(listOf("~/site"), archived.map { it.label })
+    }
 }

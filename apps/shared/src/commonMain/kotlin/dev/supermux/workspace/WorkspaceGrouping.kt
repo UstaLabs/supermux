@@ -68,6 +68,9 @@ fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): Wo
  *
  * [archived] is the archived workspace list, used ONLY to decide whether a project with no live
  * workspace still gets a group — see [showsEmptyProjectLive]. Omitted, every empty project shows.
+ *
+ * [homeOf] gives a host's own home folder (by [hostOf]'s id) for a path group's label; [home] is the
+ * fallback for a host that sent none.
  */
 fun groupWorkspaces(
     workspaces: List<WorkspaceDto>,
@@ -77,6 +80,7 @@ fun groupWorkspaces(
     archived: List<WorkspaceDto> = emptyList(),
     /** The archived rows are not known yet: show no empty project at all (card #54). */
     hideEmptyProjects: Boolean = false,
+    homeOf: (hostId: String) -> String? = { null },
     // Kept LAST so existing `groupWorkspaces(ws, home) { isPa }` trailing-lambda callers still bind here.
     isPersonalAssistant: (WorkspaceDto) -> Boolean = { false },
 ): List<WorkspaceGroup> {
@@ -98,7 +102,7 @@ fun groupWorkspaces(
     }
     val used = usedProjectKeys(archived + workspaces.filter { it.status == "archived" }, hostOf)
     result.addAll(
-        resolveGroups(rest, home, projects, hostOf, rowOrder) { key -> !hideEmptyProjects && showsEmptyProjectLive(key, used) },
+        resolveGroups(rest, home, homeOf, projects, hostOf, rowOrder) { key -> !hideEmptyProjects && showsEmptyProjectLive(key, used) },
     )
     return result
 }
@@ -130,10 +134,11 @@ fun groupArchivedWorkspaces(
     home: String,
     projects: List<ProjectRef> = emptyList(),
     hostOf: (WorkspaceDto) -> String = { "" },
+    homeOf: (hostId: String) -> String? = { null },
 ): List<WorkspaceGroup> {
     val dead = workspaces.filter { it.status == "archived" }
     val rowOrder = compareByDescending<WorkspaceDto> { it.archivedAt ?: "" }.thenBy { it.id }
-    return resolveGroups(dead, home, projects, hostOf, rowOrder) { false }
+    return resolveGroups(dead, home, homeOf, projects, hostOf, rowOrder) { false }
 }
 
 /**
@@ -146,6 +151,7 @@ fun groupArchivedWorkspaces(
 private fun resolveGroups(
     rows: List<WorkspaceDto>,
     home: String,
+    homeOf: (hostId: String) -> String?,
     projects: List<ProjectRef>,
     hostOf: (WorkspaceDto) -> String,
     rowOrder: Comparator<WorkspaceDto>,
@@ -181,7 +187,7 @@ private fun resolveGroups(
     val pathGroups = byPath.map { (key, list) ->
         WorkspaceGroup(
             key = key,
-            label = formatWorkdir(key, home),
+            label = formatWorkdir(key, homeOf(hostOf(list.first())) ?: home),
             workspaces = list.sortedWith(rowOrder),
         )
     }.sortedBy { it.label }

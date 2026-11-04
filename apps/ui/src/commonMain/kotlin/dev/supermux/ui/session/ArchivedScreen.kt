@@ -189,6 +189,7 @@ fun ArchivedScreen(
     onForceOpenConsumed: () -> Unit = {},
     projects: List<ProjectRef> = emptyList(),
     workspaceHost: (WorkspaceDto) -> String = { "" },
+    homeDirs: Map<String, String> = emptyMap(),
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
     projectImageCache: ProjectImageCache? = null,
@@ -228,6 +229,7 @@ fun ArchivedScreen(
         standalone = standalone,
         projects = projects,
         workspaceHost = workspaceHost,
+        homeDirs = homeDirs,
         loadProjectImage = loadProjectImage,
         projectImageCache = projectImageCache,
         onProjectSettings = onProjectSettings,
@@ -280,6 +282,8 @@ fun ArchivedScreen(
     projects: List<ProjectRef> = emptyList(),
     /** Host record id owning a workspace (same id space as [ProjectRef.hostId]). */
     workspaceHost: (WorkspaceDto) -> String = { "" },
+    /** Each host's own home folder by [workspaceHost]'s id: a folder's label shortens under its own host's home. */
+    homeDirs: Map<String, String> = emptyMap(),
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
     projectImageCache: ProjectImageCache? = null,
@@ -309,8 +313,8 @@ fun ArchivedScreen(
     }
 
     val sessionProjects = remember(archived, home) { archivedProjects(archived, home) }
-    val groups = remember(workspaces, home, projects, workspaceHost) {
-        groupArchivedWorkspaces(workspaces, home, projects, workspaceHost)
+    val groups = remember(workspaces, home, projects, workspaceHost, homeDirs) {
+        groupArchivedWorkspaces(workspaces, home, projects, workspaceHost, homeOf = { homeDirs[it] })
     }
     val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     // Clear the filter if the selected project no longer has anything archived under it.

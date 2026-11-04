@@ -256,6 +256,8 @@ fun SessionListScreen(
     projects: List<ProjectRef> = emptyList(),
     /** Host record id owning a workspace — pairs a row's projectId with a [ProjectRef]. */
     workspaceHost: (WorkspaceDto) -> String = { "" },
+    /** Each host's own home folder by [workspaceHost]'s id: a folder's label shortens under its own host's home. */
+    homeDirs: Map<String, String> = emptyMap(),
     /** Authenticated project image bytes; null when missing or on failure. */
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
@@ -365,9 +367,9 @@ fun SessionListScreen(
             locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> hostIsInside(loc.path, root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending) {
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending) { w ->
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
@@ -388,8 +390,8 @@ fun SessionListScreen(
     val renderedProjectIds = remember(groups) {
         groups.mapNotNull { it.projectRef() }.groupBy({ it.hostId }, { it.project.id }).mapValues { it.value.toSet() }
     }
-    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
-        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
+    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost, homeDirs) {
+        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost, homeOf = { homeDirs[it] })
     }
     val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }

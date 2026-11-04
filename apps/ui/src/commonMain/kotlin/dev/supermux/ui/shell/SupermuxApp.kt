@@ -556,6 +556,8 @@ fun SupermuxApp(
     var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val catalogHosts by fleet.projectCatalogHosts.collectAsState()
+    /** Each host's own home folder: a host's folders shorten under ITS home (the single [home] is the fallback). */
+    val homeDirs by fleet.homeDirs.collectAsState()
     /** Hosts "New project" may create on: those serving a catalog, narrowed by the host filter. */
     val newProjectHosts = remember(hostViews, catalogHosts, hostFilter) {
         newProjectHosts(hostViews, catalogHosts, hostFilter)
@@ -869,6 +871,7 @@ fun SupermuxApp(
                                 onAddHost = { ui.openAddHost() },
                                 projects = projectRefs,
                                 workspaceHost = workspaceHostOf,
+                                homeDirs = homeDirs,
                                 loadProjectImage = loadProjectImage,
                                 projectImageCache = projectImageCache,
                                 onReorderProjects = { hostId, ids ->
@@ -945,9 +948,9 @@ fun SupermuxApp(
                         val railWorkspaces = if (hostViews.size > 1 && hostFilter != null) {
                             workspaces.filter { workspaceHostOf(it) == hostFilter }
                         } else workspaces
-                        val railGroups = remember(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, sessions) {
+                        val railGroups = remember(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, sessions, homeDirs) {
                             val roles = sessions.associate { it.id to it.role }
-                            groupWorkspaces(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces) { w ->
+                            groupWorkspaces(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, homeOf = { homeDirs[it] }) { w ->
                                 val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
                                 sid != null && roles[sid] == "personal_assistant"
                             }
@@ -1163,6 +1166,7 @@ fun SupermuxApp(
                                                 onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
                                                 projects = projectRefs,
                                                 workspaceHost = workspaceHostOf,
+                                                homeDirs = homeDirs,
                                                 loadProjectImage = loadProjectImage,
                                                 projectImageCache = projectImageCache,
                                                 // Archived-only projects are hidden from the live
