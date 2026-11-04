@@ -60,6 +60,11 @@ internal fun AgentAvatar(
     speaking: Boolean = false,
     /** The live voice level 0..1: yours while [listening], its own while [speaking]; ignored otherwise. */
     level: Float = 0f,
+    /**
+     * A clock (ms) to animate by, instead of its own on every frame: it then draws only as often as this
+     * changes. The assistant overlay ticks it slowly while idle and asleep, so an always-on avatar is cheap.
+     */
+    timeMs: Long? = null,
 ) {
     val look = spec ?: remember(name) { defaultAgentAvatar(name) }
     val state = when {
@@ -73,11 +78,24 @@ internal fun AgentAvatar(
     val voice = if (listening || speaking) level.coerceIn(0f, 1f) else 0f
     val idle = look.states.idle
     val speed = state.speed ?: idle.speed ?: 3600
-    val t = rememberInfiniteTransition(label = "agent-avatar")
-    val clock by t.animateFloat(0f, TAU, infiniteRepeatable(tween(speed, easing = LinearEasing)), label = "clock")
-    val bounce by t.animateFloat(
-        0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bounce",
-    )
+    // Read inside the drawing, so a tick redraws without recomposing.
+    val clockOf: () -> Float
+    val bounceOf: () -> Float
+    if (timeMs != null) {
+        clockOf = { (timeMs % speed).toFloat() / speed * TAU }
+        bounceOf = {
+            val p = (timeMs % 1800L).toFloat() / 900f
+            FastOutSlowInEasing.transform(if (p <= 1f) p else 2f - p)
+        }
+    } else {
+        val t = rememberInfiniteTransition(label = "agent-avatar")
+        val clock = t.animateFloat(0f, TAU, infiniteRepeatable(tween(speed, easing = LinearEasing)), label = "clock")
+        val bounce = t.animateFloat(
+            0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bounce",
+        )
+        clockOf = { clock.value }
+        bounceOf = { bounce.value }
+    }
     val perk by animateFloatAsState(if ((hovered && online) || listening) 1f else 0f, spring(dampingRatio = 0.45f), label = "perk")
     val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim")
 
@@ -95,6 +113,8 @@ internal fun AgentAvatar(
     }
 
     Canvas(Modifier.size(size.dp)) {
+        val clock = clockOf()
+        val bounce = bounceOf()
         val w = this.size.width
         val cx = w / 2
         val motion = state.motion
