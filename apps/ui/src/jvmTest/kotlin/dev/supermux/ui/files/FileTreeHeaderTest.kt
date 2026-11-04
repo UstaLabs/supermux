@@ -130,4 +130,15 @@ class FileTreeHeaderTest {
         waitForIdle()
         assertEquals(listOf(false, true), asked)
     }
+
+    @Test fun windowsHostCrumbsStartAtHomeOrTheDrive() {
+        assertEquals(
+            Breadcrumbs(false, listOf(Crumb("~", "C:\\Users\\me"), Crumb("proj", "C:\\Users\\me\\proj"))),
+            breadcrumbsOf("C:\\Users\\me\\proj", "C:\\Users\\me"),
+        )
+        assertEquals(
+            Breadcrumbs(false, listOf(Crumb("D:\\", "D:\\"), Crumb("Projects", "D:\\Projects"), Crumb("X", "D:\\Projects\\X"))),
+            breadcrumbsOf("D:\\Projects\\X", "C:\\Users\\me", max = 5),
+        )
+    }
 }
