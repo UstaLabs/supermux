@@ -220,6 +220,8 @@ class OverlayUiState {
     var shot by mutableStateOf<OverlayShot?>(null)
     /** The screen is being taken this moment: the bubble waits, so it isn't in the picture. */
     var snapping by mutableStateOf(false)
+    /** The phone's screen is on; while it's off nobody sees the head, so it doesn't draw. */
+    var screenOn by mutableStateOf(true)
     var voice: OverlayVoiceControl? = null
 
     val speaking: Boolean get() = reply?.let { replyShown < it.text.length } == true
@@ -418,14 +420,13 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
     // Its own clock, only as fast as it needs: smooth while you touch it, talk to it or it speaks,
     // slower while idle, slowest asleep, still while hidden. The avatar draws at this rate instead of
     // on every screen refresh, which is what an always-on overlay costs in battery.
-    val clock = rememberOverlayClock(
-        when {
-            ui.hidden || ui.capturing -> 0
-            ui.pressed || ui.listening || ui.speaking || ui.dragging -> 60
-            state == "asleep" -> 8
-            else -> 24
-        },
-    )
+    val fps = when {
+        ui.hidden || ui.capturing || !ui.screenOn -> 0
+        ui.pressed || ui.listening || ui.speaking || ui.dragging -> 60
+        state == "asleep" -> 8
+        else -> 24
+    }
+    val clock = rememberOverlayClock(fps)
     val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
     Box(modifier.size(size + 8.dp).testTag("overlay_head"), contentAlignment = Alignment.Center) {
         Box(
@@ -459,6 +460,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 speaking = state == "speaking",
                 level = ui.level,
                 timeMs = clock,
+                blinking = fps > 0,
             )
         }
         if (agent?.unread == true && !ui.chatOpen && !ui.listening && !ui.speaking) {

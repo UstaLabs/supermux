@@ -28,6 +28,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -279,8 +280,13 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         head.view.setOnTouchListener(::onHeadTouch)
         head.show()
         windowContext.registerComponentCallbacks(screenChanges)
-        // Screen sharing ends when the screen goes off, on every Android (15+ does it too).
-        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // Screen off: sharing ends (on every Android; 15+ does it too) and the head stops drawing; on: it draws again.
+        ui.screenOn = getSystemService(PowerManager::class.java).isInteractive
+        ContextCompat.registerReceiver(
+            this, screenOnOff,
+            IntentFilter().apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON) },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         watch()
     }
@@ -304,7 +310,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         picker.onLaunch = null
         main.removeCallbacks(hold)
         main.removeCallbacks(bridgeLost)
-        runCatching { unregisterReceiver(screenOff) }
+        runCatching { unregisterReceiver(screenOnOff) }
         dropThumb()
         flashWindow?.remove()
         screenShare?.let { endScreen(it, "the overlay was turned off") }
@@ -1032,8 +1038,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     private var askedSinceOn = false
     private var thumb: OverlayWindow? = null
     private var flashWindow: OverlayWindow? = null
-    private val screenOff = object : BroadcastReceiver() {
+    private val screenOnOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            ui.screenOn = intent.action == Intent.ACTION_SCREEN_ON
+            if (ui.screenOn) return
             askedSinceOn = false
             // Android 15 QPR1+ ends a share on lock by itself; give it the chance, so the log shows who did.
             val session = screenShare ?: return

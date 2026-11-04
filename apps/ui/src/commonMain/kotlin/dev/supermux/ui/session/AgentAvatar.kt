@@ -65,6 +65,8 @@ internal fun AgentAvatar(
      * changes. The assistant overlay ticks it slowly while idle and asleep, so an always-on avatar is cheap.
      */
     timeMs: Long? = null,
+    /** Whether it blinks now and then; a host that has stopped its [timeMs] clock stops this too. */
+    blinking: Boolean = true,
 ) {
     val look = spec ?: remember(name) { defaultAgentAvatar(name) }
     val state = when {
@@ -100,8 +102,8 @@ internal fun AgentAvatar(
     val dim by animateFloatAsState(if (state.desaturate) 1f else 0f, tween(500), label = "dim")
 
     val blink = remember { Animatable(1f) }
-    LaunchedEffect(name, look.eyes.blink) {
-        if (!look.eyes.blink) return@LaunchedEffect
+    LaunchedEffect(name, look.eyes.blink, blinking) {
+        if (!look.eyes.blink || !blinking) return@LaunchedEffect
         val rnd = Random(name.hashCode())
         while (true) {
             delay(1800L + rnd.nextLong(3200))
