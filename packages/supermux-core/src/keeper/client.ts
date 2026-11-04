@@ -10,6 +10,7 @@ import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
+import { proc } from '@supermux/platform'
 
 /**
  * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
@@ -90,10 +91,8 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   return spec
 }
 
-function alive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try { process.kill(pid, 0); return true } catch { return false }
-}
+/** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
+const alive = (pid: number): boolean => proc.isAlive(pid)
 
 /**
  * The keeper directory of session `sessionId`, `<real state directory>/keepers/<sessionId>`: like `keepers`, a
