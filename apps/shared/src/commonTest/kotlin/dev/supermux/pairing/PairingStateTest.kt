@@ -1,5 +1,7 @@
 package dev.supermux.pairing
 
+import dev.supermux.net.HostIdentity
+import dev.supermux.net.PairClaimResult
 import dev.supermux.net.PairUrl
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -21,6 +23,14 @@ import kotlin.test.assertTrue
  * machine actually depends on is the four members of [PairingTokenStore], and each host's
  * real store has its own tests.
  */
+/** A well-formed 26-char base32 hostId (spec §3.1). */
+private const val HID = "amsfen6cjgpd7pjqw6nimlahvy"
+
+/** The desktop host wizard's QR, exactly as it encodes it (HostWizard.kt `encodePairingPayload`). */
+private const val CLAIM =
+    """{"v":1,"action":"pair","hostId":"$HID","name":"studio","relayUrl":"https://h-$HID.relay.supermux.dev",""" +
+        """"directUrl":"http://127.0.0.1:9898","claimSecret":"s3cret"}"""
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class PairingStateTest {
     private fun tempStore(): PairingTokenStore = InMemoryPairingTokenStore()
@@ -156,5 +166,118 @@ class PairingStateTest {
         s.close()
         s.validate("garbage with no token")
         assertIs<PairingUiState.Error>(s.state.value)
+    }
+
+    // ── a claim: the desktop host's QR ──────────────────────────────────────────────────
+
+    @Test fun a_desktop_claim_qr_is_read_not_rejected() {
+        // Card #59: the first-run connect page fed this to the link parser alone and answered
+        // "Couldn't read a token from that…" before any network call.
+        val s = state(probe = { error("a claim carries no token to probe") })
+        s.validate(CLAIM, fallbackBase = null)
+        assertIs<PairingUiState.Confirm>(s.state.value)
+    }
+
+    private fun claimState(
+        store: PairingTokenStore = tempStore(),
+        claim: suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?,
+    ) = PairingState(
+        store = store,
+        scope = TestScope(UnconfinedTestDispatcher()),
+        probeOverride = { error("a claim carries no token to probe") },
+        deviceName = "Pixel 9",
+        claimOverride = claim,
+    )
+
+    private fun minted(name: String = "Pixel 9") =
+        PairClaimResult(host = HostIdentity(hostId = HID, name = "studio"), deviceToken = "minted-token", name = name)
+
+    @Test fun a_claim_waits_for_the_tofu_confirm_showing_where_and_as_whom() {
+        val s = claimState { _, _, _ -> error("nothing is redeemed before the TOFU confirm") }
+        s.validate(CLAIM, fallbackBase = null)
+        val confirm = assertIs<PairingUiState.Confirm>(s.state.value)
+        assertEquals(HID, confirm.claim?.hostId)
+        assertEquals("wss://h-$HID.relay.supermux.dev", confirm.pair.baseUrl)
+        assertEquals("Pixel 9", confirm.deviceName)
+    }
+
+    @Test fun a_claim_is_redeemed_on_confirm_and_the_minted_token_persisted() {
+        val store = tempStore()
+        val calls = mutableListOf<List<String>>()
+        val s = claimState(store) { url, secret, name -> calls += listOf(url, secret, name); minted(name) }
+        s.validate(CLAIM, fallbackBase = null)
+        assertNull(store.load())
+        s.confirm()
+        assertIs<PairingUiState.Paired>(s.state.value)
+        assertEquals(listOf(listOf("https://h-$HID.relay.supermux.dev", "s3cret", "Pixel 9")), calls)
+        assertEquals("minted-token", store.load())
+        assertEquals("wss://h-$HID.relay.supermux.dev", store.loadBaseUrl())
+    }
+
+    @Test fun a_dismissed_claim_is_never_redeemed() {
+        val s = claimState { _, _, _ -> error("a dismissed claim must stay usable") }
+        s.validate(CLAIM, fallbackBase = null)
+        s.cancelConfirm()
+        assertIs<PairingUiState.Idle>(s.state.value)
+    }
+
+    @Test fun a_claim_answered_by_another_host_persists_nothing() {
+        val store = tempStore()
+        val s = claimState(store) { _, _, _ ->
+            PairClaimResult(host = HostIdentity(hostId = "zzzzzzzzzzzzzzzzzzzzzzzzzz"), deviceToken = "tok")
+        }
+        s.validate(CLAIM, fallbackBase = null)
+        s.confirm()
+        val err = assertIs<PairingUiState.Error>(s.state.value)
+        assertTrue("mismatch" in err.message)
+        assertNull(store.load())
+        assertNull(store.loadBaseUrl())
+    }
+
+    @Test fun an_expired_or_used_claim_is_an_error_and_persists_nothing() {
+        val store = tempStore()
+        val s = claimState(store) { _, _, _ -> null }
+        s.validate(CLAIM, fallbackBase = null)
+        s.confirm()
+        assertIs<PairingUiState.Error>(s.state.value)
+        assertNull(store.load())
+    }
+
+    @Test fun a_claim_without_a_relay_is_redeemed_on_its_direct_url() {
+        val direct = CLAIM.replace(""""relayUrl":"https://h-$HID.relay.supermux.dev",""", "")
+            .replace("http://127.0.0.1:9898", "http://192.168.1.20:9898")
+        val store = tempStore()
+        var at: String? = null
+        val s = claimState(store) { url, _, name -> at = url; minted(name) }
+        s.validate(direct, fallbackBase = null)
+        assertEquals("ws://192.168.1.20:9898", assertIs<PairingUiState.Confirm>(s.state.value).pair.baseUrl)
+        s.confirm()
+        assertEquals("http://192.168.1.20:9898", at)
+        assertEquals("ws://192.168.1.20:9898", store.loadBaseUrl())
+    }
+
+    @Test fun a_claim_is_not_sent_as_a_token_to_a_broker_already_known() {
+        val store = tempStore().apply { saveBaseUrl("ws://prior:9898") }
+        val s = claimState(store) { _, _, _ -> null }
+        s.validate(CLAIM) // the default fallback is the stored base: a bare token would go to it
+        assertIs<PairingUiState.Confirm>(s.state.value)
+    }
+
+    @Test fun confirm_still_persists_a_links_own_token() {
+        val store = tempStore()
+        val s = PairingState(store, TestScope(UnconfinedTestDispatcher()), probeOverride = { "dev" })
+        s.validate("https://host:9898/pair?t=abc123")
+        s.confirm()
+        assertIs<PairingUiState.Paired>(s.state.value)
+        assertEquals("abc123", store.load())
+        assertEquals("wss://host:9898", store.loadBaseUrl())
+    }
+
+    @Test fun confirm_with_nothing_pending_does_nothing() {
+        val store = tempStore()
+        val s = PairingState(store, TestScope(UnconfinedTestDispatcher()))
+        s.confirm()
+        assertIs<PairingUiState.Idle>(s.state.value)
+        assertNull(store.load())
     }
 }

@@ -52,7 +52,7 @@ data class PairUrl(val baseUrl: String, val token: String) {
         }
 
         /** Store the ws-form: http→ws, https→wss (BrokerApi re-maps ws→http internally). */
-        private fun normalize(base: String): String = base.trim().trimEnd('/')
+        internal fun normalize(base: String): String = base.trim().trimEnd('/')
             .replaceFirst("https://", "wss://")
             .replaceFirst("http://", "ws://")
 

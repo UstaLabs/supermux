@@ -230,6 +230,10 @@ private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : Pai
     override fun saveBaseUrl(url: String) = this@asPairingStore.saveBaseUrl(url)
 }
 
+/** This computer's name on a host it pairs with: onboarding and Add host both offer it. */
+private fun desktopDeviceName(): String =
+    runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "Desktop host"
+
 /**
  * Desktop's legacy `intro-seen` marker file (contents = the intro version), read ONCE so
  * `UiPrefs.seedIntroSeen` can drain it into `SettingsKeys.INTRO_SEEN`. Nothing else reads the
@@ -1106,7 +1110,12 @@ fun main() {
                         )
                     } else {
                         val pairing = remember {
-                            PairingState(store.asPairingStore(), scope, httpFactory = { cioHttpFactory()(null) })
+                            PairingState(
+                                store.asPairingStore(),
+                                scope,
+                                httpFactory = { cioHttpFactory()(null) },
+                                deviceName = desktopDeviceName(),
+                            )
                         }
                         DisposableEffect(Unit) { onDispose { pairing.close() } }
                         OnboardingScreen(pairing, onPaired = {
@@ -2053,10 +2062,7 @@ fun main() {
                             autoSelect = System.getenv("SM_AUTOSELECT") == "1",
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
-                            defaultDeviceName = remember {
-                                runCatching { java.net.InetAddress.getLocalHost().hostName }
-                                    .getOrNull()?.ifBlank { null } ?: "Desktop host"
-                            },
+                            defaultDeviceName = remember { desktopDeviceName() },
                             settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
                             settingsSection = { section, scope ->
                                 DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
