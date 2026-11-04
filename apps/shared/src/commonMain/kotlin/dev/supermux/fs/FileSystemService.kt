@@ -40,23 +40,11 @@ val DirState.snapshotOrPrevious: DirSnapshot?
 fun interface DirSubscription { fun close() }
 
 /**
- * An absolute path in the broker's normalised form (its fs_dir / fs_gone / fs_err echo this):
- * `//` collapsed, `.` dropped, `..` resolved (never above "/"), no trailing slash except "/".
- * A relative path is returned with the same clean-up but no leading slash.
+ * A path in the broker's normalised form (its fs_dir / fs_gone / fs_err echo this): separators collapsed into the
+ * host's own (a Windows broker answers `C:\…\src` for `C:\…/src`), `.` dropped, `..` resolved (never above the root),
+ * no trailing separator but at a root ([normalizeHostPath]). A relative path gets the same clean-up, "." for nothing.
  */
-fun normalizeFsPath(path: String): String {
-    val abs = path.startsWith("/")
-    val out = ArrayList<String>()
-    for (part in path.split('/')) {
-        when (part) {
-            "", "." -> {}
-            ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeAt(out.size - 1) else if (!abs) out += part
-            else -> out += part
-        }
-    }
-    val joined = out.joinToString("/")
-    return if (abs) "/$joined" else joined.ifEmpty { "." }
-}
+fun normalizeFsPath(path: String): String = normalizeHostPath(path).ifEmpty { "." }
 
 class FileSystemService(
     private val api: BrokerApi,

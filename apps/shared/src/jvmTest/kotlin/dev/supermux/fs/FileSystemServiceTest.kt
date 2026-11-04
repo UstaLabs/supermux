@@ -361,4 +361,25 @@ class FileSystemServiceTest {
         assertEquals("""{"op":"delete","path":"/mnt/x"}""", bodies[0])
         assertEquals("""{"op":"delete","path":"/mnt/x","permanent":true}""", bodies[1])
     }
+
+    @Test fun aWindowsFolderKeyMatchesTheBrokersEcho() {
+        assertEquals("C:\\Users\\me\\proj\\src", normalizeFsPath("C:\\Users\\me\\proj/src"))
+        assertEquals("C:\\Users\\me\\proj\\src", normalizeFsPath("c:\\Users\\me\\proj\\.\\lib\\..\\src\\"))
+        assertEquals("C:\\", normalizeFsPath("C:/"))
+        assertEquals("/a/c", normalizeFsPath("/a//b/../c/"))
+        assertEquals(".", normalizeFsPath(""))
+    }
+
+    // The tree joins a child onto the workdir the session reports (`C:\Users\me\proj`); a Windows broker resolves
+    // the folder and echoes `C:\Users\me\proj\src`. Before, the echo found no slot and the folder stayed "Loading".
+    @Test fun aWindowsFolderSubscribedInMixedSpellingTakesTheBrokersEcho() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val s = fs.subscribe("C:\\Users\\me\\proj/src")
+        runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("C:\\Users\\me\\proj\\src")), sent)
+        fs.onFrame(dir("C:\\Users\\me\\proj\\src", "b:1", "a.kt"))
+        val ready = assertIs<DirState.Ready>(fs.dir("C:\\Users\\me\\proj/src").value)
+        assertEquals(listOf("a.kt"), ready.snap.entries.map { it.name })
+        s.close()
+    }
 }
