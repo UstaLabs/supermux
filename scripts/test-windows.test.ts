@@ -67,6 +67,26 @@ describe("parseJunit", () => {
     expect(suites.get("a/ok.test.ts")).toEqual({ tests: 1, failures: 0, errors: 0 })
     expect(suites.get("a/bad & worse.test.ts")).toEqual({ tests: 2, failures: 1, errors: 0 })
   })
+
+  // Bun nests a <testsuite> per describe block, each with the file's name. Keeping the last one per file lost a
+  // failure in an earlier describe whenever the last passed: the lane once reported src/core/editor/changes.test.ts
+  // as passed while its "untracked symlinks are never followed" failed (run 41917522111).
+  test("a failure in any describe block fails the file, wherever it sits", () => {
+    const nested = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="1">
+  <testsuite name="src/x.test.ts" file="src/x.test.ts" tests="3" failures="1" errors="0">
+    <testsuite name="first" file="src/x.test.ts" tests="1" failures="1" errors="0">
+      <testcase name="breaks" classname="first"><failure message="nope"/></testcase>
+    </testsuite>
+    <testsuite name="last" file="src/x.test.ts" tests="2" failures="0" errors="0">
+      <testcase name="a" classname="last"/>
+      <testcase name="b" classname="last"/>
+    </testsuite>
+  </testsuite>
+</testsuites>`
+    expect(resultsForChunk(["src/x.test.ts"], parseJunit(nested))).toEqual([{ file: "src/x.test.ts", status: "failed" }])
+    expect(parseJunit(nested).get("src/x.test.ts")).toEqual({ tests: 3, failures: 1, errors: 0 })
+  })
 })
 
 describe("resultsForChunk", () => {

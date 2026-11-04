@@ -92,11 +92,14 @@ export function parseJunit(xml: string): Map<string, SuiteCounts> {
     const attr = (name: string) => attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1]
     const file = attr("file") ?? attr("name")
     if (!file) continue
-    suites.set(normalizeTestPath(decodeXml(file)), {
-      tests: Number(attr("tests") ?? 0),
-      failures: Number(attr("failures") ?? 0),
-      errors: Number(attr("errors") ?? 0),
-    })
+    const key = normalizeTestPath(decodeXml(file))
+    const counts = { tests: Number(attr("tests") ?? 0), failures: Number(attr("failures") ?? 0), errors: Number(attr("errors") ?? 0) }
+    // Bun nests a suite per describe block inside the file's own, every one named after the file: the outermost
+    // holds the totals, and a failure in any of them must fail the file, whatever order they come in.
+    const seen = suites.get(key)
+    suites.set(key, seen
+      ? { tests: Math.max(seen.tests, counts.tests), failures: Math.max(seen.failures, counts.failures), errors: Math.max(seen.errors, counts.errors) }
+      : counts)
   }
   return suites
 }
