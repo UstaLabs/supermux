@@ -213,6 +213,13 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putAssistantOverlayAgent(sessionId: String?) =
         settings.putString(SettingsKeys.ASSISTANT_OVERLAY_AGENT, sessionId)
 
+    /** Your screen goes with what you say when you hold the overlay to talk; on unless turned off. */
+    val assistantOverlayScreen: Flow<Boolean> =
+        settings.string(SettingsKeys.ASSISTANT_OVERLAY_SCREEN).map { it?.toBooleanStrictOrNull() ?: true }
+
+    suspend fun putAssistantOverlayScreen(value: Boolean) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_SCREEN, value.toString())
+
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =
         settings.string(SettingsKeys.TEXT_SCALE).map { raw ->

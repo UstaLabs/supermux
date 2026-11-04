@@ -341,5 +341,24 @@ private fun AssistantOverlayRow() {
                 Text("Open the setting again")
             }
         }
+        if (on) {
+            val screen by prefs.assistantOverlayScreen.collectAsState(true)
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Show your screen when you hold it to talk", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
+                    Text(
+                        "Android asks once each time you unlock, and shows its sharing chip meanwhile.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = screen,
+                    onCheckedChange = { scope.launch { prefs.putAssistantOverlayScreen(it) } },
+                    modifier = Modifier.testTag("appearance_overlay_screen_switch"),
+                )
+            }
+        }
     }
 }

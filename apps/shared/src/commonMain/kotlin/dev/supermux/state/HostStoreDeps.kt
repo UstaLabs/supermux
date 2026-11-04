@@ -76,6 +76,9 @@ object SettingsKeys {
     /** The Agent the assistant overlay shows on this device (a session id), picked in its chat's
      *  header. Per device, never synced; unset = the default Agent. */
     const val ASSISTANT_OVERLAY_AGENT = "appearance:assistantOverlayAgent"
+    /** "true"/"false": your screen goes with what you say when you hold the overlay to talk (Android asks
+     *  once per session). Per device, never synced; unset = on. */
+    const val ASSISTANT_OVERLAY_SCREEN = "appearance:assistantOverlayScreen"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping

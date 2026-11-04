@@ -4,12 +4,14 @@
 // windows (Android: overlay windows owned by a service); the windows share one [OverlayUiState].
 package dev.supermux.ui.overlay
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,9 +42,11 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,6 +80,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,6 +105,8 @@ import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.sessionPreviewPlainText
+import dev.supermux.net.ByteArrayChunkSource
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
@@ -199,19 +208,32 @@ class OverlayUiState {
     var shareAttach by mutableStateOf<ComposerExternalAttach?>(null)
     /** A picture of the screen is being taken: nothing of the overlay may be in it. */
     var capturing by mutableStateOf(false)
-    /** Dragged and held still over the screen: letting go shows the Agent what's under it. */
-    var lookArmed by mutableStateOf(false)
-    /** Android's screen-sharing session for looks is on (asked once; ends when stopped or the screen goes off). */
-    var lookSharing by mutableStateOf(false)
-    /** The last ask to share the screen got a "no": offer a screenshot of the user's own instead. */
-    var lookDeclined by mutableStateOf(false)
+    /** This device's switch: your screen goes with what you say when you hold it to talk. */
+    var screenWithVoice by mutableStateOf(true)
+    /** Android's screen-sharing session is on (asked once; ends when stopped or the screen goes off). */
+    var screenSharing by mutableStateOf(false)
+    /** Android is asking to share the screen (the first hold after unlocking), so this talk went hands-free. */
+    var screenAsking by mutableStateOf(false)
+    /** The last ask got a "no": nothing of the screen goes, and the chat offers a screenshot of your own. */
+    var screenDeclined by mutableStateOf(false)
+    /** The screen taken when you held it to talk, going with your words unless you drop it. */
+    var shot by mutableStateOf<OverlayShot?>(null)
+    /** The screen is being taken this moment: the bubble waits, so it isn't in the picture. */
+    var snapping by mutableStateOf(false)
     var voice: OverlayVoiceControl? = null
 
     val speaking: Boolean get() = reply?.let { replyShown < it.text.length } == true
 
     /** Anything for the bubble to show right now. */
     val bubbleVisible: Boolean
-        get() = !hidden && !capturing && !dragging && !chatOpen && (listening || finishing || micMissing || (reply != null && !replyFolded))
+        get() = !hidden && !capturing && !snapping && !dragging && !chatOpen &&
+            (listening || finishing || micMissing || (reply != null && !replyFolded))
+}
+
+/** The screen taken when you held the overlay to talk: sent with your words unless you drop it. */
+@Stable
+class OverlayShot(val thumb: ImageBitmap, val png: Deferred<ByteArray?>) {
+    var dropped by mutableStateOf(false)
 }
 
 /** The longest stretch of a reply the bubble types out; the rest is one tap away. */
@@ -303,12 +325,20 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     LaunchedEffect(ui.finishing, dictation.active, dictation.transcribing) {
         if (ui.finishing && !dictation.active && !dictation.transcribing) {
             val text = latest.trim()
+            val shot = ui.shot?.takeUnless { it.dropped }
             ui.finishing = false
             ui.heard = ""
+            ui.shot = null
             latest = ""
             if (text.isNotEmpty()) {
                 ui.thinking = true
-                fleet.sendMessage(agentId, text)
+                // The screen goes up only now that you've let go: a cancelled talk never leaves the phone.
+                val upload = actions.upload
+                val png = shot?.png?.await()
+                val fileId = if (png != null && upload != null) {
+                    upload(ByteArrayChunkSource(png), "screen-${Clock.System.now().toEpochMilliseconds()}.png", "image/png", null) { _, _ -> }
+                } else null
+                actions.send(text, listOfNotNull(fileId))
             }
         }
     }
@@ -391,19 +421,12 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
     val clock = rememberOverlayClock(
         when {
             ui.hidden || ui.capturing -> 0
-            ui.pressed || ui.listening || ui.speaking || ui.dragging || ui.lookArmed -> 60
+            ui.pressed || ui.listening || ui.speaking || ui.dragging -> 60
             state == "asleep" -> 8
             else -> 24
         },
     )
-    val lift by animateFloatAsState(
-        when {
-            ui.lookArmed -> 1.16f
-            ui.pressed || ui.listening -> 1.08f
-            else -> 1f
-        },
-        label = "lift",
-    )
+    val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
     Box(modifier.size(size + 8.dp).testTag("overlay_head"), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(size).scale(lift).shadow(10.dp, CircleShape).clip(CircleShape)
@@ -417,9 +440,6 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 Modifier.size(size).scale(ring)
                     .border(3.dp, (if (ui.cancelArmed) cs.error else cs.primary).copy(alpha = 0.7f), CircleShape),
             )
-        } else if (ui.lookArmed) {
-            // Armed to look: a steady ring, in step with the frame around what it will take.
-            Box(Modifier.size(size).scale(lift).border(3.dp, cs.primary, CircleShape))
         }
         val inner = (size.value * 0.82f).toInt()
         // A press perks it up, but not while you hold it to talk: then it is listening, not hovered.
@@ -489,6 +509,24 @@ fun OverlayBubble(
                         maxLines = 4,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val shot = ui.shot
+                    val note = when {
+                        ui.screenAsking -> "Android asks before your screen can go. Tap Send when you're done."
+                        shot != null && !shot.dropped -> "Your screen goes with this."
+                        shot != null -> "Screen dropped: only your words go."
+                        else -> null
+                    }
+                    if (note != null) {
+                        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Icon(
+                                if (shot?.dropped == true) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = null,
+                                tint = cs.onPrimaryContainer.copy(alpha = 0.8f),
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(note, color = cs.onPrimaryContainer.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
                 if (ui.locked) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -589,68 +627,82 @@ fun OverlayUndo(name: String, onUndo: () -> Unit, modifier: Modifier = Modifier)
 }
 
 /**
- * The frame a look takes, shown before it is taken, with what letting go does. Drawn in a window the
- * size of the frame plus its label above; [frameTop] is where the frame starts in it.
+ * The screen taken as you hold it to talk, just below the head: tap it, or slide down onto it while you
+ * hold, to drop it from this message.
  */
 @Composable
-fun OverlayLookFrame(name: String, frameTop: Dp, modifier: Modifier = Modifier) {
+fun OverlayShotThumb(shot: OverlayShot, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val grow by animateFloatAsState(if (shown) 1f else 0.94f, label = "look-frame")
-    Box(modifier.fillMaxSize().testTag("overlay_look_frame")) {
-        val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        modifier.padding(4.dp).testTag("overlay_shot"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Box(
-            Modifier.fillMaxSize().padding(top = frameTop).scale(grow)
-                .background(cs.primary.copy(alpha = 0.06f), shape)
-                .border(3.dp, cs.primary, shape),
-        )
+            Modifier.size(width = 52.dp, height = 112.dp).shadow(6.dp, shape).clip(shape)
+                .border(2.dp, if (shot.dropped) cs.outline else cs.primary, shape)
+                .clickable(onClickLabel = if (shot.dropped) "Send your screen" else "Don't send your screen", onClick = onToggle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                shot.thumb,
+                contentDescription = "Your screen",
+                contentScale = ContentScale.Crop,
+                alpha = if (shot.dropped) 0.3f else 1f,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (shot.dropped) Icon(Icons.Filled.Close, contentDescription = null, tint = cs.onSurface)
+        }
         Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = cs.primary,
-            contentColor = cs.onPrimary,
-            shadowElevation = 4.dp,
-            modifier = Modifier.padding(start = 6.dp),
+            shape = RoundedCornerShape(50),
+            color = if (shot.dropped) cs.surfaceContainerHigh else cs.primary,
+            contentColor = if (shot.dropped) cs.onSurfaceVariant else cs.onPrimary,
+            shadowElevation = 2.dp,
         ) {
             Text(
-                "Let go to show $name this",
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                if (shot.dropped) "Not sent" else "Screen",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
     }
 }
 
+/** The quick flash that says the screen was just taken. */
+@Composable
+fun OverlayFlash(modifier: Modifier = Modifier) {
+    val fade = remember { Animatable(0.55f) }
+    LaunchedEffect(Unit) { fade.animateTo(0f, tween(240)) }
+    Box(modifier.fillMaxSize().background(Color.White.copy(alpha = fade.value)))
+}
+
 /**
- * What the chat's composer says about looks, above its field: that screen sharing is on, with Stop; the
- * way round a "no" to sharing (a screenshot of your own); otherwise how to show it something.
+ * The chat's say about the screen, above its field: this device's switch for sending the screen when you
+ * hold it to talk, Stop while Android's sharing is on, and the way round a "no" (a screenshot of your own).
  */
 @Composable
-fun OverlayLookChips(ui: OverlayUiState, name: String, onStopSharing: () -> Unit, onAttachScreenshot: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val icon = @Composable { Icon(Icons.Outlined.Visibility, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) }
-    when {
-        ui.lookSharing -> AssistChip(
-            onClick = onStopSharing,
-            label = { Text("Sharing your screen · Stop") },
-            leadingIcon = icon,
-            modifier = Modifier.testTag("overlay_look_stop"),
-        )
-        ui.lookDeclined -> AssistChip(
+fun OverlayScreenChips(ui: OverlayUiState, onToggle: (Boolean) -> Unit, onStopSharing: () -> Unit, onAttachScreenshot: () -> Unit) {
+    val iconSize = Modifier.size(AssistChipDefaults.IconSize)
+    FilterChip(
+        selected = ui.screenWithVoice,
+        onClick = { onToggle(!ui.screenWithVoice) },
+        label = { Text(if (ui.screenWithVoice) "Screen goes with hold-to-talk" else "Screen stays private") },
+        leadingIcon = {
+            Icon(if (ui.screenWithVoice) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff, contentDescription = null, modifier = iconSize)
+        },
+        modifier = Modifier.testTag("overlay_screen_toggle"),
+    )
+    if (ui.screenSharing) {
+        AssistChip(onClick = onStopSharing, label = { Text("Sharing · Stop") }, modifier = Modifier.testTag("overlay_screen_stop"))
+    }
+    if (ui.screenDeclined) {
+        AssistChip(
             onClick = onAttachScreenshot,
-            label = { Text("Attach a screenshot instead") },
-            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) },
-            modifier = Modifier.testTag("overlay_look_fallback"),
+            label = { Text("Attach a screenshot") },
+            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null, modifier = iconSize) },
+            modifier = Modifier.testTag("overlay_screen_fallback"),
         )
-        else -> Row(
-            Modifier.padding(horizontal = 4.dp, vertical = 6.dp).testTag("overlay_look_hint"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Icon(Icons.Outlined.Visibility, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
-            Text("Drag $name onto anything and hold to show it here", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant)
-        }
     }
 }
 

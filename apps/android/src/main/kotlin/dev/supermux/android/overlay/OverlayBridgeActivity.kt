@@ -15,8 +15,8 @@ import dev.supermux.ui.platform.PickKind
 
 /**
  * The assistant overlay's way to the things only an activity may ask for (#62): the screen-sharing
- * consent behind looks (drag it onto something and hold still), and the file and photo pickers behind
- * the chat's attach button. A service cannot launch either for a result.
+ * consent behind holding it to talk with the screen, and the file and photo pickers behind the chat's
+ * attach button. A service cannot launch either for a result.
  *
  * Invisible (a translucent theme, nothing drawn) and gone as soon as it has an answer. The overlay
  * steps out of the way while it is up: its windows would cover the system's dialog and picker.
@@ -75,7 +75,7 @@ class OverlayBridgeActivity : ComponentActivity() {
             when (intent.getStringExtra(EXTRA_JOB)) {
                 JOB_SHARE -> {
                     val projections = getSystemService(MediaProjectionManager::class.java)
-                    // The whole screen (a look frames part of it), not a list of apps to switch to.
+                    // The whole screen, not a list of apps to switch to.
                     consent.launch(
                         if (Build.VERSION.SDK_INT >= 34) projections.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
                         else projections.createScreenCaptureIntent(),
