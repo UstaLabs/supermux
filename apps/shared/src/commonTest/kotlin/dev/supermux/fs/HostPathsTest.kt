@@ -116,4 +116,37 @@ class HostPathsTest {
         assertEquals("/home/me", inferHomeDir("/home/me/proj"))
         assertNull(inferHomeDir("/srv/proj"))
     }
+
+    @Test fun aPosixNameMayHoldABackslash() {
+        assertEquals("/w/a\\b", hostJoin("/w", "a\\b"))
+        assertEquals("C:\\w\\a\\b", hostJoin("C:\\w", "a/b"))
+        assertEquals("/w", hostParent("/w/a\\b"))
+        assertEquals("a\\b", pathLeaf("/w/a\\b"))
+        assertEquals("a\\b", hostRelativePath("/w", "/w/a\\b"))
+    }
+
+    @Test fun rootOfEachKindOfHostPath() {
+        assertEquals("/", hostRoot("/home/me"))
+        assertEquals("c:\\", hostRoot("c:\\Users\\me"))
+        assertEquals("C:/", hostRoot("C:/Users/me"))
+        assertEquals("\\\\server\\share", hostRoot("\\\\server\\share\\app"))
+        assertNull(hostRoot("src/a.kt"))
+    }
+
+    @Test fun fileUriBackToAHostPath() {
+        assertEquals("C:\\Users\\me\\my app\\a.kt", hostPathFromFileUri("file:///C:/Users/me/my%20app/a.kt"))
+        assertEquals("C:\\Users\\me\\a.kt", hostPathFromFileUri("file:///c%3A/Users/me/a.kt"))
+        assertEquals("/home/me/a#b.kt", hostPathFromFileUri("file:///home/me/a%23b.kt"))
+        assertEquals("/home/me/é.kt", hostPathFromFileUri("file://localhost/home/me/%C3%A9.kt"))
+        assertEquals("\\\\server\\share\\a.kt", hostPathFromFileUri("file://server/share/a.kt"))
+        assertNull(hostPathFromFileUri("https://example.com/a.kt"))
+    }
+
+    // One encoder for every file URI the clients send: java.net.URLEncoder's set (the convergence
+    // EditorPanelLspUriTest pinned), so `! ~ ' ( )` are escaped and `* - _ .` stay.
+    @Test fun fileUriEscapesWhatUrlEncoderEscapes() {
+        assertEquals("file:///w/%21%7E%27%28%29.kt", hostFileUri("/w/!~'().kt"))
+        assertEquals("file:///w/a-b_c.d*e.kt", hostFileUri("/w/a-b_c.d*e.kt"))
+        assertEquals("file:///C:/w/a.kt", hostFileUri("C:\\w\\a.kt"))
+    }
 }

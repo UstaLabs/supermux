@@ -4,8 +4,18 @@
 // host's own `C:\Users\me\app`. Lexical only: nothing here touches a file system.
 package dev.supermux.fs
 
-/** A path's segments on either separator: `/a/b` and `C:\a\b` alike. A Windows drive (`C:`) is the first. */
-fun hostPathSegments(path: String): List<String> = path.split('/', '\\').filter { it.isNotEmpty() }
+/**
+ * A path's segments: `/a/b` and `C:\a\b` alike. A path starting with `/` is a POSIX host's, where `\` is an ordinary
+ * character of a name; any other (a drive, a share, a relative path, a label like `…\parent\leaf`) splits on both.
+ * A Windows drive (`C:`) is the first.
+ */
+fun hostPathSegments(path: String): List<String> = path.split(*separatorsOf(path)).filter { it.isNotEmpty() }
+
+private val POSIX_SEPARATORS = charArrayOf('/')
+private val BOTH_SEPARATORS = charArrayOf('/', '\\')
+
+/** The characters that separate [path]'s names (see [hostPathSegments]). */
+private fun separatorsOf(path: String): CharArray = if (path.startsWith('/')) POSIX_SEPARATORS else BOTH_SEPARATORS
 
 /** `C:`, the first segment of a path on a Windows drive. */
 fun isDriveSegment(segment: String): Boolean = segment.length == 2 && segment[1] == ':' && segment[0].isLetter()
@@ -54,10 +64,11 @@ fun hostIsInside(path: String, root: String): Boolean = hostRelativePath(root, p
 
 private fun isAbsoluteHostPath(path: String): Boolean = path.startsWith('/') || isWindowsHostPath(path)
 
-/** The last segment of [path] on either separator: `/a/b` and `C:\a\b` both give `b`. */
+/** The last segment of [path]: `/a/b` and `C:\a\b` both give `b` (separators as in [hostPathSegments]). */
 fun pathLeaf(path: String): String {
-    val trimmed = path.trimEnd('/', '\\')
-    return trimmed.substring(trimmed.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
+    val separators = separatorsOf(path)
+    val trimmed = path.trimEnd(*separators)
+    return trimmed.substring(trimmed.lastIndexOfAny(separators) + 1)
 }
 
 /**
@@ -110,10 +121,13 @@ fun hostParent(path: String): String? {
     return assemble(path, segments.dropLast(1), separatorOf(path))
 }
 
-/** [relative] (a broker's `/`-separated path, or the host's own) under [root], in the root's separator. */
+/**
+ * [relative] (a broker's `/`-separated path, or the host's own) under [root], in the root's separator; `.` segments
+ * drop out. Under a POSIX root a `\` in [relative] belongs to a name.
+ */
 fun hostJoin(root: String, relative: String): String {
     val sep = separatorOf(root)
-    val rel = relative.split('/', '\\').filter { it.isNotEmpty() }.joinToString(sep.toString())
+    val rel = relative.split(*separatorsOf(root)).filter { it.isNotEmpty() && it != "." }.joinToString(sep.toString())
     if (rel.isEmpty()) return root
     return if (root.endsWith('/') || root.endsWith('\\')) root + rel else "$root$sep$rel"
 }
@@ -138,13 +152,72 @@ fun normalizeHostPath(path: String): String {
     return assemble(path, out, if (isWindowsHostPath(path)) '\\' else '/')
 }
 
-private const val URI_SAFE = "-._~!$&'()*+,;=:@"
+/** The root [path] hangs from, in its own spelling: `/`, `C:\` (or `C:/`), `\\server\share`; null for a relative path. */
+fun hostRoot(path: String): String? {
+    val segments = hostPathSegments(path)
+    return when {
+        isShare(path) -> if (segments.size >= 2) assemble(path, segments.take(2), separatorOf(path)) else null
+        isWindowsHostPath(path) -> assemble(path, segments.take(1), separatorOf(path))
+        path.startsWith('/') -> "/"
+        else -> null
+    }
+}
+
+// What java.net.URLEncoder leaves as it is: ASCII letters and digits and these. Every other byte of a name's UTF-8 is
+// `%XX`, `! ~ ' ( )` included (the convergence EditorPanelLspUriTest pinned for the LSP URIs).
+private const val URI_UNRESERVED = ".-*_"
+private const val HEX = "0123456789ABCDEF"
 
 private fun encodeUriSegment(segment: String): String = buildString {
     for (byte in segment.encodeToByteArray()) {
-        val c = (byte.toInt() and 0xFF).toChar()
-        if (c.isLetterOrDigit() && c.code < 128 || c in URI_SAFE) append(c)
-        else append('%').append(((byte.toInt() and 0xFF) or 0x100).toString(16).substring(1).uppercase())
+        val v = byte.toInt() and 0xFF
+        val c = v.toChar()
+        if (v < 128 && (c.isLetterOrDigit() || c in URI_UNRESERVED)) append(c)
+        else append('%').append(HEX[v ushr 4]).append(HEX[v and 0x0F])
+    }
+}
+
+private fun hexValue(c: Char): Int = when (c) {
+    in '0'..'9' -> c - '0'
+    in 'a'..'f' -> c - 'a' + 10
+    in 'A'..'F' -> c - 'A' + 10
+    else -> -1
+}
+
+/** `%XX` escapes as UTF-8 bytes (a run of them decodes together), everything else as it is; a bad escape stays. */
+private fun percentDecode(s: String): String {
+    if ('%' !in s) return s
+    val out = StringBuilder(s.length)
+    var i = 0
+    while (i < s.length) {
+        if (s[i] != '%') { out.append(s[i]); i++; continue }
+        val bytes = ArrayList<Byte>()
+        while (i + 2 < s.length && s[i] == '%') {
+            val hi = hexValue(s[i + 1])
+            val lo = hexValue(s[i + 2])
+            if (hi < 0 || lo < 0) break
+            bytes += (hi * 16 + lo).toByte()
+            i += 3
+        }
+        if (bytes.isEmpty()) { out.append('%'); i++ } else out.append(bytes.toByteArray().decodeToString())
+    }
+    return out.toString()
+}
+
+/**
+ * The host path a `file:` URI names, or null for another scheme. `file:///C:/Users/…` and `file:///c%3A/Users/…` (how
+ * VS Code's language servers spell it) are `C:\Users\…`; `file://server/share/…` is `\\server\share\…`; the rest is
+ * a POSIX path. `localhost` is no host.
+ */
+fun hostPathFromFileUri(uri: String): String? {
+    if (!uri.startsWith("file://")) return null
+    val rest = uri.removePrefix("file://").let { if (it.startsWith("localhost/")) it.removePrefix("localhost") else it }
+    val path = percentDecode(rest)
+    return when {
+        path.length >= 3 && path[0] == '/' && isDriveSegment(path.substring(1, 3)) && (path.length == 3 || path[3] == '/') ->
+            path.substring(1, 3).uppercase() + path.substring(3).replace('/', '\\').ifEmpty { "\\" }
+        !path.startsWith('/') -> "\\\\" + path.replace('/', '\\')
+        else -> path
     }
 }
 
