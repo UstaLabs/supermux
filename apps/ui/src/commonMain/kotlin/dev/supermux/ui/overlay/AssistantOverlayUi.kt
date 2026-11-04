@@ -70,6 +70,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
@@ -105,7 +106,6 @@ import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.sessionPreviewPlainText
-import dev.supermux.net.ByteArrayChunkSource
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -287,6 +287,8 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
 @Composable
 fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     val actions = rememberChatActions(fleet, agentId)
+    // Where a finished talk is sent from: lives as long as the overlay's voice, not one effect run.
+    val talks = rememberCoroutineScope()
     var latest by remember { mutableStateOf("") }
     val mic = LocalPlatform.current.mic
     val dictation = rememberDictation(
@@ -335,12 +337,13 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
             if (text.isNotEmpty()) {
                 ui.thinking = true
                 // The screen goes up only now that you've let go: a cancelled talk never leaves the phone.
-                val upload = actions.upload
-                val png = shot?.png?.await()
-                val fileId = if (png != null && upload != null) {
-                    upload(ByteArrayChunkSource(png), "screen-${Clock.System.now().toEpochMilliseconds()}.png", "image/png", null) { _, _ -> }
-                } else null
-                actions.send(text, listOfNotNull(fileId))
+                // Not in this effect: it restarts as soon as `finishing` flips, which cancelled the upload.
+                finishTalk(
+                    talks, text, "screen-${Clock.System.now().toEpochMilliseconds()}.png", shot?.png,
+                    actions.upload, actions.send,
+                ) { println("[OverlayTalk] $it") }
+            } else {
+                println("[OverlayTalk] nothing was heard: nothing sent" + if (shot != null) " (the screen is dropped too)" else "")
             }
         }
     }
