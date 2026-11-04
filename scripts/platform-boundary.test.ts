@@ -1,0 +1,90 @@
+import { describe, expect, test } from "bun:test"
+import { compare, countHits, RULES, scanText, type Counts } from "./platform-boundary"
+
+const ts = (file: string, text: string) => scanText(file, text, RULES.filter(r => r.lang === "ts"))
+const kt = (file: string, text: string) => scanText(file, text, RULES.filter(r => r.lang === "kt"))
+const ids = (hits: { rule: string }[]) => hits.map(h => h.rule)
+
+describe("TypeScript rules", () => {
+  test("each pattern of an OS decision is flagged in feature code", () => {
+    expect(ids(ts("src/a.ts", 'if (process.platform === "win32") {}'))).toEqual(["os-check"])
+    expect(ids(ts("src/a.ts", "const h = process.env.HOME ?? homedir()"))).toEqual(["env-dirs"])
+    expect(ids(ts("src/a.ts", 'const dir = "/tmp/x"'))).toEqual(["env-dirs"])
+    expect(ids(ts("src/a.ts", 'import { spawn } from "node:child_process"'))).toEqual(["spawn"])
+    expect(ids(ts("src/a.ts", "const p = Bun.spawn(argv)"))).toEqual(["spawn"])
+    expect(ids(ts("src/a.ts", "symlinkSync(target, path)"))).toEqual(["links-perms"])
+    expect(ids(ts("src/a.ts", "mkdirSync(d, { mode: 0o700 })"))).toEqual(["links-perms"])
+    expect(ids(ts("src/a.ts", 'process.kill(-pid, "SIGTERM")'))).toEqual(["signals"])
+    expect(ids(ts("src/a.ts", 'const leaf = path.split("/").pop()'))).toEqual(["path-shape"])
+    expect(ids(ts("src/a.ts", 'if (p.startsWith(root + "/")) {}'))).toEqual(["path-shape"])
+    expect(ids(ts("src/a.ts", 'import { posix } from "path"'))).toEqual(["path-shape"])
+  })
+
+  test("the runtime's own answers pass", () => {
+    expect(ts("src/a.ts", 'symlinkSync(dir, link, "junction")')).toEqual([])
+    expect(ts("src/a.ts", "const leaf = basename(p); const rel = relative(root, p)")).toEqual([])
+    expect(ts("src/a.ts", "const dir = mkdtempSync(join(tmpdir(), 'x-'))")).toEqual([])
+  })
+
+  test("allowed places pass", () => {
+    expect(ts("packages/platform/src/os.ts", "export const os = process.platform")).toEqual([])
+    expect(ts("src/core/process/launcher.ts", "Bun.spawn(argv)")).toEqual([])
+    expect(ts("src/channels/web/index.ts", 'const parts = url.pathname.split("/")')).toEqual([])
+  })
+
+  test("comment lines are skipped", () => {
+    expect(ts("src/a.ts", "// process.platform is decided elsewhere\n * split(\"/\") here would be wrong")).toEqual([])
+  })
+})
+
+describe("Kotlin rules", () => {
+  test("each pattern is flagged in feature code", () => {
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", 'val leaf = path.substringAfterLast(\'/\')'))).toEqual(["host-path-kt"])
+    expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val os = System.getProperty("os.name")'))).toEqual(["os-check-kt"])
+    expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'ProcessBuilder("cmd", "/c", "start")'))).toEqual(["spawn-kt"])
+    expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val home = System.getProperty("user.home")'))).toEqual(["env-dirs-kt"])
+  })
+
+  test("HostPaths and the desktop's OS seams are allowed", () => {
+    expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
+    expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])
+  })
+})
+
+describe("platform-ok markers", () => {
+  test("a reason on the line, or the line above, exempts it", () => {
+    expect(ts("src/a.ts", 'const [, id] = route.split("/") // platform-ok: url route')).toEqual([])
+    expect(ts("src/a.ts", '// platform-ok: model id\nconst [provider] = model.split("/")')).toEqual([])
+  })
+
+  test("a marker without a reason is its own violation", () => {
+    expect(ids(ts("src/a.ts", 'const [provider] = model.split("/") // platform-ok:'))).toEqual(["platform-ok"])
+  })
+})
+
+describe("compare", () => {
+  const baseline: Counts = { "os-check": { "src/a.ts": 2, "src/b.ts": 1 } }
+
+  test("a count that rises, or a new file, is drift up", () => {
+    const drift = compare({ "os-check": { "src/a.ts": 3, "src/b.ts": 1, "src/c.ts": 1 } }, baseline)
+    expect(drift.rose).toEqual([
+      { rule: "os-check", file: "src/a.ts", was: 2, now: 3 },
+      { rule: "os-check", file: "src/c.ts", was: 0, now: 1 },
+    ])
+    expect(drift.fell).toEqual([])
+  })
+
+  test("a count that falls, or a file that is gone, is drift down", () => {
+    const drift = compare({ "os-check": { "src/a.ts": 1 } }, baseline)
+    expect(drift.rose).toEqual([])
+    expect(drift.fell).toEqual([
+      { rule: "os-check", file: "src/a.ts", was: 2, now: 1 },
+      { rule: "os-check", file: "src/b.ts", was: 1, now: 0 },
+    ])
+  })
+
+  test("countHits groups by rule and file", () => {
+    const hits = ts("src/a.ts", 'process.platform\nprocess.platform\nimport { posix } from "path"')
+    expect(countHits(hits)).toEqual({ "os-check": { "src/a.ts": 2 }, "path-shape": { "src/a.ts": 1 } })
+  })
+})
