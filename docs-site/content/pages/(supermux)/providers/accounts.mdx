@@ -16,11 +16,6 @@ Open **Settings ▸ Accounts**. Each agent has its own group with an **Add accou
 | Cursor | **Sign in with Cursor**, or **API key** |
 | Grok | **Sign in with Grok**, or **API key** |
 | Antigravity | **Sign in with Google**, or **API key** (Gemini) |
-| OpenCode | **API key** |
-
-<Check>
-Two add-account paths look broken by code reading (not tested live): an OpenCode API-key account (the app never sends the provider id the host requires), and a Claude subscription account on Windows (`homes.ts:80-81` refuses the shared files; the app never sends `isolated`). Test both before this table ships as is.
-</Check>
 
 Signing in works like the first sign-in: open the sign-in page, approve, and enter or paste the code if asked. The account is named after its email. When you paste a token or key, you can give it a name yourself, like "Work".
 

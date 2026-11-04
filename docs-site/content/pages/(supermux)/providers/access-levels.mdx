@@ -75,10 +75,6 @@ When a session isn't on the agent's default, a small chip with the level's name 
 
 When the agent needs your OK, a card appears just above the composer. It shows what the agent wants to do, for example the exact command, and says **Waiting for you**. The agent waits until you answer, from any of your devices.
 
-<Check>
-No notification is sent for a permission request or a question: push goes out only for agent replies, agent errors, Finish outcomes and curator notices (`src/core/push/hook.ts:52-58`, `src/main.ts:1429,1534,1613,4550`). The README promises "Get notified when a session finishes or asks a question." Fix the app, or keep this page as it is.
-</Check>
-
 The buttons come from the agent. They're usually:
 
 - **Allow once**: allow this one call.

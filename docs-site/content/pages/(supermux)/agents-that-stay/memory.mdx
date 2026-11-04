@@ -22,7 +22,6 @@ For Claude Code and Codex, supermux turns off their own built-in memory, so `~/.
 | File | What it holds |
 |---|---|
 | `domains/<topic>.md` | Notes on one topic, added over time with a date on each. |
-| `domains/<topic>.digest.md` | A tidy summary of a topic, written by the [nightly curator](#the-nightly-curator). |
 | `domains/_inbox.md` | Notes that don't belong to a topic yet. |
 | `agents.md` | The list of topics every session starts with. supermux rebuilds it from the topic files. |
 | `conventions.md` | Rules for every agent on every project. Write your own rules here. |
@@ -38,22 +37,3 @@ It's all plain text. Open the files in any editor on that computer, or ask an ag
 ## An Agent's own memory
 
 Every [Agent](/agents-that-stay) also has a private memory file, `~/.mux/agent-memory/<id>.md`. It writes down what it learns about its own work and about how you want it to behave. The memory belongs to the Agent, not its name: it stays when you rename the Agent, and comes back when you restore it from the archive.
-
-## The nightly curator
-
-Over time, topic files grow. The curator tidies them once a day. It reads the last 24 hours of conversations, keeps what's worth keeping, and writes the summaries (`*.digest.md`) that sessions read first. Then it posts a short digest of what changed.
-
-Set it up in **Settings ▸ Curator**:
-
-- **Nightly curator**: turns it on. It's off by default.
-- **Run at**: the time, in the host's local time.
-- **Agent**: which agent runs it, with its model and effort.
-- **Run now**: runs it once, right away.
-
-Press **Save** after a change. **Next run** shows when it will run.
-
-<Check>
-The curator's prompt runs `bun ~/projects/supermux/scripts/dump-last-24h.ts` and then commits and pushes `~/.mux` with git (`prompts/knowledge-curator.md:8,85-89`). A packaged install has neither that checkout nor a git repo in `~/.mux`, so it likely fails there. Verify on a fresh install before this section stays as it is.
-</Check>
-
-Without the curator, memory still works: sessions keep writing and reading the topic files. Only the summaries aren't written.
