@@ -1,0 +1,59 @@
+---
+title: Resuming
+description: Pick a session back up after a restart, a crash or a deploy, with its running turn and pending requests.
+---
+
+`core.sessions.resume(id)` is the one call for getting a session back:
+
+- **Open** in this process: returns the same object.
+- **Agent still running behind its keeper**: re-attaches, a turn in progress included.
+- **Agent gone**: relaunches it on the saved conversation.
+
+```ts
+const session = await core.sessions.resume("fix-tests")
+```
+
+Several resumes of the same id at once share one restore.
+
+## What comes back
+
+- The session's record: its configuration, permissions, account and context.
+- Its subagents. After a fresh start, ones that were running are reported `cancelled`; after a re-attach they keep running.
+- Requests the agent made while you were away, if you re-attach within `parkedDeadlineMs`. They show up in `session.requests.list()`.
+- Everything the agent sent while you were away, delivered in order before `session.resumed`.
+
+What doesn't come back: messages that were still queued in a process that crashed. The running turn survives; the queue lives in your process.
+
+A resumed session is a new `Session` object, so `seq` and `turnId` start over.
+
+## Per agent
+
+| Agent | How it resumes |
+|---|---|
+| Claude Code | `--resume=<id>`. A conversation that never got a message starts fresh under the same id. |
+| Codex | `thread/resume` |
+| Grok Build, OpenCode, Cursor | `session/resume`, or `session/load` when that's all the CLI offers |
+| Antigravity | `--conversation <id>`. A conversation that's gone fails with `conversation_lost`. |
+
+For the ACP agents, a turn that finished while your process was away arrives as raw `session.update`s, not normalized events.
+
+If the agent hands back a different conversation than the one asked for, resume fails with `resume_identity_changed`, rather than continuing in the wrong place.
+
+## Change things on the way back
+
+```ts
+await core.sessions.resume(id, {
+  account: workAccountId,                               // switch login
+  permissions: { kind: "codex", approvalPolicy: "on-request", sandbox: "read-only" },
+  configuration: { model: modelId },                    // Codex, Grok Build and Antigravity
+})
+```
+
+## Adopt a conversation you didn't start
+
+`core.sessions.adopt()` registers an existing conversation of an agent CLI as a session, without starting anything. Resume it later:
+
+```ts
+await core.sessions.adopt({ id: "imported", agent: "codex", agentSessionId: threadId, cwd })
+const session = await core.sessions.resume("imported")
+```

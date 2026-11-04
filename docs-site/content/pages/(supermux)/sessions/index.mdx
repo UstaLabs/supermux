@@ -1,0 +1,67 @@
+---
+title: Projects and sessions
+description: How sessions, workspaces and projects fit together, and how to find your way around the sidebar.
+---
+
+## The building blocks
+
+- **Session**: one conversation with one agent. Each chat you have is a session.
+- **Workspace**: where a session lives. It holds the session's chat and any other views you open next to it, like files, changes or a terminal. A workspace can hold more than one chat.
+- **Project**: a folder you work in. The sidebar groups workspaces by project.
+- **Worktree**: a separate copy of a git repository on its own branch, so several agents can work on the same project without getting in each other's way.
+
+## Worktrees
+
+When you start a session in a git repository, supermux can give it its own worktree: a fresh branch cut from a base branch, in a folder of its own. Your working copy stays untouched, and so do other sessions' changes.
+
+- It's on by default, and remembered per folder. Turn it off with **Run in isolated worktree** in the launcher.
+- It's offered when the folder you pick is the top of a git repository. A subfolder of a repository, or a folder with several repositories inside, runs in place.
+- The branch is named after the session, starting with `mux/`.
+- A new chat added to an existing workspace shares that workspace's worktree.
+
+Worktrees stay on disk after a session ends, so no work is lost. Clean them up in **Settings ▸ Worktrees**: it lists every worktree with its size, its changes and which session uses it. **Select all without changes** picks the safe ones to delete.
+
+## The sidebar
+
+From top to bottom:
+
+1. **Start a new session**: the card that opens the launcher.
+2. **Agents**: your [Agents](/agents-that-stay), if you have any.
+3. **Workspaces**: your work, grouped by project.
+
+Each workspace row shows its name, how long ago something happened, and its branch. The mark in front tells you what the agent is doing:
+
+- a **spinner** while it works,
+- a **ring with a dot** when it has finished and you haven't looked yet,
+- a quiet **ring** when it's idle.
+
+The group button in the **Workspaces** header switches between grouping by project and grouping by status. By status, everything that's working or unread sits together under **Active**.
+
+## Find a session
+
+Click **Search** in the **Workspaces** header and type. Results come in three groups: workspaces whose names match, archived ones, and chats that mention what you typed. Press <Kbd>Enter</Kbd> to open the top result.
+
+To search inside one chat, press <Kbd>Ctrl</Kbd> <Kbd>F</Kbd> (<Kbd>⌘</Kbd> <Kbd>F</Kbd> on a Mac) in that chat. Its **All chats** tab searches every chat on every computer you've connected.
+
+## Row actions
+
+Right-click a workspace (or tap its **⋮** on a phone or tablet):
+
+- **Rename**
+- **New chat here** (from the **⋮** menu): a second chat in the same workspace.
+- **Mute** / **Unmute**: no notifications from it.
+- **Mark as read**
+- **Select**: pick several workspaces to mark as read or archive together.
+- **Archive**: stops its sessions and moves it to the archive.
+
+Drag rows to reorder them within a project. On a touch screen, press and hold first.
+
+## Archive and restore
+
+Archiving stops a workspace's sessions and keeps their history. The archive dialog can also delete the worktree: it lists what you'd lose, like changed files and unmerged commits, and it's unticked by default.
+
+Archived workspaces sit in an **Archived** fold under each project, and in **Archived** in the sidebar's **⋮** menu. Click **Restore** to bring one back.
+
+## Continue in a new conversation
+
+To start fresh without losing the thread, open the chat's **⋮** menu and choose **Continue in new conversation**. You can switch to another agent or model. The new session works in the same folder, and its agent is told to read the old conversation first.

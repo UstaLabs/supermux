@@ -1,0 +1,75 @@
+---
+title: Tool calls and approvals
+description: Show what the agent is doing, and let a person, or your code, decide what it may do.
+---
+
+## Show tool calls
+
+Tool calls arrive as `tool-call` events, with a `callId` that ties related events together:
+
+```ts
+const cards = new Map<string, Card>()
+
+core.subscribe(e => {
+  if (e.type !== "session.event") return
+  const ev = e.event
+  if (ev.kind === "tool-call") {
+    cards.set(ev.callId, { tool: ev.tool, title: ev.title, phase: ev.phase, category: ev.category, input: ev.input })
+  }
+  if (ev.kind === "command-output") cards.get(ev.callId)?.output.push(ev.delta)
+  if (ev.kind === "file-diff") showDiff(ev.path, ev.diff)
+})
+```
+
+`phase` goes `started` → `updated` → `completed` or `failed`. `category` (`read`, `edit`, `execute`, `fetch`, `mcp`…) is handy for icons.
+
+## Ask a person
+
+A request stays pending until it's answered. Show it, and send back what the person picked:
+
+```ts
+// When the page loads, list what's waiting:
+const waiting = core.sessions.live(id)?.requests.list() ?? []
+
+// When the person clicks a button:
+await core.sessions.live(id)?.requests.respond(requestId, { optionId })
+```
+
+- Each option has an `id`, a `kind` (`allow_once`, `allow_always`, `reject_once`, `reject_always`) and a `label`. Show the labels; send the id.
+- A session with something pending is a good "needs you" signal in your UI.
+- A request never expires while your process is attached. See [Permissions](/core/concepts/permissions).
+
+Questions work the same way, with a different answer:
+
+```ts
+await session.requests.respond(requestId, { answers: { [questionId]: optionId } })
+await session.requests.respond(requestId, { decline: true })
+```
+
+## Nobody at the keyboard
+
+For scripts and CI, refuse anything you don't expect, or interrupt:
+
+```ts
+core.subscribe(e => {
+  if (e.type !== "session.event") return
+  const session = core.sessions.live(e.sessionId)
+  if (e.event.kind === "permission-request") {
+    const reject = e.event.options.find(o => o.kind === "reject_once")
+    if (reject) session?.requests.respond(e.event.requestId, { optionId: reject.id, message: "Not allowed in CI" })
+    else session?.interrupt({ pending: "discard" })
+  }
+  if (e.event.kind === "user-question" && e.event.blocking) {
+    session?.requests.respond(e.event.requestId, { decline: true })
+  }
+})
+```
+
+Or start the session in a mode that never asks. See [Running unattended](/core/concepts/permissions#running-unattended).
+
+## Your own tools, without prompts
+
+Tools from your own [MCP server](/core/api/mcp) can be allowed up front:
+
+- **Claude Code**: list them in `allowedTools`, named `mcp__<server>__<tool>`, for example `allowedTools: ["mcp__ops__deploy"]`.
+- **Codex**: host tools are approved automatically, even with `sandbox: "read-only"` and `approvalPolicy: "never"`.

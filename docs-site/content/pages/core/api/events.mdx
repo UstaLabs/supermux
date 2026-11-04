@@ -1,0 +1,81 @@
+---
+title: Events
+description: Every event type and its fields.
+---
+
+The concepts, ordering and replay rules are on [Normalized events](/core/concepts/events). This page lists the shapes.
+
+## CoreEvent
+
+```ts
+type CoreEvent =
+  | { type: "session.created"; sessionId: string; record: SessionRecord }
+  | { type: "session.resumed"; sessionId: string; record: SessionRecord }
+  | { type: "session.stateChanged"; sessionId: string; state: SessionState }
+  | { type: "session.update"; sessionId: string; update: AgentUpdate }        // raw, in the agent's protocol
+  | { type: "session.event"; sessionId: string; event: EventEnvelope & NormalizedBody }
+  | { type: "session.failed"; sessionId: string; error: Error }
+  | { type: "message.accepted" | "message.started"; sessionId: string; messageId: string }
+  | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
+  | { type: "account.switched"; sessionId: string; from: string; to: string; reason: "manual" | "limit" | "unavailable" }
+  | { type: "account.refreshed"; sessionId: string; account: string }
+  | { type: "account.exhausted"; sessionId: string; agent: string; account: string; reason: "limit" | "unavailable" }
+  | { type: "account.unavailable"; sessionId: string; agent: string; account: string; reason: string }
+  | { type: "account.available"; sessionId: string; agent: string; account: string }
+  | { type: "context.degraded"; sessionId: string; dropped: ContextDrop[] }
+  | { type: "context.updated"; sessionId: string; applied: Array<ContextApplied | ToolChangeApplied> }
+  | { type: "tool.called"; sessionId: string; server: string; tool: string; callId: string }
+  | { type: "tool.finished"; sessionId: string; server: string; tool: string; callId: string; ok: boolean; durationMs: number }
+```
+
+## The envelope
+
+```ts
+type EventEnvelope = {
+  sessionId: string
+  agent: string
+  seq: number                     // per Session object
+  ts: string
+  turnId?: string                 // "turn:1", "turn:2", …
+  origin: "live" | "replay"
+  native: { protocol: "codex-app-server" | "claude-stream-json" | "antigravity-stream-json" | "acp" | "core"; method?: string; payload: unknown }
+  subagentId?: string             // on any body that comes from a subagent
+}
+```
+
+## Bodies
+
+| `kind` | Fields |
+|---|---|
+| `turn-start` | none |
+| `turn-complete` | `reason: "ok" \| "interrupt"` |
+| `assistant-delta` | `messageId`, `text` |
+| `assistant-message` | `messageId`, `text` |
+| `reasoning-delta` | `reasoningId`, `text` |
+| `reasoning` | `reasoningId`, `text?`, `redacted`, `summary?` |
+| `tool-call` | `callId`, `tool`, `title?`, `phase: "started" \| "updated" \| "completed" \| "failed"`, `category?`, `locations?: { path }[]`, `input?`, `output?`, `exitCode?`, `description?` |
+| `command-output` | `callId`, `stream: "stdout" \| "stderr" \| "merged"`, `delta` |
+| `file-diff` | `callId?`, `path`, `diff`, `changeKind?` |
+| `web-search` | `callId`, `phase: "started" \| "completed" \| "failed"`, `query?`, `results?` |
+| `mcp-tool` | `callId`, `server`, `tool`, `phase: "started" \| "progress" \| "completed" \| "failed"`, `arguments?`, `result?` |
+| `plan` | `entries: { content, status: "pending" \| "in_progress" \| "completed", priority? }[]`, `explanation?` |
+| `task` | `taskId`, `taskKind: "shell" \| "agent" \| "workflow" \| "monitor" \| "subagent" \| "collab"`, `phase`, `label?`, `parentCallId?` |
+| `user-question` | `requestId`, `blocking`, `questions: { id, prompt, header?, multiSelect, allowFreeText, options: { id, label, description? }[] }[]` |
+| `permission-request` | `requestId`, `toolCall: { callId, tool, title, input?, category? }`, `options: { id, kind, label }[]`, `detail?: { command?, cwd?, blockedPath? }` |
+| `request-resolved` | `requestId`, `outcome: "answered" \| "cancelled"`, `answer?` |
+| `permission-auto` | `toolCall`, `optionId` |
+| `permissions-update` | `spec`, `applied: "now" \| "next-turn"` |
+| `commands-update` | `commands: { name, description? }[]` |
+| `mode-update` | `modeId?`, `model?` |
+| `session-info` | `title?`, `cwd?`, `model?` |
+| `usage` | `context?: { used, size }`, `tokens?: { input, output, total }`, `cost?: { amount, currency }`, `rateLimits?` |
+| `compaction` | `compactionId`, `status: "in_progress" \| "completed" \| "failed" \| "cancelled"`, `summary?`, `error?` |
+| `subagent` | `subagentId`, `phase: "started" \| "progress" \| "completed" \| "failed" \| "cancelled" \| "resumed"`, `name?`, `description?`, `prompt?`, `background?`, `activity?`, `stats?`, `result?`, `model?`, `messaging?`, `canMessage?`, `canStop?` and more |
+| `warning` | `message`, `source?` |
+| `error` | `message`, `errorType?`, `recoverable?` |
+
+`category` is one of `read`, `edit`, `delete`, `move`, `search`, `execute`, `fetch`, `mcp`, `web-search`, `think` and `other`.
+
+<Callout title="Next release">
+After 0.17.1, `commands-update` entries also carry `argumentHint`, `aliases` and `builtin`, and a new `conversation-reset` body (`agentSessionId`, `previousAgentSessionId`, `trigger?`) reports Claude Code's `/clear`.
+</Callout>

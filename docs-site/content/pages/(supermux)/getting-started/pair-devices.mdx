@@ -1,0 +1,61 @@
+---
+title: Pair your devices
+description: Connect your phone, a browser or another computer to the computer that runs your agents. No account needed.
+---
+
+supermux has no accounts. Each phone, tablet, browser or desktop app pairs once with the computer that runs your agents, using a QR code or a pairing link. That computer is called a host.
+
+## Pair your phone
+
+<Steps>
+<Step>
+### Install the app
+
+Get supermux from the [App Store](https://apps.apple.com/app/supermux/id6782643917) for iPhone and iPad, or the [APK](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) for Android.
+</Step>
+<Step>
+### Get to the Connect page
+
+A few intro pages explain supermux. The last one is **Connect to your computer.**
+</Step>
+<Step>
+### Scan the code
+
+Tap **Scan pairing code** and point the camera at the QR code on your computer. You can also paste a pairing link into **or paste a pairing link** and tap **Pair**.
+</Step>
+<Step>
+### Confirm
+
+The app asks **Connect to this broker?** and shows the address it's about to trust. Tap **Connect**.
+</Step>
+</Steps>
+
+## Where pairing codes come from
+
+| Where | What you get | How long it works |
+|---|---|---|
+| The desktop's first launch, or **Settings ▸ Hosting ▸ Pair a device…** | A QR code | One use, 10 minutes |
+| **Settings ▸ Devices ▸ Add device** (in any paired app) | A QR code and a link | Until you revoke the device |
+| `supermux pair <name>` on a server | A link and a QR code in the terminal | Until you revoke the device |
+
+To add a device from the app, open **Settings ▸ Devices**, choose **Add device**, give it a name like "Work laptop", and choose **Create**. You get a QR code and a **Copy link** button.
+
+<Callout type="warn" title="Treat a pairing link like a password">
+Anyone who opens it gets access until you revoke the device. Only scan it with your own devices.
+</Callout>
+
+## Pair a browser
+
+Open a pairing link in the browser and you're in. On a brand-new install opened in a browser, the first browser to connect is paired automatically.
+
+If the host is already set up, the browser shows **Pair this browser**. Paste a link from **Settings ▸ Devices** on a device you've already paired, and choose **Open link**.
+
+## Connect a desktop app to another computer
+
+To use a desktop app with supermux running somewhere else, click **Connect to a different broker instead** on its first launch and paste a pairing link. To add more computers later, see [Several computers](/devices/several-computers).
+
+## See and remove devices
+
+**Settings ▸ Devices** lists every paired device and when it was last seen. **Revoke** removes one: it's signed out right away and needs a new pairing link to come back.
+
+On a server, `supermux revoke <name>` does the same.

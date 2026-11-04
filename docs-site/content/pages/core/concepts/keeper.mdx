@@ -1,0 +1,69 @@
+---
+title: The keeper
+description: A small process per session that keeps the agent running when your app stops, and replays what you missed.
+---
+
+Every session's agent runs behind a keeper: one small process per session that owns the agent's stdin and stdout, keeps a journal of what the agent sends, and listens on a Unix socket. Your process connects to it with a per-session token.
+
+```text
+your process  ⇄  (Unix socket + token)  ⇄  keeper  ⇄  (stdin/stdout, journaled)  ⇄  agent CLI
+```
+
+## Why it exists
+
+Your app can crash, restart or redeploy while an agent is in the middle of a turn. The agent doesn't notice: it keeps working behind its keeper. When your process comes back, `core.sessions.resume(id)` reconnects and replays everything from the last frame your process handled, including a turn still in progress.
+
+## Detach and re-attach
+
+```ts
+// Keep the agents running when your process stops:
+process.once("SIGTERM", () => core.close({ agents: "detach" }))
+
+// Next start: pick each session back up.
+for (const { id } of await core.sessions.list()) {
+  core.sessions.resume(id).catch(error => console.error(id, error.message))
+}
+```
+
+- `session.close({ mode: "detach" })` and `core.close({ agents: "detach" })` let go of the agent but leave it running.
+- `core.sessions.resume(id)` re-attaches to a running keeper, or relaunches the agent on its saved conversation if the keeper is gone.
+- `core.sessions.close(id, { mode: "shutdown" })` stops the agent, also one nobody is attached to.
+- `core.sessions.forget(id)` deletes the record and the keeper's folder. It refuses while the agent still runs.
+
+<Callout title="Agents keep running">
+If your script ends without `core.close({ agents: "shutdown" })`, its agents keep running behind their keepers. That's the point of the keeper, but remember it in scripts.
+</Callout>
+
+## Requests while you're away
+
+If the agent asks for permission while no process is attached, the keeper parks the request. When you re-attach within the deadline, it's delivered and shows up in `session.requests.list()`. If nobody attaches in time, the keeper answers it with an error itself.
+
+The deadline is `parkedDeadlineMs`: 10 minutes for Claude Code and Codex, 2 minutes for the others. Raise it per agent:
+
+```ts
+supermux({
+  stateDirectory,
+  agents: { codex: { keeper: { parkedDeadlineMs: 3_600_000 } } },
+})
+```
+
+## Limits and defaults
+
+| Option | Claude Code, Codex | Grok Build, OpenCode, Cursor, Antigravity |
+|---|---|---|
+| `parkedDeadlineMs` | 600 000 | 120 000 |
+| `journalMaxBytes` | 64 000 000 | 64 MiB |
+| `connectTimeoutMs` | 4 000 | 10 000 |
+
+The journal lives in the keeper's memory, up to `journalMaxBytes`, so each keeper can use about that much memory.
+
+## How it behaves
+
+- One process attaches at a time. A new connection replaces the old one.
+- The keeper exits after its agent exits.
+- It has no idle timeout: a detached agent keeps running until it's shut down.
+- If you resume with a different session context, the old agent is stopped and a new one started.
+
+## On disk
+
+Each keeper keeps its files in `<stateDirectory>/keepers/<sessionId>/`: the journal, its status, a token and the socket. Keepers write there as your user, without a sandbox, so keep the state directory out of every folder an agent can write. The keepers never follow a symlink there.

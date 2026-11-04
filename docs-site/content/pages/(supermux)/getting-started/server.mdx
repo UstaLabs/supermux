@@ -1,0 +1,63 @@
+---
+title: Install on a server
+description: Run supermux on an always-on Linux box or Mac with one command, then work with it from your desktop or phone.
+---
+
+A server install suits a home server, a mini PC, a VPS or a Mac mini that stays on. Your agents run there around the clock, and you open them from the desktop app, the phone app or a browser.
+
+## One command
+
+```sh
+curl -fsSL https://supermux.dev/install.sh | sh -s -- --native
+```
+
+It works on Linux (x64 or arm64) and on Macs with Apple silicon. Here's what it does:
+
+- Offers to install Claude Code and Codex if no agent is installed yet. You sign in to them later, in the app.
+- Downloads the `supermux` program, checks its checksum, and puts it in `~/.local/bin`.
+- Sets supermux up as a service that starts by itself: a systemd user service on Linux, a LaunchAgent on a Mac. On Linux it keeps running after you log out.
+- Prints a pairing link and a QR code. Open the link (or scan the code) on the device you want to use. Missed it? Run `supermux pair phone` for a new one.
+
+Running the same command again updates supermux instead of installing it twice.
+
+<Callout title="Headless Mac">
+After a reboot, a Mac only starts supermux once someone logs in. For a Mac mini without a keyboard, turn on Automatic Login in **System Settings ▸ Users & Groups**.
+</Callout>
+
+## Other ways to install
+
+Run the script without a flag and it asks how you want to run supermux:
+
+```sh
+curl -fsSL https://supermux.dev/install.sh | sh
+```
+
+| Option | What you get |
+|---|---|
+| `--native` | The supermux program as a service, as above. |
+| `--docker` | supermux in Docker, with nothing else changed on the machine. Good for a first try. |
+| `--vm` | supermux in a local VM (Lima on a Mac, Incus on Linux). |
+| `--source` | A build from the source code, for contributors. Linux only. |
+
+With Docker, supermux runs on port 8787. Open `http://localhost:8787` in a browser: the first browser to connect is paired automatically and a short setup walks you through signing in to an agent and pairing your phone. Put the projects you want agents to work on in `~/supermux/workspace/`.
+
+## The supermux command
+
+On a server you manage supermux from the terminal.
+
+| Command | What it does |
+|---|---|
+| `supermux pair <name>` | Prints a pairing link and QR code for a new device. |
+| `supermux revoke <name>` | Removes a paired device. |
+| `supermux connect` | Sets up how you reach this machine from outside. See [Reach your computer from anywhere](/devices/remote-access). |
+| `supermux update` | Updates to the latest release. `supermux update --check` only checks. |
+| `supermux rollback` | Goes back to the version you had before the last update. |
+| `supermux version` | Shows the installed version. |
+
+## If something goes wrong
+
+- Linux service logs: `journalctl --user -u supermux -n 50`
+- Mac logs: `tail -f ~/.mux/state/supermux.err.log`
+- `~/.local/bin` isn't on your PATH: the installer prints the `export PATH=…` line to add to your shell profile.
+
+More in [Troubleshooting](/help/troubleshooting).

@@ -1,0 +1,45 @@
+---
+title: Staying in control
+description: What helpers may do, how to stop them, and what to keep an eye on when agents run agents.
+---
+
+When agents start other agents, a lot can happen in the background. Here's what supermux does to keep that safe, and what's left to you.
+
+## Helpers can't wait for you
+
+Helpers and council members run in the background, so no one sees their permission requests. supermux therefore only lets them run at access levels that never stop to ask a person:
+
+| Agent | Levels a helper may use |
+|---|---|
+| Claude Code | **Bypass**, or **Don't ask** (refuses instead of asking) |
+| Codex | **Full access**, **Auto**, or **Read only** |
+| Cursor | **Force** or **Auto-review** |
+| OpenCode | **Allow** or **Read only** |
+| Grok | **Always approve** |
+| Antigravity | **Bypass** or **Plan** |
+
+If you want a helper to read only, say so when you ask, for example "use a read-only Codex subagent to review this".
+
+Sessions an agent opens for you in the sidebar are different: they can ask you, like any session. They start at the agent's most open level, so lower it in their composer if you want to approve each step.
+
+## Stop things
+
+- **A helper**: **Stop** on its card.
+- **A council**: **Stop council** on its card.
+- **Everything a session started**: archive the session. Its helpers and their helpers stop with it, and its councils end.
+
+## You hear about helpers through their parent
+
+Helpers and council members never send you notifications, and their chats aren't in your sidebar. What they do reaches you through the agent that started them: its cards, the strip above the composer, and its replies.
+
+## Things to keep an eye on
+
+- **There's no cap on how many helpers an agent starts.** Watch the strip above the composer, and say how many you want when it matters.
+- **A message brings an archived session back.** If an agent messages a session you archived, that session restores itself to read it.
+- **Any session can archive any other**, including your Agents. You can bring one back from **Archived**.
+- **Worktrees stay.** Worktrees made for helpers and council members aren't deleted when they stop. Clean them up in **Settings ▸ Worktrees**.
+- **A helper that's waiting on something stays waiting.** supermux only nudges a helper once it's idle, and there's no time limit. Stop it from its card if it's stuck.
+
+## What only Agents can do
+
+A few tools are kept for [Agents](/agents-that-stay): creating new Agents, muting other sessions, and choosing which session a chat talks to. Everything else on this page works from any session.

@@ -1,0 +1,80 @@
+---
+title: MCP tools
+description: Give any supported agent a tool that runs in your own process.
+---
+
+`mcpServer()` and `tool()` turn your TypeScript functions into an MCP server that any supported agent can call. The tool runs in your process, with zod schemas for its input and output.
+
+```ts
+import { z } from "zod"
+import { supermux } from "@supermux/core"
+import { mcpServer, tool } from "@supermux/core/mcp"
+
+const ops = mcpServer({
+  name: "ops",
+  tools: {
+    deploy: tool({
+      description: "Deploy the current build to an environment",
+      input: z.object({ environment: z.enum(["staging", "production"]) }),
+      async run({ environment }, ctx) {
+        console.log(`deploy called by ${ctx.agent} session ${ctx.sessionId}: ${environment}`)
+        return `Deployed to ${environment}`
+      },
+    }),
+  },
+})
+
+const core = supermux({
+  stateDirectory,
+  agents: { claude: { allowedTools: ["mcp__ops__deploy"] }, codex: {} },
+  mcpServers: [ops],
+})
+```
+
+You need `zod` 4 in your own app (`npm i zod`).
+
+## mcpServer()
+
+```ts
+function mcpServer(options: McpServerOptions): HostMcpServer
+```
+
+| Option | |
+|---|---|
+| `name` | Letters, digits, `_` and `-`. |
+| `tools` | A map of tool names to `tool()` definitions. Or pass `create(ctx)` to build an SDK `McpServer` yourself; one of the two. |
+| `instructions` | Text the agent gets about the server. |
+| `version` | Defaults to `"1.0.0"`. |
+| `toolChanges` | `"reload"` (default) or `"live-only"`: what happens when you add or remove tools while sessions run. |
+
+The returned server has `add(name, tool)` and `remove(name)` to change its tools later, and `tools` to list them.
+
+## tool()
+
+```ts
+function tool<I, O>(definition: {
+  description: string
+  title?: string
+  input?: ZodSchema<I>
+  output?: ZodSchema<O>
+  annotations?: object
+  run(args: I, ctx: ToolContext): unknown | Promise<unknown>
+}): HostTool
+
+type ToolContext = { sessionId: string; agent: string; account?: string; server: string; signal: AbortSignal }
+```
+
+What `run` returns becomes the tool result: a string as text, `undefined` as an empty result, anything else as JSON.
+
+## Attaching tools
+
+- **To every session**: `mcpServers` in `supermux()` or `createCore()`, or `core.mcp.register(server)` later.
+- **To one session**: through its session context (`context.mcpServers`).
+
+Tool names in Claude Code are `mcp__<server>__<tool>`. To let Claude call them without asking, list them in `allowedTools`. Codex approves host tools by itself.
+
+Each `tool.called` and `tool.finished` event tells you when a tool ran, and for how long.
+
+## How it works
+
+The agent runs a tiny bridge (`@supermux/core/mcp-bridge`), which connects to one Unix socket per core at `<stateDirectory>/mcp/mcp.sock`, with a token per session and server. While your process is down, the bridge answers every call with "host unavailable" and reconnects when you're back.

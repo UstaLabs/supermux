@@ -1,0 +1,71 @@
+---
+title: Accounts
+description: Several logins per agent, picked per session, with an automatic switch when one hits its usage limit.
+---
+
+An account is one login for one agent. Every agent has a built-in system account, `<agent>:system`: the login its CLI already has on this machine. The core never moves, copies or overrides it. A session without an `account` uses it.
+
+Add more accounts to give sessions different logins, or to keep working when one runs out.
+
+## Ways to add an account
+
+| Agent | Methods |
+|---|---|
+| Claude Code, Codex | `api_key`, `token`, `subscription` |
+| Cursor, Grok Build, Antigravity | `api_key`, `subscription` |
+| OpenCode | `api_key` (with a `provider`) |
+
+```ts
+// A key or token you already have:
+const work = await core.accounts.add({ agent: "claude", method: "token", secret: process.env.CLAUDE_TOKEN, label: "Work" })
+
+// A guided sign-in, like the CLI's own login:
+const login = core.accounts.login({ agent: "codex" })
+login.on(state => { if (state.url) console.log("Open", state.url, state.code ?? "") })
+const personal = await login.done
+```
+
+`login()` returns a handle right away. Its state carries the URL to open and, for device-code logins, the code to enter. For logins that end with a code to paste, call `login.submitCode(text)`. A login times out after 30 minutes. OpenCode has no guided login: add an API key instead.
+
+## Use an account
+
+```ts
+const session = await core.sessions.create({ id: "fix-tests", agent: "claude", cwd, account: work.id })
+```
+
+To move a session to another account, resume it with one:
+
+```ts
+await core.sessions.resume("fix-tests", { account: personal.id })
+```
+
+A live session is shut down and reopened on the same conversation with the other login, and you get `account.switched` with `reason: "manual"`.
+
+## Switch at a usage limit
+
+```ts
+supermux({ stateDirectory, agents: { claude: {}, codex: {} }, accounts: { autoSwitch: true } })
+```
+
+With `autoSwitch` on (it's off by default), a session whose account hits a usage window of 100%, or whose login the agent's API refuses, moves to the best other account of the same agent once the current turn ends. Then, with `continueAfterSwitch` (on by default), it's told once to continue where it stopped. `autoSwitch` can also be a function, read each time, so your app can toggle it at runtime.
+
+- **Claude Code and Codex** report usage windows, so they switch at their limits.
+- **Grok Build** switches when xAI reports its credits are used up (HTTP 402) or the login is refused.
+- **Antigravity** reports no usage windows.
+- **Cursor accounts** are never switched automatically.
+
+The best account is the one with the most room left, weighted by how soon its limits reset. If none has room, you get `account.exhausted`.
+
+## Homes and history
+
+Each account gets a home folder under `<stateDirectory>/accounts/homes/<agent>/<id>/`. For Claude Code and Codex, the conversation history in those homes is shared with the agent's real home, so a session keeps its conversation when it changes account. Credentials stay separate. An `isolated` account keeps its own history and is never used for automatic switching.
+
+Secrets are stored in `<stateDirectory>/accounts/vault/`, one file per secret, readable only by you. They aren't encrypted. Pass your own `vault` in `accounts` options to store them elsewhere.
+
+## Reading usage
+
+```ts
+core.accounts.usage(work.id)        // [{ name, usedPercent, resetsAt? }, …] or undefined
+await core.accounts.pick("claude")  // the account with the most room left right now
+core.accounts.unavailable(work.id)  // { reason, since } when the login was refused
+```

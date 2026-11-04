@@ -1,0 +1,53 @@
+---
+title: Orchestration
+description: One agent can run others. Hand out work, get second opinions, and let your agents talk to each other.
+---
+
+In supermux an agent isn't alone. Any session can start other sessions, hand them tasks, message them and gather their answers. You ask in plain words; the agent does the coordinating, and you watch it happen in the chat.
+
+## What your agents can do
+
+<Cards>
+  <Card title="Delegate" href="/orchestration/delegation">
+    Start a helper on any agent and model, give it a task, and get a report back.
+  </Card>
+  <Card title="Message each other" href="/orchestration/messages">
+    Write to another session, wake it up, and hear back.
+  </Card>
+  <Card title="Hold a council" href="/orchestration/councils">
+    Put one question to several agents at once, in rounds, and end with a verdict.
+  </Card>
+  <Card title="Start sessions" href="/orchestration/mixing">
+    Open a new session in a project for you, with any agent.
+  </Card>
+</Cards>
+
+## How to ask
+
+There's nothing to set up. Tell an agent what you want, for example:
+
+- "Have a Codex subagent write the tests while you update the docs."
+- "Ask Codex and Grok whether we should keep refresh tokens in the database, then give me a verdict."
+- "Start a session in `~/code/billing-api` to fix the failing webhook test."
+- "Tell the billing-api session to pull before it pushes."
+
+[Agents](/agents-that-stay) are the natural place for this, because they stay around to follow up. Ordinary sessions can do it too.
+
+## What you see
+
+Everything shows up in the chat of the agent that's coordinating:
+
+- **A card for each helper**, with its task, what it's doing right now, and its result. You can write to the helper or stop it from the card.
+- **A council card**, with every member's answer, round by round, and the verdict at the end.
+- **A strip above the composer** while helpers or council members are still working.
+- **An "N agents" tag** on the session's row in the sidebar.
+
+Helpers don't clutter your sidebar or send you notifications. You hear about them through the agent that started them.
+
+## Mix agents and accounts
+
+A Claude Code session can hand work to Codex, Grok, OpenCode, Cursor or Antigravity, on any of their models. Each helper runs on its agent's account with the most room left, so the work spreads across your subscriptions. See [Mixing agents and accounts](/orchestration/mixing).
+
+## Stay in control
+
+Helpers can't stop to ask you for permission, so they only run at access levels that never wait for a person. You can stop any helper or council from its card, and archiving a session stops everything it started. See [Staying in control](/orchestration/control).

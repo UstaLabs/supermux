@@ -1,0 +1,34 @@
+---
+title: Mixing agents and accounts
+description: Hand work to any agent and model, and spread it across your subscriptions.
+---
+
+Every session can reach every agent you've installed. A Claude Code session can start a Codex session, delegate a task to Grok, or put a question to OpenCode and Antigravity in a council.
+
+## Pick the right agent for each job
+
+When an agent starts a session, a helper or a council member, it chooses the agent, the model and the effort for it. You can steer that in plain words:
+
+- "Use a fast, cheap model for the renaming, and Opus for the review."
+- "Ask Codex to double-check this, since it wrote the original."
+- "Compare what three different models say."
+
+An agent can see which agents are ready on this computer, with their models, effort levels and access levels, so it only picks what you can actually run.
+
+## Start a session for you
+
+Besides hidden helpers, an agent can open a normal session in any project folder, for example "start a session in `~/code/billing-api` to fix the webhook test". That session:
+
+- shows up in your sidebar like one you started yourself, and you can talk to it directly,
+- gets its own git worktree when the folder is a git repository,
+- starts at its agent's default access level, which is the most open one. Change it in its composer if you want it to ask first.
+
+It isn't tied to the session that started it: it keeps running if that one is archived.
+
+## Spread work across accounts
+
+Every session, helper and council member that an agent starts runs on its agent's account with the most room left right now, like **Auto** in the run settings. Several helpers on the same agent may still land on the same account.
+
+If **Switch accounts automatically** is on and a helper's account hits its limit, the helper moves to another account and carries on. See [Accounts and usage limits](/providers/accounts).
+
+An agent can't pick a specific account for the sessions it starts. To use one account on purpose, start that session yourself and choose it under **Account**.
