@@ -737,6 +737,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
     await previous.catch(() => {})
     this.failureEmitted = false
     try {
+      // Its agent crashed ("Claude process exited"): this input reopens the same conversation (resume) instead of
+      // failing on the dead session. Inbox delivery revives first; the user's own messages come straight here.
+      if (!this.stopped && this.sessionSnapshotState() === "failed") await this.resume()
       await this.settleReopen()
       this.assertLive(epoch)
       const content = await this.buildContent(text, meta, epoch)

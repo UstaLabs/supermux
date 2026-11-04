@@ -2296,6 +2296,26 @@ for (const kind of [...QUEUE_KINDS, "codex"] as const) {
   })
 }
 
+// The user's own messages (app, Telegram, WhatsApp) reach send() directly, not through inbox delivery: the
+// next one after a crash brings the agent back on the same conversation instead of "Session runtime failed".
+for (const kind of [...QUEUE_KINDS, "codex"] as const) {
+  test(`${kind}: the next message to a session whose agent crashed reopens the same conversation and runs`, async () => {
+    const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+    const { host, workdir } = await harness(kind, fake)
+    const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+    const events = listen(adapter)
+    await adapter.start()
+    await adapter.send("before")
+    fake.failRuntime(new Error("Claude process exited"))
+    await waitUntil(() => adapter.sessionSnapshotState() === "failed")
+    await adapter.send("is something wrong?")
+    expect(fake.opens.map((o) => o.resumeId)).toEqual([undefined, "native-keep"])
+    expect(fake.promptTexts.map((p) => p[0])).toEqual(["before", "is something wrong?"])
+    expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual(["Claude process exited"])
+    expect(adapter.isAlive()).toBe(true)
+  })
+}
+
 test("claude: resume() leaves a live session alone, and two resume() calls after a crash reopen it once", async () => {
   const kind = "claude" as const
   const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
