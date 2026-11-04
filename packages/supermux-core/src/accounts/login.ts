@@ -65,6 +65,18 @@ export function parseAntigravityLoginUrl(output: string): string | undefined {
   return prompt !== undefined ? urls[0] : undefined
 }
 
+/**
+ * Types a pasted code into a login CLI's terminal as a person does: the code, then Enter as its own input.
+ * Enter is "\r", what a keyboard sends: a POSIX pty turns it into the "\n" a line read waits for, and a
+ * Windows ConPTY takes only "\r" as the Enter key (agy never saw a code that ended in "\n").
+ * [open]: false once the login is over, so a late Enter is not typed into nothing.
+ */
+export function typeLoginCode(write: (data: string) => void, code: string, open: () => boolean = () => true): void {
+  write(code.trim())
+  const enter = setTimeout(() => { if (open()) write("\r") }, ENTER_DELAY_MS)
+  enter.unref?.()
+}
+
 /** How long agy waits for the pasted code after printing its URL ("Waiting for authentication (timeout 60s)"). */
 export const ANTIGRAVITY_CODE_WINDOW_MS = 60_000
 
@@ -482,9 +494,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       if (typeof text !== "string" || !text.trim()) throw new CoreError("invalid_input", "code must be a nonempty string")
       if (!state.needsCode || state.phase !== "awaiting_user" || !proc) throw new CoreError("invalid_input", "This login is not waiting for a code")
       const child = proc
-      child.write(text.trim())
-      const enter = setTimeout(() => { if (!finished) child.write("\r") }, ENTER_DELAY_MS)
-      enter.unref?.()
+      typeLoginCode(data => child.write(data), text, () => !finished)
     },
     /** No effect once the login is verifying (the process has exited and the account is being saved). */
     cancel() { if (state.phase !== "verifying") fail(new CoreError("login_cancelled", "Login cancelled"), "cancelled") },
