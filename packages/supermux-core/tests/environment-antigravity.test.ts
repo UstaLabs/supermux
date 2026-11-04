@@ -4,6 +4,8 @@ import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { prepareAntigravityEnvironment, linkAntigravityCli, shareAntigravityHistory, writeAntigravityMcpConfig, writeAntigravityPlugins } from "../src/environment/index.js"
+import { antigravityLinks } from "../src/environment/antigravity.js"
+import { Unsupported } from "@supermux/platform"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -219,4 +221,21 @@ test("no real cli dir: the dangling cli link survives a second prepare", async (
   const u = fakeUser(); rmSync(join(u.user, ".gemini", "antigravity-cli"), { recursive: true })
   await prepareAntigravityEnvironment(spec(u)); await prepareAntigravityEnvironment(spec(u))
   expect(readlinkSync(join(u.shadow, ".gemini", "antigravity-cli"))).toBe(join(u.user, ".gemini", "antigravity-cli"))
+})
+
+// #37: on Windows without Developer Mode a file link is refused, and the shadow home silently lost the user's
+// .gitconfig and the like (agy's shell ran without the user's git identity). A small file is copied instead; folders
+// still link (a junction needs no privilege).
+test("where this host cannot link files, a small file is copied into the shadow home and folders still link", async () => {
+  const saved = antigravityLinks.linkFile
+  antigravityLinks.linkFile = () => { throw new Unsupported("files.linkFile", "no file links here") }
+  try {
+    const u = fakeUser()
+    await prepareAntigravityEnvironment(spec(u))
+    expect(lstatSync(join(u.shadow, ".gitconfig")).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(u.shadow, ".gitconfig"), "utf8")).toBe("[user]\nname=x\n")
+    expect(readlinkSync(join(u.shadow, ".ssh"))).toBe(join(u.user, ".ssh"))
+  } finally {
+    antigravityLinks.linkFile = saved
+  }
 })

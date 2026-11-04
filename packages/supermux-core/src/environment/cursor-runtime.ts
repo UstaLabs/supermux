@@ -11,6 +11,7 @@ import {
   type Stats,
 } from "node:fs"
 import { join, dirname } from "node:path"
+import { files } from "@supermux/platform"
 
 // The cursor-agent runtime payload (`versions/<build>/`, ~178 MB) is identical
 // across sessions — keyed by build id, additive, read at runtime. We keep one
@@ -115,7 +116,8 @@ export function ensureSharedCursorRuntime(
         rmSync(linkPath, { recursive: true, force: true })
       }
     }
-    symlinkSync(shared, linkPath)
+    // A junction: a typeless symlink to a folder needs Developer Mode on Windows, and failed at every boot there.
+    files.linkDirectory(shared, linkPath)
   } catch {
     // A failure here must not block a spawn (worst case the session keeps its
     // own private copy).

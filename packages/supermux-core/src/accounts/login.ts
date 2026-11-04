@@ -10,6 +10,7 @@ import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
+import { files } from "@supermux/platform"
 
 export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
@@ -190,7 +191,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
         prepare: async dir => {
           await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
           // A junction needs no privilege on Windows (a "dir" symlink needs Developer Mode or admin).
-          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), process.platform === "win32" ? "junction" : "dir")
+          files.linkDirectory(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
           // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
           if (process.platform !== "win32") for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
