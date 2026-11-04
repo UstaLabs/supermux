@@ -13,14 +13,14 @@ npm i @supermux/core
 
 ## What it handles for you
 
-- **One event stream for six agents:** text, reasoning, tool calls, command output, file diffs, plans, subagents and token usage arrive as the same [normalized events](/core/concepts/events), each with the vendor's original payload attached.
+- **One event stream for every agent:** text, reasoning, tool calls, command output, file diffs, plans, subagents and token usage arrive as the same [normalized events](/core/concepts/events), each with the vendor's original payload attached.
 - **Sessions that outlive your process:** the agent keeps working when your process exits, and `core.sessions.resume(id)` reconnects to the running turn and replays what you missed. See [The keeper](/core/concepts/keeper).
 - **Permission prompts and questions as events:** you answer them with `session.requests.respond()`. Nothing is approved behind your back. See [Permissions](/core/concepts/permissions).
 - **Messages while the agent works:** they queue until the current turn ends. Interrupt, and, where the agent supports it, steer, fork, switch model and read history.
-- **Your functions as tools:** `mcpServer()` and `tool()` with zod schemas give any of the six agents a tool that runs in your process. See [MCP tools](/core/api/mcp).
+- **Your functions as tools:** `mcpServer()` and `tool()` with zod schemas give any supported agent a tool that runs in your process. See [MCP tools](/core/api/mcp).
 - **Several logins per agent:** pick an account per session, and switch automatically at a usage limit. See [Accounts](/core/concepts/accounts).
 
-## The six agents
+## Supported agents
 
 | Agent | CLI | Protocol | Resume | Steer | Fork | Model switch | History | Questions |
 |---|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
