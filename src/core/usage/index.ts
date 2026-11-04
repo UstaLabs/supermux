@@ -5,6 +5,8 @@ import { Database } from "bun:sqlite"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
+import { SIGN_IN_EXPIRED } from "../accounts/broker-accounts"
+import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
 
@@ -581,9 +583,6 @@ export async function fetchCursorUsage(
   return token ? fetchCursorUsageWithToken(token) : null
 }
 
-/** What every surface says when Cursor no longer accepts the login (CoreError code `account_expired`). */
-export const CURSOR_SIGN_IN_EXPIRED = "Cursor sign-in expired — sign in to Cursor again."
-
 /**
  * Whether api2.cursor.sh refused the token itself: 401, the Connect code `unauthenticated`, or
  * `ERROR_NOT_LOGGED_IN` (its answer for an expired or revoked session token).
@@ -616,7 +615,7 @@ export async function fetchCursorUsageWithToken(token: string): Promise<CursorUs
   )
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    if (cursorSignedOut(res.status, body)) throw new CoreError("account_expired", CURSOR_SIGN_IN_EXPIRED)
+    if (cursorSignedOut(res.status, body)) throw new CoreError(SIGN_IN_EXPIRED, CURSOR_SIGN_IN_EXPIRED)
     // The status and Cursor's own words stay in the broker log; the card gets a sentence.
     log.warn("cursor_usage_failed", { status: res.status, body: body.slice(0, 300) })
     throw new Error("Couldn't read Cursor usage right now — try again in a moment.")

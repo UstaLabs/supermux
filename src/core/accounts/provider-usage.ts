@@ -5,9 +5,7 @@ import { BALANCE_WINDOW, systemAccountId, type UsageStore as AccountUsageStore }
 import type { UsageWindow } from "../../../packages/supermux-core/src/accounts/types.js"
 import type { ClaudeUsage, CodexUsage, GrokUsage, UsageWindow as ProviderWindow } from "../usage/index"
 import type { UsageFailed } from "../usage/store"
-
-/** The code of a refusal that says "sign this login in again" (Core's CoreError code, the usage fetchers'). */
-export const SIGN_IN_EXPIRED = "account_expired"
+import { SIGN_IN_EXPIRED } from "./broker-accounts"
 
 /** The provider's usage as policy windows, named like the agents' own rate-limit events; undefined when there is none to record. */
 export function policyWindows(provider: string, data: unknown): UsageWindow[] | undefined {

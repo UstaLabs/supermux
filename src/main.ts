@@ -65,6 +65,7 @@ import {
   migrateSettingsCredentials,
   parseAccountsSettings,
   setAccountsAutoSwitchSource,
+  setAccountsChangedListener,
   sharedAccounts,
   toApiError,
   type AccountAgent,
@@ -157,6 +158,7 @@ import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
+import { startFailureNotice } from "./core/agents/start-failure"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
@@ -641,6 +643,8 @@ getUsageStore().on("failed", (e: UsageFailed) => {
 })
 // Agent statuses read the marks synchronously (detectAgentStatuses): have them in memory from boot.
 void sharedAccounts().usage.load()
+// A session that opened onto a login its agent refused (Cursor's expired sign-in) marks the account there.
+setAccountsChangedListener(() => brokerAccounts.notifyChanged())
 // The stored agent credentials become selectable token/api_key accounts, once. Sessions that pick
 // no account keep the global env injection (hydrateCredentialEnv), so nothing changes for them.
 void (async () => {
@@ -4009,7 +4013,8 @@ ch.on("inbound", async (msg: InboundMessage) => {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
     const resumed = await resumeSuspendedSession(session)
     if (!resumed) {
-      await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`, disable_notification: false })
+      const text = startFailureNotice("resume", session.name, sessionManager.resumeFailure(session.id), `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`)
+      await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
       return
     }
   }
@@ -4199,7 +4204,7 @@ if (webChannel) {
       await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
       if (!resumed) {
-        await notifySession(targetSession.id, `Failed to resume session "${targetSession.name}".`)
+        await notifySession(targetSession.id, startFailureNotice("resume", targetSession.name, sessionManager.resumeFailure(targetSession.id)))
         return
       }
     }
@@ -4233,7 +4238,7 @@ if (webChannel) {
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
       webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
       let started: ReturnType<typeof registry.resolveName>
-      let notInstalled: AgentNotInstalledError | undefined
+      let spawnError: unknown
       try {
         const spawned = await spawnSession({
           workdir: draftSnapshot.workdir,
@@ -4244,7 +4249,7 @@ if (webChannel) {
         })
         started = registry.resolveName(spawned.name)
       } catch (err: any) {
-        if (err instanceof AgentNotInstalledError) notInstalled = err
+        spawnError = err
         log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
       }
       if (!started) {
@@ -4271,7 +4276,7 @@ if (webChannel) {
         })
         // The draft row was restored just above, so the session exists again and
         // the notice has a home.
-        await notifySession(draftSnapshot.id, notInstalled ? notInstalled.message : `Failed to start session "${draftSnapshot.name}".`)
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, spawnError))
         return
       }
       inbound = { ...msg, target_session_id: started.id }

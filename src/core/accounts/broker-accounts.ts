@@ -78,6 +78,25 @@ export function setAccountsAutoSwitchSource(source: () => boolean): void {
   autoSwitchSource = source
 }
 
+let accountsChanged: () => void = () => {}
+
+/** main.ts points this at BrokerAccounts.notifyChanged: every client reloads its accounts. */
+export function setAccountsChangedListener(listener: () => void): void {
+  accountsChanged = listener
+}
+
+/** The code of an account mark that says "sign this login in again" (Core's CoreError code, also the usage fetchers'). */
+export const SIGN_IN_EXPIRED = "account_expired"
+
+/**
+ * The agent refused `account`'s login itself (an expired or revoked sign-in, seen when a session opened):
+ * Core's own unavailable mark with the sign-in code, which Settings ▸ Accounts, the chat's account pill and
+ * Auto read, and which a working usage fetch or a new sign-in clears. Every client is told once.
+ */
+export function markSignInExpired(account: string, reason: string): void {
+  if (sharedAccounts().usage.markUnavailable(account, reason, new Date(), SIGN_IN_EXPIRED)) accountsChanged()
+}
+
 export function resetSharedAccountsForTests(next?: Shared): void {
   shared = next
   autoSwitchSource = () => false
