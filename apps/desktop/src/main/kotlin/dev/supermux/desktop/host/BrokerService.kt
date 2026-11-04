@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.windowsPowerShell
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -780,9 +781,7 @@ Terminal=false
     }
 
     /** Windows PowerShell by its System32 path, never whatever `powershell.exe` the search path finds first. */
-    val WINDOWS_POWERSHELL: String =
-        (System.getenv("SystemRoot")?.takeIf { it.isNotBlank() }?.trimEnd('\\') ?: "C:\\Windows") +
-            "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    val WINDOWS_POWERSHELL: String = windowsPowerShell()
 
     /**
      * Windows 11 denies even current-user Task Scheduler registration to a non-elevated process.

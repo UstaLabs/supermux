@@ -804,7 +804,9 @@ jobs:
         working-directory: .
         run: bun run typecheck
       - name: Test desktop native-host integration
-        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --console=plain --no-daemon
+        # DesktopOsTest runs read-aloud's and the file opener's real scripts in Windows
+        # PowerShell 5.1 (#40); every other OS only ever runs them in pwsh 7.
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --console=plain --no-daemon
       - name: Stage native host helpers
         # Git Bash provides sh/curl/tar; the canonical staging path compiles the
         # Windows x64 broker + sessiond.
