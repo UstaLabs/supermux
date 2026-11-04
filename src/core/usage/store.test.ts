@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { ClaudeUsage, CursorUsage, UsageResponse } from "./index"
-import { UsageStore, type UsageSnapshot } from "./store"
+import { UsageStore, type UsageFailed, type UsageSnapshot } from "./store"
+import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 
 let tmp: string
 const stores: UsageStore[] = []
@@ -447,4 +448,103 @@ test("fetched follows live data in, wherever it was fetched (the reset routes, /
     { provider: "claude", account: "claude:system" },
     { provider: "cursor", account: "cursor:system" },
   ])
+})
+
+// A refused login is a state the clients act on ("Sign in again"), so its code travels with the text.
+function signInExpired(): Error {
+  return new CoreError("account_expired", "Cursor sign-in expired — sign in to Cursor again.")
+}
+
+test("a fetch that failed for the login carries its error code until data arrives; other failures carry none", async () => {
+  let mode: "expired" | "down" | "ok" = "expired"
+  const store = makeStore({
+    fetchers: {
+      cursor: async () => {
+        if (mode === "expired") throw signInExpired()
+        if (mode === "down") throw new Error("Couldn't read Cursor usage right now — try again in a moment.")
+        return cursor(30)
+      },
+    },
+  })
+
+  let snap = await store.refresh(["cursor"], { force: true })
+  expect(snap.errors.cursor).toBe("Cursor sign-in expired — sign in to Cursor again.")
+  expect(snap.errorCodes.cursor).toBe("account_expired")
+
+  mode = "down"
+  snap = await store.refresh(["cursor"], { force: true })
+  expect(snap.errors.cursor).toBe("Couldn't read Cursor usage right now — try again in a moment.")
+  expect(snap.errorCodes.cursor).toBeUndefined()
+
+  mode = "expired"
+  await store.refresh(["cursor"], { force: true })
+  mode = "ok"
+  snap = await store.refresh(["cursor"], { force: true })
+  expect(snap.cursor?.totalPercentUsed).toBe(30)
+  expect(snap.errors.cursor).toBeUndefined()
+  expect(snap.errorCodes.cursor).toBeUndefined()
+})
+
+test("error codes survive a restart, for system logins and added accounts", async () => {
+  const store = makeStore({
+    fetchers: { cursor: async () => { throw signInExpired() } },
+    accounts: async () => [
+      { id: "cursor-work", agent: "cursor", label: "Work", method: "subscription", fetch: async () => { throw signInExpired() } },
+      { id: "cursor-down", agent: "cursor", label: "Down", method: "subscription", fetch: async () => { throw new Error("Couldn't read Cursor usage right now — try again in a moment.") } },
+    ],
+  })
+  const snap = await store.refresh()
+  expect(snap.accounts.map((a) => [a.id, a.errorCode])).toEqual([["cursor-work", "account_expired"], ["cursor-down", null]])
+  store.dispose()
+
+  const reloaded = new UsageStore({ filePath: join(tmp, "usage-snapshot.json"), fetchers: {}, localReaders: {} })
+  stores.push(reloaded)
+  const cached = reloaded.snapshot()
+  expect(cached.errorCodes.cursor).toBe("account_expired")
+  expect(cached.accounts.map((a) => [a.id, a.errorCode])).toEqual([["cursor-work", "account_expired"], ["cursor-down", null]])
+})
+
+test("an added account's code clears once its usage arrives", async () => {
+  let expired = true
+  const store = makeStore({
+    accounts: async () => [
+      { id: "cursor-work", agent: "cursor", label: "Work", method: "subscription", fetch: async () => { if (expired) throw signInExpired(); return cursor(5) } },
+    ],
+  })
+  expect((await store.refresh()).accounts[0]!.errorCode).toBe("account_expired")
+  expired = false
+  const snap = await store.refresh(undefined, { force: true })
+  expect(snap.accounts[0]!.errorCode).toBeNull()
+  expect(snap.accounts[0]!.error).toBeNull()
+})
+
+test("a live fetch that failed with an error code emits failed with the account id, its words and its code", async () => {
+  const failed: UsageFailed[] = []
+  const store = makeStore({
+    fetchers: { cursor: async () => { throw signInExpired() }, claude: async () => null, grok: async () => { throw new Error("Grok billing API 500") } },
+    accounts: async () => [
+      { id: "cursor-work", agent: "cursor", label: "Work", method: "subscription", fetch: async () => { throw signInExpired() } },
+      { id: "cursor-down", agent: "cursor", label: "Down", method: "subscription", fetch: async () => { throw new Error("Couldn't read Cursor usage right now — try again in a moment.") } },
+    ],
+  })
+  store.on("failed", (e: UsageFailed) => failed.push(e))
+  await store.refresh()
+  expect(failed.sort((a, b) => a.account.localeCompare(b.account))).toEqual([
+    { provider: "cursor", account: "cursor-work", message: "Cursor sign-in expired — sign in to Cursor again.", code: "account_expired" },
+    { provider: "cursor", account: "cursor:system", message: "Cursor sign-in expired — sign in to Cursor again.", code: "account_expired" },
+  ])
+})
+
+test("applyResponse (the /usage command) records error codes and emits failed for them", () => {
+  const failed: UsageFailed[] = []
+  const store = makeStore()
+  store.on("failed", (e: UsageFailed) => failed.push(e))
+  store.applyResponse({
+    claude: null, codex: null, cursor: null, opencode: null, grok: null,
+    errors: { cursor: "Cursor sign-in expired — sign in to Cursor again.", codex: "credentials not found" },
+    errorCodes: { cursor: "account_expired" },
+  })
+  const snap = store.snapshot()
+  expect(snap.errorCodes).toEqual({ cursor: "account_expired" })
+  expect(failed).toEqual([{ provider: "cursor", account: "cursor:system", message: "Cursor sign-in expired — sign in to Cursor again.", code: "account_expired" }])
 })

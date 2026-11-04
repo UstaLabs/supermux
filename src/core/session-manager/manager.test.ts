@@ -23,6 +23,22 @@ describe("SessionManager resume frames", () => {
     expect(ok).toBe(false)
   })
 
+  test("a failed suspended resume keeps its error for the notice, until the next resume of that session", async () => {
+    const m = manager()
+    const refused = Object.assign(new Error("Cursor sign-in expired — sign in to Cursor again."), { code: "account_expired" })
+    const resume = spyOn(agents.cursor, "resume").mockImplementation(async () => { throw refused })
+    try {
+      expect(await m.resumeSuspended({ id: "x", name: "n", agent: "cursor", workdir: "/tmp", agent_home: "/tmp/cur-home" })).toBe(false)
+      expect(m.resumeFailure("x")).toBe(refused)
+      expect(m.resumeFailure("y")).toBeUndefined()
+      // An agent without a resume path fails without an error to tell.
+      expect(await m.resumeSuspended({ id: "x", name: "n", agent: "not-a-kind", workdir: "/tmp" })).toBe(false)
+      expect(m.resumeFailure("x")).toBeUndefined()
+    } finally {
+      resume.mockRestore()
+    }
+  })
+
   test("suspended resume of opencode WITHOUT agent_home returns false (arm exists, home missing)", async () => {
     const m = manager()
     const ok = await m.resumeSuspended({ id: "x", name: "n", agent: "opencode", workdir: "/tmp" })

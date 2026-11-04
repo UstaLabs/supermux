@@ -39,6 +39,7 @@ fun FleetSettingsSection(
             actions = dev.supermux.ui.accounts.rememberAccountsActions(fleet),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
+            onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
         )
         SettingsSection.Curator -> CuratorSettingsScreen(
             actions = rememberCuratorSettingsActions(fleet),

@@ -141,6 +141,7 @@ class RunSettingsAccountTest {
         sessionAccount: () -> String?,
         onSwitch: suspend (String) -> AccountResult<SessionAccountResult>,
         onOpenAccounts: (() -> Unit)? = null,
+        onSignIn: (() -> Unit)? = null,
     ) {
         val scope = rememberCoroutineScope()
         val switch = remember { SessionAccountSwitch(scope, onSwitch) }
@@ -149,7 +150,7 @@ class RunSettingsAccountTest {
             onSend = { _, _ -> }, onInterrupt = {},
             models = models,
             sessionAgent = "claude",
-            account = RunSettingsAccount.forChat("claude", sessionAccount(), null, accounts, switch, onOpenAccounts),
+            account = RunSettingsAccount.forChat("claude", sessionAccount(), null, accounts, switch, onOpenAccounts, onSignIn),
         )
     }
 
@@ -283,6 +284,27 @@ class RunSettingsAccountTest {
         onNodeWithTag("account-picker-item:claude-work").performClick()
         waitForIdle()
         assertEquals(listOf("claude-work"), asked)
+    }
+
+    // A system login whose sign-in expired (#63): the panel says so and its link is the sign-in itself.
+    @Test fun an_expired_system_sign_in_says_so_and_links_to_signing_in_again() = runComposeUiTest {
+        val expired = system.copy(unavailable = AccountUnavailableDto(
+            reason = "Cursor sign-in expired — sign in to Cursor again.", since = "2026-11-04T10:40:58.000Z", code = "account_expired"))
+        var signIns = 0
+        var opened = 0
+        setPlatformContent {
+            ChatComposer(listOf(expired, work), { null }, onSwitch = { id -> ok(id) }, onOpenAccounts = { opened++ }, onSignIn = { signIns++ })
+        }
+        waitForIdle()
+        openAccountList()
+        onNodeWithTag("run_settings_account_unavailable").assertExists()
+        onNodeWithText("Sign-in expired").assertIsDisplayed()
+        onNodeWithTag("run_settings_open_accounts").assertDoesNotExist()
+        onNodeWithTag("run_settings_sign_in").performClick()
+        waitForIdle()
+        assertEquals(1, signIns)
+        assertEquals(0, opened)
+        onNodeWithTag("run_settings_panel").assertDoesNotExist()
     }
 
     @Test fun under_touch_the_account_switches_from_the_sheet() = runComposeUiTest {

@@ -986,7 +986,8 @@ private fun WorkspacePaneContent(
                 chatState = { sid -> rememberChatState(viewApp, sid) },
                 chatActions = { s ->
                     val openAccounts = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Accounts) } }
-                    rememberChatActions(viewApp, s, openAccounts = openAccounts)
+                    val openSignIn = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers) } }
+                    rememberChatActions(viewApp, s, openAccounts = openAccounts, openSignIn = openSignIn)
                 },
                 drafts = drafts,
                 documents = documents,

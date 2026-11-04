@@ -2,7 +2,15 @@ import { existsSync, readFileSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
+import { CoreError } from "../../../packages/supermux-core/src/errors.js"
+import { AgentKind } from "../../shared/agents"
+import { makeLogger } from "../../shared/log"
+import { SIGN_IN_EXPIRED } from "../accounts/broker-accounts"
+import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
+import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
+
+const log = makeLogger("usage")
 
 // ── Types ──
 
@@ -159,6 +167,8 @@ export interface UsageResponse {
   opencode: OpenCodeUsage | null
   grok: GrokUsage | null
   errors: Record<string, string>
+  /** The code of an error that has one (`account_expired`: the provider refused the login, sign in again). */
+  errorCodes?: Record<string, string>
 }
 
 // ── Credential paths ──
@@ -167,7 +177,6 @@ const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
 const CLAUDE_JSON  = join(homedir(), ".claude.json")
 const CLAUDE_VERSIONS_DIR = join(homedir(), ".local", "share", "claude", "versions")
 const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
-const CURSOR_DB   = join(homedir(), ".config", "Cursor", "User", "globalStorage", "state.vscdb")
 const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
 const GROK_AUTH   = join(homedir(), ".grok", "auth.json")
 
@@ -540,26 +549,56 @@ export async function redeemCodexReset(
 
 // ── Cursor ──
 
-export async function fetchCursorUsage(
-  dbPath: string = CURSOR_DB,
-): Promise<CursorUsage | null> {
-  if (!existsSync(dbPath)) return null
-
-  const db = new Database(dbPath, { readonly: true })
-  let token: string | null = null
-  try {
-    const row = db.query("SELECT value FROM ItemTable WHERE key = ?").get("cursorAuth/accessToken") as
-      | { value: string }
-      | null
-    token = row?.value ?? null
-  } finally {
-    db.close()
-  }
-  if (!token) return null
-  return fetchCursorUsageWithToken(token)
+/**
+ * cursor-agent's own login: the file `cursor-agent login` writes and every Cursor session copies, which
+ * Settings shows as Cursor's system login. Resolved per call (XDG_CONFIG_HOME / APPDATA). Not the Cursor
+ * IDE's token store (~/.config/Cursor/User/globalStorage/state.vscdb): that is another app's login, kept
+ * fresh only while the IDE runs. On macOS cursor-agent keeps its login in the Keychain and this file is
+ * absent, so the card has no usage there rather than a false "signed out".
+ */
+export function cursorAuthPath(): string {
+  return authCredPath(AgentKind.Cursor, {
+    home: homedir(),
+    xdgConfigHome: process.env.XDG_CONFIG_HOME,
+    appData: process.env.APPDATA,
+    platform: process.platform,
+  })
 }
 
-/** The same fetch for an access token held elsewhere (cursor-agent's `cursor/auth.json`). */
+/** The access token of a cursor-agent auth.json; null when the file or its token is missing. */
+export function readCursorAccessToken(authPath: string): string | null {
+  if (!existsSync(authPath)) return null
+  try {
+    const token = JSON.parse(readFileSync(authPath, "utf-8"))?.accessToken
+    return typeof token === "string" && token ? token : null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchCursorUsage(
+  authPath: string = cursorAuthPath(),
+): Promise<CursorUsage | null> {
+  const token = readCursorAccessToken(authPath)
+  return token ? fetchCursorUsageWithToken(token) : null
+}
+
+/**
+ * Whether api2.cursor.sh refused the token itself: 401, the Connect code `unauthenticated`, or
+ * `ERROR_NOT_LOGGED_IN` (its answer for an expired or revoked session token).
+ */
+function cursorSignedOut(status: number, body: string): boolean {
+  if (status === 401) return true
+  try {
+    const data = JSON.parse(body)
+    if (data?.code === "unauthenticated") return true
+    return Array.isArray(data?.details) && data.details.some((d: any) => d?.debug?.error === "ERROR_NOT_LOGGED_IN")
+  } catch {
+    return false
+  }
+}
+
+/** The same fetch for an access token held elsewhere (an added account's cursor/auth.json). */
 export async function fetchCursorUsageWithToken(token: string): Promise<CursorUsage> {
   const res = await fetch(
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -574,7 +613,13 @@ export async function fetchCursorUsageWithToken(token: string): Promise<CursorUs
       signal: AbortSignal.timeout(TIMEOUT_MS),
     },
   )
-  if (!res.ok) throw new Error(`Cursor usage API ${res.status}: ${await res.text()}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    if (cursorSignedOut(res.status, body)) throw new CoreError(SIGN_IN_EXPIRED, CURSOR_SIGN_IN_EXPIRED)
+    // The status and Cursor's own words stay in the broker log; the card gets a sentence.
+    log.warn("cursor_usage_failed", { status: res.status, body: body.slice(0, 300) })
+    throw new Error("Couldn't read Cursor usage right now — try again in a moment.")
+  }
 
   const data = await res.json() as any
   const plan = data.planUsage ?? data
@@ -877,7 +922,7 @@ export async function fetchGrokUsage(
 export interface UsagePaths {
   claudeCredsPath?: string
   codexAuthPath?: string
-  cursorDbPath?: string
+  cursorAuthPath?: string
   opencodeDbPath?: string
   grokAuthPath?: string
   grokBillingBase?: string
@@ -887,19 +932,24 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
   const [claudeResult, codexResult, cursorResult, opencodeResult, grokResult] = await Promise.allSettled([
     fetchClaudeUsage(paths?.claudeCredsPath),
     fetchCodexUsage(paths?.codexAuthPath),
-    fetchCursorUsage(paths?.cursorDbPath),
+    fetchCursorUsage(paths?.cursorAuthPath),
     fetchOpenCodeUsage(paths?.opencodeDbPath),
     fetchGrokUsage(paths?.grokAuthPath, paths?.grokBillingBase),
   ])
 
   const errors: Record<string, string> = {}
+  const errorCodes: Record<string, string> = {}
+  const failed = (provider: string, reason: unknown): void => {
+    errors[provider] = (reason as { message?: string } | undefined)?.message ?? String(reason)
+    if (reason instanceof CoreError && reason.code) errorCodes[provider] = reason.code
+  }
 
   let claude: ClaudeUsage | null = null
   if (claudeResult.status === "fulfilled") {
     claude = claudeResult.value
     if (!claude) errors.claude = "credentials not found or token expired"
   } else {
-    errors.claude = claudeResult.reason?.message ?? String(claudeResult.reason)
+    failed("claude", claudeResult.reason)
   }
 
   let codex: CodexUsage | null = null
@@ -907,7 +957,7 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
     codex = codexResult.value
     if (!codex) errors.codex = "credentials not found"
   } else {
-    errors.codex = codexResult.reason?.message ?? String(codexResult.reason)
+    failed("codex", codexResult.reason)
   }
 
   let cursor: CursorUsage | null = null
@@ -915,7 +965,7 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
     cursor = cursorResult.value
     if (!cursor) errors.cursor = "credentials not found"
   } else {
-    errors.cursor = cursorResult.reason?.message ?? String(cursorResult.reason)
+    failed("cursor", cursorResult.reason)
   }
 
   let opencode: OpenCodeUsage | null = null
@@ -923,7 +973,7 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
     opencode = opencodeResult.value
     if (!opencode) errors.opencode = "no usage recorded yet"
   } else {
-    errors.opencode = opencodeResult.reason?.message ?? String(opencodeResult.reason)
+    failed("opencode", opencodeResult.reason)
   }
 
   let grok: GrokUsage | null = null
@@ -931,8 +981,8 @@ export async function fetchAllUsage(paths?: UsagePaths): Promise<UsageResponse> 
     grok = grokResult.value
     if (!grok) errors.grok = "credentials not found or token expired"
   } else {
-    errors.grok = grokResult.reason?.message ?? String(grokResult.reason)
+    failed("grok", grokResult.reason)
   }
 
-  return { claude, codex, cursor, opencode, grok, errors }
+  return { claude, codex, cursor, opencode, grok, errors, ...(Object.keys(errorCodes).length ? { errorCodes } : {}) }
 }
