@@ -13,7 +13,6 @@ curl -fsSL https://supermux.dev/install.sh | sh -s -- --native
 
 It works on Linux (x64 or arm64) and on Macs with Apple silicon. Here's what it does:
 
-- Installs tmux if it's missing. That's the only step that may ask for your password.
 - Offers to install Claude Code and Codex if no agent is installed yet. You sign in to them later, in the app.
 - Downloads the `supermux` program, checks its checksum, and puts it in `~/.local/bin`.
 - Sets supermux up as a service that starts by itself: a systemd user service on Linux, a LaunchAgent on a Mac. On Linux it keeps running after you log out.
