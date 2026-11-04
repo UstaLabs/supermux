@@ -42,12 +42,6 @@ Components you can use in MDX: `Callout`, `Cards`/`Card`, `Steps`/`Step`, `Tabs`
 
 The character images in `public/images/avatars/` are rendered with the app's own avatar renderer (`src/core/agents/avatar/renderer.js`) from `src/core/agents/avatar/gallery/`.
 
-## Hosting
+## Publishing
 
-The site is plain files after `bun run build`, so it can go anywhere. Nothing is set up yet; see `deploy/` for ready-made configuration:
-
-- **Cloudflare Pages**: build command `cd docs-site && bun install && bun run build`, output directory `docs-site/out`.
-- **GitHub Pages**: copy `deploy/github-pages.yml` to `.github/workflows/` and turn on Pages with "GitHub Actions" as the source.
-- **Coolify, or any Docker host**: `docker build -f docs-site/deploy/Dockerfile docs-site`. In Coolify, set the base directory to `docs-site` and the Dockerfile to `deploy/Dockerfile`. It serves the site on port 80.
-
-For `docs.supermux.dev`, point the domain at whichever host you pick. Keep `DOCS_BASE_PATH` unset.
+`.github/workflows/docs.yml` builds this folder and publishes it to GitHub Pages at **https://docs.supermux.dev**. It runs when a push to `main` changes `docs-site/`, and by hand from the Actions tab. The custom domain is set in the repository's Pages settings, so the site is built for the root: leave `DOCS_BASE_PATH` and `DOCS_DRAFT` unset there.
