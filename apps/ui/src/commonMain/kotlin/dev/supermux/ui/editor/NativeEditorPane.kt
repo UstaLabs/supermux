@@ -44,6 +44,7 @@ import dev.supermux.editor.plugins.search.Search
 import dev.supermux.editor.plugins.search.registerWidgets
 import dev.supermux.editor.plugins.view.EditorSettings
 import dev.supermux.editor.plugins.view.ViewSettings
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -167,7 +168,7 @@ fun NativeDocumentEditor(
                 lineWrap = lineWrap,
                 readOnly = readOnly || covered,
                 onFontSize = report,
-                label = doc.path.substringAfterLast('/'),
+                label = pathLeaf(doc.path),
                 widgets = widgets,
             )
             badge?.let { px ->

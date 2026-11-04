@@ -119,6 +119,7 @@ import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
 import dev.supermux.chat.chatTimeLabel
 import dev.supermux.chat.isRedactedReasoning
+import dev.supermux.fs.pathLeaf
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
@@ -722,7 +723,7 @@ private fun ToolDiffPane(
                 ToolCodeEditor(
                     text = text,
                     language = language,
-                    label = path.substringAfterLast('/'),
+                    label = pathLeaf(path),
                     theme = rememberAppEditorTheme(),
                     toggleColor = cs.primary,
                     lineKinds = diffDoc?.kinds,

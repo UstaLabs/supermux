@@ -159,4 +159,9 @@ class SidebarRailModelTest {
         assertEquals("CA", projectInitials("composer-at-mentions"))
         assertEquals("?", projectInitials(""))
     }
+
+    @Test
+    fun projectInitialsOfAWindowsFolderLabel() {
+        assertEquals("Op", projectInitials("…\\local\\optikokuyucu"))
+    }
 }

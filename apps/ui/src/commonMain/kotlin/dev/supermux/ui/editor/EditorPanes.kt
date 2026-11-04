@@ -63,6 +63,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
@@ -407,7 +408,7 @@ fun FilePane(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = cs.primary)
                             Text(
-                                path.substringAfterLast('/'),
+                                pathLeaf(path),
                                 color = cs.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = Space.sm),

@@ -95,6 +95,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -340,7 +341,7 @@ fun WorkspacePanes(
                     Box(Modifier.observePress(itemId) { ws.focusedFileViewId = itemId }) {
                     WorkspaceFileTab(
                         itemId = itemId,
-                        title = filePath.substringAfterLast('/'),
+                        title = pathLeaf(filePath),
                         path = filePath,
                         state = tabState,
                         dirty = documents.isDirty(filePath),
