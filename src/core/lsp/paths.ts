@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { home } from "../../shared/home"
 
 /** User-local LSP tooling (no sudo): SDKs and `go install` binaries. */
@@ -17,5 +17,5 @@ export function bunGlobalBinDir(): string {
 
 /** PATH for install + spawn: mux bin, bun global bin, then system PATH. */
 export function lspPathEnv(): string {
-  return [muxLspBinDir(), bunGlobalBinDir(), process.env.PATH].filter(Boolean).join(":")
+  return [muxLspBinDir(), bunGlobalBinDir(), process.env.PATH].filter(Boolean).join(delimiter)
 }

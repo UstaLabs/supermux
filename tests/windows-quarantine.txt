@@ -85,7 +85,6 @@ src/core/host-identity/keypair.test.ts | asserts POSIX file modes (0600/0700); W
 src/core/inbox/store.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "the inbox folder is private to the user (0700) and so is eac" | #29
 src/core/lsp/install.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "installEnv is non-interactive and sets GOBIN under mux lsp" | #29
 src/core/memory/agent-memory.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "ensureAgentMemoryFiles creates both files empty, in a privat" | #29
-src/core/plugins/lifecycle.test.ts | unrecognized plugin source: C:\Users\RUNNER~1\AppData\Local\Temp\lifecycle-add-i5BLhz\exte; first: "addPlugin copies a local source into the tree and appends to" | #29
 src/core/project/images.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "write creates the dir 0700 and stores bytes under a uuid.ext" | #29
 src/core/runtime-assets-gc.test.ts | ENOENT: no such file or directory, chmod 'C:\Users\RUNNER~1\AppData\Local\Temp\mux-gc-2lRx; first: "sweepRuntimeAssets > an unremovable dir is skipped; the rest" | #29
 src/core/runtime-assets.test.ts | expects a /-spelled path (/runtime-assets/); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
