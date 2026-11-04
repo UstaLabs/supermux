@@ -17,6 +17,11 @@ data class HostState(
     val sessions: List<SessionInfo> = emptyList(),
     val workspaces: List<WorkspaceDto> = emptyList(),
     val archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+    /**
+     * A `lazyArchived` snapshot came and we hold no archived rows yet (card #54): until the fetch
+     * lands, the sidebar cannot tell an archived-only project from a new empty one, so it hides both.
+     */
+    val archivedPending: Boolean = false,
     val messages: Map<String, List<LogEntry>> = emptyMap(),
     /**
      * Sessions whose [messages] hold the full page the broker serves, not just a snapshot tail

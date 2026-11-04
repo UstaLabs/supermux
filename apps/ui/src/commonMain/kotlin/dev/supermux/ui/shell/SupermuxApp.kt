@@ -66,6 +66,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -297,18 +298,25 @@ fun SupermuxApp(
     val openByWorkspace = sessionListMode == SessionListMode.Workspaces
 
     val sessions by fleet.sessions.collectAsState()
-    // First frame that draws real sessions — the end of the cold-start path ([StartupTrace]) —
+    // Card #54: how often the whole shell recomposes (every live frame for any session can).
+    SideEffect {
+        dev.supermux.util.PerfTrace.countRecompose("shell")
+        // The first composition that has live sessions, applied (drawing comes after: ui.sessions.drawn).
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.firstMilestone("ui.shell.composed", "sessions" to sessions.size)
+    }
+    // First frame that draws real sessions — the end of the cold-start path ([PerfTrace]) —
     // and the frames after the next session-list changes (the cache, then the live snapshot).
     var sessionFrames by remember { mutableStateOf(0) }
     LaunchedEffect(sessions) {
         if (sessions.isEmpty() || sessionFrames >= 3) return@LaunchedEffect
         withFrameNanos { }
         sessionFrames++
-        dev.supermux.util.StartupTrace.mark("ui.sessions.drawn", "n=$sessionFrames sessions=${sessions.size}")
+        dev.supermux.util.PerfTrace.milestone("ui.sessions.drawn", "n" to sessionFrames, "sessions" to sessions.size)
     }
     val archivedSessions by fleet.archivedSessions.collectAsState()
     val workspaces by fleet.workspaces.collectAsState()
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
+    val archivedPending by fleet.archivedPending.collectAsState()
     val messages by fleet.messages.collectAsState()
     val agentState by fleet.agentState.collectAsState()
     val subagentsBySession by fleet.subagents.collectAsState()
@@ -353,8 +361,10 @@ fun SupermuxApp(
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
     val setHostFilter: (String?) -> Unit = { hostFilter = it; fleet.saveHostFilter(it) }
 
-    // Refresh the settled fold when the live list changes (settle / resume / snapshot).
-    LaunchedEffect(sessions) { fleet.refreshArchived() }
+    // The archived list (the Agents ▸ Archived fold, the archive) is refreshed by each host's store
+    // when it can change: a (re)connect, an archive (session_removed), a resume. It used to be
+    // re-downloaded here on EVERY change to the live list — a model switch, a git status, a
+    // rename — ~420 KB each time (card #54).
 
     val selectedSession = ui.selectedId?.let { selectedId ->
         sessions.firstOrNull { it.id == selectedId }
@@ -456,6 +466,20 @@ fun SupermuxApp(
         ui.selectedId?.let { fleet.ensureMessagesLoaded(it) }
         fleet.updateViewing(viewingSnapshot)
         for (sid in viewingSnapshot?.visibleChatSessionIds.orEmpty()) notify.onSessionFocused(sid)
+    }
+
+    // Card #54: every selection is a chat open, with its own trace from here to "fully shown".
+    LaunchedEffect(ui.selectedId) {
+        val sid = ui.selectedId ?: return@LaunchedEffect
+        val trace = dev.supermux.util.PerfTrace.startChat(sid)
+        dev.supermux.util.PerfTrace.event(
+            "chat.open",
+            "session" to sid,
+            "name" to sessions.firstOrNull { it.id == sid }?.name,
+            "loaded" to fleet.appFor(sid)?.chatLoaded(sid),
+            "messages" to (messages[sid]?.size ?: 0),
+            trace = trace,
+        )
     }
 
     // Activate the opened session's chat view once per selection — never in response to a
@@ -819,6 +843,7 @@ fun SupermuxApp(
                                 onNewChatInWorkspace = onNewChatInWorkspace,
                                 archived = archivedSessions,
                                 archivedWorkspaces = archivedWorkspaces,
+                                archivedPending = archivedPending,
                                 archivedActiveId = ui.selectedArchivedWorkspaceId,
                                 onSelectArchived = { ui.selectArchivedWorkspace(it) },
                                 onOpenDraft = { id -> ui.openLauncher(draftId = id) },

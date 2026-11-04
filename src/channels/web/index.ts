@@ -4,6 +4,7 @@ import { DeviceStore } from "./device-store"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
+import { FrameStats, LoopLag, lapTimer, perfPath, type PerfLog } from "../../core/perf/perf-log"
 import { home } from "../../shared/home"
 import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
@@ -118,6 +119,9 @@ const rateLimitBucket = new WeakMap<Request, string>()
 const directLoopback = new WeakMap<Request, boolean>()
 /** The /ws heartbeat; a socket with no pong for 60 s is closed. */
 const HEARTBEAT_MS = 30_000
+/** Card #54 tracing: how often the event-loop lag probe ticks, and how often frame stats are written. */
+const PERF_LAG_TICK_MS = 500
+const PERF_STATS_MS = 60_000
 /** Close code that asks a client to reconnect and resubscribe (a fresh snapshot), e.g. after a wake. */
 export const WS_CLOSE_RESYNC = 4000
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
@@ -229,7 +233,7 @@ function newTerminalViewerId(): string {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void }; perfTrace?: string }
 
 export interface SessionSnapshot {
   id?: string
@@ -374,12 +378,14 @@ export interface WebChannelOpts {
     => import("../../core/workspace/dto").WorkspaceDto
   archiveWorkspace?: (id: string) => Promise<void>
   restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
-  listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  /** `slim`: rows without views/layout (no views query per workspace) — the app's lazy fetch, card #54. */
+  listArchivedWorkspaces?: (opts?: { slim?: boolean }) => ArchivedWorkspaceRow[]
   // Persistent project catalog (plan 2026-09-21). Mutations throw
   // ProjectNotFoundError (→ 404), ProjectConflictError (→ 409) or Error (→ 400).
   listProjectCatalog?: () => unknown[]
   /** workspaceId → projectId over active AND archived workspaces. */
-  getProjectMembership?: () => Record<string, string>
+  /** `includeArchived: false` leaves archived workspaces out (a `lazyArchived` snapshot, card #54). */
+  getProjectMembership?: (opts?: { includeArchived?: boolean }) => Record<string, string>
   createProject?: (name: string) => unknown
   renameProject?: (id: string, name: string) => unknown
   reorderProjects?: (ids: string[]) => void
@@ -562,7 +568,25 @@ export interface WebChannelOpts {
   claimStore?: import("./pair-claim").ClaimStore
   mintDeviceToken?: (name: string) => { token: string; name: string }
   getRelayUrl?: () => string | undefined
+  /**
+   * Load-time tracing (card #54, `core/perf/perf-log.ts`). While it is on, the snapshot carries
+   * `perf: true` (the apps then ship their own timings as `client_logs` with category "perf"),
+   * every API response and the snapshot record what they cost under the caller's trace id, and
+   * broadcasts are counted per frame type. Off: nothing on the wire changes.
+   */
+  perf?: PerfLog
 }
+
+/** What [WebChannel.json] put in a response body, for the perf trace (set on the Response). */
+const PERF_BYTES = Symbol("perfBytes")
+/** The JSON text itself, so a big answer can be gzipped on the way out ([WebChannel.gzipped]). */
+const PERF_TEXT = Symbol("perfText")
+/** JSON answers this long or longer are gzipped for a client that accepts it (card #54). */
+const GZIP_MIN_CHARS = 8_192
+
+/** An archived workspace as listed: the full DTO, or (slim) the DTO without views and layout. */
+export type ArchivedWorkspaceRow = Omit<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout"> &
+  Partial<Pick<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout">>
 
 /** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
 export const WEB_CAPABILITIES: ChannelCapabilities = {
@@ -596,6 +620,13 @@ export class WebChannel implements Channel {
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
   private readonly clientLogRing: StoredClientLogEntry[] = []
+  /** Card #54: broadcasts per frame type, the event loop's lateness, who asked for each request. */
+  private readonly frameStats = new FrameStats()
+  private readonly loopLag = new LoopLag(PERF_LAG_TICK_MS)
+  private perfTimers: Array<ReturnType<typeof setInterval>> = []
+  private readonly perfReqDevice = new WeakMap<Request, string>()
+  /** Extra fields a route adds to its request's `http` perf event (where its time went). */
+  private readonly perfNotes = new WeakMap<Request, Record<string, unknown>>()
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
   // single `bun test` process spins up, all seeing clientIp() === "unknown" —
@@ -682,6 +713,7 @@ export class WebChannel implements Channel {
       const dev = this.store.verify(token)
       if (dev) {
         this.store.touch(token)
+        if (this.opts.perf) this.perfReqDevice.set(req, dev.name)
         return { ok: true, device: { name: dev.name, token } }
       }
     }
@@ -705,6 +737,10 @@ export class WebChannel implements Channel {
     }
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
+    if (this.opts.perf) {
+      this.perfTimers.push(setInterval(() => this.loopLag.tick(), PERF_LAG_TICK_MS), setInterval(() => this.flushPerfStats(), PERF_STATS_MS))
+      for (const t of this.perfTimers) (t as { unref?: () => void }).unref?.()
+    }
     log.info("web channel listening", { port: this.boundPort })
   }
 
@@ -717,7 +753,7 @@ export class WebChannel implements Channel {
       // See SERVE_IDLE_TIMEOUT_SECONDS above: without this, any response slower than Bun's
       // 10s default gets its connection dropped mid-flight.
       idleTimeout: SERVE_IDLE_TIMEOUT_SECONDS,
-      fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
+      fetch: (req, server) => this.serveTraced(req, server),
       websocket: {
         // Negotiated per-connection (clients that don't support it are unaffected).
         // Terminal + control-channel JSON are highly compressible; the heavy win
@@ -798,6 +834,8 @@ export class WebChannel implements Channel {
   async stop(): Promise<void> {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
+    for (const t of this.perfTimers.splice(0)) clearInterval(t)
+    this.opts.perf?.flush()
     this.fss.close()
     // Force-close active/keep-alive connections (the `true`). A graceful stop
     // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
@@ -834,6 +872,73 @@ export class WebChannel implements Channel {
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+    if (this.opts.perf?.enabled()) this.frameStats.add(String((frame as { type?: unknown }).type), json.length, this.wsConnections.size)
+  }
+
+  /**
+   * Card #54: write the frames broadcast since the last call (per type: frames, bytes, socket
+   * sends) and how late the event loop ran, as one `ws.frames` event. Every minute while tracing.
+   */
+  flushPerfStats(): void {
+    const perf = this.opts.perf
+    if (!perf?.enabled()) {
+      this.frameStats.take()
+      this.loopLag.take()
+      return
+    }
+    perf.record({ event: "ws.frames", periodMs: PERF_STATS_MS, clients: this.wsConnections.size, frames: this.frameStats.take(), loopLag: this.loopLag.take() })
+  }
+
+  /**
+   * A JSON answer of [GZIP_MIN_CHARS] or more, gzipped for a client that accepts it (card #54: a
+   * chat open's history and extras and the archive list crossed the relay at 4–5× their gzipped
+   * size). Anything else — small, already encoded, not JSON from [json] — passes through.
+   */
+  private gzipped(req: Request, res: Response): Response {
+    const text = (res as unknown as Record<symbol, unknown>)[PERF_TEXT]
+    if (typeof text !== "string" || text.length < GZIP_MIN_CHARS) return res
+    if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "") || res.headers.has("content-encoding")) return res
+    const body = Bun.gzipSync(text, { level: 4 })
+    const headers = new Headers(res.headers)
+    headers.set("content-encoding", "gzip")
+    headers.append("vary", "accept-encoding")
+    const out = new Response(body, { status: res.status, statusText: res.statusText, headers })
+    ;(out as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    return out
+  }
+
+  /**
+   * Every HTTP request goes through here. With tracing on, an API response records how long the
+   * broker took to build it (to the Response; the transfer is not in it), its size, and the
+   * caller's `x-mux-trace: <trace>/<req>` header, and tells the caller in `server-timing`.
+   */
+  private async serveTraced(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const perf = this.opts.perf?.enabled() ? this.opts.perf : undefined
+    const t0 = perf ? performance.now() : 0
+    const routed = await this.routeRequestOrUpgrade(req, server)
+    if (!routed) return routed
+    const res = this.gzipped(req, routed)
+    if (!perf) return res
+    const path = new URL(req.url).pathname
+    if (!isApiPath(path)) return res
+    const ms = Math.round((performance.now() - t0) * 10) / 10
+    try { res.headers.set("server-timing", `app;dur=${ms}`) } catch { /* immutable (proxied) headers */ }
+    const [trace, reqId] = (req.headers.get("x-mux-trace") ?? "").split("/")
+    perf.record({
+      event: "http",
+      trace: trace || undefined,
+      req: reqId || undefined,
+      method: req.method,
+      path,
+      route: perfPath(path),
+      status: res.status,
+      bytes: (res as unknown as Record<symbol, number | undefined>)[PERF_BYTES],
+      gzipBytes: res === routed ? undefined : Number(res.headers.get("content-length")) || undefined,
+      ms,
+      device: this.perfReqDevice.get(req),
+      ...this.perfNotes.get(req),
+    })
+    return res
   }
 
   /**
@@ -868,6 +973,7 @@ export class WebChannel implements Channel {
   broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) if (c.ws !== except) c.ws.send(json)
+    if (this.opts.perf?.enabled()) this.frameStats.add(String((frame as { type?: unknown }).type), json.length, Math.max(0, this.wsConnections.size - 1))
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
@@ -894,7 +1000,9 @@ export class WebChannel implements Channel {
       }
     }
     if (url.pathname === "/ws") {
+      const authStart = performance.now()
       const auth = this.authenticate(req)
+      const authMs = Math.round((performance.now() - authStart) * 10) / 10
       if (!auth.ok) return this.authFailureResponse(auth)
       // Same rule as /ws/term: a cookie-authenticated socket must come from the app's own origin, so a
       // proxied page on `<slug>.<base>` (which gets the `Domain=.<base>` cookie) can't open it and, e.g.,
@@ -906,9 +1014,14 @@ export class WebChannel implements Channel {
       }
       const dev = auth.device
       const client = parseClientInfo(url.searchParams)
-      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now(), surface: client.surface } as WSData })
+      // Card #54: the app's launch trace id, so the broker's half of its startup joins it.
+      const perfTrace = url.searchParams.get("trace")?.slice(0, 40) || undefined
+      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now(), surface: client.surface, perfTrace } as WSData })
       if (upgraded) {
         this.noteClientConnected(dev, client)
+        if (this.opts.perf?.enabled()) {
+          this.opts.perf.record({ event: "ws.upgrade", trace: perfTrace, req: url.searchParams.get("req")?.slice(0, 40) || undefined, device: dev.name, surface: client.surface, authMs })
+        }
         return undefined  // 101 returned by Bun automatically
       }
       return new Response("upgrade failed", { status: 500 })
@@ -1574,7 +1687,12 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "subscribe") {
+      // Card #54: each phase of the build is timed; with tracing on the total, the phases and the
+      // size land in the perf log under the app's trace id (`trace`/`req` on the subscribe).
+      const perf = this.opts.perf?.enabled() ? this.opts.perf : undefined
+      const laps = lapTimer()
       const sessions = this.opts.getSessionsSnapshot()
+      laps.lap("sessions")
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
@@ -1595,6 +1713,13 @@ export class WebChannel implements Channel {
       // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
       const trimExtras = logTail !== undefined && frame.trimExtras === true
       const partialExtras: string[] = []
+      // `slimSubagents` (with `trimExtras`, card #54): a chat not on screen gets only its RUNNING
+      // subagents — the sidebar shows a running count — and its full list over chat-extras when
+      // opened. Finished ones carried up to 8,000-char prompts and results: ~860 KB of 2.3 MB.
+      const slimSubagents = trimExtras && frame.slimSubagents === true
+      // `lazyArchived` (card #54): no archived workspaces (or their project links) here; the app
+      // fetches `/archived-workspaces?slim=1` after the snapshot, off its first screen's path.
+      const lazyArchived = frame.lazyArchived === true
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1606,7 +1731,10 @@ export class WebChannel implements Channel {
         }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         // Small and needed by the session list (running badges), so never trimmed.
-        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        const sessionSubagents = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        subagents[sessionKey] = slimSubagents && !fullLogs.has(sessionKey)
+          ? sessionSubagents.filter((s) => (s as { status?: unknown }).status === "running")
+          : sessionSubagents
         councils[sessionKey] = this.opts.getSessionCouncils?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
@@ -1617,19 +1745,24 @@ export class WebChannel implements Channel {
           commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
         }
       }
+      laps.lap("perSession")
       await this.opts.enrichAttachments?.(Object.values(logs).flat())
+      laps.lap("attachments")
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
+      laps.lap("workspaces")
       // `slimArchived`: an archived workspace's views and layout are only needed once it is
       // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
-      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+      const archivedWorkspaces = lazyArchived ? undefined : (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
         if (frame.slimArchived !== true) return w
         const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
         return rest
       })
+      laps.lap("archivedWorkspaces")
       const projects = this.opts.listProjectCatalog?.() ?? []
-      const projectMembership = this.opts.getProjectMembership?.() ?? {}
+      const projectMembership = this.opts.getProjectMembership?.(lazyArchived ? { includeArchived: false } : undefined) ?? {}
+      laps.lap("projects")
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
@@ -1639,12 +1772,37 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      laps.lap("rest")
+      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(perf ? { perf: true } : {}) }
+      const text = JSON.stringify(snapshot)
+      laps.lap("stringify")
+      const sent = ws.send(text)
+      laps.lap("send")
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
       const keepAwake = this.opts.getKeepAwake?.()
       if (keepAwake) ws.send(JSON.stringify({ type: "keep_awake", keepAwake }))
+      if (perf) {
+        // After the send, so measuring what the bytes are made of never delays the app.
+        const keyBytes = Object.fromEntries(Object.entries(snapshot).map(([k, v]) => [k, JSON.stringify(v)?.length ?? 0]))
+        perf.record({
+          event: "snapshot.built",
+          trace: (typeof frame.trace === "string" ? frame.trace.slice(0, 40) : undefined) ?? ws.data.perfTrace,
+          req: typeof frame.req === "string" ? frame.req.slice(0, 40) : undefined,
+          device: ws.data.deviceName,
+          surface: ws.data.surface,
+          sessions: sessions.length,
+          workspaces: workspaces.length,
+          archivedWorkspaces: archivedWorkspaces?.length ?? "lazy",
+          trimmed: logTail !== undefined,
+          bytes: text.length,
+          sent,
+          ms: laps.total(),
+          laps: laps.laps,
+          keyBytes,
+        })
+      }
       return
     }
     if (frame.type === "ping") {
@@ -2002,7 +2160,11 @@ export class WebChannel implements Channel {
   }
 
   private json(body: unknown, status = 200): Response {
-    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+    const text = JSON.stringify(body)
+    const res = new Response(text, { status, headers: { "content-type": "application/json" } })
+    ;(res as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    ;(res as unknown as Record<symbol, unknown>)[PERF_TEXT] = text
+    return res
   }
 
   /** [json], gzipped when the client accepts it and the body is big enough to be worth it. */
@@ -2138,6 +2300,10 @@ export class WebChannel implements Channel {
       const e = raw as Record<string, unknown>
       const category = String(e.category ?? "client")
       const event = String(e.event ?? "log")
+      if (category === "perf") {
+        this.ingestPerfEntry(device, event, e, meta)
+        continue
+      }
       const stored: StoredClientLogEntry = {
         ts: Number(e.ts) || serverTs,
         category,
@@ -2157,6 +2323,31 @@ export class WebChannel implements Channel {
       })
     }
     while (this.clientLogRing.length > MAX_CLIENT_LOG_RING) this.clientLogRing.shift()
+  }
+
+  /**
+   * Card #54: an app's own timing. `ts` is the app's ms-since-launch when it happened and
+   * `meta.t` the same clock when the batch was sent, so the event is placed `meta.t - ts` before
+   * the batch arrived here (off by the batch's one-way latency, a small frame's).
+   */
+  private ingestPerfEntry(device: string, event: string, e: Record<string, unknown>, meta?: Record<string, unknown>): void {
+    const perf = this.opts.perf
+    if (!perf?.enabled()) return
+    const t = Number(e.ts)
+    const sentAt = Number(meta?.t)
+    const lag = Number.isFinite(t) && Number.isFinite(sentAt) ? Math.max(0, sentAt - t) : 0
+    const data = e.data && typeof e.data === "object" ? (e.data as Record<string, unknown>) : {}
+    perf.record({
+      ...data,
+      event,
+      src: "client",
+      ts: Math.round(perf.now() - lag),
+      t: Number.isFinite(t) ? t : undefined,
+      device,
+      surface: typeof meta?.surface === "string" ? meta.surface : undefined,
+      launch: typeof meta?.launch === "string" ? meta.launch : undefined,
+      version: typeof meta?.version === "string" ? meta.version : undefined,
+    })
   }
 
   private async handleProxyRoute(
@@ -3377,10 +3568,16 @@ export class WebChannel implements Channel {
       // What an open chat needs beyond its messages; the snapshot leaves these out for chats
       // that were not on screen (`trimExtras`).
       const id = decodeURIComponent(path.split("/")[2]!)
+      const activity = this.opts.getSessionActivity?.(id) ?? []
+      const commands = this.opts.getSessionCommands?.(id) ?? []
+      // The full subagent list, finished ones included: a `slimSubagents` snapshot sent only running ones.
+      const subagents = this.opts.getSessionSubagents?.(id) ?? []
+      if (this.opts.perf) this.perfNotes.set(req, { activity: activity.length, commands: commands.length, subagents: subagents.length })
       return this.json({
-        activity: this.opts.getSessionActivity?.(id) ?? [],
-        commands: this.opts.getSessionCommands?.(id) ?? [],
+        activity,
+        commands,
         commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+        subagents,
       })
     }
     if (method === "GET" && path === "/search/messages") {
@@ -3395,8 +3592,14 @@ export class WebChannel implements Channel {
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
+      const t0 = performance.now()
       const log = this.opts.getSessionLog(id)
+      const t1 = performance.now()
       await this.opts.enrichAttachments?.(log)
+      if (this.opts.perf) {
+        const round = (ms: number) => Math.round(ms * 10) / 10
+        this.perfNotes.set(req, { count: log.length, logMs: round(t1 - t0), enrichMs: round(performance.now() - t1) })
+      }
       return this.json(log)
     }
     if (method === "POST" && path.startsWith("/sessions/") && path.endsWith("/mute")) {
@@ -3923,7 +4126,8 @@ export class WebChannel implements Channel {
       return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
     }
     if (method === "GET" && path === "/archived-workspaces") {
-      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.() ?? [] })
+      const slim = url.searchParams.get("slim") === "1"
+      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.(slim ? { slim: true } : undefined) ?? [] })
     }
     if (method === "POST" && path === "/workspaces") {
       if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
@@ -4552,6 +4756,31 @@ export class WebChannel implements Channel {
       try { body = await req.json() } catch { return this.json({ error: "invalid json" }, 400) }
       this.ingestClientLogs(auth.device.name, body?.entries ?? [], body?.meta)
       return this.json({ ok: true, count: (body?.entries ?? []).length })
+    }
+
+    // Card #54: the load-time trace. GET reads the in-memory ring (`?trace=&since=&limit=`), PUT
+    // `{enabled}` turns tracing on or off (the same flag `bun scripts/perf-timeline.ts on` writes).
+    if (path === "/debug/perf" && (method === "GET" || method === "PUT")) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const perf = this.opts.perf
+      if (!perf) return this.json({ error: "tracing unavailable" }, 503)
+      if (method === "PUT") {
+        const body = await req.json().catch(() => ({})) as { enabled?: unknown }
+        if (typeof body.enabled !== "boolean") return this.json({ error: "enabled must be true or false" }, 400)
+        perf.setEnabled(body.enabled)
+        return this.json({ enabled: perf.enabled() })
+      }
+      const since = Number(url.searchParams.get("since") ?? "")
+      const limit = Number(url.searchParams.get("limit") ?? "")
+      return this.json({
+        enabled: perf.enabled(),
+        events: perf.events({
+          trace: url.searchParams.get("trace") ?? undefined,
+          since: Number.isFinite(since) && since > 0 ? since : undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : 2_000,
+        }),
+      })
     }
 
     if (method === "GET" && path === "/debug/client-logs") {

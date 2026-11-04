@@ -1,5 +1,6 @@
 // src/main.ts
 import { avatarRev } from "./core/agents/avatar"
+import { PerfLog } from "./core/perf/perf-log"
 import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
@@ -389,6 +390,8 @@ process.on("exit", () => releasePidFile(PID_FILE))
 
 // DB creation BEFORE registry
 const dbPath = join(STATE_DIR, "db.sqlite3")
+// Load-time tracing (card #54): off unless MUX_PERF=1 or `bun scripts/perf-timeline.ts on`.
+const perfLog = new PerfLog({ dir: join(STATE_DIR, "perf"), envEnabled: process.env.MUX_PERF === "1" })
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
@@ -2510,6 +2513,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   }
   webChannel = new WebChannel({
     updateChecker,
+    perf: perfLog,
     getHostInfo: () => ({
       hostId: hostIdentity.hostId,
       name: advertisedHostName,
@@ -2965,13 +2969,18 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (!dto) throw new Error("workspace not found")
       return dto
     },
-    listArchivedWorkspaces: () => {
+    listArchivedWorkspaces: (o) => {
       const internal = internalSessionIds()
-      return registry.workspaces
+      const rows = registry.workspaces
         .list({ includeArchived: true })
         .filter((w) => w.status === "archived")
         .filter((w) => isVisibleWorkspace(w, internal))
-        .map(toWsDto)
+      if (!o?.slim) return rows.map(toWsDto)
+      // Slim (card #54): no views query per workspace, and no views or layout in the answer.
+      return rows.map((w) => {
+        const { views: _views, layout: _layout, ...rest } = workspaceDto(w, [], projectService.resolve(w))
+        return rest
+      })
     },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
     // Project catalog. The routes broadcast projects_changed after each mutation.
@@ -2979,10 +2988,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // Membership input excludes internal workspaces for consistency — they're
     // not sent to clients anyway (see listWorkspaces/listArchivedWorkspaces
     // above), and a resolved membership entry for one would be dead data.
-    getProjectMembership: () => {
+    getProjectMembership: (o) => {
       const internal = internalSessionIds()
       return projectService.membership(
-        registry.workspaces.list({ includeArchived: true }).filter((w) => isVisibleWorkspace(w, internal)),
+        registry.workspaces.list({ includeArchived: o?.includeArchived !== false }).filter((w) => isVisibleWorkspace(w, internal)),
       )
     },
     createProject: (name) => projectService.create(name),

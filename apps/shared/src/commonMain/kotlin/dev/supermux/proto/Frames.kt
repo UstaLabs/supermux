@@ -540,6 +540,13 @@ sealed interface ServerFrame {
          * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
          */
         val partialExtras: List<String>? = null,
+        /** The broker is tracing load times (card #54): ship ours (`client_logs`, category "perf"). */
+        val perf: Boolean = false,
+        /**
+         * The `subscribe` asked for `lazyArchived` and the broker left [archivedWorkspaces] (and
+         * their [projectMembership]) out; fetch `GET /archived-workspaces?slim=1` (card #54).
+         */
+        val archivedLazy: Boolean = false,
     ) : ServerFrame
 
     /**
@@ -1003,6 +1010,10 @@ sealed interface ClientFrame {
     @Serializable @SerialName("fs_sub")
     data class FsSub(val path: String, val since: String? = null) : ClientFrame
 
+    /** App log lines for the broker's log; category "perf" is the load-time trace (card #54). */
+    @Serializable @SerialName("client_logs")
+    data class ClientLogs(val entries: List<ClientLogEntry>, val meta: JsonObject? = null) : ClientFrame
+
     @Serializable @SerialName("fs_unsub")
     data class FsUnsub(val path: String) : ClientFrame
 
@@ -1021,3 +1032,7 @@ sealed interface ClientFrame {
     @Serializable @SerialName("lsp_close")
     data class LspClose(val session: String, val serverId: String) : ClientFrame
 }
+
+/** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
+@Serializable
+data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)

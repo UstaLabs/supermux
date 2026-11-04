@@ -24,11 +24,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         state.copy(
             sessions = frame.sessions,
             workspaces = if (catalogKnown) applyMembership(frame.workspaces, frame.projectMembership) else frame.workspaces,
-            archivedWorkspaces = if (catalogKnown) {
-                applyMembership(frame.archivedWorkspaces, frame.projectMembership)
-            } else {
-                frame.archivedWorkspaces
+            archivedWorkspaces = when {
+                // Not in this snapshot: keep what we hold until the store's fetch replaces it.
+                frame.archivedLazy -> state.archivedWorkspaces
+                catalogKnown -> applyMembership(frame.archivedWorkspaces, frame.projectMembership)
+                else -> frame.archivedWorkspaces
             },
+            archivedPending = frame.archivedLazy && state.archivedWorkspaces.isEmpty(),
             projects = frame.projects,
             projectCatalogKnown = catalogKnown,
             messages = snapshotMessages(state, frame),
@@ -407,6 +409,23 @@ private fun snapshotCompleteLogs(state: HostState, frame: ServerFrame.Snapshot):
 private fun <V> keptExtras(held: Map<String, V>, frame: ServerFrame.Snapshot): Map<String, V> {
     val trimmed = frame.partialExtras ?: return emptyMap()
     return trimmed.filter { it in frame.logs && it in held }.associateWith { held.getValue(it) }
+}
+
+/**
+ * A chat-extras subagent list plus what live `subagent_update`s changed while it was in flight:
+ * per id the fresher of the two (by last activity), ordered by start.
+ */
+fun mergeFetchedSubagents(
+    fetched: List<dev.supermux.proto.Subagent>,
+    current: List<dev.supermux.proto.Subagent>,
+): List<dev.supermux.proto.Subagent> {
+    val byId = LinkedHashMap<String, dev.supermux.proto.Subagent>()
+    for (s in fetched) byId[s.id] = s
+    for (s in current) {
+        val f = byId[s.id]
+        if (f == null || s.lastActivityAt > f.lastActivityAt) byId[s.id] = s
+    }
+    return byId.values.sortedBy { it.startedAt }
 }
 
 /**
