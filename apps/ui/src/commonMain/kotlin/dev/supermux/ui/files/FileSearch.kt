@@ -71,6 +71,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.SearchHit
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.delay
@@ -133,9 +135,9 @@ fun toGoToEntry(workdir: String, hit: SearchHit): GoToEntry? {
 
 /** A recently opened workdir-relative file as a list entry (nothing highlighted). */
 fun recentEntry(workdir: String, relativePath: String): GoToEntry = GoToEntry(
-    absolutePath = relativePath.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) },
+    absolutePath = hostJoin(workdir, relativePath),
     relativePath = relativePath,
-    name = relativePath.substringAfterLast('/'),
+    name = pathLeaf(relativePath),
     folder = relativePath.substringBeforeLast('/', ""),
     isDir = false,
 )
