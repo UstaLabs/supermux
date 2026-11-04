@@ -62,4 +62,11 @@ class HostPathsTest {
         assertFalse(sameHostPath("/home/Me", "/home/me"))
         assertTrue(sameHostPath("/home/me/", "/home//me"))
     }
+
+    @Test fun windowsCaseFoldingIsOrdinalLikeNtfsDottedIIsNotI() {
+        // NTFS upper-cases one character at a time with its own table: 'i' and 'İ' (U+0130) are two names.
+        // String.equals(ignoreCase = true) calls them equal, because it also compares the lower-case forms.
+        assertFalse(sameHostPath("C:\\proj\\i.txt", "C:\\proj\\\u0130.txt"))
+        assertTrue(sameHostPath("C:\\proj\\FILE", "c:\\PROJ\\file"))
+    }
 }

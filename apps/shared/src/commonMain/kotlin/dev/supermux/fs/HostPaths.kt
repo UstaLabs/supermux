@@ -15,9 +15,21 @@ fun isWindowsHostPath(path: String): Boolean =
     path.startsWith("\\\\") ||
         (path.length >= 2 && isDriveSegment(path.substring(0, 2)) && (path.length == 2 || path[2] == '\\' || path[2] == '/'))
 
-/** Segment by segment: case-insensitively for a Windows path (`C:\Users` is `c:\users`), exactly for a POSIX one. */
+/**
+ * One name on the host: exactly on POSIX, and on Windows case-insensitively the way NTFS does it, one character
+ * at a time with the invariant upper case (`Char.uppercaseChar`). So it holds in every UI language ("FILE" is
+ * "file" on a Turkish Windows too), and 'İ' stays a different name from 'i'.
+ */
+fun sameHostSegment(a: String, b: String, windows: Boolean): Boolean {
+    if (!windows) return a == b
+    if (a.length != b.length) return false
+    for (i in a.indices) if (a[i].uppercaseChar() != b[i].uppercaseChar()) return false
+    return true
+}
+
+/** Segment by segment, with [sameHostSegment]: `C:\Users` is `c:\users`, `/Users` is not `/users`. */
 fun sameHostSegments(a: List<String>, b: List<String>, windows: Boolean): Boolean =
-    a.size == b.size && a.indices.all { a[it].equals(b[it], ignoreCase = windows) }
+    a.size == b.size && a.indices.all { sameHostSegment(a[it], b[it], windows) }
 
 /** Whether [a] and [b] name the same place on the host. */
 fun sameHostPath(a: String, b: String): Boolean =
@@ -36,5 +48,8 @@ fun hostRelativePath(root: String, path: String): String? {
     if (p.size < r.size || !sameHostSegments(r, p.subList(0, r.size), windows = isWindowsHostPath(root))) return null
     return p.subList(r.size, p.size).joinToString("/")
 }
+
+/** Whether [path] is [root] or inside it, on the host's rules. */
+fun hostIsInside(path: String, root: String): Boolean = hostRelativePath(root, path) != null
 
 private fun isAbsoluteHostPath(path: String): Boolean = path.startsWith('/') || isWindowsHostPath(path)
