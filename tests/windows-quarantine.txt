@@ -26,6 +26,7 @@ packages/supermux-core/tests/detached.test.ts | expected true got false; first: 
 packages/supermux-core/tests/environment-claude.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareClaudeEnvironment > mcp.json matches the fixture byte" | #29
 packages/supermux-core/tests/environment-grok.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "config rewrite is idempotent" | #29
 packages/supermux-core/tests/environment-opencode.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareOpenCodeEnvironment opencode.json matches the former " | #29
+packages/supermux-core/tests/integration.test.ts | keeper status did not appear, no echo of 2 (intermittent: passed in run 41849291342, failed in 41856835329) | #29 | flaky
 packages/supermux-core/tests/keeper-links.test.ts | no echo of 2; first: "a link planted where the keeper stages a journal rewrite is " | #29
 packages/supermux-core/tests/keeper-lost.test.ts | The agent did not start: ENOENT: no such file or directory, uv_spawn 'C:\Users\RUNNER~1\Ap; first: "opencode: resume with a host MCP server whose keeper dies in" | #29
 packages/supermux-core/tests/keeper-socket.test.ts | file locked or denied (EACCES); first: "keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, " | #29
