@@ -1,0 +1,39 @@
+---
+title: Updates
+description: Keep the apps and the computer that runs your agents up to date. Your sessions keep running.
+---
+
+Two things get updated: the **app** on each of your devices, and **supermux on the computer that runs your agents**. On a desktop that hosts, the app takes care of both.
+
+## Desktop app
+
+When a new version is out, a card appears at the foot of the sidebar: **Update available**, with **What's new** and **Install**. **Install** downloads the new `.dmg`, `.msi` or `.deb` and opens it. On Windows the app installs it and closes itself so the files can be replaced.
+
+To check yourself, choose **File ▸ Check for Updates…**, or open **Check for updates** in Settings.
+
+A hosting desktop app brings its own copy of supermux, so the agents' side is updated with the app. Updating the app doesn't stop your sessions.
+
+## Phones and browsers
+
+- **iPhone and iPad**: through the App Store.
+- **Android**: the same **Update available** card. **Install** downloads the new APK and installs it over the old one. The first time, Android asks you to allow installing apps from supermux.
+- **Browser**: the web app comes from your computer, so it's always the same version as supermux there.
+
+## A server
+
+A server install checks for new versions every six hours, but never installs one by itself.
+
+- **From the app**: **Settings ▸ System** shows the version and whether an update is available. Press **Update broker**.
+- **From the terminal**: run `supermux update`. It downloads the new version, checks it, swaps it in and restarts the service.
+- **Going back**: `supermux rollback` restores the version you had before.
+- **Docker**: run `docker compose pull && docker compose up -d` in the folder with your `docker-compose.yml`.
+
+## Stable and alpha
+
+There are two release channels: **stable**, and **alpha** for early builds. You're on whichever channel the build you installed came from: a stable install is never offered an alpha.
+
+## What happens to your sessions
+
+Updating an app stops nothing: your agents run on the computer, not in the app.
+
+When supermux itself restarts on that computer, your apps reconnect by themselves. A session that was mid-way through picks up again on your next message.

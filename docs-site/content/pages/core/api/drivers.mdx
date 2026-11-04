@@ -1,0 +1,62 @@
+---
+title: Drivers
+description: The options each agent takes, in supermux() and in its driver factory.
+---
+
+## In supermux()
+
+Each key under `agents` takes these options. Everything is optional; `defaults` shows what you get.
+
+| Agent | Options |
+|---|---|
+| `claude` | `model`, `effort` (`low`…`max`), `fastMode`, `permissionMode`, `permissionPrompts` (`"host"` or `"none"`), `tools`, `allowedTools`, `disallowedTools`, `partialMessages`, `command`, `args`, `env`, `inheritEnv`, timeouts, `maxFrameBytes`, `keeper` |
+| `codex` | `model`, `reasoningEffort`, `sandbox`, `approvalPolicy`, `command`, `args` (keep `app-server` first), `env`, `inheritEnv`, timeouts, `maxFrameBytes`, `keeper` |
+| `grok` | `model`, `reasoningEffort` (`low`, `medium`, `high`), `policy`, `nativeMode`, `askKinds`, `authPath`, `noLeader`, `mcpServers`, `command`, `commandArgs`, `env`, `inheritEnv`, timeouts, `keeper` |
+| `opencode` | `model`, `policy`, `nativeMode`, `askKinds`, `openCodePollIntervalMs`, `mcpServers`, `command`, `env`, `inheritEnv`, timeouts, `keeper` |
+| `cursor` | `model`, `policy`, `mode` (`agent`, `plan`, `ask`), `askKinds`, `mcpServers`, `command`, `commandArgs`, `env`, `inheritEnv`, timeouts, `keeper` |
+| `antigravity` | `home` (required: a shadow home from `prepareAntigravityEnvironment`), `userHome`, `model`, `mode`, `interruptGraceMs`, `command`, `args`, `env`, `inheritEnv`, timeouts, `keeper` |
+
+- `keeper` takes `parkedDeadlineMs`, `journalMaxBytes` and `connectTimeoutMs`. See [The keeper](/core/concepts/keeper).
+- Permissions are flat options here, like `permissionMode` or `policy`. Passing `permissions` throws and tells you which options to use instead.
+
+```ts
+supermux({
+  stateDirectory,
+  agents: {
+    claude: { model: "opus", effort: "high", permissionMode: "acceptEdits" },
+    codex: { sandbox: "read-only", approvalPolicy: "never" },
+    cursor: { model: "auto" },
+  },
+})
+```
+
+## Driver factories
+
+For `createCore()`, build drivers with their factories. Every factory checks its options when you call it and throws a `TypeError` naming any that's missing.
+
+| Factory | Import |
+|---|---|
+| `claude(options: ClaudeOptions): AgentDriver` | `@supermux/core/claude` |
+| `codex(options: CodexOptions): AgentDriver` | `@supermux/core/codex` |
+| `grok(options: GrokOptions): AgentDriver` | `@supermux/core/agents` |
+| `opencode(options: OpenCodeOptions): AgentDriver` | `@supermux/core/agents` |
+| `cursor(options: CursorOptions): AgentDriver` | `@supermux/core/agents` |
+| `antigravity(options: AntigravityOptions): AgentDriver` | `@supermux/core/antigravity` |
+| `acp(options: AcpOptions): AgentDriver` | `@supermux/core/acp` (any agent that speaks ACP) |
+
+The factories need what `supermux()` fills in for you: an `id`, the `command` and its arguments, `inheritEnv`, the `permissions` spec, timeouts (`setupTimeoutMs`, `shutdownTimeoutMs` and, for Claude Code and Codex, `requestTimeoutMs`), `maxFrameBytes`, and a `keeper: { stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`.
+
+The quickest way to see a complete set is to print `defaults`, which `supermux()` passes to the factories.
+
+## Default commands
+
+| Agent | Command |
+|---|---|
+| Claude Code | `claude` |
+| Codex | `codex` with `app-server` |
+| Grok Build | `grok` |
+| OpenCode | `opencode` |
+| Cursor | `cursor-agent` |
+| Antigravity | `agy` |
+
+Set `command` to use a CLI that isn't on your `PATH`.

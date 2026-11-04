@@ -1,0 +1,62 @@
+---
+title: FAQ
+description: Short answers to the questions people ask most.
+---
+
+<Accordions type="single">
+<Accordion title="Is supermux an agent?">
+No. It runs the agent programs you already use, like Claude Code and Codex, and it's where you work with them. It isn't a cloud service either: it runs on your own computer or server.
+</Accordion>
+
+<Accordion title="Is it free?">
+Yes. supermux is open source under the MIT license, and it runs on the agent subscriptions you already have.
+</Accordion>
+
+<Accordion title="Do I need API keys?">
+No. You sign in to each agent with your normal subscription. API keys work too, if you prefer them; they're billed per token by the provider.
+</Accordion>
+
+<Accordion title="Which agents does it support?">
+Claude Code, Codex, Cursor, OpenCode, Grok and Antigravity. See [Supported providers](/providers).
+</Accordion>
+
+<Accordion title="Can I use it from my phone only?">
+The phone app is how you reach your agents, but the agents run on a computer: your laptop, a desktop at home or a server. Install supermux there first. See [Install on your computer](/getting-started/install) or [Install on a server](/getting-started/server).
+</Accordion>
+
+<Accordion title="Where does my code go?">
+It stays on the computer that runs your agents. Your agents talk to their own providers, like Anthropic or OpenAI, just as they would if you ran them yourself. See [Privacy and telemetry](/running/privacy).
+</Accordion>
+
+<Accordion title="Does my laptop have to stay on?">
+Your agents run on the computer that hosts them, so that computer has to be on and awake. Closing the app doesn't stop them. For work that runs while you're away, use a computer that stays on, or turn on **Keep this computer awake**. See [Always on](/running/always-on).
+</Accordion>
+
+<Accordion title="Can my team share one install?">
+Not yet. Each install belongs to one person. Each teammate runs their own.
+</Accordion>
+
+<Accordion title="Does Windows need WSL?">
+No. The Windows app runs agents natively.
+</Accordion>
+
+<Accordion title="Does it work on an Intel Mac?">
+The desktop app and the server program need Apple silicon. On an Intel Mac you can run supermux in Docker or a virtual machine: see [Install on a server](/getting-started/server#other-ways-to-install).
+</Accordion>
+
+<Accordion title="What happens when I hit a usage limit?">
+Add more than one account for that agent, and turn on **Switch accounts automatically**. The session then moves to another account and carries on. See [Accounts and usage limits](/providers/accounts).
+</Accordion>
+
+<Accordion title="Can I use more than one computer?">
+Yes. Pair several and see all their sessions in one list. See [Several computers](/devices/several-computers).
+</Accordion>
+
+<Accordion title="Do I have to use the supermux relay?">
+No. It's on by default so your devices can reach your computer from anywhere, but you can turn it off and use your home network, your own VPN or a tunnel. See [Reach your computer from anywhere](/devices/remote-access).
+</Accordion>
+
+<Accordion title="Does supermux collect data?">
+supermux on your computer sends anonymous usage events: which agents, models and features you use, never your prompts, code, paths or names. You can see exactly what's sent, and turn it off in **Settings ▸ System**. See [Privacy and telemetry](/running/privacy).
+</Accordion>
+</Accordions>

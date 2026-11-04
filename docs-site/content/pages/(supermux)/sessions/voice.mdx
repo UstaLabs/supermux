@@ -1,0 +1,63 @@
+---
+title: Voice
+description: Dictate messages instead of typing, fix them by voice, and have replies read aloud.
+---
+
+## Dictate a message
+
+Tap the microphone in the composer, or, on a keyboard, hold <Kbd>Space</Kbd>. A quick tap still types a space; holding it starts recording, and letting go stops.
+
+While you talk, a small bar shows the recording time, and your words appear in the composer as you speak. The text stays editable: fix a word by hand, or add to it, before you send. **Discard recording** throws the recording away.
+
+### Fix it by voice
+
+You can correct yourself while dictating. Say "scratch that", "remove the last sentence" or "no wait, make it Tuesday", and the text changes instead of growing. Anything that's meant for the agent, like "delete the unused imports", stays in the message.
+
+### If it doesn't work out
+
+If supermux didn't catch what you said, the recording isn't lost: choose **Retry**, **Send as audio** to attach the recording instead, or **Dismiss**.
+
+## Where your speech is turned into text
+
+| Device | Where |
+|---|---|
+| Desktop app and browser | On the computer that runs your agents |
+| iPhone, iPad and Android | Your choice under **Settings ▸ Voice ▸ Transcription**: on that computer, or **On this device** |
+
+On a phone, the default is the computer when it has a ChatGPT sign-in for Codex, and the phone itself otherwise.
+
+### Speech engines
+
+On the computer, **Settings ▸ Voice** offers these engines:
+
+| Engine | What it uses |
+|---|---|
+| **Codex Realtime (ChatGPT)** (default) | OpenAI's speech service, with your ChatGPT sign-in for Codex |
+| **Claude Code voice** | Anthropic's speech service, with your Claude sign-in |
+| **Cursor voice** | Cursor's speech service, with your Cursor sign-in |
+| **Whisper (local)** | Whisper on your own computer. Also used when another engine fails. |
+
+With the first three, your audio goes to that company, under your own sign-in. Whisper keeps it on your computer.
+
+<Check>
+Whisper needs `~/.local/bin/whisper-cli` and a model in `~/.cache/whisper-models/` on the host. The research didn't find whether supermux installs them. Confirm before this page promises Whisper as the fallback on a fresh install.
+</Check>
+
+### Tidy-up, languages and your own words
+
+- **Cleanup**: a model tidies up the raw transcript before it reaches the composer. Pick the **Cleanup engine** and **Cleanup model** in **Settings ▸ Voice**.
+- **Languages**: **Auto-detect**, or pick the languages you speak. Pick several if you mix them.
+- **Glossary**: add the names dictation keeps getting wrong, like your project's or your colleagues'. The list is shared across your devices.
+
+## Have replies read aloud
+
+Every reply from an agent has a **Read aloud** button next to **Copy response**. Tap **Stop reading** to stop.
+
+Choose the voice in **Settings ▸ Voice ▸ Read aloud**:
+
+- **Device (system voice)**: your phone's or computer's own voice. The default.
+- **ChatGPT (Codex login)**: a voice from ChatGPT, using the Codex sign-in on your computer.
+
+**Preview** plays a short sample.
+
+On an Apple Watch, you can also dictate a message to a session from your wrist.

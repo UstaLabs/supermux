@@ -1,0 +1,46 @@
+---
+title: Reach your computer from anywhere
+description: Use your agents away from home through the supermux relay, or through your own VPN or tunnel.
+---
+
+Your agents run on your computer at home or on a server. To reach them from a café or your phone's mobile data, supermux needs a way in. By default, that's the supermux relay.
+
+## The supermux relay
+
+Your computer keeps a connection open to `relay.supermux.dev`, and gets an address of its own, like `https://h-….relay.supermux.dev`. Your devices use that address wherever they are. Nothing needs to be opened on your router.
+
+- It's **on by default** for the desktop app and for server installs.
+- It's **not set up** for Docker installs; add your own address, or the relay, yourself.
+- Every request still needs a paired device. An address alone gets nobody in.
+- If the connection drops, or your computer wakes from sleep, it reconnects by itself.
+
+<Callout type="warn" title="The relay is not end-to-end encrypted">
+Your traffic is encrypted between your device and the relay, and between the relay and your computer. On the relay server itself it's handled unencrypted on its way through. Notifications are different: they're encrypted end to end. If that matters for your work, use your own VPN or tunnel instead.
+</Callout>
+
+## Turn the relay off
+
+- **Desktop app**: switch off **Remote access through relay** in **Settings ▸ Hosting**. Your devices can then reach this computer on your home network only.
+- **Server**: run `supermux connect --off` to go back to the local address only, or `supermux setup --no-relay`.
+
+## Use your own VPN or tunnel
+
+On a server, `supermux connect` sets up another way in and asks which one you want:
+
+| Option | What you get |
+|---|---|
+| **Cloudflare Tunnel** | A public HTTPS address: stable with your own domain, or a throwaway one for a quick test. |
+| **Tailscale** | Your devices only, or a public address with Funnel. |
+| **NetBird** | A private network between your devices, which you can host yourself. |
+| **ngrok** | A public HTTPS address. |
+| **Self-serve** | Your own reverse proxy: supermux shows the port and example settings. |
+
+`supermux connect` turns the relay off and prints a new pairing link. Because the address changed, pair your devices again.
+
+In the apps, you can also add a computer by its address, for example a Tailscale name: **Add host ▸ URL**. See [Several computers](/devices/several-computers).
+
+## When your computer is asleep or off
+
+The app shows **Can't reach** with the computer's name and when it was last seen, and asks **Is the computer awake and logged in?** Your last sessions stay visible until it's back.
+
+To keep a computer reachable, leave it on and turn on **Keep this computer awake** in the desktop app. See [Desktop app](/devices/desktop).

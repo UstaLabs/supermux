@@ -1,0 +1,48 @@
+---
+title: Files and the editor
+description: Browse the project's files and edit them with a real code editor, on any device.
+---
+
+Every workspace can show its files next to the chat. Click **+** in the tab bar and choose **Files**: the file tree opens beside your chat.
+
+## The file tree
+
+- Click a file to open it in a tab. Folders open and close with a click.
+- Letters next to a file show its git status: **M** modified, **A** added, **D** deleted, **R** renamed, **?** untracked, **U** conflict, **\*** changes inside a folder.
+- The header has **Collapse all**, **Refresh** and **Files options**, with **New file…**, **New folder…** and **Reveal active file**.
+- Right-click a file or folder for **New file…**, **New folder…**, **Rename…**, **Delete…**, **Copy path** and **Copy relative path**. Deleting asks first, and moves the file to the computer's trash when it can.
+
+To jump to a file by name, press <Kbd>Ctrl</Kbd> <Kbd>P</Kbd> (<Kbd>⌘</Kbd> <Kbd>P</Kbd> on a Mac) for **Go to file…**. With nothing typed, it lists the files you opened last.
+
+File paths in the chat are links too: tap one to open that file.
+
+## The editor
+
+Files open in supermux's own code editor, the same on desktop, phone and browser:
+
+- syntax highlighting for more than 40 languages,
+- find, folding, and selecting every match at once,
+- completions, errors and go-to-definition from language servers.
+
+Save with <Kbd>Ctrl</Kbd> <Kbd>S</Kbd> (<Kbd>⌘</Kbd> <Kbd>S</Kbd>) or the tab's **Save** button. If an agent changes a file you have open, the editor shows **File changed on disk** with a **Reload** button.
+
+Pictures and videos open as previews. Other files that aren't text can be saved and opened on your device. Text files up to 1 MB open in the editor.
+
+On a phone, an accessory bar above the keyboard adds editing keys.
+
+## Language servers
+
+Language servers give the editor completions and error checking. They run on the computer that hosts your agents. Manage them in **Settings ▸ Editor / LSP**:
+
+- TypeScript and JavaScript, Python (Pyright), Bash, YAML, JSON, CSS, HTML, Go (gopls), Rust (rust-analyzer) and Dart are built in. Each shows whether it's **Ready**, and one that's missing has an install button.
+- **Add language server** adds any other one, with the command that starts it.
+
+Code intelligence works in workspaces that have an agent. Without one, the editor says **No agent in this workspace — code intelligence is off.**
+
+## Editor settings
+
+**Settings ▸ Editor / LSP** also has **Wrap long lines**, **Font size**, **Side-by-side diffs** and, for phones, the **Accessory bar**.
+
+## Getting files in and out
+
+The file tree is for browsing and editing. To give an agent a file, attach it in the [composer](/sessions/composer). Files an agent makes for you arrive in the chat.

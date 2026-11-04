@@ -1,0 +1,60 @@
+---
+title: Councils
+description: Put one question to several agents at once, compare their answers round by round, and end with a verdict.
+---
+
+A council is a structured second opinion. One agent puts a question to several others, collects their answers, can run follow-up rounds, and ends with a verdict.
+
+## How a council runs
+
+<Steps>
+<Step>
+### The question goes out
+
+The agent you asked picks the members: any mix of agents and models, for example Codex, Grok and Antigravity. Each member is a session of its own, labelled A, B, C and so on.
+</Step>
+<Step>
+### Members answer
+
+Every member works on the question and sends in its answer. Answers come back to the agent running the council as they arrive.
+</Step>
+<Step>
+### Follow-up rounds
+
+The agent can start another round with a new focus. Each member then sees the others' answers, labelled by letter only.
+</Step>
+<Step>
+### The verdict
+
+When it has what it needs, the agent ends the council with a verdict, a few sentences long, and tells you.
+</Step>
+</Steps>
+
+Members work in the same folder as the agent that called the council, or each in its own new git worktree.
+
+## What you see
+
+**The council card** sits in the chat where the council was called. It shows:
+
+- the question, and how many members have answered,
+- the rounds; tap one to see that round,
+- one row per member, with its letter, agent, model, and its latest answer or what it's doing,
+- the **Verdict** once it's over.
+
+Tap a member's row to read all its answers, round by round.
+
+**The council strip** sits above the composer while members are working. It shows each member's logo with a ring while it works and a check once it has answered, a line of live activity, and a clock for the round.
+
+## Stop a council
+
+Choose **Stop council** on the card. It asks **This ends the council and stops its members. Their answers stay here.** The agent that called it is told that you ended it.
+
+A council also ends by itself when no members are left.
+
+## When to use one
+
+- Design decisions where you want more than one view.
+- Comparing how different models handle the same task.
+- Checking a plan before you commit to it.
+
+To start one, just ask, for example "Hold a council with Codex and Grok on whether we should keep refresh tokens in the database, then give me the verdict."
