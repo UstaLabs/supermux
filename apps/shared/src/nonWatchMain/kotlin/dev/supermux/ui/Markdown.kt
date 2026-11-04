@@ -346,7 +346,8 @@ private fun emitLink(node: ASTNode, src: String, sink: SpanSink) {
     else sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
 }
 
-private val LINK_SCHEME_RE = Regex("""^[A-Za-z][A-Za-z0-9+.-]*:(?!\d)""")
+// A scheme, but not a Windows drive: `C:\…` and `C:/…` are paths.
+private val LINK_SCHEME_RE = Regex("""^(?![A-Za-z]:[\\/])[A-Za-z][A-Za-z0-9+.-]*:(?!\d)""")
 private val GITHUB_LINE_ANCHOR_RE = Regex("""#L(\d+)(?:-L?(\d+))?$""")
 private val BARE_FILE_NAME_RE = Regex("""^([\w.-]+\.\w+)(?::(\d+)(?:-(\d+))?)?$""")
 

@@ -16,6 +16,9 @@ package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.fs.hostJoin
+import dev.supermux.ui.editor.repoPath
+import dev.supermux.ui.isAbsoluteEditorPath
 import dev.supermux.ui.terminal.LocalTerminalTitleSink
 import dev.supermux.ui.terminal.TerminalTitles
 import androidx.compose.animation.core.tween
@@ -540,8 +543,8 @@ fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
  */
 fun tappedPathCandidates(ref: FilePathRef, workdir: String, relativeTo: String? = null): List<String> {
     val path = ref.path.trim()
-    val relative = !path.startsWith("/") && !path.startsWith("~")
-    val inFolder = if (relativeTo != null && relative) workspaceOpenPath(FilePathRef("$relativeTo/$path"), workdir) else null
+    val relative = !isAbsoluteEditorPath(path) && !path.startsWith("~")
+    val inFolder = if (relativeTo != null && relative) workspaceOpenPath(FilePathRef(hostJoin(relativeTo, path)), workdir) else null
     return listOfNotNull(inFolder, workspaceOpenPath(ref, workdir)).distinct()
 }
 
@@ -749,10 +752,10 @@ private fun DiffPaneForWorkspace(
         },
         getReviewComments = { reviewSessionId?.let { actions.reviewComments(it) }.orEmpty() },
         readWalkthroughFile = { repo, path ->
-            actions.workspaceFsRead(workspaceId, if (repo.isBlank()) path else "$repo/$path")
+            actions.workspaceFsRead(workspaceId, repoPath(repo, path))
         },
         onOpenWalkthroughFile = { repo, path, line ->
-            onOpenFile(if (repo.isBlank()) path else "$repo/$path", line, null)
+            onOpenFile(repoPath(repo, path), line, null)
         },
         // Review stays session-keyed; only available when we have a primary chat.
         onReviewAddComment = { body -> reviewSessionId?.let { actions.reviewAddComment(it, body) } },
@@ -766,7 +769,7 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
-        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
+        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
         diffDocuments = documents,
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
         modifier = modifier.fillMaxSize(),
