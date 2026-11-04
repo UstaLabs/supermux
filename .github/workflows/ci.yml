@@ -212,17 +212,8 @@ jobs:
         env:
           # Inside the job's temp folder, so the standard user below can read what bun install hard-links from it.
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
-      - name: Broker and core tests, against the Windows quarantine
-        run: bun scripts/test-windows.ts --report windows-test-report.json
-      - name: Upload the Windows test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-test-report
-          path: windows-test-report.json
-          if-no-files-found: ignore
+      # The quick checks first (a minute or two), the suite (about 40 minutes) last.
       - name: ConPTY and Job Object smoke
-        if: always()
         run: bun scripts/windows/conpty-smoke.ts
       - name: Broker smoke as a standard user
         if: always()
@@ -238,6 +229,16 @@ jobs:
             -Script "$env:GITHUB_WORKSPACE\scripts\windows-vm\ci-smoke.ps1" `
             -ScriptArgs @("-Repo", $env:GITHUB_WORKSPACE, "-Bun", (Join-Path $bunDir "bun.exe")) `
             -ReadPaths @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)
+      - name: Broker and core tests, against the Windows quarantine
+        if: always()
+        run: bun scripts/test-windows.ts --report windows-test-report.json
+      - name: Upload the Windows test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-report
+          path: windows-test-report.json
+          if-no-files-found: ignore
 
   # ── zmx: the POSIX workspace-terminal backend, against real processes ──────
   # The `ts` lane runs this backend's unit tests against a fake helper. This one
