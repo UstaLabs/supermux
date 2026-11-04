@@ -9,7 +9,7 @@
 
 packages/supermux-core/tests/accounts-core.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "system accounts per agent with lazily read identity; registr" | #29
 packages/supermux-core/tests/accounts-homes.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude home links shared entries to the root, creating missi" | #29
-packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test never sees the typed code, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test's Bun child never sees the typed line (it types \r, which real agy accepts: #70 checked on the VM): Bun's console stdin under ConPTY; then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
 packages/supermux-core/tests/accounts-vault.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "file vault: 0700 dir, 0600 files, round trip, delete, missin" | #29
 packages/supermux-core/tests/acp-keeper.test.ts | an unhandled `read ECONNRESET` (node:net close) on keeper detach/re-attach fails whichever such test it lands in (passed in run 41877911651, failed twice in 41883601390) | #29 | flaky
 packages/supermux-core/tests/agents-table.test.ts | expect(received).toBe(expected); first: "README.md's agents table is exactly renderAgentsTable() once" | #29
