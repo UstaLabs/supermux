@@ -33,7 +33,8 @@ enum class ChromeOs {
 /**
  * Room the window controls take inside the top band of the content.
  *
- * @property start width kept clear at the top-left
+ * @property start width kept clear at the top-left (the traffic lights or the ☰ menu, and the
+ *   sidebar toggle, which stays in the band in both sidebar states)
  * @property end width kept clear at the top-right (our Linux window buttons)
  * @property band height of the band the controls sit in; content below it is never covered
  */
@@ -49,16 +50,26 @@ data class ChromeInsets(val start: Dp, val end: Dp, val band: Dp) {
  * Linux only when [LinuxWindowChrome] engaged — otherwise the system frame draws its title bar
  * outside the content and nothing needs to move).
  */
-fun chromeInsets(os: ChromeOs, customChrome: Boolean, windowsCaptionButtons: Dp = WindowsCaptionButtonsFallbackWidth): ChromeInsets = when {
+fun chromeInsets(
+    os: ChromeOs,
+    customChrome: Boolean,
+    windowsCaptionButtons: Dp = WindowsCaptionButtonsFallbackWidth,
+    macTrafficLights: Dp = MacTrafficLightsWidth,
+): ChromeInsets = when {
     customChrome && os == ChromeOs.Linux ->
-        ChromeInsets(start = 0.dp, end = LinuxWindowControlsWidth, band = LinuxTitleBarHeight)
+        ChromeInsets(start = SidebarBandControlsWidth, end = LinuxWindowControlsWidth, band = LinuxTitleBarHeight)
     // Windows: the native caption buttons (JBR's live right inset) at the top-right of the band.
     customChrome && os == ChromeOs.Windows ->
-        ChromeInsets(start = 0.dp, end = windowsCaptionButtons, band = WindowsTitleBarHeight)
-    // macOS keeps its own traffic-light inset (LocalMacTrafficLightsInset, live from JBR); the rest
-    // keep the system frame.
+        ChromeInsets(start = SidebarBandControlsWidth, end = windowsCaptionButtons, band = WindowsTitleBarHeight)
+    // macOS: the traffic lights (JBR's live left inset) and the sidebar toggle beside them.
+    os == ChromeOs.MacOs ->
+        ChromeInsets(start = macTrafficLights + MacTitleBarHeight + 4.dp, end = 0.dp, band = MacTitleBarHeight)
+    // Everything else keeps the system frame.
     else -> ChromeInsets.None
 }
+
+/** The ☰ main menu and the sidebar toggle at the start of the custom Linux / Windows band. */
+val SidebarBandControlsWidth = 4.dp + LinuxTitleBarHeight * 2 + 4.dp
 
 /**
  * The live insets for the main window's content. [ChromeInsets.None] by default, so pop-out

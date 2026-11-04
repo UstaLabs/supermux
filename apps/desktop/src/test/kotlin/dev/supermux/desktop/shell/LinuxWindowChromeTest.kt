@@ -1,6 +1,9 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,7 +53,8 @@ class LinuxWindowChromeTest {
     @Test
     fun linuxCustomChromeReservesTheButtonsAtTheTopRight() {
         val i = chromeInsets(ChromeOs.Linux, customChrome = true)
-        assertEquals(0.dp, i.start)
+        assertEquals(SidebarBandControlsWidth, i.start, "the ☰ menu and the sidebar toggle, in both sidebar states")
+        assertEquals(72.dp, SidebarBandControlsWidth)
         assertEquals(LinuxWindowControlsWidth, i.end)
         assertEquals(LinuxTitleBarHeight, i.band)
         // Three 24 dp buttons, an 8 dp gap between them and an 8 dp margin each side.
@@ -65,8 +69,13 @@ class LinuxWindowChromeTest {
     }
 
     @Test
-    fun macReservesNothingHereItsTrafficLightsHaveTheirOwnInset() {
-        assertEquals(ChromeInsets.None, chromeInsets(ChromeOs.MacOs, customChrome = true))
+    fun macReservesTheTrafficLightsAndTheSidebarToggle() {
+        // The live traffic-light inset, then the 28 dp toggle that stays beside it (#57).
+        assertEquals(
+            ChromeInsets(start = 70.dp + 28.dp + 4.dp, end = 0.dp, band = MacTitleBarHeight),
+            chromeInsets(ChromeOs.MacOs, customChrome = false, macTrafficLights = 70.dp),
+        )
+        assertEquals(MacTrafficLightsWidth + 32.dp, chromeInsets(ChromeOs.MacOs, customChrome = true).start, "the fallback lights width")
     }
 
     @Test
@@ -388,8 +397,38 @@ class LinuxWindowChromeTest {
             }
         }
         waitForIdle()
-        assertEquals(400, leftWidth, "the left strip does not touch the buttons")
+        assertEquals(400 - 72, leftWidth, "the top-left strip leaves the ☰ menu and the toggle free")
         assertEquals(400 - 104, rightWidth, "the top-right strip leaves the buttons' width free")
+    }
+
+    @Test
+    fun aStripBesideTheCollapsedRailClearsOnlyTheRestOfTheStartControls() = runComposeUiTest {
+        var besideRail = -1
+        var besideList = -1
+        var besideRailX = -1f
+        val mac = chromeInsets(ChromeOs.MacOs, customChrome = false, macTrafficLights = 70.dp) // start = 102 dp
+        setContent {
+            CompositionLocalProvider(LocalWindowChromeInsets provides mac) {
+                Box(Modifier.size(1000.dp, 600.dp)) {
+                    // Beside the 52 dp rail: the lights and the toggle run on to 102 dp.
+                    Box(Modifier.padding(start = 52.dp).width(400.dp).height(32.dp).avoidWindowControls()) {
+                        Box(
+                            Modifier.fillMaxWidth().height(32.dp)
+                                .onWidth { besideRail = it }
+                                .onGloballyPositioned { besideRailX = it.positionInRoot().x },
+                        )
+                    }
+                    // Beside the expanded sidebar: nothing over it.
+                    Box(Modifier.padding(start = 320.dp).width(400.dp).height(32.dp).avoidWindowControls()) {
+                        Box(Modifier.fillMaxWidth().height(32.dp).onWidth { besideList = it })
+                    }
+                }
+            }
+        }
+        waitForIdle()
+        assertEquals(400 - 50, besideRail, "102 − 52 dp of the strip sits under the controls")
+        assertEquals(102f, besideRailX, "its tabs start right after the toggle")
+        assertEquals(400, besideList, "a strip past the controls keeps its full width")
     }
 
     @Test

@@ -212,6 +212,8 @@ fun HostSwitcher(
     onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     onForgetHost: (recordId: String) -> Unit = {},
     nowMs: Long = Clock.System.now().toEpochMilliseconds(),
+    /** The collapsed sidebar's form: the host glyph with its dot, no name. Same menu. */
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (hosts.isEmpty()) return
@@ -223,7 +225,34 @@ fun HostSwitcher(
     var forgetTarget by remember { mutableStateOf<HostView?>(null) }
 
     Box(modifier) {
-        Row(
+        if (compact) {
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .clickable { expanded = true }
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .testTag("host_switcher"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Dns,
+                    contentDescription = current?.displayLabel ?: "All hosts",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                if (current != null) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 6.dp, bottom = 6.dp)
+                            .clip(CircleShape)
+                            .background(cs.surfaceContainerHigh)
+                            .padding(1.5.dp),
+                    ) { HostDot(current.colorIndex, size = 7.dp) }
+                }
+            }
+        } else Row(
             Modifier
                 .height(30.dp)
                 .clip(RoundedCornerShape(8.dp))
