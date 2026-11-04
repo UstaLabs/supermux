@@ -2,6 +2,7 @@ package dev.supermux.ui.editor
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /** Pure `file://` URI construction for the LSP connect flow — port of Android
  *  `EditorScreen.kt:595-603`'s `joinPath`/`pathToUri`/`dirUri`. */
@@ -42,5 +43,19 @@ class EditorPanelLspUriTest {
     @Test fun dir_uri_always_ends_with_a_trailing_slash() {
         assertEquals("file:///home/user/proj/", dirUri("/home/user/proj"))
         assertEquals("file:///home/user/proj/", dirUri("/home/user/proj/"))
+    }
+
+    @Test fun windows_host_uris() {
+        assertEquals("C:\\Users\\me\\proj\\src\\a.ts", joinPath("C:\\Users\\me\\proj", "src/a.ts"))
+        assertEquals("file:///C:/Users/me/my%20proj/a.ts", pathToUri("C:\\Users\\me\\my proj\\a.ts"))
+        assertEquals("file:///C:/Users/me/proj/", dirUri("C:\\Users\\me\\proj"))
+        assertEquals("file:///C:/Users/me/proj/", dirUri("C:\\Users\\me\\proj\\"))
+    }
+
+    @Test fun a_servers_windows_uri_maps_back_to_the_workdir() {
+        assertEquals("src/a.ts", uriToWorkdirPath("file:///c%3A/Users/me/proj/src/a.ts", "C:\\Users\\me\\proj"))
+        assertEquals("src/a.ts", uriToWorkdirPath("file:///C:/Users/me/proj/src/a.ts", "C:\\Users\\me\\proj\\"))
+        assertNull(uriToWorkdirPath("file:///D:/other/a.ts", "C:\\Users\\me\\proj"))
+        assertEquals("src/a.ts", uriToWorkdirPath("file:///private/var/w/src/a.ts", "/var/w"))
     }
 }
