@@ -52,6 +52,8 @@ export type KeeperStatus = {
   updatedAt: number
   meta: Record<string, unknown>
   error?: string
+  /** The last problem the keeper went on through, such as a journal or status write the OS refused. */
+  warning?: string
   reaped?: boolean
   /** The socket the keeper listens on (see keeperSocketPath). Absent: an older keeper, listening on `<keeper dir>/keeper.sock`. */
   socket?: string

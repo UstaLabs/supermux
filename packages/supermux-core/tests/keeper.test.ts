@@ -1,7 +1,7 @@
 import { afterEach, expect, test, setDefaultTimeout } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -284,6 +284,31 @@ test('journal cap hysteresis rewrites far fewer times than frames appended', asy
   const bytes = (await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'))).byteLength
   expect(bytes).toBeLessThanOrEqual(400)
   expect(j[0]!.seq).toBe(st.firstSeq)
+  await shutdownAndAssert(conn, stateDirectory, sessionId)
+})
+
+test('a journal rewrite whose rename the OS refuses leaves the keeper and the agent running, and says so in the status', async () => {
+  const { conn, stateDirectory, sessionId } = await open('rename-refused', {}, limits({ journalMaxBytes: 400 }))
+  const journal = join(stateDirectory, 'keepers', sessionId, 'journal.ndjson')
+  // A rewrite renames a new file onto journal.ndjson. Windows refuses that while the journal is open (EPERM); here a
+  // directory in its place makes the rename fail the same way (the keeper's descriptor still writes to the old file).
+  await rm(journal)
+  await mkdir(join(journal, 'blocked'), { recursive: true })
+  const echoed: number[] = []
+  for (let i = 0; i < 30; i++) {
+    conn.write(JSON.stringify({ cmd: 'echo', n: i }))
+    const [frame] = await collect(conn, 1)
+    if (!frame) break
+    echoed.push(JSON.parse(frame.line).echoed)
+    conn.ack(frame.seq)
+  }
+  expect(echoed).toEqual([...Array(30).keys()])
+  const st = await waitStatus(stateDirectory, sessionId, s => typeof s.warning === 'string')
+  expect(st.journalRewrites).toBeGreaterThan(0)
+  expect(st.warning).toContain('journal')
+  expect(st.error).toBeUndefined()
+  expect(alive(st.keeperPid)).toBe(true)
+  expect(alive(st.agentPid)).toBe(true)
   await shutdownAndAssert(conn, stateDirectory, sessionId)
 })
 

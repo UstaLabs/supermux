@@ -117,11 +117,15 @@ async function main() {
   }
   // Appended to through this descriptor only: a link put at the path later is never followed.
   let journalFd = createPrivateFile(journalPath, constants.O_WRONLY | constants.O_APPEND)
+  // The file journalFd writes to: the journal, or a rewrite's staging file whose rename onto it failed.
+  let journalFile = journalPath
 
   const startedAt = Date.now()
   let meta: Record<string, unknown> = {}
   let agentExited: number | null | undefined
   let statusError: string | undefined
+  /** The last problem the keeper went on through (a journal or status write that failed): kept in the status. */
+  let warning: string | undefined
   let client: Socket | undefined
   let maxRequestId = 0
   const parked = new Map<string, Parked>()
@@ -135,7 +139,7 @@ async function main() {
   let awaitingFirstClient: ReturnType<typeof setTimeout> | undefined
   let journalRewrites = 0
   let statusTimer: ReturnType<typeof setTimeout> | undefined
-  let lastFlushedKeys = { agentPid: 0, agentExited: undefined as number | null | undefined, metaKey: '', error: undefined as string | undefined, firstSeq: 1 }
+  let lastFlushedKeys = { agentPid: 0, agentExited: undefined as number | null | undefined, metaKey: '', error: undefined as string | undefined, warning: undefined as string | undefined, firstSeq: 1 }
   const decoder = new TextDecoder('utf-8', { fatal: true })
   let stdoutBuffer = Buffer.alloc(0)
 
@@ -165,24 +169,42 @@ async function main() {
     try {
       writeAll(fd, body)
       verify()
-      renameSync(staging, journalPath)
     } catch (error) {
       closeSync(fd)
       try { unlinkSync(staging) } catch { /* already gone */ }
       throw error
     }
-    closeSync(journalFd)
+    // Windows refuses to rename onto a file that is still open, this keeper's own descriptor included: close the old
+    // journal first. Appends go to the new file from here on, under the journal's name, or under the staging name
+    // while another process still holds the journal (the next rewrite tries the rename again).
+    const previous = journalFile
+    try { closeSync(journalFd) } catch { /* */ }
     journalFd = fd
+    journalFile = staging
     journalRewrites += 1
+    try {
+      renameSync(staging, journalPath)
+      journalFile = journalPath
+    } finally {
+      if (previous !== journalPath && previous !== journalFile) { try { unlinkSync(previous) } catch { /* */ } }
+    }
   }
 
+  /** The journal file is for inspection (a replay reads the array): failing to write it costs the file, never the agent. */
   function appendJournal(entry: JournalEntry) {
     journal.push(entry)
     const line = JSON.stringify(entry) + '\n'
     journalBytes += Buffer.byteLength(line)
-    writeAll(journalFd, line)
-    if (journalBytes > limits.journalMaxBytes) rewriteJournal()
-    else firstSeq = journal[0]?.seq ?? lastSeq + 1
+    try { writeAll(journalFd, line) } catch (error) { note('journal write', error) }
+    // The array is trimmed before the rewrite touches a file, so it stays capped when those writes fail.
+    if (journalBytes > limits.journalMaxBytes) {
+      try { rewriteJournal() } catch (error) { note('journal rewrite', error) }
+    } else firstSeq = journal[0]?.seq ?? lastSeq + 1
+  }
+
+  function note(what: string, error: unknown) {
+    warning = `${what}: ${error instanceof Error ? error.message : String(error)}`
+    writeStatus()
   }
 
   function flushStatus() {
@@ -202,12 +224,19 @@ async function main() {
     }
     if (agentExited !== undefined) status.agentExited = agentExited
     if (statusError) status.error = statusError
-    writeSecure(statusPath, JSON.stringify(status) + '\n')
+    if (warning) status.warning = warning
+    try { writeSecure(statusPath, JSON.stringify(status) + '\n') } catch (error) {
+      // Windows refuses the rename while another process has status.json open: try again shortly.
+      warning = `status write: ${error instanceof Error ? error.message : String(error)}`
+      if (!statusTimer) statusTimer = setTimeout(() => flushStatus(), STATUS_COALESCE_MS)
+      return
+    }
     lastFlushedKeys = {
       agentPid: status.agentPid,
       agentExited,
       metaKey: JSON.stringify(meta),
       error: statusError,
+      warning,
       firstSeq,
     }
   }
@@ -218,6 +247,7 @@ async function main() {
       agentExited !== lastFlushedKeys.agentExited ||
       JSON.stringify(meta) !== lastFlushedKeys.metaKey ||
       statusError !== lastFlushedKeys.error ||
+      warning !== lastFlushedKeys.warning ||
       firstSeq !== lastFlushedKeys.firstSeq
     if (immediate || keysChanged) {
       flushStatus()
@@ -314,6 +344,11 @@ async function main() {
       if (req !== undefined) inflight.set(rpcIdKey(req), { seq, line, id: req })
     }
   }
+
+  // Anything else that escapes (a bug): say what it was, in the status and to the host, instead of vanishing silently.
+  const guard = (error: unknown) => fail(`keeper error: ${error instanceof Error ? error.message : String(error)}`)
+  process.on('uncaughtException', guard)
+  process.on('unhandledRejection', guard)
 
   agent.stdout?.on('data', onAgentChunk)
   agent.on('error', err => fail(err.message))
