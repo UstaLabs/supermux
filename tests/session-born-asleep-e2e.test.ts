@@ -77,6 +77,7 @@ async function messages(id: string): Promise<any[]> {
 }
 
 const replies = (id: string) => frames.filter((f) => f.type === "message_append" && f.session === id && f.entry?.direction === "outbound").map((f) => f.entry.text as string)
+const statuses = (id: string) => frames.filter((f) => f.type === "session_state" && f.session === id && typeof f.status === "string").map((f) => f.status as string)
 const starting = (id: string) => frames.some((f) => f.type === "agent_state" && f.session === id && f.detail === "starting")
 const startsIn = (folder: string) => (existsSync(STARTS) ? readFileSync(STARTS, "utf8").split("\n").filter((l) => l === folder).length : 0)
 const send = (sessionId: string, text: string, clientId: string) => ws!.send(JSON.stringify({ type: "send", session: sessionId, op: "reply", args: { text }, client_message_id: clientId }))
@@ -200,6 +201,8 @@ test("the launcher answers while the agent is still starting; the first message 
   expect(execFileSync("git", ["-C", created.workdir, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("mux/born-asleep")
   expect(startsIn(created.workdir)).toBe(1)
   expect((await session(created.id)).status).toBe("active")
+  // Every client hears it is awake now, not only one that takes a new snapshot.
+  await waitFor("the status change", () => statuses(created.id).includes("active"))
   expect((await messages(created.id)).filter((m) => m.id === "in:web:web-first-1")).toHaveLength(1)
 }, 60_000)
 
@@ -234,6 +237,7 @@ test("Stop while it starts: no reply, the session goes back to sleep, and the ne
   // What started is stopped and the row is asleep again (it was asleep from birth, so the log line is the evidence).
   await waitFor("put back to sleep", () => readFileSync(join(dir, "broker.log"), "utf8").split("\n").some((l) => l.includes("session_put_back_to_sleep") && l.includes(created.id)))
   expect((await session(created.id)).status).toBe("suspended")
+  await waitFor("the status change back", () => statuses(created.id).at(-1) === "suspended")
   await Bun.sleep(500)
   expect(replies(created.id).filter((t) => t.startsWith("Fixture reply"))).toEqual([])
   expect((await messages(created.id)).map((m) => m.id)).toContain("in:web:web-stop-1")

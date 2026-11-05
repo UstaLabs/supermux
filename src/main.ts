@@ -1150,9 +1150,16 @@ const doorStarts = new Set<string>()
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
-  // "starting" while a wake is in flight; the session's real state once it is over.
-  onWaking: (id) => webChannel?.broadcastToAll(agentStateFrame(id)),
-  putToSleep: (id) => sessionManager.putToSleep(id),
+  // "starting" while a wake is in flight; the session's real state once it is over, and its status
+  // (active, or still suspended after a failure) for every client, not only one taking a new snapshot.
+  onWaking: (id, waking) => {
+    webChannel?.broadcastToAll(agentStateFrame(id))
+    if (!waking) broadcastSessionStatus(id)
+  },
+  putToSleep: async (id) => {
+    await sessionManager.putToSleep(id)
+    broadcastSessionStatus(id)
+  },
   onWakeFailed: (id, err) => {
     const s = registry.sessions.getById(id)
     log.warn("session_wake_failed", { id, name: s?.name, err: err instanceof Error ? err.message : String(err) })
@@ -1160,6 +1167,12 @@ const sessionChain = new SessionChain({
     void notifySession(id, wakeFailureNotice(s.agent, err))
   },
 })
+
+/** Card #75: a session's lifecycle status (active, suspended) changed: every client hears it. */
+function broadcastSessionStatus(id: string): void {
+  const status = registry.sessions.getById(id)?.status
+  if (status) webChannel?.broadcastToAll({ type: "session_state", session: id, status })
+}
 
 /** A session's agent_state frame: "starting" while its chain wakes it, else what the store says. */
 function agentStateFrame(id: string, st: AgentState = agentStateStore.get(id)) {
