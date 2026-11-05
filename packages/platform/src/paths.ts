@@ -25,3 +25,20 @@ export function isInside(path: string, root: string, flavor: PathFlavor = nodePa
 export function isStrictlyInside(path: string, root: string, flavor: PathFlavor = nodePath): boolean {
   return isInside(path, root, flavor) && flavor.relative(root, path) !== ""
 }
+
+// Windows: characters a name may not hold, and the device names no file may have (with or without an extension).
+const WINDOWS_RESERVED = /[<>:"|?*\u0000-\u001f]/g
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i
+
+/**
+ * [name] (a session's or an Agent's, free text) as one folder name on [platform]'s file system: `/` and `\` never nest
+ * it, and "." / ".." never climb out. On Windows also no reserved character, no trailing dot or space (Windows would drop
+ * them) and no device name (CON, NUL, COM1...). Elsewhere a name maps to itself otherwise, so no existing folder moves.
+ */
+export function safeFolderName(name: string, platform: NodeJS.Platform = process.platform): string {
+  const flat = name.replace(/[/\\]/g, "-")
+  if (platform !== "win32") return flat === "." || flat === ".." ? `_${flat}` : flat
+  const clean = flat.replace(WINDOWS_RESERVED, "-").replace(/[. ]+$/, "")
+  if (clean === "") return "_"
+  return WINDOWS_DEVICE.test(clean) ? `_${clean}` : clean
+}

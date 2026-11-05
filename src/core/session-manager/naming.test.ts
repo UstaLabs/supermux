@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { resolveSelfRename, buildNamingRule } from "./naming"
+import { resolveSelfRename, buildNamingRule, ensureUnique } from "./naming"
 
 // --- resolveSelfRename ------------------------------------------------------
 
@@ -60,4 +60,17 @@ test("buildNamingRule tells the agent it may rename only once", () => {
   const rule = buildNamingRule("My Cool 🎉")
   expect(rule).toMatch(/only.*once|once/i)
   expect(rule).not.toMatch(/rename again/i)
+})
+
+// A session's name becomes its home folder (agents/<kind>/<name>). On macOS and Windows a file system ignores letter
+// case: "Fix bug" and "fix bug" were two sessions sharing one home, their credentials and history mixed.
+test("ensureUnique: a name in another letter case is taken (the same folder on macOS and Windows)", () => {
+  expect(ensureUnique("Fix bug", new Set(["fix bug"]))).toBe("Fix bug-2")
+  expect(ensureUnique("fix bug", new Set(["FIX BUG", "fix bug-2"]))).toBe("fix bug-3")
+  expect(ensureUnique("other", new Set(["fix bug"]))).toBe("other")
+})
+
+test("ensureUnique: names are compared as the folders they become", () => {
+  // "a/b" is the folder "a-b" (a / never nests a home).
+  expect(ensureUnique("a/b", new Set(["a-b"]))).toBe("a/b-2")
 })

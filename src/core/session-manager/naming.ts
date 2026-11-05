@@ -1,5 +1,6 @@
 import { basename } from "path"
 import { normalizeName } from "../../shared/slug"
+import { paths } from "@supermux/platform"
 
 const MAX_LEN = 80
 
@@ -7,11 +8,25 @@ export function deriveName(workdir: string): string {
   return normalizeName(basename(workdir)) || "session"
 }
 
+/**
+ * How a name compares with the taken ones: as the folder it becomes (a session's home, paths.safeFolderName), in either
+ * letter case, since the file systems of macOS and Windows ignore it. Uppercased: ordinal and locale-neutral (Q12).
+ */
+const folderKey = (name: string) => paths.safeFolderName(name).toUpperCase()
+
+/** Whether [name] would be the folder of one of [taken] (folderKey). */
+export function folderTaken(name: string, taken: Iterable<string>): boolean {
+  const key = folderKey(name)
+  for (const other of taken) if (folderKey(other) === key) return true
+  return false
+}
+
 export function ensureUnique(base: string, taken: Set<string>): string {
-  if (!taken.has(base)) return base
+  const keys = new Set([...taken].map(folderKey))
+  if (!keys.has(folderKey(base))) return base
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`
-    if (!taken.has(candidate)) return candidate
+    if (!keys.has(folderKey(candidate))) return candidate
   }
 }
 

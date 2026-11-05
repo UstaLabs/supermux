@@ -50,3 +50,29 @@ test("the flavour of a platform: win32's rules for win32, posix's for the rest",
   expect(paths.flavor("darwin").sep).toBe("/")
   expect(paths.flavor("win32").sep).toBe("\\")
 })
+
+// Session and Agent names become folder names (an agent's home, its workspace). A title is free text: on Windows a name
+// with < > : " | ? * or a control character, a device name (CON, NUL, COM1...) or a trailing dot or space cannot be a
+// folder, so the session never started there. Elsewhere only / and \\ and . / .. are changed, so no home moves.
+test("safeFolderName on Windows makes any name a folder Windows can create", () => {
+  expect(paths.safeFolderName("Fix: login? <now>", "win32")).toBe("Fix- login- -now-")
+  expect(paths.safeFolderName('say "hi" | x*', "win32")).toBe("say -hi- - x-")
+  expect(paths.safeFolderName("con", "win32")).toBe("_con")
+  expect(paths.safeFolderName("NUL.txt", "win32")).toBe("_NUL.txt")
+  expect(paths.safeFolderName("Com1", "win32")).toBe("_Com1")
+  expect(paths.safeFolderName("console", "win32")).toBe("console")
+  expect(paths.safeFolderName("trailing. ", "win32")).toBe("trailing")
+  expect(paths.safeFolderName("tab\there", "win32")).toBe("tab-here")
+  expect(paths.safeFolderName("a/b\\c", "win32")).toBe("a-b-c")
+  // Windows drops a trailing dot: "_.." would be the folder "_".
+  expect(paths.safeFolderName("..", "win32")).toBe("_")
+  expect(paths.safeFolderName("...", "win32")).toBe("_")
+})
+
+test("safeFolderName elsewhere changes only what would leave the folder: / and \\, and . and ..", () => {
+  expect(paths.safeFolderName("Fix: login? <now>", "linux")).toBe("Fix: login? <now>")
+  expect(paths.safeFolderName("con", "darwin")).toBe("con")
+  expect(paths.safeFolderName("a/b\\c", "linux")).toBe("a-b-c")
+  expect(paths.safeFolderName(".", "linux")).toBe("_.")
+  expect(paths.safeFolderName("..", "darwin")).toBe("_..")
+})

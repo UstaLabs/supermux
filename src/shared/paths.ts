@@ -55,12 +55,11 @@ export const STATE_DIR = process.env.MUX_STATE_DIR ?? join(MUX_HOME, "state")
 /**
  * A session name as ONE folder name: an agent's home is `<STATE_DIR>/agents/<kind>/<this>`. A `/` or
  * `\` in the name would nest the home or climb out of the agents folder (into ~/.codex, say), so each
- * becomes `-`, and "." / ".." get a `_` in front. An ordinary name maps to itself, so existing
- * sessions' homes don't move.
+ * becomes `-`, and "." / ".." get a `_` in front; on a Windows host also what Windows cannot name a
+ * folder (paths.safeFolderName). An ordinary name maps to itself, so existing sessions' homes don't move.
  */
 export function homeDirName(name: string): string {
-  const flat = name.replace(/[/\\]/g, "-")
-  return flat === "." || flat === ".." ? `_${flat}` : flat
+  return paths.safeFolderName(name)
 }
 
 export const SOCKETS_DIR = process.env.MUX_SOCKETS_DIR ?? join(STATE_DIR, "sockets")

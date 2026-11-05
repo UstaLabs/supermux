@@ -23,6 +23,20 @@ function deps(over: Partial<CreateAgentDeps> = {}) {
   return { d, spawned, announced, root }
 }
 
+// An Agent's name is its workspace folder (~/.mux/workspace/<name>). On macOS and Windows "Atlas" and "atlas" are the
+// same folder; on Windows a name with : ? * < > | ", a device name (CON) or a trailing dot or space is no folder at all.
+test("validateAgentName: a name in another letter case is taken; on Windows a name that cannot be a folder is refused", () => {
+  const taken = validateAgentName("Atlas", new Set(["atlas"]))
+  expect(taken.ok).toBe(false)
+  if (!taken.ok) expect(taken.code).toBe("name_taken")
+  for (const name of ["Fix: it", "what?", "CON", "trailing."]) {
+    const refused = validateAgentName(name, new Set(), "win32")
+    expect(refused.ok).toBe(false)
+    if (!refused.ok) expect(refused.code).toBe("name_invalid")
+  }
+  expect(validateAgentName("Fix: it", new Set(), "linux")).toEqual({ ok: true, name: "Fix: it" })
+})
+
 test("validateAgentName refuses path tricks, empty and taken names", () => {
   const taken = new Set(["Dockie"])
   for (const bad of ["", "  ", "../x", "a/b", "a\\b", ".", "..", ".hidden", "Dockie", "x".repeat(81)]) {
