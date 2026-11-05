@@ -28,7 +28,8 @@ function sinceC3a(agent: string): string[] {
   // permission.external_directory in opencode.json), so reading an inbox never prompts.
   if (agent === "opencode") return ["files.<home>/config/opencode/opencode.json", "files.<opencode.json non-context keys>", "instructions.text"]
   // Session inbox: Codex's home gains the exec-policy rules file that lets its shell read its own inbox file.
-  if (agent === "codex") return ["files.<home>/rules/supermux-inbox-sess-c3.rules", "instructions.text"]
+  // Card #76: its app-server also asks for reasoning summaries (`-c model_reasoning_summary`), so the args change.
+  if (agent === "codex") return ["args", "files.<home>/rules/supermux-inbox-sess-c3.rules", "instructions.text"]
   // 2026-10-29 (Agents): Claude's MUX_SESSION_ROLE is gone (the role comes from the session row; nothing read it).
   return agent === "claude" ? ["args", "env.MUX_CORE", "env.MUX_SESSION_ROLE", "instructions.text"] : ["instructions.text"]
 }
