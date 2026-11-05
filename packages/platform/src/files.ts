@@ -2,7 +2,7 @@
 // type is ignored elsewhere). A file link is a symlink, which Windows lets a standard user create only with Developer
 // Mode: without it the answer is Unsupported, and the caller falls back on purpose (Q5: copy a small file, or keep an
 // account's files to itself) instead of failing halfway, or swallowing EPERM and losing the file.
-import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
 import { cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
@@ -118,5 +118,28 @@ function copyLink(from: string, to: string, root: string, copyRoot: string, opti
   } catch (error) {
     if (!(error instanceof Unsupported)) throw error
     copyFileSync(target, to)
+  }
+}
+
+export interface EntryOptions {
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** The lstat call (tests); node:fs's lstatSync by default. */
+  lstat?: (path: string) => Stats
+}
+
+/**
+ * What is at [path], never following a link: lstat's answer, or undefined when nothing is there. On Windows lstat
+ * cannot read an AF_UNIX socket file (Bun answers EACCES; a link or a junction it reads), so there an entry it refuses
+ * is a "socket", which only connecting to it tells live from stale.
+ */
+export function lstatEntry(path: string, options: EntryOptions = {}): Stats | "socket" | undefined {
+  try {
+    return (options.lstat ?? lstatSync)(path)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ENOENT") return undefined
+    if (code === "EACCES" && (options.platform ?? process.platform) === "win32") return "socket"
+    throw error
   }
 }

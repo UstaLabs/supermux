@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { Unsupported, files } from "@supermux/platform"
@@ -127,3 +127,20 @@ for (const [name, copy] of copies) {
     expect(readFileSync(join(dir, "dest", "file-link"), "utf8")).toBe("a")
   })
 }
+
+test("lstatEntry: what is at a path, never through a link; nothing there is undefined", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "file"), "x")
+  symlinkSync(join(dir, "file"), join(dir, "link"), "file")
+  expect(files.lstatEntry(join(dir, "missing"))).toBeUndefined()
+  expect((files.lstatEntry(join(dir, "file")) as Stats).isFile()).toBe(true)
+  expect((files.lstatEntry(join(dir, "link")) as Stats).isSymbolicLink()).toBe(true)
+})
+
+// §2.2 #7: Bun cannot lstat an AF_UNIX socket file on Windows (EACCES), while a link or a junction it can. The MCP host
+// read that as an error and never started again after an unclean exit left its socket behind.
+test("lstatEntry: on Windows an entry lstat is refused is an AF_UNIX socket; elsewhere EACCES stays an error", () => {
+  const eacces = () => { throw Object.assign(new Error("EACCES: permission denied, lstat"), { code: "EACCES" }) }
+  expect(files.lstatEntry("C:\\state\\mcp\\mcp.sock", { platform: "win32", lstat: eacces })).toBe("socket")
+  expect(() => files.lstatEntry("/state/mcp/mcp.sock", { platform: "linux", lstat: eacces })).toThrow("EACCES")
+})

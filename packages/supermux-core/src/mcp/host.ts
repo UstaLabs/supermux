@@ -5,12 +5,13 @@
  * SDK McpServer for that (session, server) and connects it with SocketTransport.
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
-import { closeSync, constants, lstatSync } from "node:fs"
+import { closeSync, constants } from "node:fs"
 import { unlink } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import type { JSONRPCMessage, McpServer, Transport } from "@modelcontextprotocol/server"
+import { files } from "@supermux/platform"
 import { CoreError } from "../errors.js"
 import { createPrivateFile, present, readPrivateFile, realDirectoryIn, realStateDirectory, writeAll } from "../private-files.js"
 import { CORE_SUBCOMMANDS, selfEntry } from "../self-entry.js"
@@ -159,9 +160,11 @@ export class McpHost {
   private async listen(): Promise<void> {
     await this.loadSecret()
     privateDirectory(this.directory)
-    if (present(this.socket)) {
+    // What an unclean exit left there is probed by connecting: a Windows socket file cannot even be stat'ed.
+    const left = files.lstatEntry(this.socket)
+    if (left !== undefined) {
       // Never probed through a link (it could lead to anyone's socket).
-      if (lstatSync(this.socket).isSymbolicLink()) throw new CoreError("state_unsafe", `Refusing ${this.socket}: it is a symbolic link`)
+      if (left !== "socket" && left.isSymbolicLink()) throw new CoreError("state_unsafe", `Refusing ${this.socket}: it is a symbolic link`)
       if (await reachable(this.socket)) throw new CoreError("mcp_socket_in_use", `Another live core owns the MCP socket ${this.socket}`)
       await unlink(this.socket).catch(() => {})
     }

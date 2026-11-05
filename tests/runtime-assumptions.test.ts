@@ -2,7 +2,8 @@
 // around, after checking it (see the platform-layer spec, §3.2). If a Bun upgrade changes one, this file goes red
 // before users notice. The Windows lane runs it too, so a fact that differs on Windows shows up there.
 import { expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -73,6 +74,28 @@ test("a recursive delete removes a folder link, never what it points to", () => 
     expect(existsSync(join(dir, "doomed"))).toBe(false)
     expect(readFileSync(join(dir, "target", "precious.txt"), "utf8")).toBe("keep me")
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Why files.lstatEntry answers "socket" for an entry lstat refuses on Windows (§2.2 #7): Bun cannot lstat an AF_UNIX
+// socket file there (EACCES), so a check that lstats a leftover socket (the MCP host's, a keeper's) must not take that
+// for an error. If a Bun upgrade starts reading them, this goes red, and lstatEntry can answer from lstat everywhere.
+test("lstat reads a socket file as a socket, except on Windows, where Bun refuses it (EACCES)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mux-sock-"))
+  const server = createServer()
+  try {
+    const path = join(dir, "s.sock")
+    await new Promise<void>(resolve => server.listen(path, resolve))
+    if (process.platform === "win32") {
+      let code: string | undefined
+      try { lstatSync(path) } catch (error) { code = (error as NodeJS.ErrnoException).code }
+      expect(code).toBe("EACCES")
+    } else {
+      expect(lstatSync(path).isSocket()).toBe(true)
+    }
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
     rmSync(dir, { recursive: true, force: true })
   }
 })

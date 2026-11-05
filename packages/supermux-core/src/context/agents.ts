@@ -18,7 +18,8 @@ import type {
 } from "./types.js"
 import { reloadOnlyUpdates } from "./update.js"
 import { writeAntigravityMcpConfig, writeAntigravityPlugins, type AntigravityPluginWrapper } from "../environment/antigravity.js"
-import { assertRealDirectory, linkDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
+import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
+import { files } from "@supermux/platform"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
@@ -50,7 +51,7 @@ function pluginFolder(context: LaunchContext, skills: string[], plugins: string[
   const entries: string[] = []
   plugins.forEach((path, index) => {
     const link = join(folder, `${String(index + 1).padStart(2, "0")}-${basename(path)}`)
-    linkDirectory(path, link)
+    files.linkDirectory(path, link)
     entries.push(link)
   })
   skills.forEach((root, index) => {
@@ -97,13 +98,13 @@ export function editPluginFolder(directory: string, changes: ContextChange[], ma
         const path = join(folder, entry.name)
         rmSync(path, { recursive: true, force: true })
         undo.push(() => {
-          if (entry.kind === "plugins") linkDirectory(entry.path, path)
+          if (entry.kind === "plugins") files.linkDirectory(entry.path, path)
           else writeSkillsPlugin(path, entry.name, entry.path, manifests)
         })
       }
     } else if (change.kind === "plugins") {
       const path = join(folder, `${String(++pluginIndex).padStart(2, "0")}-${basename(change.item)}`)
-      linkDirectory(change.item, path)
+      files.linkDirectory(change.item, path)
       // recursive: Bun on Windows refuses a plain rm of a junction (EFAULT); it still only removes the link.
       undo.push(() => rmSync(path, { recursive: true, force: true }))
     } else {

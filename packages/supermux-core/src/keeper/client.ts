@@ -1,16 +1,16 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, realpathSync, type Stats } from 'node:fs'
-import { lstat, rm, unlink } from 'node:fs/promises'
+import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
+import { rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { CoreError } from '../errors.js'
 import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
-import { proc } from '@supermux/platform'
+import { files, proc } from '@supermux/platform'
 
 /**
  * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
@@ -152,24 +152,18 @@ function mine(info: Stats): boolean {
  * outside the keeper directory, also sits in a 0700 directory this user owns (not a link to one).
  * A short path under a shared temp dir is predictable: another user could make its directory (once a
  * reboot emptied it, say) and listen there, to be sent a session's token.
+ * Windows: a socket file cannot be stat'ed ("socket"), and a uid or mode would mean nothing there; its
+ * folders (the keeper's, the user's own temp dir) are the user's.
  */
 function trustedSocket(dir: string, path: string): boolean {
-  if (process.platform === 'win32') return listedSocket(path)
   try {
-    const socket = lstatSync(path)
-    if (!socket.isSocket() || !mine(socket)) return false
+    const socket = files.lstatEntry(path)
+    if (socket === 'socket') return true
+    if (!socket?.isSocket() || !mine(socket)) return false
     if (resolve(dirname(path)) === resolve(dir)) return true
     const parent = lstatSync(dirname(path))
     return parent.isDirectory() && mine(parent) && (parent.mode & 0o777) === 0o700
   } catch { return false }
-}
-
-/**
- * Windows: an AF_UNIX socket file is listed in its folder but cannot be stat'ed (EACCES), and a uid or
- * mode would mean nothing there; its folders (the keeper's, the user's own temp dir) are the user's.
- */
-function listedSocket(path: string): boolean {
-  try { return readdirSync(dirname(path)).includes(basename(path)) } catch { return false }
 }
 
 /** The socket a new keeper of `dir` listens on: the first candidate whose directory this user can make private. */
@@ -179,13 +173,9 @@ function newSocketPath(dir: string): string {
 
 /** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */
 async function removeSocket(path: string) {
-  if (process.platform === 'win32') {
-    if (listedSocket(path)) await unlink(path).catch(() => {})
-    return
-  }
   try {
-    const info = await lstat(path)
-    if (info.isSocket() && mine(info)) await unlink(path)
+    const info = files.lstatEntry(path)
+    if (info === 'socket' || (info?.isSocket() && mine(info))) await unlink(path)
   } catch { /* gone */ }
 }
 
