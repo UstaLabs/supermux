@@ -1,5 +1,26 @@
 package dev.supermux.ui.panes
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.HoverInteraction
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
@@ -17,7 +38,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,7 +57,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -194,6 +213,11 @@ fun PaneHost(
      * starts). Null keeps every drag inside this layer.
      */
     tearOff: TabTearOff? = null,
+    /**
+     * The tone [viewId]'s content is drawn on — the sheet under its pane's strip, which its tab,
+     * while active, is cut from so the two read as one piece. Null: a pane showing nothing.
+     */
+    sheetColor: @Composable (viewId: String?) -> Color = { MaterialTheme.colorScheme.surfaceContainerLow },
     content: @Composable (viewId: String) -> Unit,
 ) {
     val ownedDrag = remember { PaneDragController() }
@@ -272,12 +296,15 @@ fun PaneHost(
 
     Box(
         modifier
+            // The frame every pane's sheet sits in, the tone of the sidebar's rail.
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .onGloballyPositioned { hostRoot = it.positionInRoot() },
     ) {
         CompositionLocalProvider(
             LocalPaneAreaFit provides fit,
             LocalTabTearOff provides tearOff,
             LocalSoleView provides (layout as? LayoutNode.Group)?.viewIds?.singleOrNull(),
+            LocalSheetColor provides sheetColor,
         ) {
         PaneHostNode(
             layout = layout,
@@ -288,6 +315,9 @@ fun PaneHost(
             onDragEndMiss = { onDragEndMissState.value(it) },
             modifier = Modifier
                 .fillMaxSize()
+                // Half of every gutter here, half around each pane: 6 dp at the frame's edges and
+                // between two panes alike.
+                .padding(horizontal = PaneGutter)
                 .layout { measurable, constraints ->
                     if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
                         fit.measure(layoutState.value, constraints.maxWidth, constraints.maxHeight, windowBounds(), minPanePx)
@@ -312,6 +342,7 @@ fun PaneHost(
             val state = TabSlotState(selected = id in activeIds, dragged = false)
             tabSlot?.invoke(id, state) ?: DefaultTabChip(id, titleFor(id), state, labelFont, onCloseView)
         }
+        val liftedTone: @Composable (String) -> Color = { id -> sheetColor(id) }
         val held = drag.ghost?.takeIf { drag.isDragging && it.visible }
         val heldId = drag.draggingViewId
         if (held != null && heldId != null) {
@@ -323,12 +354,18 @@ fun PaneHost(
                     bounds = Rect(held.x, held.y, held.x + held.width, held.y + held.height),
                     hostRoot = hostRoot,
                     lift = lift.value,
+                    tone = liftedTone(heldId),
+                    toneAtRest = if (heldId in activeIds) 1f else 0f,
                     modifier = Modifier.testTag("tab-drag-ghost"),
                 ) { lifted(heldId) }
             }
         } else {
             drag.settling?.let { settle ->
-                key(settle) { SettlingTab(settle, drag, hostRoot) { lifted(settle.viewId) } }
+                key(settle) {
+                    SettlingTab(settle, drag, hostRoot, liftedTone(settle.viewId), if (settle.viewId in activeIds) 1f else 0f) {
+                        lifted(settle.viewId)
+                    }
+                }
             }
         }
     }
@@ -342,17 +379,22 @@ private const val PaneFitCommitDelayMs = 300L
 
 /**
  * A tab drawn above the strips at [bounds] (root px), lifted off its strip by [lift] (0 to 1): a
- * shadow and a touch of scale, its corners rounding as it rises.
+ * shadow and a touch of scale, cut from its sheet's [tone] with its bottom corners rounding as it
+ * rises. At rest it wears [toneAtRest] of the tone — all of it for the active tab, which is part of
+ * its sheet, none for any other.
  */
 @Composable
 private fun LiftedTab(
     bounds: Rect,
     hostRoot: Offset,
     lift: Float,
+    tone: Color,
+    toneAtRest: Float,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
+    val shape = remember(lift) { SheetTabShape(bottomCorner = TabCorner * lift) }
     Box(
         Modifier
             .zIndex(20f)
@@ -360,17 +402,41 @@ private fun LiftedTab(
             .size(with(density) { DpSize(bounds.width.toDp(), bounds.height.toDp()) })
             .graphicsLayer {
                 shadowElevation = TabLiftElevation.toPx() * lift
-                shape = RoundedCornerShape(TabLiftCorner * lift)
+                this.shape = shape
                 clip = true
                 scaleX = 1f + TabLiftScale * lift
                 scaleY = 1f + TabLiftScale * lift
             }
+            .drawBehind {
+                val a = toneAtRest + (1f - toneAtRest) * lift
+                if (a > 0f) drawRect(tone.copy(alpha = tone.alpha * a))
+            }
             // The caller's modifier (a test tag) on the tab where it is drawn.
-            .then(modifier),
+            .then(modifier)
+            .padding(top = TabTopInset),
         propagateMinConstraints = true,
     ) {
         content()
     }
+}
+
+/**
+ * A sheet tab's outline in its strip slot: [TabCorner] top corners, starting [TabTopInset] below the
+ * strip's top, and [bottomCorner] corners where it meets — or, lifted, leaves — its sheet.
+ */
+private class SheetTabShape(private val bottomCorner: Dp) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        with(density) {
+            val top = CornerRadius(TabCorner.toPx())
+            val bottom = CornerRadius(bottomCorner.toPx())
+            Outline.Rounded(
+                RoundRect(
+                    left = 0f, top = TabTopInset.toPx(), right = size.width, bottom = size.height,
+                    topLeftCornerRadius = top, topRightCornerRadius = top,
+                    bottomRightCornerRadius = bottom, bottomLeftCornerRadius = bottom,
+                ),
+            )
+        }
 }
 
 /**
@@ -384,6 +450,8 @@ private fun SettlingTab(
     settle: TabSettle,
     drag: PaneDragController,
     hostRoot: Offset,
+    tone: Color,
+    toneAtRest: Float,
     content: @Composable () -> Unit,
 ) {
     val at = remember { Animatable(settle.from.topLeft, Offset.VectorConverter) }
@@ -400,6 +468,8 @@ private fun SettlingTab(
         bounds = Rect(at.value, settle.from.size),
         hostRoot = hostRoot,
         lift = lift.value,
+        tone = tone,
+        toneAtRest = toneAtRest,
         modifier = Modifier.testTag("tab-drag-settle"),
         content = content,
     )
@@ -420,10 +490,60 @@ private fun <T> tabSettle(): FiniteAnimationSpec<T> = tween(durationMillis = 180
 /** How long a dropped tab waits for a strip to lay out its slot before giving up on easing. */
 private const val SettleWaitFrames = 3
 
-/** A held tab's lift: its shadow, its corners and how much it grows. */
+/** A held tab's lift: its shadow and how much it grows. */
 private val TabLiftElevation = 8.dp
-private val TabLiftCorner = 8.dp
 private const val TabLiftScale = 0.02f
+
+/** Half the gutter of frame around and between the panes' sheets: 6 dp in all. */
+private val PaneGutter = 3.dp
+
+/** A sheet's corners: the menus' radius. */
+private val SheetCorner = 10.dp
+
+/** A tab's top corners, and how far below the strip's top it starts (28 dp of a 32 dp strip). */
+private val TabCorner = 9.dp
+private val TabTopInset = 4.dp
+
+/** The concave curves that join the active tab to its sheet. */
+private val TabFlare = 8.dp
+
+/** Tabs share the strip's width equally, never narrower or wider than this; the row's end padding. */
+private val TabMinWidth = 112.dp
+private val TabMaxWidth = 200.dp
+private val TabRowPadding = 8.dp
+
+/** How far an overflowing strip fades out at an end with more tabs past it. */
+private val StripFade = 30.dp
+
+/**
+ * The active tab, cut from its sheet: [TabCorner] top corners from [TabTopInset] down to the strip's
+ * bottom, where a [TabFlare] concave curve either side turns it into the sheet below.
+ */
+private fun DrawScope.drawSheetTab(tone: Color) {
+    val top = TabTopInset.toPx()
+    val r = CornerRadius(TabCorner.toPx())
+    val f = TabFlare.toPx()
+    val w = size.width
+    val h = size.height
+    val path = Path().apply {
+        addRoundRect(RoundRect(0f, top, w, h, topLeftCornerRadius = r, topRightCornerRadius = r))
+        // Each flare is its corner square less a quarter circle: filled where tab meets sheet.
+        moveTo(-f, h)
+        arcTo(Rect(-2 * f, h - 2 * f, 0f, h), 90f, -90f, false)
+        lineTo(0f, h)
+        close()
+        moveTo(w + f, h)
+        arcTo(Rect(w, h - 2 * f, w + 2 * f, h), 90f, 90f, false)
+        lineTo(w, h)
+        close()
+    }
+    drawPath(path, tone)
+}
+
+/** The tone the panes' sheets are drawn on, by view; provided by [PaneHost]. */
+private val LocalSheetColor = staticCompositionLocalOf<@Composable (String?) -> Color> {
+    { MaterialTheme.colorScheme.surfaceContainerLow }
+}
 
 /**
  * What a drop does, wherever it was resolved: the tree edit through [applyEdit], then
@@ -586,6 +706,7 @@ private fun GroupHost(
             onDispose { dragState.unregisterGroup(group.id) }
         }
         val stripHeightPx = with(LocalDensity.current) { TAB_STRIP_HEIGHT.toPx() }
+        val sheet = LocalSheetColor.current(null)
         Box(
             modifier
                 .fillMaxSize()
@@ -595,9 +716,18 @@ private fun GroupHost(
                     dragState.registerPane(group.id, bounds)
                     dragState.registerEmptyPane(group.id, bounds, stripHeightPx)
                 },
-            contentAlignment = Alignment.Center,
         ) {
-            emptyGroupSlot?.invoke()
+            // An empty sheet below where a strip would be, in the frame like any pane's.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(start = PaneGutter, end = PaneGutter, top = TAB_STRIP_HEIGHT, bottom = PaneGutter * 2)
+                    .clip(RoundedCornerShape(SheetCorner))
+                    .background(sheet),
+                contentAlignment = Alignment.Center,
+            ) {
+                emptyGroupSlot?.invoke()
+            }
             // The whole canvas is one target: a tab dropped anywhere on it lands here.
             if (dragState.hoverPaneId == group.id) {
                 PaneDropOverlay(activeZone = DropZone.Centre, edgesEnabled = false)
@@ -606,11 +736,14 @@ private fun GroupHost(
         return
     }
     val active = group.activeViewId ?: group.viewIds.first()
-    Column(modifier.fillMaxSize()) {
+    // The tone of the active view's content: its sheet, and the tab cut from it.
+    val sheet = LocalSheetColor.current(active)
+    Column(modifier.fillMaxSize().padding(horizontal = PaneGutter)) {
         PaneTabStrip(
             groupId = group.id,
             viewIds = group.viewIds,
             activeViewId = active,
+            sheetColor = sheet,
             titleFor = titleFor,
             // Name the group; do NOT hand back a rebuilt `group`. This lambda is
             // captured by the tab's pointer handler and can outlive this composition.
@@ -638,6 +771,10 @@ private fun GroupHost(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .padding(bottom = PaneGutter * 2)
+                // The sheet: the content's own surface, rounded like a menu, in the frame.
+                .clip(RoundedCornerShape(SheetCorner))
+                .background(sheet)
                 .onGloballyPositioned { coords ->
                     dragState.registerPane(group.id, coords.boundsInRoot())
                 }
@@ -815,9 +952,12 @@ fun PaneTabStrip(
     tabSlot: @Composable (itemId: String, state: TabSlotState) -> Unit,
     modifier: Modifier = Modifier,
     addSlot: (@Composable () -> Unit)? = null,
-) {
+    /** The active view's sheet below the strip: the active tab is cut from the same tone. */
+    sheetColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+) = BoxWithConstraints(modifier.fillMaxWidth()) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
+    val stripWidthPx = constraints.maxWidth.toFloat()
     // Unique, stable key for this strip's PaneStripChrome registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).
     val chromeKey = remember { newPaneKey() }
@@ -827,23 +967,26 @@ fun PaneTabStrip(
         dragState.hoverStripGroupId == groupId &&
         dragState.draggingViewId !in viewIds
     val insertAt = dragState?.hoverInsertIndex ?: 0
-    // Measured tab widths (px) so each tab can animate to a true pixel target —
-    // they transform through each other on reorder instead of list-reflow.
-    val tabWidthsPx = remember { mutableStateMapOf<String, Float>() }
-    val minTabPx = with(density) { 56.dp.toPx() }
-    fun widthOf(id: String) = tabWidthsPx[id]?.coerceAtLeast(minTabPx) ?: minTabPx
-    fun targetXForIndex(index: Int): Float {
-        var x = 0f
-        for (i in 0 until index.coerceAtLeast(0)) {
-            val id = displayIds.getOrNull(i) ?: break
-            x += widthOf(id)
-        }
-        return x
-    }
     // Touch gets a + as roomy as its tab chips (see DefaultTabChip).
     val addSlotWidth = if (dev.supermux.ui.adaptive.LocalPointerAvailable.current) 36.dp else 64.dp
-    val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
-        if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
+    val addSlotPx = if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
+    val rowPadPx = with(density) { TabRowPadding.toPx() }
+    // Chrome's widths: the strip shared out equally between TabMinWidth and TabMaxWidth, and past
+    // that it scrolls. While the pointer is on the strip, a closed tab's room is not handed out
+    // (room is only taken, for a new tab), so the next tab's × stays under the pointer.
+    val sharedPx = ((stripWidthPx - addSlotPx - 2 * rowPadPx) / displayIds.size.coerceAtLeast(1))
+        .coerceIn(with(density) { TabMinWidth.toPx() }, with(density) { TabMaxWidth.toPx() })
+    val stripHover = remember { MutableInteractionSource() }
+    val stripHovered by stripHover.collectIsHoveredAsState()
+    var heldPx by remember { mutableStateOf<Float?>(null) }
+    val tabPx = heldPx?.let { minOf(it, sharedPx) } ?: sharedPx
+    SideEffect { heldPx = if (stripHovered) tabPx else null }
+    val tabWidth = with(density) { tabPx.toDp() }
+    fun targetXForIndex(index: Int): Float = rowPadPx + index.coerceAtLeast(0) * tabPx
+    val stripContentWidthPx = 2 * rowPadPx + displayIds.size * tabPx + addSlotPx
+    // The tab under the pointer: no separator beside it, and the ghost of a hover on it.
+    var hoveredTab by remember { mutableStateOf<String?>(null) }
+    val dragging = dragState?.isDragging == true
 
     val tearOffNow = rememberUpdatedState(LocalTabTearOff.current)
     val windowSizeNow = rememberUpdatedState(LocalWindowInfo.current.containerSize)
@@ -879,10 +1022,10 @@ fun PaneTabStrip(
     }
 
     Box(
-        modifier
+        Modifier
             .fillMaxWidth()
             .height(TAB_STRIP_HEIGHT)
-            .background(cs.surfaceContainerLow)
+            .hoverable(stripHover)
             .onGloballyPositioned { coords ->
                 viewport.value = coords.boundsInRoot()
                 if (groupId.isNotEmpty()) {
@@ -905,6 +1048,26 @@ fun PaneTabStrip(
         Box(
             Modifier
                 .fillMaxHeight()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val fade = StripFade.toPx()
+                    if (scroll.value > 0) {
+                        drawRect(
+                            Brush.horizontalGradient(listOf(Color.Transparent, Color.Black), startX = 0f, endX = fade),
+                            size = Size(fade, size.height),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    }
+                    if (scroll.value < scroll.maxValue) {
+                        drawRect(
+                            Brush.horizontalGradient(listOf(Color.Black, Color.Transparent), startX = size.width - fade, endX = size.width),
+                            topLeft = Offset(size.width - fade, 0f),
+                            size = Size(fade, size.height),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    }
+                }
                 .horizontalScroll(scroll),
         ) {
             Box(
@@ -916,14 +1079,8 @@ fun PaneTabStrip(
                 // Compose in a stable order (committed viewIds) so keys never reshuffle
                 // under the active pointerInput; visual order is purely animated X.
                 val stableIds = viewIds.ifEmpty { displayIds }
-                fun targetXForOrder(order: List<String>, index: Int): Float {
-                    var x = 0f
-                    for (i in 0 until index.coerceAtLeast(0)) {
-                        val tid = order.getOrNull(i) ?: break
-                        x += widthOf(tid)
-                    }
-                    return x
-                }
+                fun targetXForOrder(order: List<String>, index: Int): Float =
+                    rowPadPx + index.coerceIn(0, order.size) * tabPx
                 for (id in stableIds) {
                     key(id) {
                         val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
@@ -951,7 +1108,30 @@ fun PaneTabStrip(
                             label = "tab-morph-x-$id",
                         )
                         val selected = id == activeViewId
-                        val z = if (hidden) 0f else 1f
+                        val z = when {
+                            hidden -> 0f
+                            selected -> 1.5f
+                            else -> 1f
+                        }
+                        val hover = remember { MutableInteractionSource() }
+                        val tabHovered by hover.collectIsHoveredAsState()
+                        LaunchedEffect(hover) {
+                            hover.interactions.collect {
+                                when (it) {
+                                    is HoverInteraction.Enter -> hoveredTab = id
+                                    is HoverInteraction.Exit -> if (hoveredTab == id) hoveredTab = null
+                                }
+                            }
+                        }
+                        val at = displayIds.indexOf(id)
+                        val next = displayIds.getOrNull(at + 1)
+                        // Hairlines between quiet tabs only: none beside the active or the hovered
+                        // tab, after the last, or while a tab is being dragged.
+                        val separator = !hidden && !dragging && next != null &&
+                            id != activeViewId && next != activeViewId &&
+                            id != hoveredTab && next != hoveredTab
+                        val ghost = cs.onSurface.copy(alpha = 0.065f)
+                        val hairline = cs.onSurface.copy(alpha = 0.13f)
                         // Where this tab rests, for one settling into it: its drawn bounds less
                         // the slide still to go. Published after every composition (a new slot
                         // from a drop) and every placement (a slide moving it).
@@ -969,11 +1149,8 @@ fun PaneTabStrip(
                             Modifier
                                 .zIndex(z)
                                 .graphicsLayer { translationX = animatedX }
-                                // Min width keeps the geometric centre on the label so
-                                // performClick("view-tab-x") selects instead of hitting ×.
-                                .defaultMinSize(minWidth = 56.dp)
+                                .width(tabWidth)
                                 .fillMaxHeight()
-                                .onSizeChanged { tabWidthsPx[id] = it.width.toFloat() }
                                 .onGloballyPositioned { coords ->
                                     placed.coords = coords
                                     if (groupId.isNotEmpty()) {
@@ -1012,8 +1189,30 @@ fun PaneTabStrip(
                                 // Modifier.alpha only fades what is inner to it. "Fully hide"
                                 // above was always the intent; it is now also the behaviour.
                                 .alpha(if (hidden) 0f else 1f)
-                                .testTag("view-tab-$id"),
-                            // The 56 dp minimum must reach the slot, or its background stops short.
+                                .hoverable(hover)
+                                .drawBehind {
+                                    when {
+                                        hidden -> Unit
+                                        selected -> drawSheetTab(sheetColor)
+                                        tabHovered && !dragging -> drawRoundRect(
+                                            color = ghost,
+                                            topLeft = Offset(1.dp.toPx(), TabTopInset.toPx() + 2.dp.toPx()),
+                                            size = Size(size.width - 2.dp.toPx(), size.height - TabTopInset.toPx() - 5.dp.toPx()),
+                                            cornerRadius = CornerRadius(8.dp.toPx()),
+                                        )
+                                    }
+                                    if (separator) {
+                                        drawRect(
+                                            color = hairline,
+                                            topLeft = Offset(size.width - 0.5.dp.toPx(), TabTopInset.toPx() + 8.dp.toPx()),
+                                            size = Size(1.dp.toPx(), 14.dp.toPx()),
+                                        )
+                                    }
+                                }
+                                .testTag("view-tab-$id")
+                                // The tab's 28 dp, at the strip's bottom where it meets its sheet.
+                                .padding(top = TabTopInset),
+                            // The slot fills the tab, background and all.
                             propagateMinConstraints = true,
                         ) {
                             tabSlot(id, TabSlotState(selected = selected, dragged = hidden))
@@ -1047,6 +1246,7 @@ fun PaneTabStrip(
                             .zIndex(0.5f)
                             .graphicsLayer { translationX = animatedAddX }
                             .fillMaxHeight()
+                            .padding(top = TabTopInset)
                             .width(addSlotWidth),
                     ) {
                         addSlot()
@@ -1341,6 +1541,8 @@ fun PaneSplit(
                         if (total > 0) currentOnSeamDrag(i, (travelPx / total).toDouble())
                     },
                     testTag = "splitter-$i",
+                    // The gutter between two sheets is the seam; the line only shows to be grabbed.
+                    idleColor = Color.Transparent,
                 )
             }
         },

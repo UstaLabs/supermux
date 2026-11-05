@@ -49,6 +49,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -107,6 +113,10 @@ import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.files.activeFilePath
 import dev.supermux.ui.files.filePathOrNull
+import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.terminal.terminalPalette
+import dev.supermux.ui.theme.GeistFontFamily
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.files.isFilesTreeView
 import dev.supermux.ui.files.nextFocusedFileView
 import dev.supermux.ui.panes.DefaultTabChip
@@ -305,7 +315,8 @@ fun WorkspacePanes(
         modifier = modifier,
         chrome = stripChrome,
         emptyGroupSlot = { WorkspaceEmptyHint() },
-        labelFont = MonoFontFamily,
+        labelFont = GeistFontFamily,
+        sheetColor = { id -> sheetToneOf(id?.let { viewsById[it] }) },
         tabSlot = { itemId, tabState ->
             val v = viewsById[itemId]
             val filePath = v
@@ -334,8 +345,12 @@ fun WorkspacePanes(
                             title = v?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
-                            labelFont = MonoFontFamily,
+                            labelFont = GeistFontFamily,
                             onClose = { _ -> onCloseCandidate(v) },
+                            icon = {
+                                val agent = v?.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.agent }
+                                ViewTabIcon(v, agent, tabState.selected)
+                            },
                         )
                         }
                     }
@@ -1226,3 +1241,35 @@ internal fun TabLongPressMenu(
  */
 internal fun ViewDto?.tabUnread(selected: Boolean, unreadSessions: Set<String>): Boolean =
     !selected && this?.chatSessionId()?.let { it in unreadSessions } == true
+
+/** The tone a view's content is drawn on: the sheet under its strip, and its tab while active. */
+@Composable
+private fun sheetToneOf(v: ViewDto?): Color {
+    val cs = MaterialTheme.colorScheme
+    return when {
+        v == null -> cs.surfaceContainerLow
+        v.kind == "terminal" -> terminalPalette().background
+        v.filePathOrNull() != null -> Color(LocalPanes.current.code)
+        v.kind == "editor" && v.stateString("mode") == "diff" -> cs.surface
+        else -> cs.surfaceContainerLow
+    }
+}
+
+/** A tab's 16 dp icon: the agent's mark on a chat, a glyph for what any other view holds. */
+@Composable
+private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
+    if (v?.kind == "chat" && agent != null) {
+        AgentLogo(agent = agent, size = 14.dp)
+        return
+    }
+    val cs = MaterialTheme.colorScheme
+    val glyph = when {
+        v?.kind == "chat" -> Icons.Outlined.ChatBubbleOutline
+        v?.kind == "terminal" -> Icons.Outlined.Terminal
+        v?.kind == "display" -> Icons.Outlined.DesktopWindows
+        v?.kind == "editor" && v.stateString("mode") == "diff" -> Icons.Outlined.Difference
+        v != null && v.isFilesTreeView() -> Icons.Outlined.Folder
+        else -> Icons.AutoMirrored.Outlined.InsertDriveFile
+    }
+    Icon(glyph, contentDescription = null, tint = if (selected) cs.onSurface else cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+}
