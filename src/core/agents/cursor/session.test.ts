@@ -368,3 +368,28 @@ test("cursor: resume of a never-started row starts fresh under the row's account
     expect(child.opens.at(-1)?.resumeId).toBeUndefined()
     await adapter.stop()
 })
+
+// Card #75: a new session is born asleep and starts through resume, so resume must launch it under its
+// permission mode exactly as spawn did (the host's default is "force": auto-approve everything).
+test("cursor: resume starts a row under its permission mode, as spawn does", async () => {
+  const spawned = fakeChildFactory({ nativeId: "native-plan" })
+  const spawnHost = await makeHost(spawned.factory)
+  const wd1 = mkdtempSync(join(tmpdir(), "mux-cursor-plan-"))
+  dirs.push(wd1)
+  await spawn({ registry: registry(), bind: async () => {}, tmuxSession: "mux", cursorHost: spawnHost, registerAdapter: () => {} },
+    { workdir: wd1, requestedName: "cur-plan", agent: AgentKind.Cursor, id: "spawn-plan", permissionMode: "plan" })
+  const expected = spawned.ocCalls[0]?.options.permissions
+  expect(expected).not.toEqual({ kind: "acp", policy: "auto-approve", nativeMode: "agent" })
+
+  const child = fakeChildFactory()
+  const host = await makeHost(child.factory)
+  const wd2 = mkdtempSync(join(tmpdir(), "mux-cursor-born-plan-"))
+  dirs.push(wd2)
+  const { adapter } = await resume(
+    { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, cursorHost: host },
+    { id: "born-plan", workdir: wd2, agent_home: join(wd2, ".home"), permissionMode: "plan" } as never,
+    "born-plan",
+  )
+  expect(child.ocCalls.at(-1)?.options.permissions).toEqual(expected)
+  await adapter.stop()
+})
