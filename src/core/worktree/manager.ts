@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "fs"
 import { mkdir } from "fs/promises"
 import { basename, dirname, join, resolve } from "path"
 import { createHash, randomUUID } from "crypto"
-import { home } from "../../shared/home"
+import { muxHomeNow } from "../../shared/paths"
 import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
@@ -19,11 +19,11 @@ export interface WorktreeHandle {
   repoRoot: string
 }
 
-/** Where session worktrees live. MUX_WORKTREES_ROOT (read per call, not at module load)
- *  overrides it — the test preload points it at a throwaway dir so tests never create
- *  folders in the live ~/.mux/worktrees (~24k leaked before 2026-09-22). */
+/** Where session worktrees live: `<mux home>/worktrees`, the mux home as the environment says now (MUX_HOME, else
+ *  ~/.mux). MUX_WORKTREES_ROOT (read per call, not at module load) overrides it — the test preload points it at a
+ *  throwaway dir so tests never create folders in the live ~/.mux/worktrees (~24k leaked before 2026-09-22). */
 export function worktreesRoot(): string {
-  return process.env.MUX_WORKTREES_ROOT || join(home(), ".mux", "worktrees")
+  return process.env.MUX_WORKTREES_ROOT || join(muxHomeNow().path, "worktrees")
 }
 
 export function repoSlug(repoRoot: string): string {

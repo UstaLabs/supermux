@@ -1,9 +1,10 @@
 import { delimiter, join } from "node:path"
 import { home } from "../../shared/home"
+import { muxHomeNow } from "../../shared/paths"
 
-/** User-local LSP tooling (no sudo): SDKs and `go install` binaries. */
+/** User-local LSP tooling (no sudo): SDKs and `go install` binaries, in `<mux home>/lsp` unless MUX_LSP_DIR says. */
 export function muxLspHome(): string {
-  return process.env.MUX_LSP_DIR || join(home(), ".mux", "lsp")
+  return process.env.MUX_LSP_DIR || join(muxHomeNow().path, "lsp")
 }
 
 export function muxLspBinDir(): string {

@@ -25,16 +25,21 @@ test("tests never create worktrees in the live ~/.mux/worktrees (preload sets MU
   await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
 })
 
-test("worktreesRoot reads MUX_WORKTREES_ROOT at call time", () => {
-  const prev = process.env.MUX_WORKTREES_ROOT
+// Without MUX_WORKTREES_ROOT the worktrees live in the mux home, wherever MUX_HOME puts it: the root was
+// $HOME/.mux/worktrees, so a broker with MUX_HOME set made its worktrees outside its own home.
+test("worktreesRoot reads MUX_WORKTREES_ROOT at call time, else the mux home's worktrees folder", () => {
+  const prev = { root: process.env.MUX_WORKTREES_ROOT, home: process.env.MUX_HOME }
   try {
     process.env.MUX_WORKTREES_ROOT = "/tmp/x-root"
     expect(worktreesRoot()).toBe("/tmp/x-root")
     delete process.env.MUX_WORKTREES_ROOT
-    expect(worktreesRoot()).toBe(join(process.env.HOME || homedir(), ".mux", "worktrees"))
+    process.env.MUX_HOME = "/tmp/x-mux-home"
+    expect(worktreesRoot()).toBe(join("/tmp/x-mux-home", "worktrees"))
   } finally {
-    if (prev === undefined) delete process.env.MUX_WORKTREES_ROOT
-    else process.env.MUX_WORKTREES_ROOT = prev
+    for (const [key, value] of [["MUX_WORKTREES_ROOT", prev.root], ["MUX_HOME", prev.home]] as const) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })
 
