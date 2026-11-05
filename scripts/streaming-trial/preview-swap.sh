@@ -10,7 +10,7 @@
 # Must be launched DETACHED (it stops the broker this session's tools go through):
 #   systemd-run --user --collect --unit=mux-swap-runner /bin/bash preview-swap.sh swap <worktree> <dur>
 set -uo pipefail
-PORT=9898; SERVICE=mux; PREVIEW_UNIT=mux-preview; REVERT_UNIT=mux-revert
+PORT=9898; SERVICE=mux; PREVIEW_UNIT=${PREVIEW_UNIT:-mux-preview76}; REVERT_UNIT=mux-revert
 BUN=/home/ahmet/.bun/bin/bun
 LOG=/home/ahmet/streaming-probe/out/preview-swap.log
 DROPINS=/home/ahmet/.config/systemd/user/mux.service.d
@@ -42,6 +42,9 @@ swap(){ local wt=$1 dur=$2
   log "=== SWAP: $wt -> :$PORT for $dur ==="
   [ -f "$wt/src/main.ts" ] || { log "no $wt/src/main.ts — abort"; return 1; }
   [ -e "$wt/src/channels/web/static/index.html" ] || { log "no built web client in the worktree — abort"; return 1; }
+  # A preview unit from an earlier swap can linger "loaded" (transient file under /run/user): systemd-run would then
+  # refuse to start it AFTER the default broker is already stopped. Check first; pick another PREVIEW_UNIT if taken.
+  if systemctl --user cat "$PREVIEW_UNIT" >/dev/null 2>&1; then log "unit $PREVIEW_UNIT already exists — set PREVIEW_UNIT=<fresh name>; abort (default broker untouched)"; return 1; fi
   systemctl --user stop "${REVERT_UNIT}.timer" "${REVERT_UNIT}.service" 2>/dev/null
   # A wall-clock time, not --on-active: a `systemctl --user daemon-reload` (any session may run one) re-arms a
   # monotonic timer from the reload, which pushed this afternoon's revert from 17:17 to 17:35.
