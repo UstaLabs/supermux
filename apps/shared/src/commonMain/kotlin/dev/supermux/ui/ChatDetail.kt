@@ -80,6 +80,16 @@ fun countToolsSince(
 ): Int = toolTimestampsMs.count { it >= sinceMs }
 
 /**
+ * What a working session is doing, from its agent_state detail: "starting" while a session that was
+ * not up is being woken (card #75), "working" while it runs a tool, else "thinking".
+ */
+fun workingBaseLabel(detail: String?): String = when (detail) {
+    "starting" -> "starting"
+    "running" -> "working"
+    else -> "thinking"
+}
+
+/**
  * Low-mode working status: platform [baseLabel] + optional tool + count + duration.
  * Segments joined with " · ".
  */

@@ -135,6 +135,7 @@ import dev.supermux.ui.countToolsSince
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
+import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -780,10 +781,14 @@ fun ChatPanel(
         dead -> null
         working && agent != null -> {
             if (hideTools) {
-                val base = if (agent.detail == "running") "running" else "thinking"
+                val base = when (agent.detail) { "running" -> "running"; "starting" -> "starting"; else -> "thinking" }
                 formatLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
             } else {
-                if (agent.detail == "running") "running ${agent.tool ?: "tool"}…" else "thinking…"
+                when (agent.detail) {
+                    "running" -> "running ${agent.tool ?: "tool"}…"
+                    "starting" -> "starting…"
+                    else -> "thinking…"
+                }
             }
         }
         sending -> "sending…"
@@ -1351,14 +1356,14 @@ private fun WorkingIndicator(
     // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
     val label = if (detailLow) {
         formatLowWorkingStatus(
-            baseLabel = if (agent.detail == "running") "working" else "thinking",
+            baseLabel = workingBaseLabel(agent.detail),
             detail = agent.detail,
             tool = agent.tool,
             toolCount = toolCount,
             durationLabel = durationLabel,
         )
     } else {
-        val base = (if (agent.detail == "running") "working" else "thinking") +
+        val base = workingBaseLabel(agent.detail) +
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }

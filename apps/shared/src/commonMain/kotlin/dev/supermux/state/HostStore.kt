@@ -598,7 +598,9 @@ class HostStore(
                 }
             }
             is ServerFrame.AgentState -> if (frame.working) {
-                PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.agent.working", "detail" to frame.detail, trace = it) }
+                // Card #75: "starting" is the session being woken; the agent is working once it says so.
+                val mark = if (frame.detail == "starting") "start.agent.starting" else "start.agent.working"
+                PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once(mark, "detail" to frame.detail, trace = it) }
             }
             is ServerFrame.ActivityAppend -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.activity", trace = it) }
             is ServerFrame.CommandsChanged -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.commands", "count" to frame.commands.size, trace = it) }
@@ -853,12 +855,13 @@ class HostStore(
     private fun nowIso(): String = deps.nowIso()
 
     /** Append an optimistic outbound bubble so the user's message shows instantly, before the
-     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in the
-     *  MessageAppend reducer. Only echoes when there is text (attachments-only stay quiet). */
-    fun appendLocalEcho(sessionId: String, text: String) {
+     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Replaced in the
+     *  MessageAppend reducer by the broker's copy of the message sent as [clientMessageId] (card #75).
+     *  Only echoes when there is text (attachments-only stay quiet). */
+    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
-            id = "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = clientMessageId?.let(::localEchoId) ?: "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
@@ -890,7 +893,7 @@ class HostStore(
         val queuedSessions = queued.map { it.session }.toSet()
         _pendingSend.update { it intersect queuedSessions }
         if (queued.isEmpty()) return
-        queued.forEach { appendLocalEcho(it.session, it.args.text.trim()) }
+        queued.forEach { appendLocalEcho(it.session, it.args.text.trim(), it.clientMessageId) }
         stateScope.launch { queued.forEach { deliverOrQueue(it) } }
     }
 
@@ -899,9 +902,12 @@ class HostStore(
      *  after the reconnect snapshot. */
     fun sendMessage(sessionId: String, text: String, attachments: List<String> = emptyList()) {
         if (text.isBlank() && attachments.isEmpty()) return
-        appendLocalEcho(sessionId, text.trim())
+        // Card #75: one id for this message wherever it goes: the frame, a retry after a reconnect,
+        // the broker's log and dedupe, and the local copy the broker's copy replaces.
+        val clientMessageId = newClientMessageId()
+        appendLocalEcho(sessionId, text.trim(), clientMessageId)
         markPendingSend(sessionId)
-        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }))
+        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }), clientMessageId = clientMessageId)
         stateScope.launch { deliverOrQueue(frame) }
     }
 
@@ -2692,6 +2698,7 @@ class HostStore(
                     inheritFrom = inheritFrom?.ifBlank { null },
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
+                    clientMessageId = if ((firstMessage ?: text).isNotBlank() || attachmentIds.isNotEmpty()) newClientMessageId() else null,
                 ),
                 trace = startTrace,
             )

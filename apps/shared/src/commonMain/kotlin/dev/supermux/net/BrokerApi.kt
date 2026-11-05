@@ -393,6 +393,8 @@ data class SpawnRequest(
      * handoff). The client must not also WS-send this text — that raced spawn.
      */
     val firstMessage: String? = null,
+    /** Card #75: the app's own id for [firstMessage] (`web-<uuid>`), the one the broker logs it under. */
+    @SerialName("client_message_id") val clientMessageId: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */

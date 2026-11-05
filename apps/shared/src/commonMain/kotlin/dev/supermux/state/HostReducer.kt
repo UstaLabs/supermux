@@ -1,5 +1,7 @@
 package dev.supermux.state
 
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -181,13 +183,23 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     }
     is ServerFrame.MessageAppend -> {
         val prev = state.messages[frame.session] ?: emptyList()
-        val pruned = if (frame.entry.direction.startsWith("in")) {
-            prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
-        } else prev
+        val entry = frame.entry
+        // The app's own copy of a message it sent goes when the broker's copy of that message arrives
+        // (card #75): found by the id it was sent under, which the broker logs as message_id. A broker
+        // that ignored the id gave the message one of its own: then one copy with the same text goes.
+        val echo = when {
+            !entry.direction.startsWith("in") -> null
+            entry.message_id?.startsWith(CLIENT_MESSAGE_ID_PREFIX) == true -> localEchoId(entry.message_id)
+            else -> prev.firstOrNull { it.id.startsWith("local-") && it.text == entry.text }?.id
+        }
+        val kept = if (echo == null) prev else prev.filterNot { it.id == echo }
+        // An entry that is already there (the same frame twice) is replaced where it is, not shown twice.
+        val at = kept.indexOfFirst { it.id == entry.id }
+        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry }
         // The transcript moved on, so the just-answered receipts have served their purpose;
         // the "answered: …" line the close wrote is the record that stays.
         state.copy(
-            messages = state.messages + (frame.session to (pruned + frame.entry)),
+            messages = state.messages + (frame.session to next),
             closedRequests = if (frame.session in state.closedRequests) {
                 state.closedRequests - frame.session
             } else {
@@ -436,6 +448,16 @@ fun mergeFetchedActivity(fetched: List<ActivityEvent>, current: List<ActivityEve
     val newest = fetched.mapNotNull { it.seq }.maxOrNull() ?: return if (fetched.isEmpty()) current else fetched
     return fetched + current.filter { (it.seq ?: Int.MIN_VALUE) > newest }
 }
+
+/** The prefix of an id the app gives a message it sends (card #75); the rest is a uuid. */
+const val CLIENT_MESSAGE_ID_PREFIX = "web-"
+
+/** The id of the app's own copy of the message it sent as [clientMessageId], shown until the broker's copy arrives. */
+fun localEchoId(clientMessageId: String): String = "local-$clientMessageId"
+
+/** A new id for a message the app sends (card #75). */
+@OptIn(ExperimentalUuidApi::class)
+fun newClientMessageId(): String = CLIENT_MESSAGE_ID_PREFIX + Uuid.random().toString()
 
 /**
  * A fetched history page plus whatever the live buffer gained while the fetch was in flight:

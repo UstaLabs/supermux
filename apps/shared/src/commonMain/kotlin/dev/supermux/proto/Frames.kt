@@ -1005,6 +1005,8 @@ sealed interface ClientFrame {
         @OptIn(ExperimentalSerializationApi::class)
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
+        /** Card #75: the app's own id for this message (`web-<uuid>`); the broker logs and dedupes it under it. */
+        @SerialName("client_message_id") val clientMessageId: String? = null,
     ) : ClientFrame
 
     @Serializable @SerialName("fs_sub")
