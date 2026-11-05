@@ -192,12 +192,24 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 
 - **`WebSizing.Fill`**, the default: the view takes the size its modifier gives it.
 - **`WebSizing.WrapContentHeight(max, initial = 160.dp)`**: full width, and the page's content height, capped at
-  `max` and followed with a spring. A taller page scrolls inside the view. The height comes from the bridge shim's
-  `ResizeObserver` (so only pages that get the shim, see [The bridge](#the-bridge)), or from an engine that measures
-  natively.
-  - **Choose `initial` close to your typical content.** Until pages report, every view in a list is `initial` tall,
-    and that first layout decides which views are on screen and go live; real heights then push some of them off
-    screen again.
+  `max`. A taller page scrolls inside the view. The height comes from the bridge shim's `ResizeObserver` (so only
+  pages that get the shim, see [The bridge](#the-bridge)), or from an engine that measures natively.
+  - A new height moves whatever the list lays out after the view, so the view takes it where it disturbs nobody
+    reading. **Where it shows, a view never shrinks by itself:** a smaller height (a page shorter than its `initial`,
+    the usual first report) waits until the view's row has left its lazy list, which then takes it without moving
+    anything on screen; meanwhile the page's own background fills the rest. Only a page the user is using (pressed
+    last, or holding the keyboard focus) shrinks in view, as they act on it. A plain scrolling `Column` places a view
+    however far off screen it is: there it is taken once the view is more than a window's height away. **A taller
+    height is always taken**, so a page is never cut: animated with a spring while the view is on screen, still and
+    painted (a page that grows as it streams), and at once off screen, under its cover, or while its list moves, so
+    the rows after it move once rather than drift against the scroll.
+  - **Choose `initial` at or a little above your content's height, at the width it is shown at.** Until pages report,
+    every view in a list is `initial` tall: a guess that is too low grows the view in front of the reader when its
+    page reports, and moves the rows after it. Pages are usually responsive, so a guess that is right on a phone can be
+    far off on a tablet's or a desktop's wider column. The sample's chat measured its pages at the widths it runs at
+    and picks its guess by its card's width (`PreviewSpec.initialFor`): before, on the Mac's 680 dp cards, 13 of its
+    20 wrap-content pages reported another height a second or two after coming on screen, and the content under the
+    reader moved by up to 83 dp (2026-11-05, [macOS](#macos)).
   - Page memory keeps each page's last height, so a view recreated by a lazy list shows at its real height at once.
   - Reported sizes are the page's to choose, so they're checked: non-finite, zero and negative sizes are ignored,
     both sides are clamped to 32,000 CSS px, and the view is never laid out taller than 262,142 px, the most Compose's

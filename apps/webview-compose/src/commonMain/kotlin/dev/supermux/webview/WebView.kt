@@ -29,7 +29,10 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
@@ -37,6 +40,7 @@ import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.node.UnplacedAwareModifierNode
 import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.node.invalidateMeasurement
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -47,7 +51,9 @@ import androidx.compose.ui.unit.coerceAtMost
 import dev.supermux.webview.runtime.LocalWebViewOverlays
 import dev.supermux.webview.runtime.LocalWebViewRuntime
 import dev.supermux.webview.runtime.PlatformHost
+import dev.supermux.webview.runtime.WebViewRuntime
 import dev.supermux.webview.runtime.windowOverlays
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -107,7 +113,7 @@ public fun WebView(
     DisposableEffect(host) { onDispose { host.dispose() } }
     val sized = when (sizing) {
         WebSizing.Fill -> modifier
-        is WebSizing.WrapContentHeight -> modifier.fillMaxWidth().then(WrapContentHeightElement(state, sizing))
+        is WebSizing.WrapContentHeight -> modifier.fillMaxWidth().then(WrapContentHeightElement(state, sizing, runtime))
     }
     // Whether a scrolling parent (a lazy list, a scrolling Column) measures the view: unbounded along its axis.
     val scrollingParent = remember { mutableStateOf(false) }
@@ -310,22 +316,24 @@ internal fun coverBackgroundOf(image: ImageBitmap): Color {
     return Color(red = (top[2] / n).toInt(), green = (top[3] / n).toInt(), blue = (top[4] / n).toInt(), alpha = (top[1] / n).toInt())
 }
 
-/** [WebSizing.WrapContentHeight]'s height: the page's, capped, followed with a spring. */
+/** [WebSizing.WrapContentHeight]'s height: the page's, capped, taken where nobody reading is disturbed by it. */
 private class WrapContentHeightElement(
     private val state: WebViewState,
     private val sizing: WebSizing.WrapContentHeight,
+    private val runtime: WebViewRuntime,
 ) : ModifierNodeElement<WrapContentHeightNode>() {
-    override fun create() = WrapContentHeightNode(state, sizing)
+    override fun create() = WrapContentHeightNode(state, sizing, runtime)
 
     override fun update(node: WrapContentHeightNode) {
         node.state = state
         node.sizing = sizing
+        node.runtime = runtime
     }
 
     override fun equals(other: Any?): Boolean =
-        other is WrapContentHeightElement && other.state === state && other.sizing == sizing
+        other is WrapContentHeightElement && other.state === state && other.sizing == sizing && other.runtime === runtime
 
-    override fun hashCode(): Int = 31 * state.hashCode() + sizing.hashCode()
+    override fun hashCode(): Int = 31 * (31 * state.hashCode() + sizing.hashCode()) + runtime.hashCode()
 
     override fun InspectorInfo.inspectableProperties() {
         name = "webViewWrapContentHeight"
@@ -335,24 +343,90 @@ private class WrapContentHeightElement(
 }
 
 /**
+ * How long after the view last moved it counts as moving (its list scrolls or flings): a new height then is taken at
+ * once, not animated against the scroll.
+ */
+private const val MOVING_MILLIS = 100L
+
+/**
  * Lays the view out at the page's height: [WebSizing.WrapContentHeight.initial] until the page reports one, never
  * above [WebSizing.WrapContentHeight.max], nor above what Compose's `Constraints` can hold (262,142 px).
  *
- * It reads the page's size in layout, so a page that reports a new one relayouts the view without recomposing it.
- * The first height is taken at once, so a view that page memory gave its size shows at it with no jump; later ones are
- * animated, and the animation only runs while there is one: a view at rest has no coroutine.
+ * It reads the page's size in layout, so a page that reports a new one relayouts the view without recomposing it. A
+ * new height moves whatever its list lays out after the view, so it is taken where it disturbs nobody reading:
+ * - The first height is taken at once, so a view that page memory gave its size shows at it with no jump.
+ * - Where it shows, the view never shrinks by itself: a smaller height (a page shorter than its guess, the usual first
+ *   report of a view laid out at `initial`) waits until the view has left: its row is no longer placed by its lazy
+ *   list, which then takes it without moving anything on screen ([near]), or the view left the composition (page memory
+ *   gives the next view of the page its height). Until then the page's own background fills the rest. Only a page the
+ *   user is using (the runtime's focused view: pressed last, or holding the keyboard focus) shrinks in view, as they
+ *   act on it.
+ * - A taller height is taken: the page's content mustn't be cut. It is animated only while the view is on screen, still
+ *   and painted (a page that grows as it streams, a section opened): off screen, under its cover (a placeholder, or a
+ *   snapshot, which is no page to follow) or while its list moves, it is taken at once, so the rows after it move once
+ *   rather than drift against the scroll for the spring's 200 ms.
+ * The animation only runs while there is one: a view at rest has no coroutine.
  */
 private class WrapContentHeightNode(
     var state: WebViewState,
     var sizing: WebSizing.WrapContentHeight,
-) : Modifier.Node(), LayoutModifierNode {
-    /** The height asked for, in px: NaN until the first measure. */
+    var runtime: WebViewRuntime,
+) : Modifier.Node(), LayoutModifierNode, GlobalPositionAwareModifierNode, UnplacedAwareModifierNode {
+    /** The height the view is laid out at, or animates to, in px: NaN until the first measure. */
     private var target = Float.NaN
     private var animation: Animatable<Float, AnimationVector1D>? = null
+    private var animating: Job? = null
+
+    /** A smaller height waits for the view to leave ([follow]). */
+    private var held = false
+
+    /**
+     * Whether the view is laid out where a smaller height would move what is on screen: placed, and less than a window's
+     * height from the window. A lazy list places a row only while some of it shows: a row whose web view is clipped out
+     * may still be its first visible row, the one it keeps in place, so shrinking it would move every row it lays out
+     * after it. Once the row isn't placed (it scrolled out of the list, or left the composition), nothing on screen
+     * depends on its height. A plain scrolling Column places a view however far off screen it is: far, it is taken too.
+     */
+    private var near = false
+
+    // Whether any of the view is in the window, and when it last moved there (the runtime's clock).
+    private var visible = false
+    private var position = Offset.Unspecified
+    private var movedAt = 0L
 
     override fun onDetach() {
         target = Float.NaN
-        animation = null
+        stopAnimation()
+        held = false
+        near = false
+        visible = false
+        position = Offset.Unspecified
+    }
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        val at = coordinates.positionInWindow()
+        if (at != position) {
+            position = at
+            movedAt = runtime.clock()
+        }
+        val shown = coordinates.boundsInWindow()
+        visible = coordinates.isAttached && shown.width >= 1f && shown.height >= 1f
+        val window = coordinates.findRootCoordinates().size.height.toFloat()
+        val top = at.y
+        val bottom = top + coordinates.size.height
+        setNear(coordinates.isAttached && bottom > -window && top < 2 * window)
+    }
+
+    override fun onUnplaced() {
+        visible = false
+        setNear(false)
+    }
+
+    private fun setNear(placedNear: Boolean) {
+        if (near == placedNear) return
+        near = placedNear
+        // Gone from where it shows: a height held back is taken, and nothing on screen moves.
+        if (!placedNear && held) invalidateMeasurement()
     }
 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
@@ -363,18 +437,37 @@ private class WrapContentHeightNode(
         return layout(placeable.width, height) { placeable.place(0, 0) }
     }
 
-    /** The height to lay out at now: [wanted] at once the first time; after that, animated to each new one. */
+    /**
+     * The height to lay out at now: [wanted] at once the first time; after that, [wanted] when it may be taken (on
+     * screen a smaller one waits), at once or animated as the class says.
+     */
     private fun follow(wanted: Float): Float {
         val previous = target
         if (previous.isNaN()) {
             target = wanted
             return wanted
         }
-        if (wanted != previous) {
-            target = wanted
+        val owner = state.owner
+        val inUse = owner != null && runtime.focused === owner
+        held = wanted < previous && near && !inUse
+        val next = if (held) previous else wanted
+        if (next != previous) {
+            target = next
+            val watched = visible && runtime.clock() - movedAt >= MOVING_MILLIS && state.phase == WebViewPhase.Live
+            if (!watched) {
+                stopAnimation()
+                return next
+            }
             val running = animation ?: Animatable(previous).also { animation = it }
-            coroutineScope.launch { running.animateTo(wanted, spring(visibilityThreshold = 0.5f)) }
+            animating?.cancel()
+            animating = coroutineScope.launch { running.animateTo(next, spring(visibilityThreshold = 0.5f)) }
         }
-        return animation?.value ?: wanted
+        return animation?.value ?: target
+    }
+
+    private fun stopAnimation() {
+        animating?.cancel()
+        animating = null
+        animation = null
     }
 }
