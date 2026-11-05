@@ -44,6 +44,8 @@ class AndroidPlatformTest {
                 // G1: termlib is bound, and MediaCodec decodes an h264 display transport.
                 terminal = true,
                 scrcpy = true,
+                // #62: the assistant overlay (a chat head over other apps), behind its Appearance switch.
+                assistantOverlay = true,
             ),
             ANDROID_CAPS,
         )
