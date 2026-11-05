@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
@@ -19,8 +20,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
@@ -93,7 +92,7 @@ internal const val BUBBLE_TITLE = "supermux assistant bubble"
 internal const val CHAT_TITLE = "supermux assistant chat"
 
 private val os = System.getProperty("os.name").orEmpty()
-private val isMac = os.startsWith("Mac")
+internal val isMac = os.startsWith("Mac")
 
 /** Where the overlay can float: macOS and Windows (a Linux desktop's compositor may not keep it on top). */
 val desktopOverlaySupported: Boolean = isMac || os.startsWith("Windows")
@@ -118,11 +117,10 @@ fun DesktopAssistantOverlay(
     val ui = overlay.ui
     val screenAllowed by prefs.assistantOverlayScreen.collectAsState(true)
     SideEffect { overlay.allowScreen(screenAllowed) }
-    // The hold-to-talk key works from any app while the overlay is up (where macOS allows it).
-    DisposableEffect(overlay) {
-        overlay.startTalkKey()
-        onDispose { overlay.stopTalkKey() }
-    }
+    // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
+    val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it) } }.collectAsState(null)
+    LaunchedEffect(overlay, talkKey) { talkKey?.let { overlay.useTalkKey(it) } }
+    DisposableEffect(overlay) { onDispose { overlay.stopTalkKey() } }
 
     OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
         themed {
@@ -195,12 +193,6 @@ fun DesktopAssistantOverlay(
                     modifier = Modifier.size(CARD_W.dp, CARD_H.dp),
                     composerChips = {
                         if (ui.screenWithVoice) OverlayGlassesChip(ui, shown.name, onToggle = { overlay.toggleGlasses() })
-                        if (isMac && !overlay.keyAllowed) {
-                            AssistChip(
-                                onClick = { overlay.allowTalkKey() },
-                                label = { Text("Hold right ⌥ to talk from any app · Allow") },
-                            )
-                        }
                     },
                     onPickAgent = { id -> overlay.pickAgent(prefs, fleet, id) },
                 )
@@ -347,58 +339,73 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
         }
     }
 
-    // ── the hold-to-talk key: right ⌥ (or right Alt), held on its own, from any app ──
+    // ── the hold-to-talk key, from any app: a combo (no permission), or right ⌥ held on its own ──
 
-    private val talkKey = TalkKeyHold(HOLD_MS)
+    private val keyHold = TalkKeyHold(HOLD_MS)
     private var keyTick: Job? = null
     private var keyTap: MacTalkKeyTap? = null
-    /** macOS lets supermux read the key from any app (Input Monitoring). */
-    var keyAllowed by mutableStateOf(false)
+    private var hotKey: MacHotKey? = null
+    /** The combo started the talk going on, at this time. */
+    private var comboFrom: Long? = null
 
-    fun startTalkKey() {
-        if (!isMac || keyTap != null) return
-        keyAllowed = MacOverlayNative.canListenToKeys()
-        if (!keyAllowed) return
+    /**
+     * Listens for [key] from any app, in place of the one before. A combo is macOS's to hand over, no
+     * permission asked; right ⌥ alone needs Input Monitoring (allowed from Settings), so it waits for that.
+     */
+    suspend fun useTalkKey(key: TalkKey) {
+        stopTalkKey()
+        if (!isMac) return
+        if (key.combo) {
+            val combo = hotKey ?: MacHotKey(
+                // AppKit's thread: everything goes on to the overlay's.
+                onPress = { scope.launch { comboDown() } },
+                onRelease = { scope.launch { comboUp() } },
+            ).also { hotKey = it }
+            combo.register(key.carbonKey, key.carbonModifiers)
+            return
+        }
+        while (!MacOverlayNative.canListenToKeys()) delay(2_000)
         val tap = MacTalkKeyTap(
             // The tap's own thread: everything goes on to the overlay's.
             onKey = { down -> scope.launch { onTalkKey(down) } },
-            onOther = { scope.launch { keyOutputs(talkKey.otherKey(System.currentTimeMillis())) } },
+            onOther = { scope.launch { keyOutputs(keyHold.otherKey(System.currentTimeMillis())) } },
         )
-        if (tap.start()) keyTap = tap else keyAllowed = false
+        if (tap.start()) keyTap = tap
     }
 
     fun stopTalkKey() {
+        hotKey?.unregister()
         keyTap?.stop()
         keyTap = null
+        keyTick?.cancel()
     }
 
-    /** Asks macOS for Input Monitoring (its prompt, then its settings page); the key starts once it's allowed. */
-    fun allowTalkKey() {
-        if (!MacOverlayNative.askToListenToKeys()) MacOverlayNative.openPrivacySettings("ListenEvent")
-        scope.launch {
-            // Allowed in System Settings meanwhile? Then it starts, no restart needed where macOS agrees.
-            repeat(60) {
-                delay(2_000)
-                if (MacOverlayNative.canListenToKeys()) {
-                    startTalkKey()
-                    return@launch
-                }
-            }
-        }
+    // The combo talks from the moment it's down: nothing to tell apart from typing, so no wait.
+    private fun comboDown() {
+        if (ui.listening) return
+        comboFrom = System.currentTimeMillis()
+        handle(listOf(CompanionGesture.Intent.ListenStart))
+    }
+
+    private fun comboUp() {
+        val from = comboFrom ?: return
+        comboFrom = null
+        // Let go of at once, it was a slip, not a talk.
+        endTalk(send = System.currentTimeMillis() - from >= HOLD_MS)
     }
 
     private fun onTalkKey(down: Boolean) {
         val at = System.currentTimeMillis()
         if (down) {
-            keyOutputs(talkKey.keyDown(at))
+            keyOutputs(keyHold.keyDown(at))
             keyTick?.cancel()
             keyTick = scope.launch {
                 delay(HOLD_MS)
-                keyOutputs(talkKey.tick(System.currentTimeMillis()))
+                keyOutputs(keyHold.tick(System.currentTimeMillis()))
             }
         } else {
             keyTick?.cancel()
-            keyOutputs(talkKey.keyUp(at))
+            keyOutputs(keyHold.keyUp(at))
         }
     }
 

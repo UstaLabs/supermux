@@ -39,7 +39,8 @@ internal object MacOverlayNative {
     // Kept reachable while queued: a collected callback would crash when AppKit calls it.
     private val queued = java.util.Collections.synchronizedSet(mutableSetOf<MainWork>())
 
-    private fun onMain(work: () -> Unit) {
+    /** Runs [work] on AppKit's main thread, asynchronously. */
+    internal fun onMain(work: () -> Unit) {
         lateinit var job: MainWork
         job = MainWork {
             try {

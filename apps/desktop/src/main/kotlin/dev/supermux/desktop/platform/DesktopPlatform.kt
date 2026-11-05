@@ -158,6 +158,12 @@ class DesktopPlatform : Platform {
                 override fun canDrawOverOtherApps(): Boolean = true
                 override fun openPermissionPage() = Unit
                 override suspend fun requestMic(): Boolean = true
+                override val screenNote: String =
+                    "Double-click it to put its glasses on: while it wears them, your screen goes with hold-to-talk. " +
+                        "macOS asks once for Screen Recording; they come off after 5 quiet minutes."
+                override val moreSettings: (@androidx.compose.runtime.Composable () -> Unit)? = {
+                    dev.supermux.desktop.overlay.DesktopOverlaySettings()
+                }
             }
         } else null
 
