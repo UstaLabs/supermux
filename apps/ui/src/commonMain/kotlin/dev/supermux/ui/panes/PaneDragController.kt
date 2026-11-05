@@ -514,7 +514,9 @@ class PaneDragController {
     private fun settleFromHere() {
         val viewId = draggingViewId ?: return
         val g = ghost?.takeIf { pastThreshold && it.visible } ?: return
-        settling = TabSettle(viewId, g.label, Rect(g.x, g.y, g.x + g.width, g.y + g.height))
+        // As wide as it is drawn: its slot's width, which it took on as the drag made it active.
+        val width = slotOf(viewId)?.width ?: g.width
+        settling = TabSettle(viewId, g.label, Rect(g.x, g.y, g.x + width, g.y + g.height))
     }
 
     /** [settle] has landed (or has nowhere to land here): stop drawing it. */
@@ -545,13 +547,17 @@ class PaneDragController {
 
     /**
      * The held tab's index in its own strip: past each neighbour whose middle its leading edge has
-     * crossed ([liveInsertIndex]). By the tabs' widths at press and where the held tab is drawn
+     * crossed ([liveInsertIndex]). By the tabs' widths as drawn and where the held tab is drawn
      * ([ghost]), so the order changes exactly when it visibly passes a tab — never by live tab
      * bounds, which slide under it — with the strip's auto-scroll since press counted in.
      */
     private fun sameStripIndex(): Int {
-        val width = originWidths.getOrNull(fromIndex) ?: return stickyIndex
-        val rest = originWidths.filterIndexed { i, _ -> i != fromIndex }
+        // The tabs' widths as drawn now: the active tab is wider than the rest, and the drag itself
+        // makes the held tab the active one.
+        val origin = originGroupId ?: return stickyIndex
+        val widths = originOrder.mapIndexed { i, id -> tabBounds[tabKey(origin, id)]?.width ?: originWidths.getOrElse(i) { DefaultTabWidth } }
+        val width = widths.getOrNull(fromIndex) ?: return stickyIndex
+        val rest = widths.filterIndexed { i, _ -> i != fromIndex }
         val left = (ghost?.x ?: (pointerRoot.x - grabOffset.x)) - (originContentLeft - originScroll)
         stickyIndex = liveInsertIndex(rest, width, stickyIndex, left)
         return stickyIndex

@@ -362,7 +362,7 @@ internal fun SidebarRail(
                 }
             }
         }
-        Box(Modifier.width(RAIL_WIDTH).height(1.dp).background(cs.onSurface.copy(alpha = 0.10f)))
+        RailRule()
         Column(
             Modifier.padding(vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

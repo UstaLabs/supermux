@@ -1441,7 +1441,8 @@ private fun ShellHome(
                 // toggle and tabs, in the tab strip's colour and at its height — or the launcher's,
                 // which paints the sidebar's tone up to the top. The rail starts below the band.
                 val railUnderBand = collapsed && sidebarTopPad > 0.dp
-                val bandColor = if (ui.launcherOpen) cs.surfaceContainerHigh else cs.surfaceContainerLow
+                // The tab strip has no tone of its own now: it is the frame's, which the rail shares.
+                val bandColor = cs.surfaceContainerHigh
                 // No title band (iPad, Android, the web, a system-framed desktop): the sidebar gets
                 // a band of its own and the toggle sits in it in BOTH states, the same spot the
                 // desktop's title-band toggle never leaves (#57).
@@ -1496,18 +1497,9 @@ private fun ShellHome(
                 }
             }
 
-            // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width).
-            if (ui.sidebarCollapsed) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = RAIL_WIDTH)
-                        .padding(top = if (sidebarTopPad > 0.dp) TAB_STRIP_HEIGHT else 0.dp)
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(cs.outlineVariant),
-                )
-            } else {
+            // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width). The collapsed
+            // rail has no seam line: the panes' sheets beside it are the edge.
+            if (!ui.sidebarCollapsed) {
                 SidebarDivider(
                     // Start width + total travel, clamped by setSidebarWidth: an overshoot
                     // past min/max is not lost, so the edge waits for the cursor to return.

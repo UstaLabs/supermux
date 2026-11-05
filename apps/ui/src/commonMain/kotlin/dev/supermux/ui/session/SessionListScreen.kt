@@ -2406,11 +2406,11 @@ fun SessionListFooter(
     val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
     val themeLabel = if (darkNow) "Switch to light theme" else "Switch to dark theme"
     Column(Modifier.fillMaxWidth()) {
-        // onSurface at ~14%: on the dark rail `outlineVariant` is nearly invisible.
+        // A small line, not a rule across the sidebar: the footer is set off, the edge stays open.
         HorizontalDivider(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
             thickness = 1.dp,
-            color = cs.onSurface.copy(alpha = 0.14f),
+            color = cs.onSurface.copy(alpha = 0.08f),
         )
         Row(
             Modifier

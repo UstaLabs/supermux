@@ -1,5 +1,9 @@
 package dev.supermux.ui.panes
 
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -350,8 +354,10 @@ fun PaneHost(
                 // Lifts off its strip as the drag starts, rather than popping up.
                 val lift = remember { Animatable(0f) }
                 LaunchedEffect(Unit) { lift.animateTo(1f, tween(durationMillis = 120)) }
+                // As wide as the slot it leaves: the tab it is becomes the active one, and grows.
+                val heldWidth = drag.slotOf(heldId)?.width ?: held.width
                 LiftedTab(
-                    bounds = Rect(held.x, held.y, held.x + held.width, held.y + held.height),
+                    bounds = Rect(held.x, held.y, held.x + heldWidth, held.y + held.height),
                     hostRoot = hostRoot,
                     lift = lift.value,
                     tone = liftedTone(heldId),
@@ -455,17 +461,19 @@ private fun SettlingTab(
     content: @Composable () -> Unit,
 ) {
     val at = remember { Animatable(settle.from.topLeft, Offset.VectorConverter) }
+    val size = remember { Animatable(settle.from.size, Size.VectorConverter) }
     val lift = remember { Animatable(1f) }
     LaunchedEffect(Unit) {
         val slot = awaitSlot(drag, settle.viewId)
         if (slot != null) {
             launch { lift.animateTo(0f, tabSettle()) }
+            launch { size.animateTo(slot.size, tabSettle()) }
             at.animateTo(slot.topLeft, tabSettle())
         }
         drag.endSettle(settle)
     }
     LiftedTab(
-        bounds = Rect(at.value, settle.from.size),
+        bounds = Rect(at.value, size.value),
         hostRoot = hostRoot,
         lift = lift.value,
         tone = tone,
@@ -511,6 +519,9 @@ private val TabFlare = 8.dp
 private val TabMinWidth = 112.dp
 private val TabMaxWidth = 200.dp
 private val TabRowPadding = 8.dp
+
+/** A tab's room besides its title: 11 + 6 dp padding, 16 + 7 dp icon, 6 + 16 dp ×, 4 dp to fade. */
+private val TabChromeWidth = 66.dp
 
 /** How far an overflowing strip fades out at an end with more tabs past it. */
 private val StripFade = 30.dp
@@ -744,6 +755,7 @@ private fun GroupHost(
             viewIds = group.viewIds,
             activeViewId = active,
             sheetColor = sheet,
+            labelFont = labelFont,
             titleFor = titleFor,
             // Name the group; do NOT hand back a rebuilt `group`. This lambda is
             // captured by the tab's pointer handler and can outlive this composition.
@@ -954,6 +966,8 @@ fun PaneTabStrip(
     addSlot: (@Composable () -> Unit)? = null,
     /** The active view's sheet below the strip: the active tab is cut from the same tone. */
     sheetColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+    /** The tabs' label font: the active tab is as wide as its title needs, measured in it. */
+    labelFont: FontFamily = FontFamily.Default,
 ) = BoxWithConstraints(modifier.fillMaxWidth()) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -974,16 +988,42 @@ fun PaneTabStrip(
     // Chrome's widths: the strip shared out equally between TabMinWidth and TabMaxWidth, and past
     // that it scrolls. While the pointer is on the strip, a closed tab's room is not handed out
     // (room is only taken, for a new tab), so the next tab's × stays under the pointer.
-    val sharedPx = ((stripWidthPx - addSlotPx - 2 * rowPadPx) / displayIds.size.coerceAtLeast(1))
-        .coerceIn(with(density) { TabMinWidth.toPx() }, with(density) { TabMaxWidth.toPx() })
+    // The active tab is as wide as its title needs (up to TabMaxWidth) when an equal share would
+    // cut it, and the others split what is left.
+    val minPx = with(density) { TabMinWidth.toPx() }
+    val maxPx = with(density) { TabMaxWidth.toPx() }
+    val availablePx = stripWidthPx - addSlotPx - 2 * rowPadPx
+    val tabCount = displayIds.size.coerceAtLeast(1)
+    val textMeasurer = rememberTextMeasurer()
+    val activeTitle = titleFor(activeViewId)
+    val activeWantPx = remember(activeTitle, labelFont, density) {
+        val title = textMeasurer.measure(
+            activeTitle,
+            TextStyle(fontFamily = labelFont, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+            maxLines = 1,
+            softWrap = false,
+        ).size.width
+        (title + with(density) { TabChromeWidth.toPx() }).coerceIn(minPx, maxPx)
+    }
+    val equalPx = availablePx / tabCount
+    val sharedPx = if (activeWantPx <= equalPx || tabCount == 1) {
+        equalPx.coerceIn(minPx, maxPx)
+    } else {
+        ((availablePx - activeWantPx) / (tabCount - 1)).coerceIn(minPx, maxPx)
+    }
     val stripHover = remember { MutableInteractionSource() }
     val stripHovered by stripHover.collectIsHoveredAsState()
     var heldPx by remember { mutableStateOf<Float?>(null) }
     val tabPx = heldPx?.let { minOf(it, sharedPx) } ?: sharedPx
     SideEffect { heldPx = if (stripHovered) tabPx else null }
-    val tabWidth = with(density) { tabPx.toDp() }
-    fun targetXForIndex(index: Int): Float = rowPadPx + index.coerceAtLeast(0) * tabPx
-    val stripContentWidthPx = 2 * rowPadPx + displayIds.size * tabPx + addSlotPx
+    val activeTabPx = maxOf(tabPx, if (activeWantPx > equalPx) activeWantPx else tabPx)
+    fun widthOf(id: String): Float = if (id == activeViewId) activeTabPx else tabPx
+    fun targetXForIndex(index: Int): Float {
+        var x = rowPadPx
+        for (i in 0 until index.coerceIn(0, displayIds.size)) x += widthOf(displayIds[i])
+        return x
+    }
+    val stripContentWidthPx = 2 * rowPadPx + displayIds.sumOf { widthOf(it).toDouble() }.toFloat() + addSlotPx
     // The tab under the pointer: no separator beside it, and the ghost of a hover on it.
     var hoveredTab by remember { mutableStateOf<String?>(null) }
     val dragging = dragState?.isDragging == true
@@ -1079,8 +1119,11 @@ fun PaneTabStrip(
                 // Compose in a stable order (committed viewIds) so keys never reshuffle
                 // under the active pointerInput; visual order is purely animated X.
                 val stableIds = viewIds.ifEmpty { displayIds }
-                fun targetXForOrder(order: List<String>, index: Int): Float =
-                    rowPadPx + index.coerceIn(0, order.size) * tabPx
+                fun targetXForOrder(order: List<String>, index: Int): Float {
+                    var x = rowPadPx
+                    for (i in 0 until index.coerceIn(0, order.size)) x += widthOf(order[i])
+                    return x
+                }
                 for (id in stableIds) {
                     key(id) {
                         val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
@@ -1108,6 +1151,11 @@ fun PaneTabStrip(
                             label = "tab-morph-x-$id",
                         )
                         val selected = id == activeViewId
+                        val animatedWidth by animateFloatAsState(
+                            targetValue = widthOf(id),
+                            animationSpec = if (hidden) snap() else TabSlide,
+                            label = "tab-width-$id",
+                        )
                         val z = when {
                             hidden -> 0f
                             selected -> 1.5f
@@ -1149,7 +1197,7 @@ fun PaneTabStrip(
                             Modifier
                                 .zIndex(z)
                                 .graphicsLayer { translationX = animatedX }
-                                .width(tabWidth)
+                                .width(with(density) { animatedWidth.toDp() })
                                 .fillMaxHeight()
                                 .onGloballyPositioned { coords ->
                                     placed.coords = coords
@@ -1352,6 +1400,9 @@ private fun Modifier.tabDragGestures(
                 Offset(downLocal.x, downLocal.y)
             }
             val stripOrder = stripOrderProvider()
+            // The group's active tab before this press: a drag makes the dragged tab active (below),
+            // and Esc on a torn-off tab puts this one back.
+            val activeAtPress = activeProvider()
             dragState.begin(
                 viewId = viewId,
                 groupId = groupId,
@@ -1375,7 +1426,7 @@ private fun Modifier.tabDragGestures(
                 label = dragState.label,
                 groupId = groupId,
                 index = stripOrder.indexOf(viewId).coerceAtLeast(0),
-                activeViewId = activeProvider(),
+                activeViewId = activeAtPress,
                 grab = dragState.grab,
                 tabSize = boundsAtDown?.size ?: Size(56.dp.toPx(), 32.dp.toPx()),
                 groupSize = dragState.groupAreaOf(groupId)?.size ?: Size.Zero,
@@ -1411,6 +1462,9 @@ private fun Modifier.tabDragGestures(
                         dragState.updatePointer(pointerRoot, startRoot, threshold)
                         val starting = !passed && dragState.pastThreshold
                         if (dragState.pastThreshold) passed = true
+                        // The tab you move is the tab you're on, as in a browser. Only once it moves:
+                        // a press on its × must not switch to it first.
+                        if (starting) onSelect(viewId)
                         // A held finger owns the gesture: the strip must not start scrolling under it.
                         if (passed || touch) change.consume()
                         val host = if (mouse && passed) tearOff() else null
