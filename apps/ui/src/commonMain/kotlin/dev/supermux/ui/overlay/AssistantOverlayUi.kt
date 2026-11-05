@@ -117,7 +117,7 @@ import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.session.wearingGlasses
-import dev.supermux.ui.sessionPreviewPlainText
+import dev.supermux.ui.messagePlainText
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -270,7 +270,8 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
     LaunchedEffect(id) {
         fleet.agentReplies.collect { ev ->
             if (ev.session != id || ui.chatOpen) return@collect
-            val text = sessionPreviewPlainText(ev.entry.text.orEmpty()).trim()
+            // The whole reply, plain: "Read it all" shows all of it (a list preview's text stops at 300 characters).
+            val text = messagePlainText(ev.entry.text.orEmpty())
             if (text.isEmpty()) return@collect
             ui.reply = OverlayReply(ev.entry.id, agent.name, text)
             ui.replyShown = 0
