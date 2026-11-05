@@ -58,7 +58,6 @@ src/core/agents/bin-dirs.test.ts | expects /-spelled bin dirs (/home/u/.opencode
 src/core/agents/claude/core-host.mux-shim.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "the preamble offers a shell read exactly when the Bash rules" | #29
 src/core/agents/claude/core-host.prompts.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "claude may read its inbox through allow rules (Read of the f" | #29
 src/core/agents/claude/session.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "claude core spawn/resume dialect > PA spawn registers before" | #29
-src/core/agents/core-bridge/core-adapter-accounts.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude: a subscription account gets the mux-shim server thro" | #29
 src/core/agents/core-bridge/core-adapter.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
 src/core/agents/detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "grok cred path is ~/.grok/auth.json" | #29
 src/core/agents/install.test.ts | never exits on Windows, killed by the timeout (run 41849291342) | #29 | hangs
