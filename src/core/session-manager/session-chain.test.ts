@@ -251,3 +251,28 @@ test("ensureLiveWith waits for a boot resume still in flight instead of starting
   await live
   expect(resumed).toBe(0)
 })
+
+test("a wake that hangs fails after its timeout, and a new message rejoins that start instead of starting a second", async () => {
+  let release!: () => void
+  const hung = new Promise<void>((r) => { release = r })
+  let calls = 0
+  let live = false
+  const failed: string[] = []
+  const chain = new SessionChain({
+    isLive: () => live,
+    ensureLive: async () => { calls++; await hung; live = true },
+    onWakeFailed: (_id, err) => { failed.push((err as Error).message) },
+    wakeTimeoutMs: 30,
+  })
+  await expect(chain.wake("s")).rejects.toThrow("the agent did not start within")
+  expect(chain.waking("s")).toBe(false)
+  expect(chain.pending("s")).toBe(false)
+  // The start is still running: the next message waits on it, not on a second one.
+  await expect(chain.wake("s")).rejects.toThrow("the agent did not start within")
+  expect(calls).toBe(1)
+  release()
+  await Bun.sleep(5)
+  await chain.wake("s")
+  expect(calls).toBe(1)
+  expect(failed).toHaveLength(2)
+})

@@ -37,7 +37,14 @@ export type SessionChainDeps = {
   putToSleep?(id: string): Promise<void>
   /** A wake failed (not cancelled): once per wake, whoever ran it, so the chat can say why. */
   onWakeFailed?(id: string, err: unknown): void
+  /**
+   * A wake still running after this fails, so a start that hangs never holds the session's queue for
+   * good (default 25 min: a 10 min checkout, a 10 min setup hook and the agent's own start).
+   */
+  wakeTimeoutMs?: number
 }
+
+const WAKE_TIMEOUT_MS = 25 * 60_000
 
 export class SessionChain {
   private readonly tails = new Map<string, Promise<void>>()
@@ -46,6 +53,8 @@ export class SessionChain {
   private readonly endings = new Map<string, Map<number, Error>>()
   /** Sessions being woken now, and when that began. */
   private readonly wakingNow = new Map<string, number>()
+  /** Each session's ensureLive still running, also one a wake gave up waiting for. */
+  private readonly ensuring = new Map<string, Promise<void>>()
 
   constructor(private readonly deps: SessionChainDeps) {}
 
@@ -84,7 +93,7 @@ export class SessionChain {
     if (this.deps.isLive(id)) return
     this.setWaking(id, true)
     try {
-      await this.deps.ensureLive(id)
+      await this.ensureLiveBounded(id)
     } catch (err) {
       if (token.cancelled) throw new CancelledError(id)
       this.end(id, new WakeFailedError(id, err))
@@ -98,6 +107,27 @@ export class SessionChain {
       try { await this.deps.putToSleep?.(id) } catch (err) { log.warn("chain_put_to_sleep_failed", { session: id, err: String(err) }) }
       throw new CancelledError(id)
     }
+  }
+
+  /**
+   * ensureLive, given up on after the wake timeout. A start a wake gave up on keeps running; the next
+   * wake waits on that same start rather than begin a second agent beside it.
+   */
+  private ensureLiveBounded(id: string): Promise<void> {
+    let running = this.ensuring.get(id)
+    if (!running) {
+      const started: Promise<void> = this.deps.ensureLive(id).finally(() => {
+        if (this.ensuring.get(id) === started) this.ensuring.delete(id)
+      })
+      running = started
+      this.ensuring.set(id, running)
+    }
+    const ms = this.deps.wakeTimeoutMs ?? WAKE_TIMEOUT_MS
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`the agent did not start within ${ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${ms} ms`}`)), ms)
+    })
+    return Promise.race([running, timeout]).finally(() => clearTimeout(timer))
   }
 
   /** Stop, archive or kill: drop the queued work; the work running sees `token.cancelled`. */
