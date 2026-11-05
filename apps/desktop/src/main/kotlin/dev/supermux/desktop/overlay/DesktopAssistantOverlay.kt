@@ -59,6 +59,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import java.awt.GraphicsEnvironment
@@ -121,6 +123,11 @@ fun DesktopAssistantOverlay(
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
     val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it) } }.collectAsState(null)
     LaunchedEffect(overlay, talkKey) { talkKey?.let { overlay.useTalkKey(it) } }
+    // Back where it rested last time, before it shows; and where it comes to rest, written down.
+    LaunchedEffect(overlay) {
+        overlay.restore(decodeOverlaySpot(prefs.assistantOverlaySpot.first()))
+        overlay.rested.collect { prefs.putAssistantOverlaySpot(it.encode()) }
+    }
     // Diagnostics: when the bubble comes and goes, and what decided it.
     LaunchedEffect(ui) {
         snapshotFlow { ui.bubbleVisible }.collect { shown ->
@@ -133,7 +140,7 @@ fun DesktopAssistantOverlay(
     }
     DisposableEffect(overlay) { onDispose { overlay.stopTalkKey() } }
 
-    OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
+    if (overlay.placed) OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
         themed {
             // Hosted once, here: its replies pop the bubble, and hold-to-talk records through its mic.
             OverlayReplies(fleet, agent, ui)
@@ -287,8 +294,27 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
     var headX by mutableIntStateOf(startBox.x + startSpot.x.toInt())
     var headY by mutableIntStateOf(startBox.y + startSpot.y.toInt())
 
+    /** Placed: where it rested last time, or its usual spot; the head shows from then on. */
+    var placed by mutableStateOf(false)
+        private set
+
+    /** Each spot it comes to rest at, to be written down. */
+    val rested = MutableSharedFlow<OverlaySpot>(extraBufferCapacity = 1)
+
     init {
         measureRoom()
+    }
+
+    /** Back at [saved] when a screen still holds it; its usual spot otherwise. */
+    fun restore(saved: OverlaySpot?) {
+        restoreSpot(saved, usableScreens(), HEAD_BOX)?.let { (x, y) ->
+            headX = x
+            headY = y
+            val box = usableBounds(x + HEAD_BOX / 2 to y + HEAD_BOX / 2)
+            ui.edge = if (x + HEAD_BOX / 2 < box.x + box.width / 2) Edge.Left else Edge.Right
+            measureRoom()
+        }
+        placed = true
     }
 
     fun down(x: Int, y: Int, at: Long) {
@@ -563,6 +589,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
                 delay(16)
             }
             measureRoom()
+            rested.tryEmit(OverlaySpot(headX, headY, box))
         }
     }
 
@@ -627,15 +654,22 @@ private fun BufferedImage.png(maxEdge: Int): ByteArray = ByteArrayOutputStream()
     out.toByteArray()
 }
 
+/** The usable area of every screen, as [usableBounds] measures one. */
+private fun usableScreens(): List<Rectangle> =
+    GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { usable(it.defaultConfiguration) }
+
+private fun usable(gc: java.awt.GraphicsConfiguration): Rectangle {
+    val b = gc.bounds
+    val inset = Toolkit.getDefaultToolkit().getScreenInsets(gc)
+    return Rectangle(b.x + inset.left, b.y + inset.top, b.width - inset.left - inset.right, b.height - inset.top - inset.bottom)
+}
+
 /** The usable area (less the menu bar, the Dock or the taskbar) of the screen holding [point]; the main one for null. */
 private fun usableBounds(point: Pair<Int, Int>?): Rectangle {
     val env = GraphicsEnvironment.getLocalGraphicsEnvironment()
     val device = point?.let { (px, py) -> env.screenDevices.firstOrNull { it.defaultConfiguration.bounds.contains(px, py) } }
         ?: env.defaultScreenDevice
-    val gc = device.defaultConfiguration
-    val b = gc.bounds
-    val inset = Toolkit.getDefaultToolkit().getScreenInsets(gc)
-    return Rectangle(b.x + inset.left, b.y + inset.top, b.width - inset.left - inset.right, b.height - inset.top - inset.bottom)
+    return usable(device.defaultConfiguration)
 }
 
 private fun Rectangle.overlayScreen() = OverlayScreen(width.toFloat(), height.toFloat(), topInset = 0f, bottomInset = 0f, keyboardHeight = 0f)
