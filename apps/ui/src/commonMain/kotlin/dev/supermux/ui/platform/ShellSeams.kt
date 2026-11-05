@@ -5,6 +5,8 @@
 package dev.supermux.ui.platform
 
 import androidx.compose.runtime.Immutable
+import dev.supermux.ui.panes.TabTearOff
+import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.update.ClientUpdateStatus
 import kotlinx.coroutines.flow.StateFlow
 
@@ -178,6 +180,13 @@ interface WindowHostController {
 
     /** Release the extra window [hostId] — its claim goes back to whoever owned it. */
     fun release(hostId: String)
+
+    /**
+     * Live tear-off for the window [hostId], showing workspace [workspaceId] over [ws]: a tab
+     * dragged out of the window opens in a window of its own that follows the pointer. Null where
+     * the host cannot move a window under a pointer (touch hosts) — the drag then stays inside.
+     */
+    fun tabTearOff(hostId: String, ws: WorkspaceSession, workspaceId: String): TabTearOff? = null
 }
 
 // ── Push registration ─────────────────────────────────────────────────────────

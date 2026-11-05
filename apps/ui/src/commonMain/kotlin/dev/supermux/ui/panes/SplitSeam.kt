@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -63,6 +64,8 @@ fun SplitSeamOverlay(
     modifier: Modifier = Modifier,
     onDragStart: () -> Unit = {},
     testTag: String = "split_seam",
+    /** The hairline at rest; null for the usual quiet line. Panes on their own sheets pass none. */
+    idleColor: Color? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
@@ -72,7 +75,7 @@ fun SplitSeamOverlay(
     val resizeIcon = if (horizontal) ColResizeIcon else RowResizeIcon
 
     val hairlineColor by animateColorAsState(
-        targetValue = if (active) cs.primary.copy(alpha = 0.90f) else cs.onSurface.copy(alpha = 0.18f),
+        targetValue = if (active) cs.primary.copy(alpha = 0.90f) else idleColor ?: cs.onSurface.copy(alpha = 0.18f),
         animationSpec = tween(120),
         label = "split_hairline_color",
     )

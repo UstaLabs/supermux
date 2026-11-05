@@ -955,7 +955,9 @@ fun SessionLauncherScreen(
         BoxWithConstraints(
             outer
                 .fillMaxSize()
-                .background(cs.surfaceContainerHigh)
+                // The tone of the "Start a new session" card that opens it: set off from the
+                // sidebar's frame, and not the chat's either.
+                .background(cs.surfaceContainer)
                 // The soft keyboard shrinks the scroll viewport (as the chat composer dock does),
                 // so a long prompt's growing field scrolls into view instead of under the IME.
                 // The Scaffold shell consumes its own padding first, so the nav bar isn't doubled.
@@ -1448,7 +1450,7 @@ private fun LauncherHostPill(
         Row(
             modifier = modifier
                 .clip(RoundedCornerShape(20.dp))
-                .background(cs.surfaceContainer)
+                .background(cs.surfaceContainerHighest)
                 .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
                 .clickable(enabled = enabled) { haptic.perform(HapticKind.Tick); expanded = true }
                 .padding(
@@ -1502,7 +1504,7 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
+            .background(cs.surfaceContainerHighest)
             .clickable { haptic.perform(HapticKind.Tick); onClick() }
             .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,

@@ -1,35 +1,34 @@
 package dev.supermux.ui.shell
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.supermux.ui.editor.isMarkdownPath
-import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.panes.TabChipRow
+import dev.supermux.ui.panes.TabClose
+import dev.supermux.ui.panes.TabIcon
+import dev.supermux.ui.panes.TabTitle
+import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.panes.TabSlotState
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
@@ -61,8 +60,8 @@ fun WorkspaceFileTab(
     extraMenu: () -> List<RowContextMenuEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
-    val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
-    val fg = if (state.selected) cs.primary else cs.onSurfaceVariant
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
 
     // Cluster G8: the shared right-click wrapper (F3's `RowContextMenu`), so this tab compiles on
     // a host with no `ContextMenuArea`. Inert under touch — the file tab's save / preview / close
@@ -70,28 +69,23 @@ fun WorkspaceFileTab(
     RowContextMenu(
         items = { listOf(RowContextMenuEntry("Move to New Window", onMoveToNewWindow)) + extraMenu() },
     ) {
-    Row(
-        Modifier
-            .fillMaxHeight()
-            .background(bg)
-            .padding(start = 14.dp, end = 8.dp)
-            .testTag("tab-move-to-window-$itemId"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(
-            text = title,
-            color = fg,
-            fontFamily = MonoFontFamily,
-            fontSize = 11.sp,
-            fontWeight = if (state.selected) FontWeight.Medium else FontWeight.Normal,
-        )
+    TabChipRow(hover, Modifier.testTag("tab-move-to-window-$itemId")) {
+        TabIcon(badge = null) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.InsertDriveFile,
+                contentDescription = null,
+                tint = if (state.selected) cs.onSurface else cs.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        TabTitle(title, state, GeistFontFamily)
 
         // Markdown only, and only on the active tab — a row of toggles across every background tab
         // would be noise.
         if (state.selected && isMarkdownPath(path)) {
             Box(
                 Modifier
+                    .padding(start = 4.dp)
                     .size(16.dp)
                     .clickable { onTogglePreview() }
                     .pointerHoverIcon(PointerIcon.Hand)
@@ -101,7 +95,7 @@ fun WorkspaceFileTab(
                 Icon(
                     imageVector = if (previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
                     contentDescription = if (previewMode) "Edit" else "Preview",
-                    tint = if (previewMode) cs.primary else fg,
+                    tint = if (previewMode) cs.primary else cs.onSurfaceVariant,
                     modifier = Modifier.size(12.dp),
                 )
             }
@@ -110,11 +104,12 @@ fun WorkspaceFileTab(
         // The save affordance replaces nothing — it appears only while there is something to save,
         // so a clean tab looks exactly as it did before.
         when {
-            saving -> Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+            saving -> Box(Modifier.padding(start = 4.dp).size(16.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = cs.primary)
             }
             dirty -> Box(
                 Modifier
+                    .padding(start = 4.dp)
                     .size(16.dp)
                     .clickable { onSave() }
                     .pointerHoverIcon(PointerIcon.Hand)
@@ -130,21 +125,12 @@ fun WorkspaceFileTab(
             }
         }
 
-        Box(
-            Modifier
-                .size(16.dp)
-                .clickable { onClose(itemId) }
-                .alpha(if (state.selected) 0.85f else 0.5f)
-                .testTag("tab-close-$itemId"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Close view",
-                tint = fg,
-                modifier = Modifier.size(12.dp),
-            )
-        }
+        TabClose(
+            visible = state.selected || hovered,
+            onClick = { onClose(itemId) },
+            label = "Close view",
+            modifier = Modifier.testTag("tab-close-$itemId"),
+        )
     }
     }
 }

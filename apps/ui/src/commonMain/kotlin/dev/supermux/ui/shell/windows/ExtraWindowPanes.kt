@@ -102,8 +102,8 @@ fun tearOutTabFrom(
     viewId: String,
 ): WindowHost? {
     val layoutSync = ws.layoutSync
-    return tearOutTabLive(registry, layoutSync.tree, viewId, workspaceId) { next ->
-        layoutSync.edit { next }
+    return tearOutTabLive(registry, layoutSync.tree, viewId, workspaceId) { transform ->
+        layoutSync.edit(transform)
         layoutSync.tree
     }
 }
