@@ -152,3 +152,25 @@ export function killTree(pid: number, options: KillTreeOptions = {}): void {
     try { kill(pid, signal) } catch { /* gone */ }
   }
 }
+
+/**
+ * A bash that runs a POSIX shell script (a worktree's .mux/worktree-setup.sh or .mux/verify.sh): the bash on PATH. On
+ * Windows, Git for Windows' bash.exe: on PATH, beside the git on PATH, or where Git installs, but never WSL's
+ * System32\bash.exe, which runs the script inside Linux. Null when there is none (MinGit, the git the broker installs,
+ * has no bash).
+ */
+export function posixShell(env: CommandEnvironment = process.env, options: ResolveOptions = {}): string | null {
+  const platform = options.platform ?? process.platform
+  if (platform !== "win32") return resolve(["bash"], env, options)
+  const fileExists = options.fileExists ?? ((path: string) => isCommandFile(path, platform))
+  const system = (envValue(env, "SystemRoot", platform) ?? "C:\\Windows").toLowerCase()
+  const candidates = (envValue(env, "PATH", platform) ?? "").split(";").filter(Boolean).map((dir) => win32.join(dir, "bash.exe"))
+  // <Git>\cmd\git.exe (or <Git>\bin\git.exe) has its bash at <Git>\bin\bash.exe.
+  const git = resolve(["git"], env, { platform, fileExists })
+  if (git) candidates.push(win32.join(win32.dirname(win32.dirname(git)), "bin", "bash.exe"))
+  const local = envValue(env, "LOCALAPPDATA", platform)
+  for (const base of [envValue(env, "ProgramFiles", platform), envValue(env, "ProgramW6432", platform), envValue(env, "ProgramFiles(x86)", platform), local && win32.join(local, "Programs")]) {
+    if (base) candidates.push(win32.join(base, "Git", "bin", "bash.exe"))
+  }
+  return candidates.find((path) => !path.toLowerCase().startsWith(system) && fileExists(path)) ?? null
+}

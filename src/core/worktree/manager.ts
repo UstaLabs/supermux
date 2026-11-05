@@ -8,7 +8,7 @@ import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
 import { makeLogger } from "../../shared/log"
-import { files, paths } from "@supermux/platform"
+import { files, paths, proc } from "@supermux/platform"
 
 const log = makeLogger("worktree")
 
@@ -95,7 +95,13 @@ async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Prom
 async function runSetupHook(repoRoot: string, worktreeDir: string, branch: string, base: string): Promise<void> {
   const hook = join(repoRoot, ".mux", "worktree-setup.sh")
   if (!existsSync(hook)) return
-  const r = await runAsync("bash", [hook], {
+  // A POSIX script: the bash on PATH, or on Windows Git for Windows' (never cmd.exe, never WSL's).
+  const bash = proc.posixShell()
+  if (!bash) {
+    log.warn("worktree_setup_hook_skipped", { worktreeDir, reason: "no bash to run .mux/worktree-setup.sh (on Windows: install Git for Windows)" })
+    return
+  }
+  const r = await runAsync(bash, [hook], {
     cwd: worktreeDir, timeoutMs: 600_000,
     env: { ...process.env, MUX_WORKTREE_DIR: worktreeDir, MUX_REPO_ROOT: repoRoot, MUX_BASE_BRANCH: base, MUX_SESSION_BRANCH: branch },
   })

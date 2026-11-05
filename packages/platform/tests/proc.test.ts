@@ -103,3 +103,20 @@ test("killTree on Windows ends the process itself when taskkill cannot be starte
   proc.killTree(4322, { platform: "win32", spawn: missing, kill: (pid) => { sent.push(pid) } })
   expect(sent).toEqual([4322])
 })
+
+// Worktree hooks are POSIX scripts (.mux/worktree-setup.sh, .mux/verify.sh). The broker ran them with `bash` from PATH
+// (on Windows: missing, since Git's installer puts only Git\cmd there, or WSL's launcher, which runs them inside Linux)
+// and through cmd.exe.
+test("posixShell elsewhere is the bash on PATH", () => {
+  expect(proc.posixShell({ PATH: "/usr/bin:/bin" }, { platform: "linux", fileExists: (p) => p === "/bin/bash" })).toBe("/bin/bash")
+  expect(proc.posixShell({ PATH: "/usr/bin" }, { platform: "linux", fileExists: () => false })).toBeNull()
+})
+
+test("posixShell on Windows is Git for Windows' bash, beside its git or where Git installs, never WSL's", () => {
+  const env = { Path: "C:\\Windows\\System32;D:\\Tools\\Git\\cmd", SystemRoot: "C:\\Windows", ProgramFiles: "C:\\Program Files" }
+  const beside = windowsFiles("C:\\Windows\\System32\\bash.exe", "D:\\Tools\\Git\\cmd\\git.exe", "D:\\Tools\\Git\\bin\\bash.exe")
+  expect(proc.posixShell(env, beside)).toBe("D:\\Tools\\Git\\bin\\bash.exe")
+  const installed = windowsFiles("C:\\Windows\\System32\\bash.exe", "C:\\Program Files\\Git\\bin\\bash.exe")
+  expect(proc.posixShell({ ...env, Path: "C:\\Windows\\System32" }, installed)).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
+  expect(proc.posixShell({ ...env, Path: "C:\\Windows\\System32" }, windowsFiles("C:\\Windows\\System32\\bash.exe"))).toBeNull()
+})
