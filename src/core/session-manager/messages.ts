@@ -45,6 +45,8 @@ export interface Message {
   council_id?: string
   council_round?: number
   council_letter?: string
+  /** Card #76: the live stream this reply replaces in the app. Sent with the live frame only; never stored. */
+  stream?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
