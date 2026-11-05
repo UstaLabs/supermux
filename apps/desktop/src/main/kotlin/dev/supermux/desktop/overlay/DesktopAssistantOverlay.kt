@@ -95,8 +95,8 @@ internal const val CHAT_TITLE = "supermux assistant chat"
 private val os = System.getProperty("os.name").orEmpty()
 internal val isMac = os.startsWith("Mac")
 
-/** Where the overlay can float: macOS and Windows (a Linux desktop's compositor may not keep it on top). */
-val desktopOverlaySupported: Boolean = isMac || os.startsWith("Windows")
+/** Where the overlay can float ([overlaySupportedOn]). */
+val desktopOverlaySupported: Boolean = overlaySupportedOn(os)
 
 /**
  * The overlay, while the Appearance switch is on. [themed] wraps a window's content in the app's theme
