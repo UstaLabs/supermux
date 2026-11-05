@@ -10,14 +10,21 @@ if "%ARCH%"=="" set "ARCH=x64"
 set "SRC=%~dp0"
 set "OUT=%~dp0out\%ARCH%"
 set "OBJ=%~dp0obj\%ARCH%"
-set "WV2=C:\wv2test\sdk\webview2\build\native"
-set "JDK=C:\wv2test\jbr"
+if not defined WV2 set "WV2=C:\wv2test\sdk\webview2\build\native"
+if not defined JDK set "JDK=C:\wv2test\jbr"
+rem The host: an ARM64 Windows builds arm64 with its own compiler (vcvarsall arm64) and x64 with its cross tools
+rem (arm64_x64); an x64 one builds arm64 with its cross tools (x64_arm64). The MSVC component is the target's.
+set "HOST=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "HOST=arm64"
+if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "HOST=arm64"
+set "VCTOOLS=Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+if "%ARCH%"=="arm64" set "VCTOOLS=Microsoft.VisualStudio.Component.VC.Tools.ARM64"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "VS="
-for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS=%%i"
-if not defined VS (echo wvbuild: no MSVC; winvm.sh setup says what is missing & exit /b 2)
-set "VCARCH=x64"
-if "%ARCH%"=="arm64" set "VCARCH=x64_arm64"
+for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires %VCTOOLS% -property installationPath`) do set "VS=%%i"
+if not defined VS (echo wvbuild: no MSVC for %ARCH%; winvm.sh setup says what is missing & exit /b 2)
+set "VCARCH=%HOST%_%ARCH%"
+if "%HOST%"=="%ARCH%" set "VCARCH=%ARCH%"
 call "%VS%\VC\Auxiliary\Build\vcvarsall.bat" %VCARCH% >nul
 if errorlevel 1 (echo wvbuild: vcvarsall %VCARCH% failed & exit /b 2)
 rem Each output's objects in a folder of their own, emptied first: a link never takes another output's or a stale object.
@@ -25,8 +32,8 @@ for %%d in ("%OUT%" "%OBJ%\test" "%OBJ%\dll" "%OBJ%\testing") do if not exist "%
 del /q "%OBJ%\test\*.obj" "%OBJ%\dll\*.obj" "%OBJ%\testing\*.obj" 2>nul
 set "CFLAGS=/nologo /c /std:c++20 /EHsc /permissive- /Zc:__cplusplus /utf-8 /bigobj /O2 /MT /W3 /DUNICODE /D_UNICODE /DNOMINMAX /I%SRC% /I%WV2%\include /I%JDK%\include /I%JDK%\include\win32"
 
-rem 1. The pure logic's tests: a failing test stops the build. Run here on x64 only.
-if "%ARCH%"=="x64" (
+rem 1. The pure logic's tests: a failing test stops the build. Run where they can: a build for the host's own arch.
+if "%ARCH%"=="%HOST%" (
   cl %CFLAGS% /Fo%OBJ%\test\glue_test.obj %SRC%test\glue_test.cpp || (echo wvbuild: glue_test compile FAILED & exit /b 1)
   link /nologo %OBJ%\test\glue_test.obj /OUT:%OUT%\glue_test.exe || (echo wvbuild: glue_test link FAILED & exit /b 1)
   %OUT%\glue_test.exe || (echo wvbuild: glue_test FAILED & exit /b 1)
