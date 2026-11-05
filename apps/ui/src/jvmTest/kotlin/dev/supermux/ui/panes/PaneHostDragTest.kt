@@ -286,7 +286,8 @@ class PaneHostDragTest {
         }
         onNodeWithTag("view-tab-b").mouseDragTo(Offset(600f, 5_000f))
         assertEquals("b", missed)
-        assertEquals(LayoutNode.Group("g1", listOf("a", "b"), "a"), tree)
+        // Nothing moved. The drag did select b: the tab you move is the tab you're on.
+        assertEquals(LayoutNode.Group("g1", listOf("a", "b"), "b"), tree)
     }
 
     @Test
@@ -445,7 +446,8 @@ class PaneHostDragTest {
         // Far below the window: no drop target, and no host to tear it off to.
         onNodeWithTag("view-tab-b").performMouseInput { moveTo(center); press(); moveBy(Offset(0f, 40f)); moveBy(Offset(0f, 5_000f)); release() }
         waitForIdle()
-        assertEquals(LayoutNode.Group("g1", listOf("a", "b"), "a"), tree)
+        // Where it was, and the active tab: moving it selected it.
+        assertEquals(LayoutNode.Group("g1", listOf("a", "b"), "b"), tree)
         assertEquals(0, onAllNodesWithTag("tab-drag-settle").fetchSemanticsNodes().size)
         assertEquals(before.left, onNodeWithTag("view-tab-b").fetchSemanticsNode().boundsInRoot.left, 1f)
         onNodeWithTag("view-tab-b").assertIsDisplayed()

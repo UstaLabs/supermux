@@ -69,10 +69,12 @@ class PaneHostTearOffTest {
         assertEquals("b", h.viewId)
         assertEquals("g1", h.groupId)
         assertEquals(1, h.index)
+        // The tab that was active before the press, though the drag has selected b: what Esc puts back.
         assertEquals("a", h.activeViewId)
         assertTrue(h.tabSize.width > 0f && h.groupSize.height > h.tabSize.height)
-        // Handed over: nothing dropped here, nothing missed, no ghost left behind.
-        assertEquals(abc, tree)
+        // Handed over: nothing dropped here, nothing missed, no ghost left behind. Only the
+        // selection the drag made — b is the tab being moved.
+        assertEquals(abc.copy(activeViewId = "b"), tree)
         assertNull(missed)
         assertNull(drag.draggingViewId)
         onNodeWithTag("tab-drag-ghost").assertDoesNotExist()
@@ -140,7 +142,9 @@ class PaneHostTearOffTest {
         setContent {
             PaneHost(layout = tree, onLayoutChange = { tree = it }, tearOff = host, addSlot = {}) { Text("body") }
         }
-        onNodeWithTag("view-tab-b").mouseDragBy(Offset(0f, 200f))
+        // Into the top quarter of the pane below: that edge's zone, a split. Not 200 px: from a
+        // 200 dp tab's middle that is just past both quarter lines, in the centre.
+        onNodeWithTag("view-tab-b").mouseDragBy(Offset(0f, 100f))
         assertTrue(host.outsides.isEmpty())
         assertTrue(tree is LayoutNode.Split)
     }
@@ -187,7 +191,7 @@ class PaneHostTearOffTest {
     }
 
     @Test
-    fun `Esc mid-drag ends it, and the release neither drops nor selects`() = runComposeUiTest {
+    fun `Esc mid-drag ends it, and the release drops nothing`() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "b")
         val drag = PaneDragController()
         setContent {
@@ -205,7 +209,9 @@ class PaneHostTearOffTest {
             moveBy(Offset(60f, 0f))
             release()
         }
-        assertEquals(LayoutNode.Group("g1", listOf("a", "b", "c"), "b"), tree)
+        // Still first, though released past b's middle. Selected, as the drag made it: Esc ends
+        // the move, not the choice of tab.
+        assertEquals(LayoutNode.Group("g1", listOf("a", "b", "c"), "a"), tree)
         assertNull(drag.draggingViewId)
     }
 

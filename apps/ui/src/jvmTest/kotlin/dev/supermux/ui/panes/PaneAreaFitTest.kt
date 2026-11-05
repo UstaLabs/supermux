@@ -63,7 +63,9 @@ class PaneAreaFitTest {
         assertEquals(200f, seamX(), 1f)
         mainClock.advanceTimeBy(1_000)
         waitForIdle()
-        assertEquals(200.0 / 600.0, sizes()[0], 1e-3, "the fit is written to the tree once it settles")
+        // The split sits inside the frame's gutters: the seam is 200 - gutter into its 600 - 2 gutters.
+        val gutter = with(density) { PaneGutter.toPx() }
+        assertEquals((200.0 - gutter) / (600.0 - 2 * gutter), sizes()[0], 1e-3, "the fit is written to the tree once it settles")
 
         onNodeWithTag("splitter-0").performTouchInput {
             down(center)
@@ -73,6 +75,6 @@ class PaneAreaFitTest {
         }
         waitForIdle()
         assertTrue(sizes()[0] > 0.4, "the drag reached the tree, got ${sizes()}")
-        assertEquals(sizes()[0].toFloat() * 600f, seamX(), 2f, "the seam is drawn where the tree says")
+        assertEquals(gutter + sizes()[0].toFloat() * (600f - 2 * gutter), seamX(), 2f, "the seam is drawn where the tree says")
     }
 }

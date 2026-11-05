@@ -504,7 +504,7 @@ private val TabLiftElevation = 8.dp
 private const val TabLiftScale = 0.02f
 
 /** Half the gutter of frame around and between the panes' sheets: 6 dp in all. */
-private val PaneGutter = 3.dp
+internal val PaneGutter = 3.dp
 
 /** A sheet's corners: the menus' radius. */
 private val SheetCorner = 10.dp
