@@ -224,6 +224,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 permissionMode = frame.permissionMode ?: s.permissionMode,
                 account = frame.account ?: s.account,
                 accountLabel = frame.accountLabel ?: s.accountLabel,
+                status = frame.status ?: s.status,
             )
         },
     )
