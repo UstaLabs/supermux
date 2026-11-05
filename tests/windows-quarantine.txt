@@ -110,6 +110,7 @@ tests/agent-rpc-internal-column.test.ts | file locked or denied (EBUSY); first: 
 tests/agent-rpc-internal-hidden.test.ts | file locked or denied (EBUSY); first: "listVisible excludes internal sessions" | #29
 tests/agents/claude-auth.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "claudeCredentialsPath points at the file `claude login` writ" | #29
 tests/atomic-json.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "writeJsonAtomic uses 0o600 perms" | #29
+tests/boot-resumes-only-agents-e2e.test.ts | a Linux-only e2e harness: finds the keepers by reading /proc; first: "after a restart only the Agent runs; a message wakes a worker" | #78
 tests/broker-spawn-bind.test.ts | file locked or denied (EBUSY); first: "spawnSession binds the socket before opening the Core sessio" | #29
 tests/c3-launch-equivalence.test.ts | expect(received).toEqual(expected); first: "claude worker: the launch equals the pre-C3 baseline apart f" | #29
 tests/c3b-launch-modes.test.ts | expect(received).toEqual(expected); first: "external: claude worker launches exactly as C3a" | #29
@@ -133,6 +134,7 @@ tests/registry.test.ts | file locked or denied (EBUSY); first: "session lifecycl
 tests/repo-scanner.test.ts | expected "" got neradmin\AppData\Local\Temp\cmux-scan-mfrSga"; first: "scanRepos > workdir itself is a repo → relPath empty string" | #29
 tests/resolve-download-attachment.test.ts | file locked or denied (EBUSY); first: "synthetic 32-hex file_id resolves directly via FileStore (no" | #29
 tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "session search returns sessions by message text, filtered + " | #29
+tests/session-born-asleep-e2e.test.ts | a POSIX-only e2e harness: #!/bin/sh stubs for claude and tmux, chmod, and a PATH joined with ":", so `bun` is not found | #75
 tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
 tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29
 tests/socket-transport.test.ts | runs a POSIX command Windows lacks; first: "shim connects through an explicit local endpoint" | #29
