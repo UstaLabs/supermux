@@ -135,31 +135,25 @@ import dev.supermux.ui.shell.windows.RegistryShellWindows
 import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
-import dev.supermux.ui.adaptive.LocalWindowControlsInsets
-import dev.supermux.ui.adaptive.WindowControlsInsets
 import dev.supermux.desktop.shell.macTitleBarDragRegion
-import dev.supermux.desktop.shell.DesktopWindowDragChrome
-import dev.supermux.ui.shell.LocalWindowDragChrome
 import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
+import dev.supermux.desktop.shell.DesktopTearOff
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
-import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.ui.shell.windows.extraWindowTitle
-import dev.supermux.desktop.shell.LocalMacWindowChrome
-import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.ui.shell.RAIL_WIDTH
-import dev.supermux.desktop.shell.rememberMacWindowChrome
-import dev.supermux.desktop.shell.ChromeOs
 import dev.supermux.desktop.shell.DesktopMenuBar
 import dev.supermux.desktop.shell.LinuxSidebarChrome
 import dev.supermux.desktop.shell.LinuxTitleBarHeight
 import dev.supermux.desktop.shell.LinuxWindowChrome
 import dev.supermux.desktop.shell.LinuxWindowChromeOverlay
-import dev.supermux.desktop.shell.LocalWindowChromeInsets
+import dev.supermux.desktop.shell.ProvideDesktopWindowChrome
+import dev.supermux.desktop.shell.desktopWindowTitle
+import dev.supermux.desktop.shell.rememberDesktopWindowChrome
 import dev.supermux.desktop.shell.MainMenuEntry
 import dev.supermux.desktop.shell.MainMenuGroup
 import dev.supermux.desktop.shell.MainMenuState
@@ -171,12 +165,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import dev.supermux.desktop.shell.MenuShortcut
-import dev.supermux.desktop.shell.chromeInsets
-import dev.supermux.desktop.shell.rememberLinuxWindowChrome
-import dev.supermux.desktop.shell.rememberWindowsWindowChrome
-import androidx.compose.ui.graphics.luminance
 import dev.supermux.desktop.shell.WindowsTitleBarHeight
-import dev.supermux.desktop.shell.WindowsCaptionButtonsFallbackWidth
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -679,8 +668,12 @@ fun main() {
             }
         }
         val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
-        // The extra OS windows, and the shared shell's view of them (cluster G8).
-        val desktopWindows = remember { RegistryShellWindows() }
+        // The extra OS windows, and the shared shell's view of them (cluster G8). Live tear-off is
+        // bound to the registry here, while composing, so that every window's panes — composed
+        // further down this same pass — already find it.
+        val desktopWindows = remember {
+            RegistryShellWindows().also { DesktopWindowHostController.bindRegistry(it.registry) }
+        }
         // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
         // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
         // file is drained ONCE here and then only carries the window bounds. Synchronous for the
@@ -779,8 +772,8 @@ fun main() {
                     val layoutSync = bind.ws.layoutSync
                     tearOutTabLive(
                         desktopWindows.registry, layoutSync.tree, viewId, bind.current.id,
-                    ) { next ->
-                        layoutSync.edit { next }
+                    ) { transform ->
+                        layoutSync.edit(transform)
                         layoutSync.tree
                     }
                     Unit
@@ -899,12 +892,8 @@ fun main() {
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
             onCloseRequest = { if (trayAvailable) windowVisible = false else requestQuit() },
             visible = windowVisible,
-            // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
-            // title still paints centred over our own UI on runtimes that ignore
-            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text — on
-            // Linux even with the custom chrome: an undecorated window has no title bar to paint
-            // it in, and GNOME's overview and Alt+Tab caption the window with it.
-            title = if (isMacOs()) "" else "supermux",
+            // Empty on macOS, under the chrome's band (DesktopWindowChrome.kt).
+            title = desktopWindowTitle("supermux"),
             icon = painterResource("supermux-icon.png"),
             state = windowState,
             // Linux custom chrome: no system frame; our band, buttons and edge handles replace it.
@@ -924,23 +913,23 @@ fun main() {
             // titlebarAppearsTransparent + hidden title — where the band drag (and the tab-drag
             // collision) remains, since stock AWT has no hit-test hook. AppShell leaves a left
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
-            // No-ops off macOS, but gated anyway to keep it obvious.
-            val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
-            val linuxChrome = linuxMoveResize?.let { rememberLinuxWindowChrome(window, it) }
+            // Every window wears this chrome, the extra windows too (DesktopWindowChrome.kt).
+            val chrome = rememberDesktopWindowChrome(window, linuxMoveResize)
+            val macChrome = chrome.mac
+            val linuxChrome = chrome.linux
             // Windows: JBR custom title bar, content edge to edge, Windows' own caption buttons
             // kept (WindowsWindowChrome.kt). Null: the normal frame and menu bar.
-            val windowsChrome = if (isWindowsOs()) rememberWindowsWindowChrome(window, dark = true) else null
+            val windowsChrome = chrome.windows
             // The band's drag regions under the custom chrome (Linux or Windows).
-            val bandRegions = linuxChrome?.regions ?: windowsChrome?.regions
+            val bandRegions = chrome.bandRegions
             // Every chrome's registry (macOS's too): the whole window's top band drags with it.
-            val chromeRegions = macChrome?.regions ?: bandRegions
+            val chromeRegions = chrome.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
-            if (isMacOs() && macChrome?.titleBar == null) {
-                LaunchedEffect(window) {
-                    window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
-                    window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
-                    window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
-                }
+            // Live tear-off: a tab dragged out of another window can land in this one.
+            DisposableEffect(window) {
+                val mainHostId = desktopWindows.registry.main().id
+                DesktopTearOff.register(mainHostId, window)
+                onDispose { DesktopTearOff.unregister(mainHostId, window) }
             }
             // Paired flag + shell UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
@@ -1040,30 +1029,10 @@ fun main() {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
-              // The band's drag regions for the whole window (the wizard too), and under the Linux
-              // and Windows custom chrome the controls' room.
-              // Windows: the native caption buttons follow the app theme (light or dark).
-              windowsChrome?.let { wc ->
-                  val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-                  LaunchedEffect(wc, dark) { wc.setDark(dark) }
-              }
-              CompositionLocalProvider(
-                  LocalMacWindowChrome provides chromeRegions,
-                  LocalWindowDragChrome provides DesktopWindowDragChrome,
-                  LocalWindowChromeInsets provides chromeInsets(
-                      ChromeOs.of(),
-                      customChrome = linuxChrome != null || windowsChrome != null,
-                      windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
-                      macTrafficLights = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth,
-                  ),
-                  // The OS's own window controls over the content, for a full-window overlay (the
-                  // chat's media viewer lays its top bar in their band, clear of them).
-                  LocalWindowControlsInsets provides when {
-                      isMacOs() -> WindowControlsInsets(band = MacTitleBarHeight, start = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth)
-                      windowsChrome != null -> WindowControlsInsets(band = WindowsTitleBarHeight, end = windowsChrome.captionButtonsWidth)
-                      else -> WindowControlsInsets()
-                  },
-              ) {
+              // The band's drag regions for the whole window (the wizard too), the controls' room
+              // (here beside the sidebar's own controls), and the OS's controls for a full-window
+              // overlay (the chat's media viewer lays its top bar in their band, clear of them).
+              ProvideDesktopWindowChrome(chrome, sidebarControls = true) {
               Box(
                   Modifier
                       .fillMaxSize()
@@ -1974,9 +1943,6 @@ fun main() {
                         }
                     }
 
-                    // macChrome (JBR title-bar hit test) scoped to the shell only: the drag-region
-                    // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
-                    // onboarding have no chrome in the title-bar band. Null provider = no-op.
                     CompositionLocalProvider(
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
                         LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
@@ -1984,10 +1950,6 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
-                        LocalMacWindowChrome provides (macChrome?.regions ?: bandRegions),
-                        LocalMacTrafficLightsInset provides (
-                            macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
-                        ),
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
@@ -2126,7 +2088,7 @@ fun main() {
                   onQuit = { confirmQuit = null; quitNow() },
                   onCancelQuit = { cancelQuit() },
               )
-              } // CompositionLocalProvider (Linux chrome)
+              } // ProvideDesktopWindowChrome
             }
             } // ProvideDesktopAdaptiveLocals
 
@@ -2196,7 +2158,8 @@ fun main() {
                     snapshotFlow {
                         extraState.position to extraState.size
                     }.collect { (pos, size) ->
-                        if (pos is WindowPosition.Absolute) {
+                        // A window following a tab drag settles its bounds once, when it ends.
+                        if (pos is WindowPosition.Absolute && !DesktopTearOff.isFollowing(host.id)) {
                             desktopWindows.registry.updateBounds(
                                 host.id,
                                 WindowBounds(
@@ -2211,21 +2174,42 @@ fun main() {
                 }
                 Window(
                     onCloseRequest = { DesktopWindowHostController.release(host.id) },
-                    title = extraBind?.let {
-                        extraWindowTitle(
-                            it.current.name,
-                            ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
-                            it.ws.viewsById,
-                            it.sessionNames,
-                        )
-                    } ?: "supermux",
+                    // Hidden while a tab it carries is dragged over another window (live tear-off).
+                    visible = host.id !in DesktopTearOff.hidden,
+                    title = desktopWindowTitle(
+                        extraBind?.let {
+                            extraWindowTitle(
+                                it.current.name,
+                                ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
+                                it.ws.viewsById,
+                                it.sessionNames,
+                            )
+                        } ?: "supermux",
+                    ),
                     icon = painterResource("supermux-icon.png"),
                     state = extraState,
+                    // The main window's chrome, not the system's title bar: on Linux that means no frame.
+                    undecorated = linuxMoveResize != null,
                 ) {
+                        // The main window's chrome, minus the sidebar's controls: the top-left strip
+                        // leaves room for the traffic lights, the top-right one for the window
+                        // buttons, and the band drags the window (DesktopWindowChrome.kt).
+                        val chrome = rememberDesktopWindowChrome(window, linuxMoveResize)
+                        // Live tear-off finds, moves and hides this window by its host id.
+                        DisposableEffect(host.id, window) {
+                            DesktopTearOff.register(host.id, window)
+                            onDispose { DesktopTearOff.unregister(host.id, window) }
+                        }
                         ProvideDesktopAdaptiveLocals {
                             DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
-                                if (extraBind != null) {
-                                    DetachedWorkspaceWindow(host, extraBind, ui)
+                                ProvideDesktopWindowChrome(chrome, sidebarControls = false) {
+                                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                                        if (extraBind != null) {
+                                            DetachedWorkspaceWindow(host, extraBind, ui)
+                                        }
+                                        // Last, so the buttons and edge handles sit over the panes.
+                                        chrome.linux?.let { LinuxWindowChromeOverlay(it) }
+                                    }
                                 }
                             }
                         }
