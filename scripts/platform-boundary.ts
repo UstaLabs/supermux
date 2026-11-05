@@ -88,6 +88,7 @@ export const RULES: Rule[] = [
       /import\s*\{[^}]*\b(?:posix|win32)\b[^}]*\}\s*from\s*["'](?:node:)?path["']/,
       /\bpath\.(?:posix|win32)\b/,
       /\.startsWith\([^)]*\+\s*["'`]\/["'`]\s*\)/,
+      /\.startsWith\([^)]*\+\s*(?:\w+\.)?sep\s*\)/,
       /\.split\(\s*["'`]\/["'`]\s*\)/,
       /\.(?:startsWith|endsWith|lastIndexOf|indexOf|includes)\(\s*["'`]\/["'`]\s*\)/,
     ],

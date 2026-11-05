@@ -17,6 +17,9 @@ describe("TypeScript rules", () => {
     expect(ids(ts("src/a.ts", 'process.kill(-pid, "SIGTERM")'))).toEqual(["signals"])
     expect(ids(ts("src/a.ts", 'const leaf = path.split("/").pop()'))).toEqual(["path-shape"])
     expect(ids(ts("src/a.ts", 'if (p.startsWith(root + "/")) {}'))).toEqual(["path-shape"])
+    // The same prefix with the host's separator: still exact case, and only one side resolved (card #75's folderReady).
+    expect(ids(ts("src/a.ts", "const inside = target.startsWith(dir + sep)"))).toEqual(["path-shape"])
+    expect(ids(ts("src/a.ts", "if (p.startsWith(root + path.sep)) {}"))).toEqual(["path-shape"])
     expect(ids(ts("src/a.ts", 'import { posix } from "path"'))).toEqual(["path-shape"])
     expect(ids(ts("src/a.ts", "const found = Bun.which(name) !== null"))).toEqual(["which-path"])
   })

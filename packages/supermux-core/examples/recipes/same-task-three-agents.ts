@@ -13,7 +13,7 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { lstat, mkdir, realpath, rm } from "node:fs/promises"
 import { constants, homedir, tmpdir } from "node:os"
-import { basename, join, sep } from "node:path"
+import { basename, isAbsolute, join, relative, sep } from "node:path"
 import { parseArgs, promisify } from "node:util"
 import { supermux } from "@supermux/core"
 import type { SupermuxAgents } from "@supermux/core"
@@ -54,7 +54,14 @@ const repo = await git(["-C", values.repo, "rev-parse", "--show-toplevel"]).catc
 // is refused.
 const temporary = [tmpdir(), process.env.TMPDIR ?? "", "/tmp", "/var/tmp"]
 const roots = await Promise.all(temporary.map(dir => realpath(dir).catch(() => "")))
-if (roots.some(dir => dir && (repo === dir || repo.startsWith(dir + sep)))) {
+// Both as real paths, compared by relative(): on Windows git prints the top level as C:/…, which a C:\… prefix never
+// matched, so a repository in the temporary directory was let through there.
+const repoReal = await realpath(repo)
+const within = (root: string) => {
+  const rel = relative(root, repoReal)
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)
+}
+if (roots.some(dir => dir && within(dir))) {
   console.error(`${repo} is inside a temporary directory the agents can write to: keep the repository outside it`)
   process.exit(1)
 }
