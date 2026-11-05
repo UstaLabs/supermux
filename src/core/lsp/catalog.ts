@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { home } from "../../shared/home"
 import { bunGlobalBinDir, muxLspBinDir, muxLspHome } from "./paths"
+import { DART_EXE } from "./install-dart-sdk"
 
 // Catalog of recommended language servers, keyed by language/extension.
 //
@@ -185,7 +186,7 @@ export { bunGlobalBinDir }
 
 /** `dart` on PATH, ~/.mux/lsp/dart-sdk, or a Flutter-bundled SDK. */
 export function findDartBin(): string | null {
-  const muxDart = join(muxLspHome(), "dart-sdk", "bin", "dart")
+  const muxDart = join(muxLspHome(), "dart-sdk", "bin", DART_EXE)
   if (existsSync(muxDart)) return muxDart
   try {
     const onPath = Bun.which("dart", { PATH: process.env.PATH })
@@ -195,12 +196,12 @@ export function findDartBin(): string | null {
   try { flutter = Bun.which("flutter", { PATH: process.env.PATH }) } catch { /* */ }
   if (flutter) {
     const install = dirname(dirname(flutter))
-    const sdkDart = join(install, "bin", "cache", "dart-sdk", "bin", "dart")
+    const sdkDart = join(install, "bin", "cache", "dart-sdk", "bin", DART_EXE)
     if (existsSync(sdkDart)) return sdkDart
   }
   for (const root of [process.env.FLUTTER_ROOT, join(home(), "flutter")]) {
     if (!root) continue
-    const sdkDart = join(root, "bin", "cache", "dart-sdk", "bin", "dart")
+    const sdkDart = join(root, "bin", "cache", "dart-sdk", "bin", DART_EXE)
     if (existsSync(sdkDart)) return sdkDart
   }
   return null
