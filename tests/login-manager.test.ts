@@ -123,7 +123,7 @@ test("Cursor login polling uses the supplied Windows APPDATA root", () => {
   let present = false
   const mgr = new LoginManager({
     paths: {
-      home: "C:\\Users\\u", appData: "D:\\Roaming", localAppData: "D:\\Local", platform: "win32",
+      home: "C:\\Users\\u", appData: "D:\\Roaming", platform: "win32",
     },
     // First-time login: credential absent at start so poll can succeed when it appears.
     // (already-authed reauth mode ignores poll success — see reauth tests above.)

@@ -49,10 +49,15 @@ test("never throws on malformed global config", () => {
   expect(readGlobalProviderConfig({ configDir: dir })).toBeUndefined()
 })
 
-test("uses LOCALAPPDATA for native Windows opencode auth without changing POSIX XDG", async () => {
+// opencode uses XDG folders on every OS: on Windows 11 (opencode 1.19.5) %USERPROFILE%\.local\share\opencode, never
+// %LOCALAPPDATA%\opencode (detect.test.ts holds the same rule for the status badge).
+test("opencode's auth is in its XDG data folder on Windows too, not LOCALAPPDATA", async () => {
   expect((await resolveOpenCodeAuth({
-    home: "C:\\Users\\u", platform: "win32", localAppData: "D:\\Data", fileExists: () => false,
-  })).authPath).toBe("D:\\Data\\opencode\\auth.json")
+    home: "C:\\Users\\u", platform: "win32", env: { LOCALAPPDATA: "D:\\Data" }, fileExists: () => false,
+  })).authPath).toBe("C:\\Users\\u\\.local\\share\\opencode\\auth.json")
+  expect((await resolveOpenCodeAuth({
+    home: "C:\\Users\\u", platform: "win32", env: { XDG_DATA_HOME: "D:\\xdg" }, fileExists: () => false,
+  })).authPath).toBe("D:\\xdg\\opencode\\auth.json")
   expect((await resolveOpenCodeAuth({
     home: "/home/u", platform: "linux", xdgDataHome: "/xdg", fileExists: () => false,
   })).authPath).toBe("/xdg/opencode/auth.json")

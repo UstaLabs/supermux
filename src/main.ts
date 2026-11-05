@@ -696,7 +696,7 @@ const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
     home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-    appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+    appData: process.env.APPDATA, platform: process.platform,
     env: process.env,
   },
 ), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
@@ -3433,7 +3433,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   loginManager = new LoginManager({
     paths: {
       home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-      appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+      appData: process.env.APPDATA, platform: process.platform,
     },
     fileExists: existsSync,
     // Every kind answers with the stored-settings oracle, so a stored
