@@ -128,7 +128,10 @@ fun DesktopAssistantOverlay(
     SideEffect { overlay.allowScreen(screenAllowed && !waylandSession) }
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
     val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it, desktopOs) } }.collectAsState(null)
-    LaunchedEffect(overlay, talkKey) { talkKey?.let { overlay.useTalkKey(it) } }
+    LaunchedEffect(overlay, talkKey) {
+        // A key that can't be had must not take the overlay down with it.
+        talkKey?.let { runCatching { overlay.useTalkKey(it) }.onFailure { e -> println("[OverlayKey] ${it.name} failed: $e") } }
+    }
     // Back where it rested last time, before it shows; and where it comes to rest, written down.
     LaunchedEffect(overlay) {
         overlay.restore(decodeOverlaySpot(prefs.assistantOverlaySpot.first()))
@@ -262,6 +265,7 @@ private fun OverlayWindow(
                 isResizable = false
                 focusableWindowState = focusable
                 setBounds(x, y, width, height)
+                println("[OverlayWindow] $unique created at $x,$y ${width}x$height ($desktopOs)")
                 onCreated(this)
                 if (desktopOs == DesktopOs.WINDOWS) {
                     addWindowListener(object : WindowAdapter() {
@@ -289,7 +293,10 @@ private fun OverlayWindow(
                 }
             }
         },
-        dispose = { it.dispose() },
+        dispose = {
+            println("[OverlayWindow] ${it.title} closed")
+            it.dispose()
+        },
         update = { w ->
             if (w.x != x || w.y != y || w.width != width || w.height != height) w.setBounds(x, y, width, height)
         },
@@ -326,7 +333,9 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     /** Back at [saved] when a screen still holds it; its usual spot otherwise. */
     fun restore(saved: OverlaySpot?) {
-        restoreSpot(saved, usableScreens(), HEAD_BOX)?.let { (x, y) ->
+        val back = restoreSpot(saved, usableScreens(), HEAD_BOX)
+        println("[OverlayHead] placed at ${back?.let { "${it.first},${it.second} (where it rested)" } ?: "$headX,$headY (its usual spot)"}")
+        back?.let { (x, y) ->
             headX = x
             headY = y
             val box = usableBounds(x + HEAD_BOX / 2 to y + HEAD_BOX / 2)
