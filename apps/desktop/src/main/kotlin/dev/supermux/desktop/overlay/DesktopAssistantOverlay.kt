@@ -232,8 +232,10 @@ private fun OverlayWindow(
 ) {
     Window(
         create = {
+            // Its own title: macOS finds it by title, and a bubble just closed can linger under the same one.
+            val unique = uniqueOverlayTitle(title)
             ComposeWindow().apply {
-                this.title = title
+                this.title = unique
                 // macOS: a non-activating panel, so a click doesn't pull you out of the app you're in.
                 if (!focusable) runCatching { type = AwtWindow.Type.POPUP }
                 isUndecorated = true
@@ -246,12 +248,15 @@ private fun OverlayWindow(
                 if (isMac) {
                     addWindowListener(object : WindowAdapter() {
                         override fun windowOpened(e: WindowEvent) {
-                            MacOverlayNative.floatEverywhere(title)
+                            MacOverlayNative.floatEverywhere(unique)
                             if (title == BUBBLE_TITLE) {
-                                println("[OverlayWindow] $title opened at ${e.window.x},${e.window.y} ${e.window.width}x${e.window.height}")
-                                MacOverlayNative.describe(title)
-                                // And once it has settled.
-                                javax.swing.Timer(600) { MacOverlayNative.describe(title) }.apply { isRepeats = false }.start()
+                                println("[OverlayWindow] $unique opened at ${e.window.x},${e.window.y} ${e.window.width}x${e.window.height}")
+                                MacOverlayNative.describe(unique)
+                                // And once it has settled, where it is and how big.
+                                javax.swing.Timer(600) {
+                                    println("[OverlayWindow] $unique settled at ${e.window.x},${e.window.y} ${e.window.width}x${e.window.height}")
+                                    MacOverlayNative.describe(unique)
+                                }.apply { isRepeats = false }.start()
                             }
                         }
                     })
