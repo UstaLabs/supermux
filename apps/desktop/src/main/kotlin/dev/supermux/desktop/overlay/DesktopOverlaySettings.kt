@@ -41,6 +41,7 @@ internal fun DesktopOverlaySettings() {
     val key = TalkKey.parse(stored, desktopOs)
     val label = key.on(desktopOs)?.label.orEmpty()
     val refused by TalkKeyStatus.refused.collectAsState()
+    val portal by TalkKeyStatus.wayland.collectAsState()
     var open by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -71,12 +72,18 @@ internal fun DesktopOverlaySettings() {
                 }
             }
         }
-        if (waylandSession) {
-            Text(
+        when (portal) {
+            WaylandHotKey.Outcome.NO_PORTAL -> Text(
                 "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold Anya to talk.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
             )
+            WaylandHotKey.Outcome.DECLINED -> Text(
+                "The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSurfaceVariant,
+            )
+            else -> Unit
         }
         refused?.let {
             Text(

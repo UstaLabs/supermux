@@ -416,6 +416,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
     private var hotKey: MacHotKey? = null
     private var winHotKey: WinHotKey? = null
     private var x11HotKey: X11HotKey? = null
+    private var waylandHotKey: WaylandHotKey? = null
     /** The combo started the talk going on, at this time. */
     private var comboFrom: Long? = null
     private var comboLabel = ""
@@ -441,9 +442,18 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
             return
         }
         if (desktopOs == DesktopOs.LINUX) {
-            // Wayland: only its GlobalShortcuts portal can hand a key over; Settings says what's missing.
-            if (waylandSession) return
             comboLabel = combo.label
+            if (waylandSession) {
+                // Only its GlobalShortcuts portal can hand a key over: the desktop asks the user once.
+                val wayland = waylandHotKey ?: WaylandHotKey(
+                    // A bus thread: everything goes on to the overlay's.
+                    onPress = { scope.launch { comboDown() } },
+                    onRelease = { scope.launch { comboUp() } },
+                ).also { waylandHotKey = it }
+                val name = agent?.name ?: "your Agent"
+                TalkKeyStatus.wayland.value = withContext(Dispatchers.IO) { wayland.register(combo, "Hold to talk to $name") }
+                return
+            }
             val x11 = x11HotKey ?: X11HotKey(
                 // The grab's own thread: everything goes on to the overlay's.
                 onPress = { scope.launch { comboDown() } },
@@ -477,6 +487,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
         hotKey?.unregister()
         winHotKey?.unregister()
         x11HotKey?.unregister()
+        waylandHotKey?.unregister()
         keyTap?.stop()
         keyTap = null
         keyTick?.cancel()
