@@ -1,6 +1,8 @@
 // src/main.ts
 import { avatarRev } from "./core/agents/avatar"
 import { PerfLog } from "./core/perf/perf-log"
+import { msSince, startTraces } from "./core/perf/start-trace"
+import { setPerfMarkSink } from "../packages/supermux-core/src/perf-marks.js"
 import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
@@ -397,6 +399,11 @@ process.on("exit", () => releasePidFile(PID_FILE))
 const dbPath = join(STATE_DIR, "db.sqlite3")
 // Load-time tracing (card #54): off unless MUX_PERF=1 or `bun scripts/perf-timeline.ts on`.
 const perfLog = new PerfLog({ dir: join(STATE_DIR, "perf"), envEnabled: process.env.MUX_PERF === "1" })
+// Card #75: a session start's trace (StartTraces), and the core's own launch marks (keeper, initialize,
+// first frames) joined to it by session id. While tracing is off begin() hands out no trace, so no
+// session is ever bound and every mark is a no-op.
+startTraces.setLog(perfLog)
+setPerfMarkSink((sessionId, event, fields) => startTraces.markSession(sessionId, event, fields, true))
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
@@ -1192,7 +1199,15 @@ const sessionManager = new SessionManager(registry, {
   orchestration: {
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
-      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel })
+      const trace = startTraces.begin()
+      startTraces.mark(trace, "request", { via: "spawn_session", agent: args.agent ?? AgentKind.Claude, model: args.model, worktree: true, firstMessage: false })
+      const t0 = performance.now()
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, perfTrace: trace })
+        .catch((err) => {
+          startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+          throw err
+        })
+      startTraces.mark(trace, "created", { ms: msSince(t0), session: created.id, workdir: created.workdir })
       return { name: created.name, session_id: created.id }
     },
     refreshTelegramMenu,
@@ -1786,6 +1801,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   let turnsStarted = 0
   let crashes = 0
   adapter.on("assistant-message", (ev: any) => {
+    startTraces.markSession(sessionId, "reply.first", { chars: typeof ev?.text === "string" ? ev.text.length : undefined }, true)
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
     // end with nothing. The message itself is stored before the send now, so a
@@ -1807,6 +1823,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
   })
   adapter.on("activity", (ev: any) => {
+    startTraces.markSession(sessionId, "activity.first", { kind: ev?.events?.[0]?.kind, tool: ev?.events?.[0]?.tool }, true)
     try {
       for (const a of ev?.events ?? []) {
         // A subagent's conversation is kept (and persisted) with its card as well.
@@ -1826,6 +1843,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => {
+    startTraces.markSession(sessionId, "turn.started", undefined, true)
     turnsStarted++
     // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
@@ -1835,6 +1853,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     settleChanged(sessionId)
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
+    // Card #75: the first turn is the end of a new session's start trace.
+    if (startTraces.traceOf(sessionId)) {
+      startTraces.markSession(sessionId, "turn.completed", { error: ev?.error ? String(ev.error).slice(0, 200) : undefined }, true)
+      startTraces.close(sessionId)
+    }
     agentStateStore.applyEvent(sessionId, "Stop")
     // Codex pushes no reliable change event (skills/changed never fired, 0.164.0): ask its app-server again,
     // so a skill the turn added shows up.
@@ -2824,6 +2847,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     finishSession: async (id, req) => finishSessionById(id, req),
     finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
+      // Card #75: one trace per start, the app's own when it sent one.
+      const trace = startTraces.begin(args.perfTrace)
+      startTraces.mark(trace, "request", { via: "launcher", agent: args.agent ?? AgentKind.Claude, model: args.model, worktree: args.worktree !== false, firstMessage: !!args.firstMessage?.trim(), attachments: args.firstAttachments?.length ?? 0, device: args.device })
+      const t0 = performance.now()
       const created = await createSessionWithWorkspace({
         workdir: args.workdir,
         name: args.name,
@@ -2837,7 +2864,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         inheritFrom: args.inheritFrom,
         workspaceId: args.workspaceId,
         viewId: args.viewId,
+        perfTrace: trace,
+      }).catch((err) => {
+        startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+        throw err
       })
+      startTraces.mark(trace, "created", { ms: msSince(t0), session: created.id, workdir: created.workdir })
       // Continue / spawn first turn: deliver AFTER session_added (the create path sent it) so the
       // client already has the row when message_append lands. spawnSession has already waited for
       // a persistent agent to connect. The launcher's first turn may carry files (uploaded before
@@ -3584,6 +3616,8 @@ const server = await startSocketServer({
 // every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
 // existing call sites read unchanged.
 async function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+  // Card #75: a new session's first message on its way to the agent (a no-op once its start is over).
+  startTraces.markSession(sessionId, "message.delivering", { chars: text.length, channel: meta?.channel }, true)
   // The turn can finish before deliver() resolves (a fast agent answers inside the hand-off), so
   // the turn is opened first and dropped again if the hand-off fails.
   const opened = openTelemetryTurn(sessionId, meta)
@@ -3688,16 +3722,24 @@ async function spawnSession(args: {
   id?: string
   /** council: a worktree made beforehand (all of a council's are made before any member starts). */
   worktreeHandle?: WorktreeHandle
+  /** Card #75: this start's trace id (StartTraces.begin), when tracing is on. */
+  perfTrace?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
+  const trace = args.perfTrace
+  let t = performance.now()
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
   // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
   assertAgentInstalled(agent)
+  startTraces.mark(trace, "installed", { ms: msSince(t), agent })
+  t = performance.now()
   // Before any worktree/name work: an unknown, foreign or unsupported account fails the request. No
   // account, or "auto", is Auto (decision #18): the account with the most room left.
-  const asked = !args.account || args.account === AUTO_ACCOUNT ? await brokerAccounts.autoAccount(agent) : args.account
+  const auto = !args.account || args.account === AUTO_ACCOUNT
+  const asked = auto ? await brokerAccounts.autoAccount(agent) : args.account
   const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
+  startTraces.mark(trace, "account", { ms: msSince(t), auto, account: account ?? "system" })
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
     : undefined
@@ -3712,17 +3754,23 @@ async function spawnSession(args: {
     wt = args.worktreeHandle
     effectiveWorkdir = wt.worktreeDir
   } else if (args.worktree !== false) {
+    t = performance.now()
     const info = await getRepoInfo(workdir)
+    startTraces.mark(trace, "repo", { ms: msSince(t), eligible: info.eligible })
     if (info.eligible && info.repoRoot) {
+      t = performance.now()
       try {
         wt = await createWorktree({
           repoRoot: info.repoRoot,
           baseBranch: args.baseBranch || info.currentBranch || "HEAD",
           sessionName: requestedName || deriveName(workdir),
+          onPhase: trace ? (name, fields) => startTraces.mark(trace, `worktree.${name}`, fields) : undefined,
         })
         effectiveWorkdir = wt.worktreeDir
+        startTraces.mark(trace, "worktree", { ms: msSince(t) })
       } catch (err) {
         log.warn("worktree_create_failed", { workdir, error: String(err) })
+        startTraces.mark(trace, "worktree", { ms: msSince(t), failed: String(err).slice(0, 200) })
         if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         // Fall back to spawning directly in the repo (today's behavior).
       }
@@ -3734,6 +3782,11 @@ async function spawnSession(args: {
     { agent, model: args.model, reasoningLevel: args.reasoningLevel },
     lookupModels,
   )
+  // Card #75: the id is minted here (every agent's spawn takes it) so the agent's own startup marks
+  // (keeper, initialize, first frames) find this start's trace.
+  const spawnId = args.id ?? (trace ? randomUUID() : undefined)
+  if (spawnId) startTraces.bind(spawnId, trace)
+  t = performance.now()
   const r = await spawnSessionHelper(
     {
       registry,
@@ -3771,8 +3824,13 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: args.id },
-  )
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: spawnId },
+  ).catch((err) => {
+    startTraces.mark(trace, "spawn_failed", { ms: msSince(t), err: String(err).slice(0, 200) })
+    if (spawnId) startTraces.close(spawnId)
+    throw err
+  })
+  startTraces.mark(trace, "spawned", { ms: msSince(t), session: r.session_id, agent })
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
   // while polling window liveness so an instant death fast-fails instead of
@@ -3810,7 +3868,9 @@ async function spawnSession(args: {
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
     })
+    t = performance.now()
     await refreshTelegramMenu()
+    startTraces.mark(trace, "telegram", { ms: msSince(t), where: "spawn", on: !!telegram })
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
@@ -3866,6 +3926,9 @@ async function delegateSession(args: {
   const parent = registry.get(args.parentId)
   if (!parent) throw new Error("unknown session")
   const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(parent.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const trace = startTraces.begin()
+  startTraces.mark(trace, "request", { via: "delegate", agent: args.agent, model: args.model, worktree: args.checkout === "worktree", firstMessage: true })
+  const t0 = performance.now()
   const r = await spawnSession({
     workdir: parent.workdir,
     requestedName: args.title?.trim() || nameFromTask(args.task),
@@ -3877,7 +3940,12 @@ async function delegateSession(args: {
     requireWorktree: args.checkout === "worktree",
     parentSessionId: parent.id,
     workspaceId,
+    perfTrace: trace,
+  }).catch((err) => {
+    startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+    throw err
   })
+  startTraces.mark(trace, "created", { ms: msSince(t0), session: r.session_id })
   const child = registry.get(r.session_id)
   if (!child) throw new Error("the child session ended before it was given its task")
   delegatedChildren.started(child, args.task, args.callId)

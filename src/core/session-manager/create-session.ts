@@ -5,6 +5,7 @@
 import { AgentKind } from "../../shared/agents"
 import type { Session } from "./types"
 import type { WorkspaceDto } from "../workspace/dto"
+import { msSince, startTraces } from "../perf/start-trace"
 
 export type CreateSessionArgs = {
   workdir: string
@@ -24,6 +25,8 @@ export type CreateSessionArgs = {
   workspaceId?: string
   /** The pending "+ → Chat" tab of that workspace to bind, instead of adding a tab. */
   viewId?: string
+  /** Card #75: this start's trace id, when tracing is on. */
+  perfTrace?: string
 }
 
 export type CreatedSession = {
@@ -51,6 +54,7 @@ export type CreateSessionDeps = {
     worktree?: boolean
     baseBranch?: string
     inheritFromSessionId?: string
+    perfTrace?: string
   }): Promise<{ name: string; session_id: string }>
   /** A live (not archived) session. */
   getSession(id: string): Session | undefined
@@ -113,10 +117,15 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     worktree: args.worktree,
     baseBranch: args.baseBranch,
     inheritFromSessionId: args.inheritFrom,
+    perfTrace: args.perfTrace,
   })
   const entry = deps.getSession(r.session_id)
+  let t = performance.now()
   if (entry) announceCreated(deps, entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
+  startTraces.mark(args.perfTrace, "announced", { ms: msSince(t) })
+  t = performance.now()
   await deps.refreshTelegramMenu()
+  startTraces.mark(args.perfTrace, "telegram", { ms: msSince(t), where: "create" })
   return {
     id: entry?.id ?? r.session_id,
     name: entry?.name ?? r.name,

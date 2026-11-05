@@ -141,3 +141,20 @@ test("createWorktree does not block the event loop while the setup hook runs", a
   expect(fired).toBeLessThan(500)
   await removeWorktree(repo, h.worktreeDir, h.sessionBranch)
 })
+
+test("createWorktree reports each step's time to onPhase (card #75): branches, add, includes, hook", async () => {
+  const repo = tmpRepo()
+  writeFileSync(join(repo, ".worktreeinclude"), "notes\nmissing\n")
+  execFileSync("mkdir", ["-p", join(repo, "notes")])
+  writeFileSync(join(repo, "notes", "a.md"), "local only")
+  const phases: Array<[string, Record<string, unknown>]> = []
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "timed", onPhase: (name, fields) => phases.push([name, fields]) })
+  expect(phases.map(([name]) => name)).toEqual(["branches", "add", "includes", "hook"])
+  for (const [, fields] of phases) expect(typeof fields.ms).toBe("number")
+  expect(phases[0]![1].count).toBe(1)
+  expect(phases[1]![1].branch).toBe("mux/timed")
+  expect(phases[2]![1].copied).toBe(1)
+  expect(phases[3]![1].present).toBe(false)
+  expect(readFileSync(join(h.worktreeDir, "notes", "a.md"), "utf-8")).toBe("local only")
+  await removeWorktree(repo, h.worktreeDir, h.sessionBranch)
+})

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { PerfEvent } from "./perf-log"
-import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderWs } from "./timeline"
+import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderStart, renderStartSummary, renderWs } from "./timeline"
 
 // One launch as it lands in perf.jsonl: the app's events (src client, t = ms since launch, ts on the
 // broker's clock) and the broker's (src broker), paired by req.
@@ -89,4 +89,70 @@ test("websocket stats add up per frame type over the window", () => {
   expect(out).toMatch(/activity_append\s+200 frames\s+105 KB/)
   expect(out).toContain("event loop: worst 160 ms late")
   expect(out).toContain("shell 410")
+})
+
+// Card #75: one session start, app and broker, paired by the POST /sessions request id.
+const S = "SAAAAAA.1"
+const start: PerfEvent[] = [
+  { ts: BASE + 20_000, src: "client", event: "start.send", trace: S, t: 20_000, agent: "claude", worktree: true, device: "mac", surface: "desktop" },
+  { ts: BASE + 20_040, src: "broker", event: "start.request", trace: S, via: "launcher", agent: "claude", worktree: true, firstMessage: true },
+  { ts: BASE + 20_041, src: "broker", event: "start.account", trace: S, ms: 1.2, auto: true, account: "system" },
+  { ts: BASE + 20_090, src: "broker", event: "start.repo", trace: S, ms: 48, eligible: true },
+  { ts: BASE + 20_110, src: "broker", event: "start.worktree.branches", trace: S, ms: 20, count: 412 },
+  { ts: BASE + 21_310, src: "broker", event: "start.worktree.add", trace: S, ms: 1_200, branch: "mux/x" },
+  { ts: BASE + 21_610, src: "broker", event: "start.worktree.includes", trace: S, ms: 300, copied: 2 },
+  { ts: BASE + 21_611, src: "broker", event: "start.worktree.hook", trace: S, ms: 0.2, present: false },
+  { ts: BASE + 21_612, src: "broker", event: "start.worktree", trace: S, ms: 1_521 },
+  { ts: BASE + 21_700, src: "broker", event: "start.host.prepared", trace: S, ms: 80, session: "s1" },
+  { ts: BASE + 21_900, src: "broker", event: "start.keeper.spawned", trace: S, ms: 150, session: "s1" },
+  { ts: BASE + 24_100, src: "broker", event: "start.claude.initialized", trace: S, ms: 2_150, commands: 39, session: "s1" },
+  { ts: BASE + 24_120, src: "broker", event: "start.spawned", trace: S, ms: 2_480, session: "s1" },
+  { ts: BASE + 24_300, src: "broker", event: "start.telegram", trace: S, ms: 180, where: "spawn" },
+  { ts: BASE + 24_305, src: "broker", event: "start.announced", trace: S, ms: 4 },
+  { ts: BASE + 24_420, src: "broker", event: "start.telegram", trace: S, ms: 115, where: "create" },
+  { ts: BASE + 24_421, src: "broker", event: "start.created", trace: S, ms: 4_380, session: "s1" },
+  { ts: BASE + 24_425, src: "broker", event: "http", trace: S, req: "r7", method: "POST", path: "/sessions", route: "/sessions", status: 200, ms: 4_385 },
+  { ts: BASE + 24_430, src: "client", event: "http", trace: S, t: 24_430, req: "r7", method: "POST", path: "/sessions", status: 200, ms: 4_420, serverMs: 4_385, device: "mac" },
+  { ts: BASE + 24_431, src: "client", event: "start.response", trace: S, t: 24_431, session: "s1", device: "mac" },
+  { ts: BASE + 24_433, src: "broker", event: "start.message.delivering", trace: S, chars: 12, session: "s1" },
+  { ts: BASE + 24_440, src: "broker", event: "start.claude.prompt_written", trace: S, session: "s1" },
+  { ts: BASE + 24_600, src: "client", event: "start.chat.shown", trace: S, t: 24_600, device: "mac" },
+  { ts: BASE + 27_440, src: "broker", event: "start.claude.first_stream", trace: S, session: "s1" },
+  { ts: BASE + 28_000, src: "broker", event: "start.reply.first", trace: S, chars: 40, session: "s1" },
+  { ts: BASE + 28_080, src: "client", event: "start.reply.drawn", trace: S, t: 28_080, device: "mac" },
+]
+
+test("a session start: app and broker on one clock, the broker's HTTP time nested, phases ranked", () => {
+  expect(listTraces(start).map((t) => [t.trace, t.kind])).toEqual([[S, "start"]])
+  const out = renderStart(start, S)
+  expect(out).toContain(`Session start ${S} — launcher, claude`)
+  // The broker's half of POST /sessions sits under the app's request line.
+  expect(out).toMatch(/app http\s+POST \/sessions · 200 · 4420 ms to headers \(broker 4385 ms\)\n\s+└ broker 4385 ms/)
+  expect(out).toContain("git worktree add -b mux/x")
+  expect(out).toContain("Telegram menu refresh (create)")
+  // Ranked: Claude's boot first, then the model's first token, then git worktree add.
+  const ranked = out.split("steps under 10 ms left out):\n")[1]!.split("\n\n")[0]!.split("\n").map((l) => l.trim().split(/\s{2,}/))
+  expect(ranked.slice(0, 3)).toEqual([["prompt → model's first stream event", "3.0 s"], ["Claude boot → initialize", "2.1 s"], ["git worktree add", "1.2 s"]])
+  expect(ranked).toContainEqual(["Telegram menu refresh ×2", "295 ms"])
+  expect(ranked.map((r) => r[0])).not.toContain("setup hook")
+  expect(out).toContain("Summary: created in 4.4 s · app had the answer at 4.4 s · chat on screen at 4.6 s · first reply at 8.0 s · drawn at 8.1 s")
+})
+
+test("a start the broker traced alone (an agent's spawn_session) reads on the broker's clock", () => {
+  const brokerOnly: PerfEvent[] = start.filter((e) => e.src === "broker" && e.event !== "http").map((e) => ({ ...e, trace: "SBBBBBBB" }))
+  brokerOnly[0] = { ...brokerOnly[0]!, via: "spawn_session" }
+  const out = renderStart(brokerOnly, "SBBBBBBB")
+  expect(out).toContain("Session start SBBBBBBB — spawn_session, claude")
+  expect(out).toContain("Summary: created in 4.4 s · first reply at 8.0 s")
+})
+
+test("several starts: each step's median, fastest and slowest, largest median first", () => {
+  const second: PerfEvent[] = start.map((e) => ({ ...e, trace: "SAAAAAA.2", ...(e.event === "start.worktree.add" ? { ms: 2_400 } : {}), ...(e.event === "start.created" ? { ms: 5_580 } : {}) }))
+  const out = renderStartSummary([...start, ...second], [S, "SAAAAAA.2"])
+  expect(out).toContain("2 session starts (launcher claude): median, fastest, slowest")
+  const lines = out.split("\n")
+  const add = lines.find((l) => l.trim().startsWith("git worktree add"))!
+  expect(add.trim().split(/\s{2,}/)).toEqual(["git worktree add", "2.4 s", "1.2 s", "2.4 s", "(2)"])
+  expect(lines.find((l) => l.trim().startsWith("created (request"))).toContain("(2)")
+  expect(lines.find((l) => l.trim().startsWith("Telegram menu refresh ×2"))).toBeDefined()
 })

@@ -10,6 +10,7 @@ import type { ContextPolicy, DriverContextSupport, SessionContext } from "../con
 import type { HostMcpServer } from "../mcp/server.js"
 import { detachedKeeperHooks } from "../keeper/client.js"
 import { removeAntigravitySession } from "../antigravity/files.js"
+import { msSince, perfMark } from "../perf-marks.js"
 
 export type HostRegistration = {
   id: string
@@ -371,6 +372,7 @@ class HostImpl implements Host {
     const token = await this.reserveAdmission(handle)
     try {
       if (this.prepare) {
+        const prepareStarted = performance.now()
         const prepared = cloneRegistration(handle.registration)
         if (prepared.account === undefined) {
           const record = await this.core.sessions.get(handle.id)
@@ -380,9 +382,12 @@ class HostImpl implements Host {
         if (patch && patch.env) handle.registration.env = { ...patch.env }
         if (patch && patch.args) handle.registration.args = [...patch.args]
         if (patch && patch.context) handle.registration.context = cloneContext(patch.context)
+        perfMark(handle.id, "host.prepared", { ms: msSince(prepareStarted) })
       }
       this.attachStarting(handle, token)
+      const openStarted = performance.now()
       const session = await this.openSession(handle, options)
+      perfMark(handle.id, "host.opened", { ms: msSince(openStarted) })
       if (options.onOpened) await options.onOpened(session)
       this.markReady(handle)
       handle.session = session

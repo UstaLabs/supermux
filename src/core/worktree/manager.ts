@@ -8,6 +8,7 @@ import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
 import { makeLogger } from "../../shared/log"
+import { msSince } from "../perf/start-trace"
 
 const log = makeLogger("worktree")
 
@@ -44,15 +45,28 @@ export function deriveSessionBranch(sessionName: string, taken: Set<string>): st
   return `mux/${ensureUnique(slug, takenLeaves)}`
 }
 
+/** Card #75: how long one step of createWorktree took (ms), and what it did. */
+export type WorktreePhase = (name: "branches" | "add" | "includes" | "hook", fields: Record<string, unknown>) => void
+
 export async function createWorktree(opts: {
-  repoRoot: string; baseBranch: string; sessionName: string
+  repoRoot: string; baseBranch: string; sessionName: string; onPhase?: WorktreePhase
 }): Promise<WorktreeHandle> {
-  const sessionBranch = deriveSessionBranch(opts.sessionName, await existingBranchNames(opts.repoRoot))
+  const phase = opts.onPhase
+  let t = performance.now()
+  const branches = await existingBranchNames(opts.repoRoot)
+  phase?.("branches", { ms: msSince(t), count: branches.size })
+  const sessionBranch = deriveSessionBranch(opts.sessionName, branches)
   const worktreeDir = join(worktreesRoot(), repoSlug(opts.repoRoot), randomUUID())
+  t = performance.now()
   await mkdir(dirname(worktreeDir), { recursive: true })
   await gitAsync(opts.repoRoot, ["worktree", "add", "-b", sessionBranch, worktreeDir, opts.baseBranch])
-  await copyWorktreeIncludes(opts.repoRoot, worktreeDir)
-  await runSetupHook(opts.repoRoot, worktreeDir, sessionBranch, opts.baseBranch)
+  phase?.("add", { ms: msSince(t), branch: sessionBranch })
+  t = performance.now()
+  const copied = await copyWorktreeIncludes(opts.repoRoot, worktreeDir)
+  phase?.("includes", { ms: msSince(t), copied })
+  t = performance.now()
+  const hook = await runSetupHook(opts.repoRoot, worktreeDir, sessionBranch, opts.baseBranch)
+  phase?.("hook", { ms: msSince(t), ...hook })
   return { worktreeDir, sessionBranch, baseBranch: opts.baseBranch, repoRoot: opts.repoRoot }
 }
 
@@ -76,9 +90,11 @@ export async function ensureWorktreeAt(opts: {
   }
 }
 
-async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Promise<void> {
+/** Copies the `.worktreeinclude` entries into the new worktree; returns how many it copied. */
+async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Promise<number> {
   const inc = join(repoRoot, ".worktreeinclude")
-  if (!existsSync(inc)) return
+  if (!existsSync(inc)) return 0
+  let copied = 0
   for (const raw of readFileSync(inc, "utf-8").split("\n")) {
     const line = raw.trim()
     if (!line || line.startsWith("#")) continue
@@ -87,17 +103,20 @@ async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Prom
     // Containment guard: never read outside the repo or write outside the worktree.
     if (!resolve(src).startsWith(resolve(repoRoot) + sep) || !resolve(dst).startsWith(resolve(worktreeDir) + sep)) continue
     if (!existsSync(src)) continue
-    try { await mkdir(dirname(dst), { recursive: true }); await cp(src, dst, { recursive: true }) } catch { /* best effort */ }
+    try { await mkdir(dirname(dst), { recursive: true }); await cp(src, dst, { recursive: true }); copied++ } catch { /* best effort */ }
   }
+  return copied
 }
 
-async function runSetupHook(repoRoot: string, worktreeDir: string, branch: string, base: string): Promise<void> {
+/** Runs `.mux/worktree-setup.sh` if the repo has one; says whether it did and how it ended. */
+async function runSetupHook(repoRoot: string, worktreeDir: string, branch: string, base: string): Promise<{ present: boolean; code?: number }> {
   const hook = join(repoRoot, ".mux", "worktree-setup.sh")
-  if (!existsSync(hook)) return
+  if (!existsSync(hook)) return { present: false }
   const r = await runAsync("bash", [hook], {
     cwd: worktreeDir, timeoutMs: 600_000,
     env: { ...process.env, MUX_WORKTREE_DIR: worktreeDir, MUX_REPO_ROOT: repoRoot, MUX_BASE_BRANCH: base, MUX_SESSION_BRANCH: branch },
   })
   // Non-fatal: deps install can fail; the session still spawns.
   if (r.code !== 0) log.warn("worktree_setup_hook_failed", { worktreeDir, code: r.code, timedOut: r.timedOut, tail: r.output.slice(-2000) })
+  return { present: true, code: r.code }
 }

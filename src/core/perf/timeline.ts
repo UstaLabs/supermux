@@ -4,9 +4,9 @@
 // reorder them), and the WebSocket traffic per frame type. Used by scripts/perf-timeline.ts.
 import { perfPath, type PerfEvent } from "./perf-log"
 
-export type TraceKind = "launch" | "chat"
+export type TraceKind = "launch" | "chat" | "start"
 
-const kindOf = (trace: string): TraceKind | undefined => (trace.startsWith("L") ? "launch" : trace.startsWith("C") ? "chat" : undefined)
+const kindOf = (trace: string): TraceKind | undefined => (trace.startsWith("L") ? "launch" : trace.startsWith("C") ? "chat" : trace.startsWith("S") ? "start" : undefined)
 
 export function parsePerfLines(text: string): PerfEvent[] {
   const out: PerfEvent[] = []
@@ -125,7 +125,7 @@ interface Row { t: number; text: string; nested: string[] }
  * The trace's rows in app time. App events give their own `t`; broker events that pair with an app
  * request (same req) nest under it; the rest are placed by the median app↔broker clock offset.
  */
-function rows(events: PerfEvent[], trace: string, origin: number, describe: (e: PerfEvent, mine: PerfEvent[]) => string | undefined): Row[] {
+function rows(events: PerfEvent[], trace: string, origin: number, describe: (e: PerfEvent, mine: PerfEvent[]) => string | undefined, describeBroker: (b: PerfEvent) => string = brokerLine): Row[] {
   const mine = events.filter((e) => e.trace === trace)
   const client = mine.filter((e) => e.src === "client" && num(e.t) !== undefined).sort((a, b) => num(a.t)! - num(b.t)!)
   const broker = mine.filter((e) => e.src === "broker")
@@ -141,7 +141,7 @@ function rows(events: PerfEvent[], trace: string, origin: number, describe: (e: 
   for (const b of broker) {
     const anchor = anchorOf(b)
     if (anchor) nested.set(anchor, [...(nested.get(anchor) ?? []), brokerLine(b)])
-    else out.push({ t: b.ts - offset - origin, text: brokerLine(b), nested: [] })
+    else out.push({ t: b.ts - offset - origin, text: describeBroker(b), nested: [] })
   }
   for (const c of client) {
     const text = describe(c, mine)
@@ -292,5 +292,194 @@ export function renderWs(events: PerfEvent[], since = 0): string {
     }
     if (recompose.size) lines.push(`  recompositions: ${[...recompose].map(([k, v]) => `${k} ${v}`).join(" · ")}`)
   }
+  return lines.join("\n")
+}
+
+// ── Session start (card #75) ────────────────────────────────────────────────────────────────────
+
+/** A start step's own line (app and broker alike): what it did, and how long it took when it says. */
+function describeStartEvent(e: PerfEvent): string {
+  const name = e.event.replace(/^start\./, "")
+  const took = num(e.ms) !== undefined ? ` ${ms(num(e.ms)!)}` : ""
+  const side = e.src === "client" ? "app" : "broker"
+  const label = `${side} ${name}`.padEnd(30)
+  switch (name) {
+    case "request": return `${label}${e.via ?? "?"} · ${e.agent ?? "?"}${e.model ? ` (${e.model})` : ""} · worktree ${e.worktree ? "yes" : "no"}${e.firstMessage ? " · with a first message" : ""}`
+    case "account": return `${label}${took} · ${e.auto ? "Auto picked" : "asked for"} ${e.account ?? "?"}`
+    case "repo": return `${label}${took} · repo probe (rev-parse, nested-repo scan, branch lists)${e.eligible === false ? " · NOT eligible: no worktree" : ""}`
+    case "worktree.branches": return `${label}${took} · git for-each-ref (${e.count ?? "?"} branches)`
+    case "worktree.add": return `${label}${took} · git worktree add -b ${e.branch ?? ""}`
+    case "worktree.includes": return `${label}${took} · .worktreeinclude: ${e.copied ?? 0} entr${e.copied === 1 ? "y" : "ies"} copied`
+    case "worktree.hook": return `${label}${took} · .mux/worktree-setup.sh ${e.present ? `ran (exit ${e.code})` : "absent"}`
+    case "worktree": return `${label}${took} · worktree ready${e.failed ? ` · FAILED: ${e.failed}` : ""}`
+    case "host.prepared": return `${label}${took} · plugins, instructions, agent environment`
+    case "host.prepare.laps": return `${label}prepare split: ${lapsText(e.laps)} (${e.plugins ?? "?"} plugins, ${e.instructionsChars ?? "?"} chars of instructions)`
+    case "claude.transport": return `${label}${took} · keeper started and connected`
+    case "core.context": return `${label}${took} · session context folder (instructions file, plugin folder, MCP config)`
+    case "keeper.spawned": return `${label}${took} · keeper process up (socket + status)`
+    case "keeper.connected": return `${label}${took} · connected to the keeper`
+    case "claude.initialized": return `${label}${took} · Claude answered initialize (${e.commands ?? "?"} slash commands)`
+    case "codex.catalog": return `${label}${took} · \`codex debug models\` before the launch`
+    case "codex.initialized": return `${label}${took} · Codex answered initialize`
+    case "codex.thread": return `${label}${took} · thread/start`
+    case "host.opened": return `${label}${took} · agent session open`
+    case "spawned": return `${label}${took} · agent spawned and ready`
+    case "telegram": return `${label}${took} · Telegram menu refresh (${e.where ?? "?"})${e.on === false ? " · Telegram off" : ""}`
+    case "announced": return `${label}${took} · workspace + session_added frames`
+    case "created": return `${label}${took} · create path done`
+    case "send": return `${label}Send pressed · ${e.agent ?? "?"} · worktree ${e.worktree ? "yes" : "no"}${num(e.files) ? ` · ${e.files} files` : ""}`
+    case "validated": return `${label}${took} · POST /paths/validate`
+    case "uploaded": return `${label}${took} · ${e.files ?? 0} files uploaded`
+    case "response": return `${label}the app has the new session${e.session ? ` (${String(e.session).slice(0, 8)})` : ""}`
+    case "session_added": return `${label}session_added frame in`
+    case "workspace_added": return `${label}workspace_added frame in`
+    case "chat.shown": return `${label}the new chat is on screen`
+    case "message.echoed": return `${label}the first message is back in the chat`
+    case "agent.working": return `${label}agent shows as working${e.detail ? ` (${e.detail})` : ""}`
+    case "activity": return `${label}first activity card in`
+    case "reply.arrived": return `${label}reply frame in`
+    case "reply.drawn": return `${label}reply on screen`
+    case "message.delivering": return `${label}first message on its way to the agent (${e.chars ?? "?"} chars)`
+    case "claude.prompt_written": case "codex.prompt_written": return `${label}prompt written to the agent`
+    case "claude.system_init": return `${label}Claude's system/init${e.mcpServers ? ` · MCP: ${e.mcpServers}` : ""}`
+    case "claude.first_stream": return `${label}Claude's first stream event (the model is answering)`
+    case "codex.first_notify": return `${label}Codex's first notification (${e.method ?? "?"})`
+    case "activity.first": return `${label}first activity card (${e.kind ?? "?"}${e.tool ? ` ${e.tool}` : ""})`
+    case "reply.first": return `${label}first reply (${e.chars ?? "?"} chars)`
+    case "turn.completed": return `${label}first turn over${e.error ? ` · ERROR ${e.error}` : ""}`
+    default: return `${label}${took}${rest(e, ["ms", "session"]) ? ` · ${rest(e, ["ms", "session"])}` : ""}`
+  }
+}
+
+/** The broker phases a start's wait is made of, in order: [label, event]. */
+const START_PHASES: Array<[string, string]> = [
+  ["Auto account choice", "start.account"],
+  ["repo probe", "start.repo"],
+  ["branch list", "start.worktree.branches"],
+  ["git worktree add", "start.worktree.add"],
+  [".worktreeinclude copies", "start.worktree.includes"],
+  ["setup hook", "start.worktree.hook"],
+  ["agent environment (prepare)", "start.host.prepared"],
+  ["session context", "start.core.context"],
+  ["codex debug models", "start.codex.catalog"],
+  ["keeper up", "start.keeper.spawned"],
+  ["Claude boot → initialize", "start.claude.initialized"],
+  ["Codex initialize", "start.codex.initialized"],
+  ["Codex thread/start", "start.codex.thread"],
+  ["workspace + frames", "start.announced"],
+]
+
+/** One start's measured steps (ms) and milestones (ms from Send, or from the request when the app sent no marks). */
+interface StartFacts {
+  mine: PerfEvent[]
+  origin: number
+  request?: PerfEvent
+  phases: Array<[string, number]>
+  created?: number
+  response?: number
+  shown?: number
+  reply?: number
+  drawn?: number
+  failed?: string
+}
+
+function startFacts(events: PerfEvent[], trace: string): StartFacts {
+  const mine = events.filter((e) => e.trace === trace)
+  const client = mine.filter((e) => e.src === "client" && num(e.t) !== undefined)
+  const send = client.find((e) => e.event === "start.send")
+  const request = mine.find((e) => e.src === "broker" && e.event === "start.request")
+  // App time when the app traced it (origin: Send), else the broker's clock (origin: the request).
+  const origin = send ? num(send.t)! : client.length ? num(client[0]!.t)! : (request ?? mine[0])?.ts ?? 0
+  // When each milestone happened, on the timeline's own clock.
+  const offset = median(client.map((e) => e.ts - num(e.t)!))
+  const at = (event: string, src?: "client" | "broker"): number | undefined => {
+    const e = mine.find((x) => x.event === event && (src === undefined || x.src === src))
+    if (!e) return undefined
+    return e.src === "client" && num(e.t) !== undefined ? num(e.t)! - origin : e.ts - (client.length ? offset : 0) - origin
+  }
+  const phases: Array<[string, number]> = []
+  for (const [label, event] of START_PHASES) {
+    const e = mine.find((x) => x.event === event)
+    if (e && num(e.ms) !== undefined) phases.push([label, num(e.ms)!])
+  }
+  const telegram = mine.filter((e) => e.event === "start.telegram")
+  if (telegram.length) phases.push([`Telegram menu refresh ×${telegram.length}`, telegram.reduce((n, e) => n + (num(e.ms) ?? 0), 0)])
+  // The first turn, split where the marks allow: hand-over → prompt written → model starts → reply.
+  const delivering = at("start.message.delivering")
+  const written = at("start.claude.prompt_written") ?? at("start.codex.prompt_written")
+  const firstStream = at("start.claude.first_stream") ?? at("start.codex.first_notify")
+  const reply = at("start.reply.first")
+  if (delivering !== undefined && written !== undefined) phases.push(["first message → written to the agent", written - delivering])
+  if (written !== undefined && firstStream !== undefined) phases.push(["prompt → model's first stream event", firstStream - written])
+  if (firstStream !== undefined && reply !== undefined) phases.push(["first stream → whole reply", reply - firstStream])
+  const failed = mine.find((e) => e.event === "start.failed" || e.event === "start.spawn_failed")
+  return {
+    mine, origin, request, phases,
+    created: num(mine.find((e) => e.event === "start.created")?.ms),
+    response: at("start.response", "client"),
+    shown: at("start.chat.shown", "client"),
+    reply,
+    drawn: at("start.reply.drawn", "client"),
+    failed: failed ? String(failed.err ?? failed.error ?? "?") : undefined,
+  }
+}
+
+const dur = (v: number) => (v >= 1000 ? secs(v) : ms(v))
+
+export function renderStart(events: PerfEvent[], trace: string): string {
+  const f = startFacts(events, trace)
+  const { mine, origin, request } = f
+  if (mine.length === 0) return `No events for ${trace}.`
+  const describe = (e: PerfEvent): string | undefined => {
+    if (e.event === "http.body") return undefined
+    if (e.event === "http") return `${"app http".padEnd(30)}${httpLine(e, mine.find((x) => x.event === "http.body" && x.req === e.req))}`
+    return describeStartEvent(e)
+  }
+  const title = `Session start ${trace}${request ? ` — ${request.via ?? "?"}, ${request.agent ?? "?"}` : ""}`
+  const lines = [header(mine, title), ...table(rows(events, trace, origin, describe, describeStartEvent))]
+
+  lines.push("", "Where the time went (largest first; steps under 10 ms left out):")
+  for (const [label, v] of [...f.phases].sort((a, b) => b[1] - a[1])) if (v >= 10) lines.push(`  ${label.padEnd(40)} ${dur(v).padStart(8)}`)
+
+  const parts: string[] = []
+  if (f.created !== undefined) parts.push(`created in ${secs(f.created)}`)
+  if (f.response !== undefined) parts.push(`app had the answer at ${secs(f.response)}`)
+  if (f.shown !== undefined) parts.push(`chat on screen at ${secs(f.shown)}`)
+  if (f.reply !== undefined) parts.push(`first reply at ${secs(f.reply)}`)
+  if (f.drawn !== undefined) parts.push(`drawn at ${secs(f.drawn)}`)
+  if (f.failed) parts.push(`FAILED: ${f.failed}`)
+  lines.push("", `Summary: ${parts.join(" · ")}`)
+  return lines.join("\n")
+}
+
+/** Several starts side by side: each step's median, fastest and slowest, largest median first. */
+export function renderStartSummary(events: PerfEvent[], traces: string[]): string {
+  const facts = traces.map((t) => startFacts(events, t)).filter((f) => f.mine.length > 0)
+  if (facts.length === 0) return "No session starts."
+  const byPhase = new Map<string, number[]>()
+  const add = (label: string, v: number | undefined) => {
+    if (v === undefined) return
+    byPhase.set(label, [...(byPhase.get(label) ?? []), v])
+  }
+  for (const f of facts) for (const [label, v] of f.phases) add(label.replace(/×\d+$/, "×2"), v)
+  const kinds = [...new Set(facts.map((f) => `${f.request?.via ?? "?"} ${f.request?.agent ?? "?"}`))].join(", ")
+  const lines = [`${facts.length} session starts (${kinds}): median, fastest, slowest`, ""]
+  const row = (label: string, xs: number[]) =>
+    `  ${label.padEnd(40)} ${dur(median(xs)).padStart(8)} ${dur(Math.min(...xs)).padStart(8)} ${dur(Math.max(...xs)).padStart(8)}  (${xs.length})`
+  for (const [label, xs] of [...byPhase].sort((a, b) => median(b[1]) - median(a[1]))) if (median(xs) >= 10) lines.push(row(label, xs))
+  lines.push("")
+  const totals: Array<[string, Array<number | undefined>]> = [
+    ["created (request → agent up, broker)", facts.map((f) => f.created)],
+    ["app had the answer", facts.map((f) => f.response)],
+    ["chat on screen", facts.map((f) => f.shown)],
+    ["first reply", facts.map((f) => f.reply)],
+    ["reply on screen", facts.map((f) => f.drawn)],
+  ]
+  for (const [label, vs] of totals) {
+    const xs = vs.filter((v): v is number => v !== undefined)
+    if (xs.length) lines.push(row(label, xs))
+  }
+  const failed = facts.filter((f) => f.failed).length
+  if (failed) lines.push("", `${failed} of ${facts.length} failed.`)
   return lines.join("\n")
 }
