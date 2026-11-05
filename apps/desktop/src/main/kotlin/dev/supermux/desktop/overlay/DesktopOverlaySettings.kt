@@ -38,7 +38,9 @@ internal fun DesktopOverlaySettings() {
     val prefs = LocalUiPrefs.current
     val scope = rememberCoroutineScope()
     val stored by prefs.assistantOverlayTalkKey.collectAsState(null)
-    val key = TalkKey.parse(stored)
+    val key = TalkKey.parse(stored, desktopOs)
+    val label = key.on(desktopOs)?.label.orEmpty()
+    val refused by TalkKeyStatus.refused.collectAsState()
     var open by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -47,18 +49,19 @@ internal fun DesktopOverlaySettings() {
                 Text("Hold to talk from any app", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
                 Text(
                     if (key.needsInputMonitoring) "Hold right ⌥ on its own and talk; let go to send. macOS asks for Input Monitoring first."
-                    else "Hold ${key.label} and talk; let go to send. No permission needed.",
+                    else "Hold $label and talk; let go to send. No permission needed.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.width(12.dp))
             Box {
-                OutlinedButton(onClick = { open = true }, modifier = Modifier.testTag("appearance_overlay_talk_key")) { Text(key.label) }
+                OutlinedButton(onClick = { open = true }, modifier = Modifier.testTag("appearance_overlay_talk_key")) { Text(label) }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    for (k in TalkKey.entries) {
+                    for (k in TalkKey.offeredOn(desktopOs)) {
+                        val name = k.on(desktopOs)?.label.orEmpty()
                         DropdownMenuItem(
-                            text = { Text(if (k.needsInputMonitoring) "${k.label} · asks for Input Monitoring" else k.label) },
+                            text = { Text(if (k.needsInputMonitoring) "$name · asks for Input Monitoring" else name) },
                             onClick = {
                                 open = false
                                 scope.launch { prefs.putAssistantOverlayTalkKey(k.name) }
@@ -67,6 +70,20 @@ internal fun DesktopOverlaySettings() {
                     }
                 }
             }
+        }
+        if (waylandSession) {
+            Text(
+                "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold Anya to talk.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.onSurfaceVariant,
+            )
+        }
+        refused?.let {
+            Text(
+                "Another app already uses ${it.label}: pick another key here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = cs.error,
+            )
         }
         if (key.needsInputMonitoring && isMac && !MacOverlayNative.canListenToKeys()) {
             TextButton(onClick = { if (!MacOverlayNative.askToListenToKeys()) MacOverlayNative.openPrivacySettings("ListenEvent") }) {
