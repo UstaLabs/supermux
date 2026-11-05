@@ -3,21 +3,34 @@ package dev.supermux.ui.panes
 /**
  * Where a tab dragged along its own strip sits now, by its neighbours' real widths — the way a
  * browser reorders tabs. [current] is its index among the other tabs ([restWidths], in strip
- * order); it passes a neighbour once its centre ([centre], from where the strip's first tab
- * starts) crosses that neighbour's middle, as laid out with the dragged tab ([draggedWidth] wide)
- * at [current].
+ * order) and [left] where its left edge is drawn, from where the strip's first tab starts.
  *
- * Going back takes crossing the neighbour's middle where it sits now, a dragged tab's width
- * away, so a pointer resting near a boundary never flips the order back and forth.
+ * A neighbour gives way as soon as the held tab's LEADING edge crosses its middle — the held tab
+ * covers half of it: moving right, its right edge past the next tab's middle; moving left, its left
+ * edge past the previous tab's. Each line has [hysteresis] px of dead band either side, so a
+ * pointer resting on it never flips the order back and forth.
  */
-internal fun liveInsertIndex(restWidths: List<Float>, draggedWidth: Float, current: Int, centre: Float): Int {
+internal fun liveInsertIndex(
+    restWidths: List<Float>,
+    draggedWidth: Float,
+    current: Int,
+    left: Float,
+    hysteresis: Float = ReorderHysteresisPx,
+): Int {
     var at = current.coerceIn(0, restWidths.size)
-    fun middleOf(k: Int): Float {
-        var left = if (k >= at) draggedWidth else 0f
-        for (i in 0 until k) left += restWidths[i]
-        return left + restWidths[k] / 2f
+    // Where the held tab's slot starts when it sits at index i: after the i tabs before it.
+    fun slotLeft(i: Int): Float {
+        var x = 0f
+        for (k in 0 until i) x += restWidths[k]
+        return x
     }
-    while (at < restWidths.size && centre > middleOf(at)) at++
-    while (at > 0 && centre < middleOf(at - 1)) at--
+    // Right edge (left + draggedWidth) past the middle of the next tab, which starts at
+    // slotLeft(at) + draggedWidth: the held tab has moved half that tab's width off its slot.
+    while (at < restWidths.size && left > slotLeft(at) + restWidths[at] / 2f + hysteresis) at++
+    // Left edge past the middle of the previous tab.
+    while (at > 0 && left < slotLeft(at - 1) + restWidths[at - 1] / 2f - hysteresis) at--
     return at
 }
+
+/** The dead band either side of a reorder line, in px: wider than a hand's tremor, too narrow to feel. */
+internal const val ReorderHysteresisPx = 4f

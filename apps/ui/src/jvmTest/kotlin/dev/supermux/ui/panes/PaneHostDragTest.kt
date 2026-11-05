@@ -324,8 +324,8 @@ class PaneHostDragTest {
     // ── Reorder feel: the tab you hold is the tab you see, and it lands where you let go ──
 
     @Test
-    fun aWideNeighbourIsPassedOnlyOnceTheTabsCentreCrossesItsMiddle() {
-        // a (100) then a 300-wide b: b's middle is 250, so a's centre (50) has to travel 200.
+    fun aWideNeighbourGivesWayOnceTheHeldTabCoversHalfOfIt() {
+        // a (100) then a 300-wide b: b's middle is 250, so a's right edge (100) travels 150, plus the band.
         val d = PaneDragController()
         d.registerStrip("g", Rect(0f, 0f, 600f, 32f))
         d.registerPane("g", Rect(0f, 32f, 600f, 600f))
@@ -334,9 +334,9 @@ class PaneHostDragTest {
         d.registerTab("g", "c", Rect(400f, 0f, 500f, 32f))
         val start = Offset(50f, 16f)
         d.begin("a", "g", start, listOf("a", "b", "c"), "a", Rect(0f, 0f, 100f, 32f))
-        d.updatePointer(Offset(240f, 16f), start, PANE_DRAG_THRESHOLD_PX)
-        assertEquals(listOf("a", "b", "c"), d.liveOrder, "a slot-sized move is not past a wide tab")
-        d.updatePointer(Offset(260f, 16f), start, PANE_DRAG_THRESHOLD_PX)
+        d.updatePointer(Offset(200f, 16f), start, PANE_DRAG_THRESHOLD_PX)
+        assertEquals(listOf("a", "b", "c"), d.liveOrder, "not yet half over b")
+        d.updatePointer(Offset(210f, 16f), start, PANE_DRAG_THRESHOLD_PX)
         assertEquals(listOf("b", "a", "c"), d.liveOrder)
         assertEquals(PaneDropTarget.Reorder("g", "a", 1), d.finish())
     }
@@ -479,14 +479,14 @@ private fun androidx.compose.ui.test.ComposeUiTest.nearRightEdge(tag: String): O
 }
 
 /**
- * How far right to drag [from]'s tab for its centre to just pass the middle of [past], its right
- * neighbour: one place, by the tabs' real widths, and not as far as the tab after.
+ * How far right to drag [from]'s tab past [past], its right neighbour: one place — its leading edge
+ * three quarters over [past], well past the middle and the band, and nowhere near the tab after.
  */
 @OptIn(ExperimentalTestApi::class)
 private fun androidx.compose.ui.test.ComposeUiTest.onePlaceRight(from: String, past: String): Float {
-    val a = onNodeWithTag("view-tab-$from").fetchSemanticsNode().boundsInRoot
+    onNodeWithTag("view-tab-$from").assertExists()
     val b = onNodeWithTag("view-tab-$past").fetchSemanticsNode().boundsInRoot
-    return b.center.x - a.center.x + 6f
+    return b.width * 0.75f + ReorderHysteresisPx
 }
 
 /** A mouse press on this node's centre, a drag by [by], and a release. */

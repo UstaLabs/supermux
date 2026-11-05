@@ -21,7 +21,7 @@ import dev.supermux.session.moveId
  *   strip's row, following the pointer sideways, while the pointer is on that strip; anywhere
  *   the pointer takes it otherwise
  * - [liveOrder] reshuffles the origin strip while the pointer stays on it, a neighbour giving
- *   way once the held tab's centre crosses its middle ([liveInsertIndex])
+ *   way as soon as the held tab's leading edge crosses its middle ([liveInsertIndex])
  * - foreign strips show an insert caret via [hoverStripGroupId]/[hoverInsertIndex]
  * - [settling] is a tab just let go, eased from where it was drawn into its slot
  */
@@ -544,7 +544,7 @@ class PaneDragController {
     }
 
     /**
-     * The held tab's index in its own strip: past each neighbour whose middle its centre has
+     * The held tab's index in its own strip: past each neighbour whose middle its leading edge has
      * crossed ([liveInsertIndex]). By the tabs' widths at press and where the held tab is drawn
      * ([ghost]), so the order changes exactly when it visibly passes a tab — never by live tab
      * bounds, which slide under it — with the strip's auto-scroll since press counted in.
@@ -552,9 +552,8 @@ class PaneDragController {
     private fun sameStripIndex(): Int {
         val width = originWidths.getOrNull(fromIndex) ?: return stickyIndex
         val rest = originWidths.filterIndexed { i, _ -> i != fromIndex }
-        val left = ghost?.x ?: (pointerRoot.x - grabOffset.x)
-        val centre = left + width / 2f - (originContentLeft - originScroll)
-        stickyIndex = liveInsertIndex(rest, width, stickyIndex, centre)
+        val left = (ghost?.x ?: (pointerRoot.x - grabOffset.x)) - (originContentLeft - originScroll)
+        stickyIndex = liveInsertIndex(rest, width, stickyIndex, left)
         return stickyIndex
     }
 
