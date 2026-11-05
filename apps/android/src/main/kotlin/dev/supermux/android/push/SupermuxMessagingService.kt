@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import dev.supermux.android.overlay.AssistantOverlayService
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessaging
@@ -111,6 +112,8 @@ class SupermuxMessagingService : FirebaseMessagingService() {
     }
 
     private fun postNotification(note: PushRouter.Notification) {
+        // The assistant overlay is out and connected for this Agent: its bubble says it instead (#62).
+        if (note.sessionId != null && note.sessionId == AssistantOverlayService.showingAgentId) return
         ensureChannel(this)
 
         val tapIntent = Intent(this, MainActivity::class.java).apply {
