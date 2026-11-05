@@ -1,6 +1,6 @@
 // src/core/worktree/manager.ts
-import { existsSync, readFileSync } from "fs"
-import { cp, mkdir } from "fs/promises"
+import { existsSync, readFileSync, realpathSync } from "fs"
+import { cp, mkdir, rm } from "fs/promises"
 import { basename, dirname, join, resolve, sep } from "path"
 import { createHash, randomUUID } from "crypto"
 import { home } from "../../shared/home"
@@ -76,18 +76,55 @@ export async function removeWorktree(repoRoot: string, worktreeDir: string, sess
   if (!opts?.keepBranch) { try { await gitAsync(repoRoot, ["branch", "-D", sessionBranch]) } catch {} }
 }
 
+/** Card #75: a session born asleep gets its branch at Send (so two quick Sends can't pick one name); the checkout waits for its wake. */
+export async function createSessionBranch(repoRoot: string, branch: string, base: string): Promise<void> {
+  await gitAsync(repoRoot, ["branch", branch, base])
+}
+
+/** The folders `git worktree list` knows for this repo (real paths). */
+async function registeredWorktrees(repoRoot: string): Promise<Set<string>> {
+  const out = await gitAsync(repoRoot, ["worktree", "list", "--porcelain"])
+  const dirs = new Set<string>()
+  for (const line of out.split("\n")) {
+    if (!line.startsWith("worktree ")) continue
+    const dir = line.slice("worktree ".length).trim()
+    dirs.add(dir)
+    try { dirs.add(realpathSync(dir)) } catch { /* gone: prune drops it */ }
+  }
+  return dirs
+}
+
+/**
+ * Makes sure the session's worktree is checked out at `workdir`: a session born asleep (branch made
+ * at Send), or one whose folder was removed (merged, cleaned up). A fresh checkout gets what
+ * createWorktree's gets: the `.worktreeinclude` copies and the setup hook. A folder git doesn't list
+ * as a worktree, inside supermux's worktrees root, was left half-made by a crash: it is removed and
+ * made again. A registered worktree is never touched (live work).
+ */
 export async function ensureWorktreeAt(opts: {
   repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
-}): Promise<void> {
-  if (existsSync(opts.workdir)) return
+}): Promise<{ created: boolean }> {
+  if (existsSync(opts.workdir)) {
+    const registered = await registeredWorktrees(opts.repoRoot)
+    let real = opts.workdir
+    try { real = realpathSync(opts.workdir) } catch { /* keep the path */ }
+    if (registered.has(opts.workdir) || registered.has(real)) return { created: false }
+    if (!resolve(opts.workdir).startsWith(resolve(worktreesRoot()) + sep)) return { created: false }
+    log.warn("worktree_half_made_removed", { workdir: opts.workdir })
+    await rm(opts.workdir, { recursive: true, force: true })
+  }
+  await mkdir(dirname(opts.workdir), { recursive: true })
   await gitAsync(opts.repoRoot, ["worktree", "prune"])
   if ((await existingBranchNames(opts.repoRoot)).has(opts.sessionBranch)) {
-    // Branch survived (only the dir was removed) — check it out at the same path.
+    // The branch exists (made at Send, or only the dir was removed): check it out at the same path.
     await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch])
   } else {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
     await gitAsync(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch])
   }
+  await copyWorktreeIncludes(opts.repoRoot, opts.workdir)
+  await runSetupHook(opts.repoRoot, opts.workdir, opts.sessionBranch, opts.baseBranch)
+  return { created: true }
 }
 
 /** Copies the `.worktreeinclude` entries into the new worktree; returns how many it copied. */
