@@ -3,6 +3,9 @@
 What supermux needs from the operating system that Node and Bun do not give it, one rule per gap, tested on
 Linux, macOS and Windows. Anything the runtimes already do right is called directly instead.
 
+- `credentials.hasGenericCredential(service, account)`: whether the OS credential store holds a generic credential
+  (go-keyring's naming; Windows Credential Manager through Bun's ffi). Elsewhere, or without that ffi: `Unsupported`.
+
 - `proc.isAlive(pid)`: whether a process exists. `EPERM` (someone else's process) counts as alive.
 
 - `lock.singleInstance(name, scope)`: one instance per name and state directory, held by the kernel.
