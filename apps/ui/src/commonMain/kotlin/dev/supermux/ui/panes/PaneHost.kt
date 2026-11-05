@@ -1,7 +1,12 @@
 package dev.supermux.ui.panes
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,7 +14,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,17 +24,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
@@ -55,6 +59,7 @@ import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -66,17 +71,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import dev.supermux.ui.theme.Motion
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.layoutNodeAt
 import dev.supermux.workspace.moveViewToGroup
@@ -90,6 +95,7 @@ import dev.supermux.workspace.splitSizesByPath
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -299,23 +305,31 @@ fun PaneHost(
             content = content,
         )
         }
-        val g = drag.ghost
-        if (drag.isDragging && g != null && g.visible) {
-            PaneDragGhostChip(
-                label = g.label,
-                labelFont = labelFont,
-                widthPx = g.width,
-                heightPx = g.height,
-                modifier = Modifier
-                    .zIndex(20f)
-                    .offset {
-                        IntOffset(
-                            (g.x - hostRoot.x).toInt(),
-                            (g.y - hostRoot.y).toInt(),
-                        )
-                    }
-                    .testTag("tab-drag-ghost"),
-            )
+        // The tab being dragged, and one easing into its slot after a drop, drawn above every
+        // strip as the tab itself — so it reads as the same tab from press to landing.
+        val activeIds = remember(layout) { collectActiveViewIds(layout).toSet() }
+        val lifted: @Composable (String) -> Unit = { id ->
+            val state = TabSlotState(selected = id in activeIds, dragged = false)
+            tabSlot?.invoke(id, state) ?: DefaultTabChip(id, titleFor(id), state, labelFont, onCloseView)
+        }
+        val held = drag.ghost?.takeIf { drag.isDragging && it.visible }
+        val heldId = drag.draggingViewId
+        if (held != null && heldId != null) {
+            key(heldId) {
+                // Lifts off its strip as the drag starts, rather than popping up.
+                val lift = remember { Animatable(0f) }
+                LaunchedEffect(Unit) { lift.animateTo(1f, tween(durationMillis = 120)) }
+                LiftedTab(
+                    bounds = Rect(held.x, held.y, held.x + held.width, held.y + held.height),
+                    hostRoot = hostRoot,
+                    lift = lift.value,
+                    modifier = Modifier.testTag("tab-drag-ghost"),
+                ) { lifted(heldId) }
+            }
+        } else {
+            drag.settling?.let { settle ->
+                key(settle) { SettlingTab(settle, drag, hostRoot) { lifted(settle.viewId) } }
+            }
         }
     }
 }
@@ -326,45 +340,90 @@ private val PaneMinSize = 120.dp
 /** Quiet time after a whole-area resize before the re-fit is written to the tree. */
 private const val PaneFitCommitDelayMs = 300L
 
-/** Floating tab chip that follows the pointer during a drag. */
+/**
+ * A tab drawn above the strips at [bounds] (root px), lifted off its strip by [lift] (0 to 1): a
+ * shadow and a touch of scale, its corners rounding as it rises.
+ */
 @Composable
-private fun PaneDragGhostChip(
-    label: String,
-    labelFont: FontFamily,
-    widthPx: Float,
-    heightPx: Float,
+private fun LiftedTab(
+    bounds: Rect,
+    hostRoot: Offset,
+    lift: Float,
     modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
-    val cs = MaterialTheme.colorScheme
-    Surface(
-        modifier = modifier
-            .width(with(density) { widthPx.toDp() })
-            .height(with(density) { heightPx.toDp().coerceAtLeast(28.dp) }),
-        shape = RoundedCornerShape(6.dp),
-        tonalElevation = 6.dp,
-        shadowElevation = 10.dp,
-        border = BorderStroke(1.dp, cs.primary.copy(alpha = 0.45f)),
-        color = cs.surfaceContainerHigh,
+    Box(
+        Modifier
+            .zIndex(20f)
+            .offset { IntOffset((bounds.left - hostRoot.x).roundToInt(), (bounds.top - hostRoot.y).roundToInt()) }
+            .size(with(density) { DpSize(bounds.width.toDp(), bounds.height.toDp()) })
+            .graphicsLayer {
+                shadowElevation = TabLiftElevation.toPx() * lift
+                shape = RoundedCornerShape(TabLiftCorner * lift)
+                clip = true
+                scaleX = 1f + TabLiftScale * lift
+                scaleY = 1f + TabLiftScale * lift
+            }
+            // The caller's modifier (a test tag) on the tab where it is drawn.
+            .then(modifier),
+        propagateMinConstraints = true,
     ) {
-        Row(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = label,
-                color = cs.primary,
-                fontFamily = labelFont,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-        }
+        content()
     }
 }
+
+/**
+ * A tab just let go: drawn where it was ([TabSettle.from]) and eased, in one short motion, into the
+ * slot its strip now gives it — in this strip or another, or this window after a dock from
+ * another. A tab that lands in no strip here (moved to another workspace or window) stops being
+ * drawn.
+ */
+@Composable
+private fun SettlingTab(
+    settle: TabSettle,
+    drag: PaneDragController,
+    hostRoot: Offset,
+    content: @Composable () -> Unit,
+) {
+    val at = remember { Animatable(settle.from.topLeft, Offset.VectorConverter) }
+    val lift = remember { Animatable(1f) }
+    LaunchedEffect(Unit) {
+        val slot = awaitSlot(drag, settle.viewId)
+        if (slot != null) {
+            launch { lift.animateTo(0f, tabSettle()) }
+            at.animateTo(slot.topLeft, tabSettle())
+        }
+        drag.endSettle(settle)
+    }
+    LiftedTab(
+        bounds = Rect(at.value, settle.from.size),
+        hostRoot = hostRoot,
+        lift = lift.value,
+        modifier = Modifier.testTag("tab-drag-settle"),
+        content = content,
+    )
+}
+
+/** The slot [viewId]'s strip gives it once laid out after the drop: the next frame, or a few for a new strip. */
+private suspend fun awaitSlot(drag: PaneDragController, viewId: String): Rect? {
+    repeat(SettleWaitFrames) {
+        withFrameNanos { }
+        drag.slotOf(viewId)?.let { return it }
+    }
+    return null
+}
+
+/** A tab easing into its slot: one short motion, slowing as it lands. */
+private fun <T> tabSettle(): FiniteAnimationSpec<T> = tween(durationMillis = 180, easing = FastOutSlowInEasing)
+
+/** How long a dropped tab waits for a strip to lay out its slot before giving up on easing. */
+private const val SettleWaitFrames = 3
+
+/** A held tab's lift: its shadow, its corners and how much it grows. */
+private val TabLiftElevation = 8.dp
+private val TabLiftCorner = 8.dp
+private const val TabLiftScale = 0.02f
 
 /**
  * What a drop does, wherever it was resolved: the tree edit through [applyEdit], then
@@ -868,10 +927,13 @@ fun PaneTabStrip(
                 for (id in stableIds) {
                     key(id) {
                         val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
+                        // The held tab, and one settling after a drop, are drawn above the strips
+                        // (PaneHost): here their slot stays empty.
+                        val hidden = isDragged || dragState?.settling?.viewId == id
                         // Pin the dragged tab at its press-time slot so its coordinate
                         // system never rides the morph animation (that caused the
                         // reorder loop). Neighbours animate to live-order positions;
-                        // the ghost is the moving visual.
+                        // the lifted copy is the moving visual.
                         val targetX = if (isDragged) {
                             val pin = viewIds.indexOf(id).let {
                                 if (it >= 0) it else dragState?.dragOriginIndex ?: 0
@@ -883,11 +945,26 @@ fun PaneTabStrip(
                         }
                         val animatedX by animateFloatAsState(
                             targetValue = targetX,
-                            animationSpec = Motion.spatial(),
+                            // An empty slot jumps: nothing shows it moving, and the tab settling
+                            // into it must find it there.
+                            animationSpec = if (hidden) snap() else TabSlide,
                             label = "tab-morph-x-$id",
                         )
                         val selected = id == activeViewId
-                        val z = if (isDragged) 0f else 1f
+                        val z = if (hidden) 0f else 1f
+                        // Where this tab rests, for one settling into it: its drawn bounds less
+                        // the slide still to go. Published after every composition (a new slot
+                        // from a drop) and every placement (a slide moving it).
+                        val placed = remember { PlacedTab() }
+                        fun publishSlot() {
+                            val coords = placed.coords?.takeIf { it.isAttached } ?: return
+                            if (groupId.isEmpty()) return
+                            dragState?.registerSlot(groupId, id, coords.boundsInRoot().translate(targetX - animatedX, 0f))
+                        }
+                        SideEffect { publishSlot() }
+                        if (dragState != null && groupId.isNotEmpty()) {
+                            DisposableEffect(groupId, id) { onDispose { dragState.unregisterSlot(groupId, id) } }
+                        }
                         Box(
                             Modifier
                                 .zIndex(z)
@@ -898,9 +975,11 @@ fun PaneTabStrip(
                                 .fillMaxHeight()
                                 .onSizeChanged { tabWidthsPx[id] = it.width.toFloat() }
                                 .onGloballyPositioned { coords ->
+                                    placed.coords = coords
                                     if (groupId.isNotEmpty()) {
                                         dragState?.registerTab(groupId, id, coords.boundsInRoot())
                                     }
+                                    publishSlot()
                                 }
                                 .then(
                                     if (dragState != null && groupId.isNotEmpty()) {
@@ -922,7 +1001,7 @@ fun PaneTabStrip(
                                         Modifier.clickable { onSelect(id) }
                                     },
                                 )
-                                // Fully hide the source slot — ghost is the moving tab.
+                                // Fully hide the source slot — the lifted copy is the moving tab.
                                 // Keeping a dimmed chip that also translated was feeding
                                 // pointer local-coords and looping the live order.
                                 //
@@ -932,12 +1011,12 @@ fun PaneTabStrip(
                                 // 0.14α primary tint painted at the source slot, because
                                 // Modifier.alpha only fades what is inner to it. "Fully hide"
                                 // above was always the intent; it is now also the behaviour.
-                                .alpha(if (isDragged) 0f else 1f)
+                                .alpha(if (hidden) 0f else 1f)
                                 .testTag("view-tab-$id"),
                             // The 56 dp minimum must reach the slot, or its background stops short.
                             propagateMinConstraints = true,
                         ) {
-                            tabSlot(id, TabSlotState(selected = selected, dragged = isDragged))
+                            tabSlot(id, TabSlotState(selected = selected, dragged = hidden))
                         }
                     }
                 }
@@ -946,7 +1025,7 @@ fun PaneTabStrip(
                     val caretX = targetXForIndex(insertAt.coerceIn(0, displayIds.size))
                     val animatedCaretX by animateFloatAsState(
                         targetValue = caretX,
-                        animationSpec = Motion.spatial(),
+                        animationSpec = TabSlide,
                         label = "tab-insert-caret-x",
                     )
                     TabInsertCaret(
@@ -960,7 +1039,7 @@ fun PaneTabStrip(
                     val addTargetX = targetXForIndex(displayIds.size)
                     val animatedAddX by animateFloatAsState(
                         targetValue = addTargetX,
-                        animationSpec = Motion.spatial(),
+                        animationSpec = TabSlide,
                         label = "tab-add-x",
                     )
                     Box(
@@ -1177,6 +1256,14 @@ private fun outsideWindow(p: Offset, size: IntSize, margin: Float): Boolean =
  * a window as the pointer wobbles across the line.
  */
 private val TearOffMargin = 16.dp
+
+/** A tab giving way to the held one, or closing a gap: quick, and never past its slot. */
+private val TabSlide = Motion.stateChange<Float>()
+
+/** Where a tab was last placed, for [PaneTabStrip]'s slot bookkeeping. */
+private class PlacedTab {
+    var coords: LayoutCoordinates? = null
+}
 
 /** How close to a strip's end a held drag starts scrolling it, and its fastest step per frame. */
 private val StripAutoScrollEdge = 40.dp

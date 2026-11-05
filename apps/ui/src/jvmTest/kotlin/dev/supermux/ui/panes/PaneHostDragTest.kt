@@ -4,6 +4,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.font.FontFamily
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -33,7 +35,7 @@ class PaneHostDragTest {
         setContent {
             PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
-        onNodeWithTag("view-tab-a").mouseDragBy(Offset(120f, 0f))
+        onNodeWithTag("view-tab-a").mouseDragBy(Offset(onePlaceRight("a", "b"), 0f))
         assertEquals(listOf("b", "a", "c"), (tree as LayoutNode.Group).viewIds)
     }
 
@@ -166,10 +168,11 @@ class PaneHostDragTest {
         waitForIdle()
 
         // An ordinary same-strip reorder inside the workspace now on screen.
+        val onePlace = onePlaceRight("x", "y")
         onNodeWithTag("view-tab-x").performMouseInput {
             moveTo(Offset(10f, 12f))
             press()
-            moveBy(Offset(140f, 0f))
+            moveBy(Offset(onePlace, 0f))
             release()
         }
 
@@ -209,9 +212,10 @@ class PaneHostDragTest {
             PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         val tab = onNodeWithTag("view-tab-a")
+        val half = onePlaceRight("a", "b") / 2f
         tab.performTouchInput { down(center) }
         mainClock.advanceTimeBy(1_000)
-        tab.performTouchInput { moveBy(Offset(60f, 0f)); moveBy(Offset(60f, 0f)); up() }
+        tab.performTouchInput { moveBy(Offset(half, 0f)); moveBy(Offset(half, 0f)); up() }
         assertEquals(listOf("b", "a", "c"), (tree as LayoutNode.Group).viewIds)
     }
 
@@ -220,9 +224,10 @@ class PaneHostDragTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "a")
         setContent { MenuStrip(tree) { tree = it } }
         val tab = onNodeWithTag("view-tab-a")
+        val half = onePlaceRight("a", "b") / 2f
         tab.performTouchInput { down(center) }
         mainClock.advanceTimeBy(1_000)
-        tab.performTouchInput { moveBy(Offset(60f, 0f)); moveBy(Offset(60f, 0f)); up() }
+        tab.performTouchInput { moveBy(Offset(half, 0f)); moveBy(Offset(half, 0f)); up() }
         waitForIdle()
         onNodeWithTag("tab-menu-new-window-a").assertDoesNotExist()
         assertEquals(listOf("b", "a", "c"), (tree as LayoutNode.Group).viewIds)
@@ -316,6 +321,136 @@ class PaneHostDragTest {
         assertEquals(PaneDropTarget.Reorder("g", "a", 2), d.finish())
     }
 
+    // ── Reorder feel: the tab you hold is the tab you see, and it lands where you let go ──
+
+    @Test
+    fun aWideNeighbourIsPassedOnlyOnceTheTabsCentreCrossesItsMiddle() {
+        // a (100) then a 300-wide b: b's middle is 250, so a's centre (50) has to travel 200.
+        val d = PaneDragController()
+        d.registerStrip("g", Rect(0f, 0f, 600f, 32f))
+        d.registerPane("g", Rect(0f, 32f, 600f, 600f))
+        d.registerTab("g", "a", Rect(0f, 0f, 100f, 32f))
+        d.registerTab("g", "b", Rect(100f, 0f, 400f, 32f))
+        d.registerTab("g", "c", Rect(400f, 0f, 500f, 32f))
+        val start = Offset(50f, 16f)
+        d.begin("a", "g", start, listOf("a", "b", "c"), "a", Rect(0f, 0f, 100f, 32f))
+        d.updatePointer(Offset(240f, 16f), start, PANE_DRAG_THRESHOLD_PX)
+        assertEquals(listOf("a", "b", "c"), d.liveOrder, "a slot-sized move is not past a wide tab")
+        d.updatePointer(Offset(260f, 16f), start, PANE_DRAG_THRESHOLD_PX)
+        assertEquals(listOf("b", "a", "c"), d.liveOrder)
+        assertEquals(PaneDropTarget.Reorder("g", "a", 1), d.finish())
+    }
+
+    @Test
+    fun overItsOwnStripTheHeldTabStaysInTheStripRowAndFollowsThePointerSideways() {
+        val d = draggingFromStrip(Offset(180f, 20f))
+        val g = assertNotNull(d.ghost)
+        assertEquals(130f, g.x, "the pointer still holds it 50 px in")
+        assertEquals(0f, g.y, "in the strip's row, however the pointer wobbles")
+        d.updatePointer(Offset(390f, 16f), Offset(50f, 16f), PANE_DRAG_THRESHOLD_PX)
+        assertEquals(300f, d.ghost!!.x, "never past the strip's end")
+    }
+
+    @Test
+    fun offItsStripTheHeldTabFollowsThePointerFreely() {
+        val d = draggingFromStrip(Offset(180f, 300f))
+        assertEquals(Offset(130f, 284f), Offset(d.ghost!!.x, d.ghost!!.y))
+    }
+
+    @Test
+    fun releasingRecordsWhereTheTabWasSoItSettlesFromThere() {
+        val d = draggingFromStrip(Offset(180f, 20f))
+        d.finish()
+        assertEquals(TabSettle("a", "a", Rect(130f, 0f, 230f, 32f)), d.settling)
+        assertNull(d.ghost)
+    }
+
+    @Test
+    fun aNewDragEndsTheLastOnesSettling() {
+        val d = draggingFromStrip(Offset(180f, 20f))
+        d.finish()
+        d.begin("b", "g", Offset(150f, 16f), listOf("a", "b", "c", "d"), "b", Rect(100f, 0f, 200f, 32f))
+        assertNull(d.settling)
+    }
+
+    @Test
+    fun aDroppedTabSettlesIntoItsSlotFromWhereItWasLetGo() = runComposeUiTest {
+        var tree: LayoutNode by mutableStateOf(LayoutNode.Group("g1", listOf("a", "b", "c"), "a"))
+        setContent {
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+        }
+        val before = onNodeWithTag("view-tab-a").fetchSemanticsNode().boundsInRoot
+        mainClock.autoAdvance = false
+        onNodeWithTag("view-tab-a").performMouseInput {
+            moveTo(center); press(); moveBy(Offset(30f, 0f)); moveBy(Offset(300f, 4f))
+        }
+        mainClock.advanceTimeByFrame()
+        val held = onNodeWithTag("tab-drag-ghost").fetchSemanticsNode().boundsInRoot
+        assertEquals(before.center.x + 330f, held.center.x, 2f, "the held tab follows the pointer 1:1")
+        assertEquals(before.center.y, held.center.y, 2f, "and stays in the strip's row")
+
+        onNodeWithTag("view-tab-a").performMouseInput { release() }
+        mainClock.advanceTimeByFrame()
+        val settling = onNodeWithTag("tab-drag-settle").fetchSemanticsNode().boundsInRoot
+        assertEquals(held.center.x, settling.center.x, 2f, "it settles from where it was let go, not from its old slot")
+
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertEquals(listOf("b", "c", "a"), (tree as LayoutNode.Group).viewIds)
+        assertEquals(0, onAllNodesWithTag("tab-drag-settle").fetchSemanticsNodes().size)
+        val c = onNodeWithTag("view-tab-c").fetchSemanticsNode().boundsInRoot
+        val landed = onNodeWithTag("view-tab-a").fetchSemanticsNode().boundsInRoot
+        assertEquals(c.right, landed.left, 1f, "and ends in its slot, after c")
+    }
+
+    @Test
+    fun aTabDockedOnAnotherStripSettlesThereFromWhereItWasLetGo() = runComposeUiTest {
+        var tree: LayoutNode by mutableStateOf(
+            LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+                LayoutNode.Group("g1", listOf("a", "b"), "a"),
+                LayoutNode.Group("g2", listOf("c"), "c"),
+            )),
+        )
+        setContent {
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+        }
+        val c = onNodeWithTag("view-tab-c").fetchSemanticsNode().boundsInRoot
+        val a = onNodeWithTag("view-tab-a").fetchSemanticsNode().boundsInRoot
+        mainClock.autoAdvance = false
+        // Node-local coordinates: onto the right pane's strip, well past c.
+        onNodeWithTag("view-tab-a").performMouseInput {
+            moveTo(center); press(); moveBy(Offset(30f, 0f))
+            moveTo(Offset(c.right + 300f - a.left, c.center.y - a.top))
+        }
+        mainClock.advanceTimeByFrame()
+        val held = onNodeWithTag("tab-drag-ghost").fetchSemanticsNode().boundsInRoot
+        onNodeWithTag("view-tab-a").performMouseInput { release() }
+        mainClock.advanceTimeByFrame()
+        assertEquals(held.center.x, onNodeWithTag("tab-drag-settle").fetchSemanticsNode().boundsInRoot.center.x, 2f)
+
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertEquals(listOf("c", "a"), ((tree as LayoutNode.Split).children[1] as LayoutNode.Group).viewIds)
+        assertEquals(0, onAllNodesWithTag("tab-drag-settle").fetchSemanticsNodes().size)
+        assertEquals(c.right, onNodeWithTag("view-tab-a").fetchSemanticsNode().boundsInRoot.left, 1f)
+    }
+
+    @Test
+    fun aTabLetGoOnNothingSettlesBackIntoItsOwnSlot() = runComposeUiTest {
+        var tree: LayoutNode by mutableStateOf(LayoutNode.Group("g1", listOf("a", "b"), "a"))
+        setContent {
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+        }
+        val before = onNodeWithTag("view-tab-b").fetchSemanticsNode().boundsInRoot
+        // Far below the window: no drop target, and no host to tear it off to.
+        onNodeWithTag("view-tab-b").performMouseInput { moveTo(center); press(); moveBy(Offset(0f, 40f)); moveBy(Offset(0f, 5_000f)); release() }
+        waitForIdle()
+        assertEquals(LayoutNode.Group("g1", listOf("a", "b"), "a"), tree)
+        assertEquals(0, onAllNodesWithTag("tab-drag-settle").fetchSemanticsNodes().size)
+        assertEquals(before.left, onNodeWithTag("view-tab-b").fetchSemanticsNode().boundsInRoot.left, 1f)
+        onNodeWithTag("view-tab-b").assertIsDisplayed()
+    }
+
     /** A controller mid-drag of tab "a" (100 px slots, a b c d) in group "g", pointer at [pointer]. */
     private fun draggingFromStrip(pointer: Offset): PaneDragController {
         val d = PaneDragController()
@@ -341,6 +476,17 @@ private fun androidx.compose.ui.test.ComposeUiTest.nearRightEdge(tag: String): O
     val root = onRoot().fetchSemanticsNode().boundsInRoot
     val node = onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
     return Offset(root.right - 10f - node.left, root.height / 2f - node.top)
+}
+
+/**
+ * How far right to drag [from]'s tab for its centre to just pass the middle of [past], its right
+ * neighbour: one place, by the tabs' real widths, and not as far as the tab after.
+ */
+@OptIn(ExperimentalTestApi::class)
+private fun androidx.compose.ui.test.ComposeUiTest.onePlaceRight(from: String, past: String): Float {
+    val a = onNodeWithTag("view-tab-$from").fetchSemanticsNode().boundsInRoot
+    val b = onNodeWithTag("view-tab-$past").fetchSemanticsNode().boundsInRoot
+    return b.center.x - a.center.x + 6f
 }
 
 /** A mouse press on this node's centre, a drag by [by], and a release. */
