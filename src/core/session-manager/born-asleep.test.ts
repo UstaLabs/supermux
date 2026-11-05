@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { execFileSync } from "child_process"
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join, sep } from "path"
 import { openDb, runMigrations } from "../storage/db"
@@ -15,10 +15,8 @@ import { AgentKind } from "../../shared/agents"
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-// The real path, as the repo's root comes back from git: on Windows the temp folder can be an 8.3 short name
-// (C:\Users\RUNNER~1\…) that git and realpath spell long, and the worktree's folder is named from that spelling.
 function tmp(prefix: string): string {
-  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+  const d = mkdtempSync(join(tmpdir(), prefix))
   dirs.push(d)
   return d
 }
@@ -56,12 +54,15 @@ function setup() {
 test("a worktree start: an asleep row with its future worktree, branch and home, and no folder yet", async () => {
   const { registry, deps, stateDir } = setup()
   const root = repo()
+  // The repo's root as git names it, which the row and its worktree's folder are made from. On Windows the temp folder
+  // can be an 8.3 short name (C:\Users\RUNNER~1\…) that git spells long, so the slug is not the one of `root`.
+  const top = (await getRepoInfo(root)).repoRoot!
   const s = await createAsleep(deps, { workdir: root, requestedName: "Fix login", agent: AgentKind.Codex, model: "gpt-5", reasoningLevel: "high", permissionMode: "auto", account: "codex-team" })
   expect(s.status).toBe("suspended")
   expect(s.connected).toBe(false)
-  expect(s.workdir.startsWith(join(worktreesRoot(), repoSlug(root)) + sep)).toBe(true)
+  expect(s.workdir.startsWith(join(worktreesRoot(), repoSlug(top)) + sep)).toBe(true)
   expect(existsSync(s.workdir)).toBe(false)
-  expect(s).toMatchObject({ name: "Fix login", agent: "codex", model: "gpt-5", reasoningLevel: "high", account: "codex-team", repo_root: root, base_branch: "main", session_branch: "mux/fix-login", core: true })
+  expect(s).toMatchObject({ name: "Fix login", agent: "codex", model: "gpt-5", reasoningLevel: "high", account: "codex-team", repo_root: top, base_branch: "main", session_branch: "mux/fix-login", core: true })
   expect(s.agent_home).toBe(join(stateDir, "agents", "codex", homeDirName("Fix login")))
   expect((await existingBranchNames(root)).has("mux/fix-login")).toBe(true)
   expect(registry.sessions.getById(s.id)?.status).toBe("suspended")
