@@ -190,16 +190,36 @@ test("a branch made at Send is checked out at wake with the includes copied and 
   await removeWorktree(repo, workdir, "mux/born")
 })
 
-test("a half-made folder left by a crash (not a registered worktree) is removed and made again", async () => {
+test("an empty folder left by a crash is removed and the worktree made in its place", async () => {
   const repo = tmpRepo()
   await createSessionBranch(repo, "mux/half", "main")
   const workdir = join(worktreesRoot(), repoSlug(repo), "half-uuid")
   mkdirSync(workdir, { recursive: true })
-  writeFileSync(join(workdir, "partial"), "x")
   expect(await ensureWorktreeAt({ repoRoot: repo, workdir, sessionBranch: "mux/half", baseBranch: "main" })).toEqual({ created: true })
-  expect(existsSync(join(workdir, "partial"))).toBe(false)
+  expect(branchOf(workdir)).toBe("mux/half")
   expect(readFileSync(join(workdir, "f.txt"), "utf-8")).toBe("hi")
   await removeWorktree(repo, workdir, "mux/half")
+})
+
+test("a folder with something in it is never removed, even one git doesn't list: it may hold work", async () => {
+  const repo = tmpRepo()
+  await createSessionBranch(repo, "mux/kept", "main")
+  const workdir = join(worktreesRoot(), repoSlug(repo), "kept-uuid")
+  mkdirSync(workdir, { recursive: true })
+  writeFileSync(join(workdir, "notes.txt"), "uncommitted work")
+  expect(await ensureWorktreeAt({ repoRoot: repo, workdir, sessionBranch: "mux/kept", baseBranch: "main" })).toEqual({ created: false })
+  expect(readFileSync(join(workdir, "notes.txt"), "utf-8")).toBe("uncommitted work")
+})
+
+test("a session folder whose repo is gone is used as it is (no git call can fail the start)", async () => {
+  const repo = tmpRepo()
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "orphan" })
+  writeFileSync(join(h.worktreeDir, "work.txt"), "still here")
+  const gone = repo + "-moved"
+  execFileSync("mv", [repo, gone])
+  expect(await ensureWorktreeAt({ repoRoot: repo, workdir: h.worktreeDir, sessionBranch: h.sessionBranch, baseBranch: "main" })).toEqual({ created: false })
+  expect(readFileSync(join(h.worktreeDir, "work.txt"), "utf-8")).toBe("still here")
+  execFileSync("rm", ["-rf", gone, h.worktreeDir])
 })
 
 test("a healthy worktree is left alone: nothing is copied or run again", async () => {

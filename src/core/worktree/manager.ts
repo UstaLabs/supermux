@@ -1,5 +1,5 @@
 // src/core/worktree/manager.ts
-import { existsSync, readFileSync, realpathSync } from "fs"
+import { existsSync, readFileSync, readdirSync } from "fs"
 import { cp, mkdir, rm } from "fs/promises"
 import { basename, dirname, join, resolve, sep } from "path"
 import { createHash, randomUUID } from "crypto"
@@ -81,36 +81,20 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
   await gitAsync(repoRoot, ["branch", branch, base])
 }
 
-/** The folders `git worktree list` knows for this repo (real paths). */
-async function registeredWorktrees(repoRoot: string): Promise<Set<string>> {
-  const out = await gitAsync(repoRoot, ["worktree", "list", "--porcelain"])
-  const dirs = new Set<string>()
-  for (const line of out.split("\n")) {
-    if (!line.startsWith("worktree ")) continue
-    const dir = line.slice("worktree ".length).trim()
-    dirs.add(dir)
-    try { dirs.add(realpathSync(dir)) } catch { /* gone: prune drops it */ }
-  }
-  return dirs
-}
-
 /**
  * Makes sure the session's worktree is checked out at `workdir`: a session born asleep (branch made
  * at Send), or one whose folder was removed (merged, cleaned up). A fresh checkout gets what
- * createWorktree's gets: the `.worktreeinclude` copies and the setup hook. A folder git doesn't list
- * as a worktree, inside supermux's worktrees root, was left half-made by a crash: it is removed and
- * made again. A registered worktree is never touched (live work).
+ * createWorktree's gets: the `.worktreeinclude` copies and the setup hook. A folder with anything in
+ * it is used as it is, never removed: it may hold work. Only an empty one inside supermux's
+ * worktrees root (a crash before the checkout) is removed and made again.
  */
 export async function ensureWorktreeAt(opts: {
   repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
 }): Promise<{ created: boolean }> {
   if (existsSync(opts.workdir)) {
-    const registered = await registeredWorktrees(opts.repoRoot)
-    let real = opts.workdir
-    try { real = realpathSync(opts.workdir) } catch { /* keep the path */ }
-    if (registered.has(opts.workdir) || registered.has(real)) return { created: false }
+    if (readdirSync(opts.workdir).length > 0) return { created: false }
     if (!resolve(opts.workdir).startsWith(resolve(worktreesRoot()) + sep)) return { created: false }
-    log.warn("worktree_half_made_removed", { workdir: opts.workdir })
+    log.warn("worktree_empty_folder_removed", { workdir: opts.workdir })
     await rm(opts.workdir, { recursive: true, force: true })
   }
   await mkdir(dirname(opts.workdir), { recursive: true })
