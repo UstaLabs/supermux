@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { applyConfig, resumeGrokSession, spawn } from "./session"
+import { applyConfig, resumeGrokSession, resume, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createGrokCoreHost, type GrokCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -401,4 +401,27 @@ describe("grok core spawn/resume dialect", () => {
     await r2.adapter.stop()
     await r3.adapter.stop()
   })
+})
+
+// Card #75: a session is born asleep and its first start is a resume of a row that never ran.
+test("grok: resume of a never-started row starts fresh under the row's account", async () => {
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const accounts: unknown[] = []
+    const register = host.register.bind(host)
+    host.register = ((r: Parameters<typeof register>[0]) => {
+      accounts.push(r.account)
+      const { account: _skip, ...rest } = r
+      return register(rest)
+    }) as typeof host.register
+    const workdir = mkdtempSync(join(tmpdir(), "mux-grok-born-"))
+    dirs.push(workdir)
+    const { adapter } = await resume(
+      { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, grokHost: host },
+      { id: "born-asleep", workdir, agent_home: join(workdir, ".home"), account: "acc-grok" } as never,
+      "born-asleep",
+    )
+    expect(accounts).toEqual(["acc-grok"])
+    expect(child.opens.at(-1)?.resumeId).toBeUndefined()
+    await adapter.stop()
 })

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, existsSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { applyConfig, resumeCursorSession, spawn } from "./session"
+import { applyConfig, resumeCursorSession, resume, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createCursorCoreHost, type CursorCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -344,4 +344,27 @@ describe("a login Cursor refuses", () => {
     expect(usage.unavailable("cursor:system")).toBeUndefined()
     expect(changed).toBe(0)
   })
+})
+
+// Card #75: a session is born asleep and its first start is a resume of a row that never ran.
+test("cursor: resume of a never-started row starts fresh under the row's account", async () => {
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const accounts: unknown[] = []
+    const register = host.register.bind(host)
+    host.register = ((r: Parameters<typeof register>[0]) => {
+      accounts.push(r.account)
+      const { account: _skip, ...rest } = r
+      return register(rest)
+    }) as typeof host.register
+    const workdir = mkdtempSync(join(tmpdir(), "mux-cursor-born-"))
+    dirs.push(workdir)
+    const { adapter } = await resume(
+      { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, cursorHost: host },
+      { id: "born-asleep", workdir, agent_home: join(workdir, ".home"), account: "acc-cursor" } as never,
+      "born-asleep",
+    )
+    expect(accounts).toEqual(["acc-cursor"])
+    expect(child.opens.at(-1)?.resumeId).toBeUndefined()
+    await adapter.stop()
 })

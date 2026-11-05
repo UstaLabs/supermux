@@ -1592,7 +1592,7 @@ export class SessionManager {
   }
 
   /** Suspended → live (lazy, triggered by the next inbound message). */
-  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean }): Promise<boolean> {
+  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean; account?: string | null }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     let resumedRuntimePid: number | null = null
     this.resumeFailures.delete(session.id)
@@ -1611,7 +1611,7 @@ export class SessionManager {
         await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, session.name)
         this.registry.sessions.setCore(session.id, true)
         this.registry.sessions.setAgentHome(session.id, agentHome)
-      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+      } else if (session.agent === "codex" && session.agent_home) {
         await this.ports.resume.bind(session.id)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, session.name)
       } else if (session.agent === "cursor" && session.agent_home) {
@@ -1688,7 +1688,7 @@ export class SessionManager {
         await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, name)
         this.registry.sessions.setCore(sessionId, true)
         this.registry.sessions.setAgentHome(sessionId, agentHome)
-      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+      } else if (session.agent === "codex" && session.agent_home) {
         await this.ports.resume.bind(sessionId)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, name)
       } else if (session.agent === "cursor" && session.agent_home) {
@@ -1822,14 +1822,15 @@ export class SessionManager {
         log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
       }
     } else if (s.agent === "codex") {
-      if (!s.agent_session_id || !s.agent_home) {
-        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
+      // No thread yet (born asleep, card #75) is a fresh start, as for the other kinds.
+      if (!s.agent_home) {
+        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_home" })
         return
       }
       try {
         await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
         if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
+        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id ?? "(fresh)" })
       } catch (err: any) {
         log.warn("codex_resume_failed", { name: s.name, err: String(err) })
       }
