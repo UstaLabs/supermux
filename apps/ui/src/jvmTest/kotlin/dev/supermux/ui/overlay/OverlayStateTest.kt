@@ -96,4 +96,33 @@ class OverlayStateTest {
         assertFalse(doubleTapWanted(screenAllowed = true, chatOpen = false, asking = true, talking = false))
         assertFalse(doubleTapWanted(screenAllowed = true, chatOpen = false, asking = false, talking = true))
     }
+
+    // The reply bubble's place and the room "Read it all" can grow into (pixels).
+    private fun space(headTop: Float) = bubbleSpace(
+        headTop = headTop, headSize = 150f, screenHeight = 2500f, topInset = 100f, bottomInset = 60f, gap = 10f, margin = 30f,
+    )
+
+    @Test fun aLowHeadKeepsItsBubbleAboveWithTheRoomUpToTheStatusBar() {
+        val s = space(headTop = 1600f)
+        assertFalse(s.below)
+        assertEquals(1600f - 10f - 100f - 30f, s.room)
+    }
+
+    @Test fun aHeadHighOnTheScreenPutsItsBubbleBelowWithTheRoomDownToTheNavigationBar() {
+        val s = space(headTop = 400f)
+        assertTrue(s.below)
+        assertEquals(2500f - 60f - 30f - (400f + 150f + 10f), s.room)
+    }
+
+    @Test fun theRoomIsNeverNegative() {
+        // A head squeezed under the status bar of a short screen: no room at all, not less than none.
+        val s = bubbleSpace(headTop = 120f, headSize = 150f, screenHeight = 300f, topInset = 100f, bottomInset = 60f, gap = 10f, margin = 30f)
+        assertFalse(s.below)
+        assertEquals(0f, s.room)
+    }
+
+    @Test fun theLinesThatFitAreWholeLinesAndAtLeastThree() {
+        assertEquals(10, linesThatFit(roomPx = 520f, linePx = 50f))
+        assertEquals(3, linesThatFit(roomPx = 40f, linePx = 50f))
+    }
 }

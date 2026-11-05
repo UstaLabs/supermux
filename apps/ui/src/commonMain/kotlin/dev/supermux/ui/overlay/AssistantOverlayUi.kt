@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -207,6 +209,10 @@ class OverlayUiState {
     var reply by mutableStateOf<OverlayReply?>(null)
     var replyShown by mutableIntStateOf(0)
     var replyFolded by mutableStateOf(false)
+    /** "Read it all": the reply shows whole, as tall as [bubbleRoom] lets it; it doesn't fold away meanwhile. */
+    var replyExpanded by mutableStateOf(false)
+    /** How tall the bubble may grow where it is now, between the head and the screen's edge (set by the host). */
+    var bubbleRoom by mutableStateOf(320.dp)
     var pressed by mutableStateOf(false)
     var chatOpen by mutableStateOf(false)
     var dragging by mutableStateOf(false)
@@ -255,7 +261,8 @@ private const val THINKING_MAX_MS = 90_000L
 
 /**
  * Pops the bubble when the Agent replies (unless its chat is open), types it out while the avatar
- * speaks, then folds it into the count after a while. Hosted once, in the head's composition.
+ * speaks, then folds it into the count after a while (not while you read it all). Hosted once, in the
+ * head's composition.
  */
 @Composable
 fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) {
@@ -268,6 +275,7 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
             ui.reply = OverlayReply(ev.entry.id, agent.name, text)
             ui.replyShown = 0
             ui.replyFolded = false
+            ui.replyExpanded = false
             ui.thinking = false
         }
     }
@@ -284,6 +292,11 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
         }
         ui.levelTarget = 0f
         ui.replyShown = r.text.length
+    }
+    // Typed out, it folds into the count after a while, unless you are reading it all.
+    val typed = reply != null && ui.replyShown >= reply.text.length
+    LaunchedEffect(reply?.id, typed, ui.replyExpanded) {
+        if (!typed || ui.replyExpanded) return@LaunchedEffect
         delay(7_000)
         ui.replyFolded = true
     }
@@ -558,13 +571,15 @@ fun GlassesGlyph(color: Color, modifier: Modifier = Modifier) {
 
 /**
  * The bubble above the head: the reply typing out, the words you are saying (with how to lock or
- * cancel), or the lock's Send / Cancel. [onOpen] opens the chat; [onSendLocked]/[onCancelLocked] end a
- * locked recording.
+ * cancel), or the lock's Send / Cancel. [onOpen] opens the chat; [onClose] puts the reply away (its ✕);
+ * [onSendLocked]/[onCancelLocked] end a locked recording. A long reply's "Read it all" shows the rest
+ * right there, as tall as [OverlayUiState.bubbleRoom] allows; if even that isn't enough, "Open in chat".
  */
 @Composable
 fun OverlayBubble(
     ui: OverlayUiState,
     onOpen: () -> Unit,
+    onClose: () -> Unit,
     onSendLocked: () -> Unit,
     onCancelLocked: () -> Unit,
     maxWidth: Dp,
@@ -643,19 +658,81 @@ fun OverlayBubble(
             ui.reply != null -> {
                 val r = ui.reply!!
                 val cut = r.text.length > BUBBLE_CHARS
-                BubbleBox(shape, cs.surfaceContainerHigh, Modifier.clickable(onClick = onOpen)) {
-                    Text(r.from, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        r.text.take(ui.replyShown.coerceAtMost(BUBBLE_CHARS)) + if (cut && !ui.speaking) "…" else "",
-                        color = cs.onSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (cut && !ui.speaking) {
-                        Text("Read it all", color = cs.primary, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                BubbleBox(shape, cs.surfaceContainerHigh, Modifier.clickable(onClick = onOpen).testTag("overlay_reply")) {
+                    // As wide as its words, with the ✕ at the far end.
+                    Column(Modifier.width(IntrinsicSize.Max)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                r.from,
+                                color = cs.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Box(
+                                Modifier.padding(start = 8.dp).offset(x = 6.dp).size(28.dp).clip(CircleShape)
+                                    .clickable(onClickLabel = "Close", onClick = onClose).testTag("overlay_reply_close"),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) }
+                        }
+                        if (ui.replyExpanded) {
+                            ReplyInFull(r.text, ui.bubbleRoom, onOpen)
+                        } else {
+                            Text(
+                                r.text.take(ui.replyShown.coerceAtMost(BUBBLE_CHARS)) + if (cut && !ui.speaking) "…" else "",
+                                color = cs.onSurface,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (cut && !ui.speaking) {
+                                Text(
+                                    "Read it all",
+                                    color = cs.primary,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp))
+                                        .clickable { ui.replyExpanded = true }.testTag("overlay_reply_more"),
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** What the bubble keeps for itself around a reply read in full: its padding, the name row, "Open in chat". */
+private val REPLY_CHROME = 100.dp
+
+/**
+ * A reply read in full, in the [room] the bubble has: whole if it fits; otherwise as much as fits, and
+ * "Open in chat" for the rest.
+ */
+@Composable
+private fun ReplyInFull(text: String, room: Dp, onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val style = MaterialTheme.typography.bodyMedium
+    val density = LocalDensity.current
+    val lines = with(density) {
+        val line = if (style.lineHeight.isSp) style.lineHeight.toPx() else style.fontSize.toPx() * 1.4f
+        linesThatFit((room - REPLY_CHROME).toPx(), line)
+    }
+    var cutShort by remember(text, lines) { mutableStateOf(false) }
+    Text(
+        text,
+        color = cs.onSurface,
+        style = style,
+        maxLines = lines,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { cutShort = it.hasVisualOverflow },
+        modifier = Modifier.testTag("overlay_reply_full"),
+    )
+    if (cutShort) {
+        Text(
+            "Open in chat",
+            color = cs.primary,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
+        )
     }
 }
 

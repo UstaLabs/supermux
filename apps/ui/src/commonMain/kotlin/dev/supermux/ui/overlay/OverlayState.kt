@@ -103,3 +103,21 @@ private const val READ_LINE_MS = 1_700L
  */
 fun doubleTapWanted(screenAllowed: Boolean, chatOpen: Boolean, asking: Boolean, talking: Boolean): Boolean =
     screenAllowed && !chatOpen && !asking && !talking
+
+/** Where the reply bubble goes, and how tall it may grow when you read it all (pixels). */
+data class BubbleSpace(val below: Boolean, val room: Float)
+
+/**
+ * The bubble sits above the head, or below it when the head is in the top 30% of the screen. Its room
+ * runs from the head ([gap] away) up to the status bar, or down to the navigation bar, less [margin].
+ */
+fun bubbleSpace(
+    headTop: Float, headSize: Float, screenHeight: Float, topInset: Float, bottomInset: Float, gap: Float, margin: Float,
+): BubbleSpace {
+    val below = headTop < screenHeight * 0.3f
+    val room = if (below) screenHeight - bottomInset - margin - (headTop + headSize + gap) else headTop - gap - topInset - margin
+    return BubbleSpace(below, room.coerceAtLeast(0f))
+}
+
+/** Whole lines of [linePx] that fit in [roomPx]; never fewer than three. */
+fun linesThatFit(roomPx: Float, linePx: Float): Int = maxOf(3, (roomPx / linePx).toInt())

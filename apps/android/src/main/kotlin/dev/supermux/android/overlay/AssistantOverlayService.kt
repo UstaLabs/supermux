@@ -109,6 +109,7 @@ import dev.supermux.ui.overlay.OverlayUndo
 import dev.supermux.ui.overlay.OverlayUiState
 import dev.supermux.ui.overlay.OverlayVoice
 import dev.supermux.ui.overlay.Spot
+import dev.supermux.ui.overlay.bubbleSpace
 import dev.supermux.ui.overlay.doubleTapWanted
 import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.overlayChoiceToStore
@@ -496,11 +497,15 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         val p = bubble.params
         val hp = head.params
         val headTop = hp.y + px(4).toInt()
-        val below = headTop < s.height * 0.3f
+        val gap = px(6)
+        val space = bubbleSpace(headTop.toFloat(), headPx(), s.height, s.topInset, s.bottomInset, gap, px(MARGIN_DP))
+        val below = space.below
+        // Anchored by the edge next to the head, so a reply read in full grows away from it, into this room.
+        ui.bubbleRoom = (space.room / windowContext.resources.displayMetrics.density).dp
         val edge = if (ui.edge == Edge.Left) Gravity.START else Gravity.END
         p.gravity = (if (below) Gravity.TOP else Gravity.BOTTOM) or edge
         p.x = px(MARGIN_DP).toInt()
-        p.y = if (below) headTop + headPx().toInt() + px(6).toInt() else s.height.toInt() - headTop + px(4).toInt()
+        p.y = if (below) headTop + headPx().toInt() + gap.toInt() else s.height.toInt() - headTop + gap.toInt()
         val touchable = ui.locked || (!ui.listening && !ui.finishing && ui.reply != null)
         p.flags = if (touchable) p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         else p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -560,10 +565,20 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         OverlayBubble(
             ui,
             onOpen = { openChat() },
+            onClose = { closeReply() },
             onSendLocked = { endTalk(send = true) },
             onCancelLocked = { endTalk(send = false) },
             maxWidth = maxWidth,
         )
+    }
+
+    /** The reply's ✕: the bubble goes, and the reply counts as read (no badge left behind for it). */
+    private fun closeReply() {
+        ui.replyFolded = true
+        ui.replyExpanded = false
+        val id = currentAgent?.id ?: return
+        shared.fleet.markRead(id)
+        shared.fleet.markReadOnServer(listOf(id))
     }
 
     // ── keep the windows in step with what is happening ──
