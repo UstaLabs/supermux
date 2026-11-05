@@ -6,6 +6,7 @@ import { AgentKind } from "../../../shared/agents"
 import { home as defaultHome } from "../../../shared/home"
 import { STATE_DIR } from "../../../shared/paths"
 import { runCli, type DiscoveryLaunch, type ModelInfo } from "../../models/discovery"
+import { antigravityUpdaterEnv } from "../../../../packages/supermux-core/src/antigravity/updater.js"
 
 /** `agy models` prints one `id<TAB>label` per line (effort baked into the id). Lines without a tab are skipped; ids deduped. */
 export function parseAgyModels(raw: string): ModelInfo[] {
@@ -33,9 +34,10 @@ export async function discoverAntigravityModels(opts?: {
   run?: (env: Record<string, string>) => Promise<string>
   stateDir?: string
   userHome?: string
+  platform?: NodeJS.Platform
 }): Promise<ModelInfo[]> {
   try {
-    const platform = process.platform
+    const platform = opts?.platform ?? process.platform
     const userHome = opts?.userHome ?? defaultHome()
     const cliDir = opts?.launch?.env[ANTIGRAVITY_CLI_DIR_ENV]
     const key = cliDir ? createHash("sha256").update(cliDir).digest("hex").slice(0, 12) : "system"
@@ -46,6 +48,7 @@ export async function discoverAntigravityModels(opts?: {
       ...(opts?.launch?.env ?? {}),
       HOME: shadow,
       ...(platform === "win32" ? { USERPROFILE: shadow } : {}),
+      ...antigravityUpdaterEnv(platform),
     }
     const raw = opts?.run
       ? await opts.run(env)

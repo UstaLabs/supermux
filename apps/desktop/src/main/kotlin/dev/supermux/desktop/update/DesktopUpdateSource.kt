@@ -1,5 +1,6 @@
 package dev.supermux.desktop.update
 
+import dev.supermux.desktop.platform.openCommand
 import dev.supermux.update.ClientPlatform
 import dev.supermux.update.ClientUpdateChecker
 import dev.supermux.update.ClientUpdateStatus
@@ -70,28 +71,17 @@ object DesktopUpdateSource {
             Desktop.getDesktop().open(file)
             return false
         }
-        val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
-        val cmd = when {
-            os.contains("win") -> arrayOf("cmd", "/c", "start", "", file.absolutePath)
-            os.contains("mac") || os.contains("darwin") -> arrayOf("open", file.absolutePath)
-            else -> arrayOf("xdg-open", file.absolutePath)
-        }
-        ProcessBuilder(*cmd).inheritIO().start()
+        openCommand(file.absolutePath).start(ProcessBuilder.Redirect.INHERIT)
         return false
     }
 
+    /** AWT's browser first; otherwise [openCommand], which never hands the URL to `cmd` (an `&` would split it). */
     fun openUrl(url: String) {
         runCatching {
             if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
                 Desktop.getDesktop().browse(java.net.URI(url))
             } else {
-                val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
-                val cmd = when {
-                    os.contains("win") -> arrayOf("cmd", "/c", "start", "", url)
-                    os.contains("mac") || os.contains("darwin") -> arrayOf("open", url)
-                    else -> arrayOf("xdg-open", url)
-                }
-                ProcessBuilder(*cmd).start()
+                openCommand(url).start()
             }
         }
     }

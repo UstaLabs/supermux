@@ -51,7 +51,15 @@ export type KeeperConnection = {
   onFrame(cb: (event: KeeperFrameEvent) => void): void
   /** Records what the running agent now carries (after a change applied without a relaunch). */
   setFingerprint(fingerprint: string): Promise<void>
+  /**
+   * How the agent ended, once `frames` is done: its exit code, the signal that ended it and its last stderr lines.
+   * Undefined when the stream ended without the keeper reporting an exit (the keeper itself went away).
+   */
+  exitStatus(): KeeperExitStatus | undefined
 }
+
+/** @experimental May change before 1.0. */
+export type KeeperExitStatus = { code: number | null; signal?: string; stderr: string[] }
 
 const sessionLocks = new Map<string, Promise<unknown>>()
 
@@ -500,7 +508,7 @@ async function connectLocked(options: {
   const waiters: Array<(v: typeof queue[number]) => void> = []
   const frameCbs: Array<(e: KeeperFrameEvent) => void> = []
   let closed = false
-  let exitCode: number | null | undefined
+  let exitStatus: KeeperExitStatus | undefined
   let welcome!: KeeperWelcome
   let replaced = false
   let welcomeSettled = false
@@ -549,7 +557,12 @@ async function connectLocked(options: {
           continue
         }
         if (msg.type === 'replaced') { replaced = true; push({ err: 'replaced' }); sock.end(); continue }
-        if (msg.type === 'exit') { exitCode = msg.code ?? null; push({ done: true }); continue }
+        if (msg.type === 'exit') {
+          const stderr = Array.isArray(msg.stderr) ? msg.stderr.filter((line: unknown): line is string => typeof line === 'string') : []
+          exitStatus = { code: typeof msg.code === 'number' ? msg.code : null, ...(typeof msg.signal === 'string' && msg.signal ? { signal: msg.signal } : {}), stderr }
+          push({ done: true })
+          continue
+        }
         if (msg.type === 'frame' || msg.type === 'parked' || msg.type === 'stderr') {
           const ev: KeeperFrameEvent = { type: msg.type, seq: msg.seq, line: msg.line }
           if (msg.stale === true) ev.stale = true
@@ -635,6 +648,7 @@ async function connectLocked(options: {
       send({ type: 'signal', signal: name })
     },
     onFrame(cb) { frameCbs.push(cb) },
+    exitStatus: () => exitStatus ? { ...exitStatus, stderr: [...exitStatus.stderr] } : undefined,
     async setFingerprint(fingerprint: string) {
       if (typeof fingerprint !== 'string') throw new TypeError('invalid fingerprint')
       writeKeeperFile(dir, fingerprintPath, fingerprint + '\n')

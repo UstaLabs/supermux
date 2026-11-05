@@ -501,10 +501,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (typeof promptUuid === 'string' && promptUuid !== active.uuid && !fromMetaOwned) return
         const finishing = active
         complete(finishing, message)
-        try { context.onActivity?.({ id: finishing.uuid, phase: 'completed' }) } catch { /* */ }
-        try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
+        // Cleared before Core hears the turn ended: its drain starts the next queued prompt inside onActivity.
+        active = undefined
         fromMetaOwned = false
-        if (active === finishing) active = undefined
+        try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
+        try { context.onActivity?.({ id: finishing.uuid, phase: 'completed' }) } catch { /* */ }
         if (commandsAfterTurn && !active) { commandsAfterTurn = false; askCommands() }
       }
     }, fail)
