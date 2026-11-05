@@ -14,6 +14,7 @@ import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -96,6 +97,13 @@ class HostStorePerfTest {
 
         h.app.ensureMessagesLoaded("a")
         runBlocking { withTimeout(5_000) { h.app.state.first { "a" in it.completeLogs && "a" in it.completeExtras } } }
+        // loadChat records chat.loaded in its finally, AFTER the state shows the chat complete and
+        // on the store's own scope: wait for the event too, or the assertions below race it.
+        runBlocking {
+            withTimeout(5_000) {
+                while (PerfTrace.since(cursor).none { it.trace == trace && it.name == "chat.loaded" }) delay(10)
+            }
+        }
 
         val history = h.headers.first { it.first == "/sessions/a/messages" }.second
         assertNotNull(history)
