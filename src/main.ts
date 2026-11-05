@@ -1149,6 +1149,8 @@ const liveness = {
 const doorStarts = new Set<string>()
 /** The folders git is checking a session's worktree out into right now (the files pane and terminals wait for them). */
 const checkoutsInFlight = new Set<string>()
+/** gracefulShutdown has begun (declared here: the session chain reads it). */
+let shuttingDown = false
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
@@ -1166,7 +1168,9 @@ const sessionChain = new SessionChain({
     const s = registry.sessions.getById(id)
     log.warn("session_wake_failed", { id, name: s?.name, err: err instanceof Error ? err.message : String(err) })
     if (!s || doorStarts.has(id)) return
-    void notifySession(id, wakeFailureNotice(s.agent, err))
+    // A start cut short by the broker stopping: the reason is the restart, not what failed under it
+    // (git's half-written progress, a keeper that went away).
+    void notifySession(id, wakeFailureNotice(s.agent, shuttingDown ? new Error("supermux restarted while it was starting") : err))
   },
 })
 
@@ -4883,7 +4887,6 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
 if (whatsapp) await whatsapp.start()
 if (telegram) await telegram.start()
 
-let shuttingDown = false
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
