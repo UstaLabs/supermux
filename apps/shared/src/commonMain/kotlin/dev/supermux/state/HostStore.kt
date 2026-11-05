@@ -133,6 +133,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -198,10 +199,14 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
+    /** Card #76: the user's "Show replies as they're written" (on unless turned off), as the next subscribe sends it. */
+    private val liveRepliesWanted = MutableStateFlow(true)
     val client = BrokerClient(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
-        subscribeFrame = { req -> subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req, streams = deps.clientInfo?.surface in LIVE_REPLY_SURFACES) },
+        subscribeFrame = { req ->
+            subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req, streams = liveRepliesWanted.value && deps.clientInfo?.surface in LIVE_REPLY_SURFACES)
+        },
         clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
@@ -523,8 +528,26 @@ class HostStore(
                     // first, heavy frame to finish (~0.9 s at launch on desktop, card #54), and every
                     // frame — the 2.3 MB snapshot included — was decoded there. Frames still reduce
                     // in [stateScope].
-                    .onSubscription { stateScope.launch(Dispatchers.Default) { client.run() } }
+                    .onSubscription {
+                        stateScope.launch(Dispatchers.Default) {
+                            // The first subscribe already carries the stored choice: a device that turned live
+                            // replies off never asks for them, not even once before a resubscribe.
+                            liveRepliesWanted.value = liveRepliesOn(deps.settings.string(SettingsKeys.LIVE_REPLIES).first())
+                            client.run()
+                        }
+                    }
                     .collect { guarded("reduce") { reduce(it) } }
+            }
+            // Card #76: turning live replies on or off in Settings applies at once: the socket reconnects and its
+            // subscribe asks (or no longer asks); the snapshot that follows carries live text only if it asked.
+            stateScope.launch {
+                deps.settings.string(SettingsKeys.LIVE_REPLIES).collect { stored ->
+                    val on = liveRepliesOn(stored)
+                    if (on != liveRepliesWanted.value) {
+                        liveRepliesWanted.value = on
+                        client.resubscribe()
+                    }
+                }
             }
             ensureViewingHeartbeat()
         }
@@ -2805,10 +2828,10 @@ internal const val SNAPSHOT_LOG_TAIL = 1
  * them and sends everything.
  */
 /**
- * Card #76: the surfaces that ask for live replies. Desktop first; each platform joins once it has been checked
- * on real hardware (Android, iOS, web).
+ * Card #76: the surfaces that ask for live replies. Desktop first; Android, iOS and the web client joined once each
+ * had been checked (the ink edge, and its reduced-motion fallback) on the emulator, the simulator and a browser.
  */
-internal val LIVE_REPLY_SURFACES = setOf("desktop")
+internal val LIVE_REPLY_SURFACES = setOf("desktop", "android", "ios", "web")
 
 internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null, streams: Boolean = false): String = buildJsonObject {
     put("type", "subscribe")

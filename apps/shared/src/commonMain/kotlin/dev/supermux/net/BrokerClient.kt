@@ -6,6 +6,8 @@ import dev.supermux.util.PerfTrace
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlin.concurrent.Volatile
@@ -136,6 +138,15 @@ class BrokerClient(
             sync.onDisconnect()
             delay(policy.delayForAttempt(attempt++))
         }
+    }
+
+    /**
+     * Drops the open socket, so [run] reconnects and subscribes again with whatever [subscribeFrame] builds now. For a
+     * choice the subscribe carries (card #76: live replies on or off); the broker forgets the old socket's choice with
+     * it. No-op while there is no socket.
+     */
+    suspend fun resubscribe() {
+        liveSession?.close(CloseReason(CloseReason.Codes.NORMAL, "resubscribe"))
     }
 
     suspend fun send(frame: ClientFrame) {

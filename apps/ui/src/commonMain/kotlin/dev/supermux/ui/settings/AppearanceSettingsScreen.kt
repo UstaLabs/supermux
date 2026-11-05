@@ -136,6 +136,7 @@ private fun AppearanceSettingsBody(
     val dynamicColor by prefs.dynamicColor.collectAsState(false)
     val terminalAppearance by prefs.terminalAppearance.collectAsState(TerminalAppearance.FOLLOW_APP)
     val storedTextScale by prefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+    val liveReplies by prefs.liveReplies.collectAsState(true)
     // The slider is DRAGGED, so it cannot be driven by the persisted value: writing on every frame
     // of the gesture is a disk write per frame, and the thumb would lag behind the finger by a
     // round trip through the store. The drag lives here and is persisted once, on release; this
@@ -233,6 +234,30 @@ private fun AppearanceSettingsBody(
                         modifier = Modifier.testTag("appearance_dynamic_switch"),
                     )
                 }
+            }
+            // Card #76: replies stream in under the ink edge by default; off, they appear once finished, as before.
+            Row(
+                Modifier.fillMaxWidth().testTag("appearance_live_replies_row"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Show replies as they're written",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = cs.onBackground,
+                    )
+                    Text(
+                        "Off: a reply appears once the agent has finished it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = liveReplies,
+                    onCheckedChange = { on -> scope.launch { prefs.putLiveReplies(on) } },
+                    modifier = Modifier.testTag("appearance_live_replies_switch"),
+                )
             }
             if (caps.assistantOverlay) AssistantOverlayRow()
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

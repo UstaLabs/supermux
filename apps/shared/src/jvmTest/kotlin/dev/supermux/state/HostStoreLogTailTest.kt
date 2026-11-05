@@ -186,7 +186,7 @@ class HostStoreLogTailTest {
         assertEquals(null, off["streams"])
         val on = Json.parseToJsonElement(subscribeFrameJson(listOf("a"), streams = true)).jsonObject
         assertEquals(1, on["streams"]!!.jsonPrimitive.int)
-        assertEquals(setOf("desktop"), LIVE_REPLY_SURFACES)
+        assertEquals(setOf("desktop", "android", "ios", "web"), LIVE_REPLY_SURFACES)
     }
 
     @Test fun subscribeAsksForTailsExceptTheChatsOnScreen() {

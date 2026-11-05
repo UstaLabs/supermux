@@ -18,6 +18,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.SettingsKeys
+import dev.supermux.state.liveRepliesOn
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.ThemeDefaults
@@ -162,6 +163,18 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putChatDetailLevel(level: ChatDetailLevel) {
         val next = sanitizeSetLevel(level) ?: return
         settings.putString(SettingsKeys.CHAT_DETAIL_LEVEL, next.wire)
+    }
+
+    /** Card #76: "Show replies as they're written" (Settings › Appearance); on unless turned off. */
+    val liveReplies: Flow<Boolean> = settings.string(SettingsKeys.LIVE_REPLIES).map { liveRepliesOn(it) }
+
+    /**
+     * On clears the key rather than writing "true": the default costs this device's settings file nothing, so on
+     * desktop (where two app instances can share one settings.json, last writer wins) only an actual "off" is ever
+     * written.
+     */
+    suspend fun putLiveReplies(on: Boolean) {
+        settings.putString(SettingsKeys.LIVE_REPLIES, if (on) null else "false")
     }
 
     // ── Appearance (cluster E7) ────────────────────────────────────────────────────────────────
