@@ -264,7 +264,7 @@ export class AccountRegistry {
     try {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify({ version: 1, accounts: [...accounts.values()] })); await file.sync() } finally { await file.close() }
-      await rename(temp, this.file)
+      await files.replace(temp, this.file)
     } finally { await rm(temp, { force: true }) }
   }
 }

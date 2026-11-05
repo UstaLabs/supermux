@@ -3,8 +3,8 @@
 // Mode: without it the answer is Unsupported, and the caller falls back on purpose (Q5: copy a small file, or keep an
 // account's files to itself) instead of failing halfway, or swallowing EPERM and losing the file.
 import { execFileSync } from "node:child_process"
-import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
-import { cp } from "node:fs/promises"
+import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
+import { cp, rename } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { Unsupported } from "./errors.js"
@@ -179,4 +179,54 @@ function walkedSize(path: string): number {
   try { names = readdirSync(path) } catch { return 0 }
   for (const name of names) total += walkedSize(join(path, name))
   return total
+}
+
+/** What a rename on Windows answers while another process has the target open. */
+const BUSY = new Set(["EPERM", "EACCES", "EBUSY"])
+
+export interface ReplaceOptions<R> {
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** How long Windows may keep the target busy before the error is thrown; 2 s by default. */
+  patienceMs?: number
+  /** The rename call (tests). */
+  rename?: R
+}
+
+function busyOnWindows(error: unknown, platform: NodeJS.Platform | undefined): boolean {
+  return (platform ?? process.platform) === "win32" && BUSY.has((error as NodeJS.ErrnoException)?.code ?? "")
+}
+
+/**
+ * Moves [from] onto [to], replacing it: the last step of an atomic write. On Windows a rename fails for a moment while
+ * another process has [to] open (an antivirus or the search indexer looking at a file just written), with EPERM,
+ * EACCES or EBUSY: retried there, backing off, for up to `patienceMs` (graceful-fs does the same). Elsewhere one rename.
+ */
+export function replaceSync(from: string, to: string, options: ReplaceOptions<(from: string, to: string) => void> = {}): void {
+  const move = options.rename ?? renameSync
+  const deadline = Date.now() + (options.patienceMs ?? 2000)
+  for (let wait = 10; ; wait = Math.min(wait * 2, 100)) {
+    try {
+      move(from, to)
+      return
+    } catch (error) {
+      if (!busyOnWindows(error, options.platform) || Date.now() + wait > deadline) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait)
+    }
+  }
+}
+
+/** [replaceSync], without blocking. */
+export async function replace(from: string, to: string, options: ReplaceOptions<(from: string, to: string) => Promise<void>> = {}): Promise<void> {
+  const move = options.rename ?? rename
+  const deadline = Date.now() + (options.patienceMs ?? 2000)
+  for (let wait = 10; ; wait = Math.min(wait * 2, 100)) {
+    try {
+      await move(from, to)
+      return
+    } catch (error) {
+      if (!busyOnWindows(error, options.platform) || Date.now() + wait > deadline) throw error
+      await new Promise(resolve => setTimeout(resolve, wait))
+    }
+  }
 }

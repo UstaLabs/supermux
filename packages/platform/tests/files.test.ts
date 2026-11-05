@@ -172,3 +172,34 @@ test("folderSize: the bytes of the files under a folder, by a walk on Windows an
   }
   expect(files.folderSize(join(dir, "missing"), { platform: "win32" })).toBe(0)
 })
+
+// The last step of an atomic write: rename the written temp file onto its target. On Windows that fails for a moment
+// while another process has the target open (an antivirus or the search indexer looking at a file just written):
+// EPERM, EACCES or EBUSY. The broker's 20-odd temp-then-rename writes never retried.
+const busy = (code: string) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code })
+
+test("replaceSync moves a file onto its target; on Windows it waits out a busy target", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "state.json.tmp"), "new")
+  writeFileSync(join(dir, "state.json"), "old")
+  files.replaceSync(join(dir, "state.json.tmp"), join(dir, "state.json"))
+  expect(readFileSync(join(dir, "state.json"), "utf8")).toBe("new")
+  let tries = 0
+  const flaky = () => { if (++tries < 3) throw busy("EPERM") }
+  files.replaceSync("a", "b", { platform: "win32", rename: flaky })
+  expect(tries).toBe(3)
+})
+
+test("replaceSync: a busy target elsewhere, a lasting one on Windows, and any other error are thrown", () => {
+  expect(() => files.replaceSync("a", "b", { platform: "linux", rename: () => { throw busy("EPERM") } })).toThrow("EPERM")
+  expect(() => files.replaceSync("a", "b", { platform: "win32", patienceMs: 50, rename: () => { throw busy("EBUSY") } })).toThrow("EBUSY")
+  let tries = 0
+  expect(() => files.replaceSync("a", "b", { platform: "win32", rename: () => { tries++; throw busy("ENOENT") } })).toThrow("ENOENT")
+  expect(tries).toBe(1)
+})
+
+test("replace (async) waits out a busy target on Windows too", async () => {
+  let tries = 0
+  await files.replace("a", "b", { platform: "win32", rename: async () => { if (++tries < 2) throw busy("EACCES") } })
+  expect(tries).toBe(2)
+})

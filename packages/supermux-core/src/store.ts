@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { mkdir, open, readdir, rename, rm } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
-import { lock } from "@supermux/platform"
+import { files, lock } from "@supermux/platform"
 import { CoreError } from "./errors.js"
 import { normalizeContext, normalizePolicy } from "./context/index.js"
 import { assertRealDirectory, present, readPrivateFile, realDirectoryIn } from "./private-files.js"
@@ -126,7 +126,7 @@ export class SessionStore {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(record)); await file.sync() } finally { await file.close() }
       this.folder("sessions")
-      await rename(temp, path)
+      await files.replace(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
 
@@ -196,7 +196,7 @@ export class SessionStore {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(subagents)) } finally { await file.close() }
       this.folder("subagents")
-      await rename(temp, path)
+      await files.replace(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
 

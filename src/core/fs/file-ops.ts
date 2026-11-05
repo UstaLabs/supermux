@@ -4,6 +4,7 @@ import { basename, dirname, join } from "path"
 import { FsError, toFsError } from "./errors"
 import type { FsEntry, FsOp } from "./types"
 import { home as userHome } from "../../shared/home"
+import { files } from "@supermux/platform"
 
 export const MAX_READ_BYTES = 1024 * 1024
 const BINARY_SCAN_BYTES = 8 * 1024
@@ -47,7 +48,7 @@ export async function writeText(path: string, text: string): Promise<{ size: num
     const buf = Buffer.from(text, "utf-8")
     try {
       await writeFile(tmp, buf)
-      await rename(tmp, path)
+      await files.replace(tmp, path)
     } catch (e) {
       await unlink(tmp).catch(() => {})
       throw e

@@ -6,7 +6,7 @@
  * (O_CREAT | O_EXCL, 0600) and renamed into place, so an existing name is never opened for writing.
  */
 import { randomBytes } from "node:crypto"
-import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs"
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs"
 import { join } from "node:path"
 import { files } from "@supermux/platform"
 import { CoreError } from "./errors.js"
@@ -106,7 +106,7 @@ export function writePrivateFile(path: string, body: string | Buffer, verify?: (
   try {
     try { writeAll(fd, body) } finally { closeSync(fd) }
     verify?.()
-    renameSync(staging, path)
+    files.replaceSync(staging, path)
   } catch (error) {
     try { unlinkSync(staging) } catch { /* already gone */ }
     throw error

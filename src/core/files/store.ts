@@ -7,6 +7,7 @@ import { makeLogger } from "../../shared/log"
 import { extFromMime } from "./mime"
 import type { AttachmentKind } from "./kinds"
 import { probeFileMeta, type MediaMeta } from "./media-meta"
+import { files } from "@supermux/platform"
 
 const log = makeLogger("core/files/store")
 
@@ -146,7 +147,7 @@ export class FileStore {
       } finally {
         closeSync(fd)
       }
-      renameSync(partPath, finalPath)
+      files.replaceSync(partPath, finalPath)
     } catch (err) {
       try { unlinkSync(partPath) } catch { /* ignore — best-effort cleanup */ }
       throw err
@@ -236,7 +237,7 @@ export class FileStore {
       } finally {
         closeSync(fd)
       }
-      renameSync(partPath, finalPath)
+      files.replaceSync(partPath, finalPath)
     } catch (err) {
       try { unlinkSync(partPath) } catch { /* ignore — best-effort cleanup */ }
       throw err

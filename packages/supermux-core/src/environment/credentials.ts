@@ -31,6 +31,7 @@ import {
 } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { dirname } from "node:path"
+import { files } from "@supermux/platform"
 
 /** How fresh a credential file is, in milliseconds since the epoch.
  * Return `Number.NEGATIVE_INFINITY` when the file carries no readable claim. */
@@ -47,7 +48,7 @@ export function promoteCredential(from: string, canonical: string): void {
   try {
     copyFileSync(from, temp)
     chmodSync(temp, 0o600)
-    renameSync(temp, canonical)
+    files.replaceSync(temp, canonical)
   } finally {
     rmSync(temp, { force: true })
   }
@@ -160,7 +161,7 @@ export function refreshSessionCredential(opts: {
   try {
     copyFileSync(opts.canonical, temp)
     chmodSync(temp, 0o600)
-    renameSync(temp, opts.sessionCopy)
+    files.replaceSync(temp, opts.sessionCopy)
   } finally {
     rmSync(temp, { force: true })
   }
