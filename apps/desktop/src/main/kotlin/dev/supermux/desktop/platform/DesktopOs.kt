@@ -133,6 +133,5 @@ internal fun speechCommand(
     }
 }
 
-/** POSIX `which`, so always false on Windows (one `which` with PATHEXT is step 9 of the platform layer). */
-internal fun which(bin: String): Boolean =
-    runCatching { ProcessBuilder("which", bin).start().waitFor() == 0 }.getOrDefault(false)
+/** Whether [bin] is a command on this process's PATH, found in-process with this OS's rules ([findCommand]). */
+internal fun which(bin: String): Boolean = findCommand(bin) != null

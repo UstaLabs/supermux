@@ -85,8 +85,9 @@ object SystemOsEnv : OsEnv {
     @Volatile var defaultTimeoutMs: Long = DEFAULT_TIMEOUT_MS
     const val DEFAULT_TIMEOUT_MS = 30_000L
 
+    // In-process (findOnPath): no `which` (missing on Windows and some Linux images) or `where` process.
     override fun hasCommand(name: String): Boolean =
-        runResult(listOf(if (os == OsEnv.Os.WINDOWS) "where" else "which", name), 5_000).exit == 0
+        dev.supermux.desktop.platform.findOnPath(name, System.getenv("PATH"), os == OsEnv.Os.WINDOWS, System.getenv("PATHEXT")) != null
 
     override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
 
