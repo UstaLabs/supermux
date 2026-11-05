@@ -5,18 +5,25 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class TalkKeyTest {
-    @Test fun theDefaultIsCommandShiftSpace() = assertEquals(TalkKey.COMMAND_SHIFT_SPACE, TalkKey.parse(null))
+    // Two keys, one hand, no permission: delivered on macOS 26 (Ahmet's Mac, 2026-11-05, press and release).
+    @Test fun theDefaultIsOptionSpace() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse(null))
 
-    @Test fun anUnknownChoiceFallsBackToTheDefault() = assertEquals(TalkKey.COMMAND_SHIFT_SPACE, TalkKey.parse("hyper+f5"))
+    @Test fun anUnknownChoiceFallsBackToTheDefault() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("hyper+f5"))
 
     @Test fun aStoredChoiceIsKept() = assertEquals(TalkKey.RIGHT_OPTION, TalkKey.parse("RIGHT_OPTION"))
 
-    // macOS (15+) doesn't deliver a hot key held with ⌥ or ⌥⇧ alone: each combo holds ⌘ or ⌃.
-    @Test fun everyComboHoldsCommandOrControl() {
-        for (k in TalkKey.entries.filter { it.combo }) {
-            assertTrue(k.carbonModifiers and (TalkKey.CMD or TalkKey.CTRL) != 0, k.name)
-        }
+    // A bare key as a hot key would take that key from typing in every app.
+    @Test fun everyComboHoldsAModifier() {
+        for (k in TalkKey.entries.filter { it.combo }) assertTrue(k.carbonModifiers != 0, k.name)
     }
+
+    // ⌥ with a letter or digit types a character (and macOS 15+ may hold such hot keys back): only ⌥Space,
+    // which was checked on the Mac, goes with ⌥ alone.
+    @Test fun optionAloneGoesOnlyWithSpace() {
+        for (k in TalkKey.entries.filter { it.combo && it.carbonModifiers == TalkKey.OPT }) assertEquals(TalkKey.SPACE, k.carbonKey, k.name)
+    }
+
+    @Test fun optionSpaceIsFirstInTheMenu() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.entries.first())
 
     // ⌘Space Spotlight, ⌃Space / ⌃⌥Space input sources, ⌃⌘Space Emoji & Symbols, ⌥⌘Space Finder search.
     @Test fun noComboIsOneOfMacOsOwnSpaceShortcuts() {
