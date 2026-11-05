@@ -313,7 +313,7 @@ private fun AssistantOverlayRow() {
             Column(Modifier.weight(1f)) {
                 Text("Assistant overlay", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
                 Text(
-                    "Experimental. Your default Agent floats over other apps: tap it to chat, hold it to talk.",
+                    "Experimental. Your Agent floats over other apps: tap it to chat, hold it to talk, double-tap it to let it see your screen.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onSurfaceVariant,
                 )
