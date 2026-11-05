@@ -1629,6 +1629,7 @@ export class SessionManager {
         log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
         return false
       }
+      if (await this.abandonIfGone(session.id, session.name)) return false
       this.registry.sessions.activate(session.id, resumedSessionPid(resumedRuntimePid, session.pid))
       return true
     } catch (err: any) {
@@ -1636,6 +1637,19 @@ export class SessionManager {
       this.resumeFailures.set(session.id, err)
       return false
     }
+  }
+
+  /**
+   * Card #75: the session was archived, killed or deleted while its agent was starting. The arm
+   * registered the agent anyway; stop it and drop it, so no live agent is left on a session that is
+   * gone. True when it did.
+   */
+  private async abandonIfGone(id: string, name: string): Promise<boolean> {
+    if (this.registry.get(id)) return false
+    log.info("resume_abandoned_session_gone", { name, id })
+    try { await this.runtimes.get(id)?.adapter.stop() } catch (err) { log.warn("resume_abandon_stop_failed", { name, id, err: String(err) }) }
+    this.deleteRuntime(id)
+    return true
   }
 
   /** Why the last resumeSuspended of `id` failed, when it threw (the chat notice says it, e.g. an expired sign-in). */
