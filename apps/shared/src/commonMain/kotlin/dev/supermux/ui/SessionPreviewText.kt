@@ -35,6 +35,36 @@ fun sessionPreviewPlainText(raw: String): String {
 /** Cap on the raw text considered; the rendered row is one or two lines regardless. */
 private const val PREVIEW_INPUT_CAP = 300
 
+/**
+ * A whole message as plain text to read in full (the assistant overlay's bubble): its markdown goes as in
+ * [sessionPreviewPlainText], but nothing is cut and its lines stay, bullets as "•" and numbered lines as
+ * they are, so a long answer still reads as paragraphs and lists.
+ */
+fun messagePlainText(raw: String): String {
+    var s = raw
+    if (s.contains("```")) s = FENCE_RE.replace(s, " ")
+    if (s.contains("](")) s = LINK_RE.replace(s, "$1")
+    s = HEADING_QUOTE_RE.replace(s, "")
+    s = BULLET_RE.replace(s, "• ")
+    if (s.contains("*")) {
+        s = STRONG_RE.replace(s, "$1")
+        s = EMPHASIS_RE.replace(s, "$1")
+    }
+    if (s.contains("`")) s = CODE_RE.replace(s, "$1")
+    s = SPACES_RE.replace(s, " ").lines().joinToString("\n") { it.trim() }
+    return BLANK_LINES_RE.replace(s, "\n\n").trim()
+}
+
+/** Heading and quote markers at a line start: a message read in full keeps its bullets and numbers. */
+private val HEADING_QUOTE_RE = Regex("""^[ \t]*(#{1,6}[ \t]+|>[ \t]?)""", RegexOption.MULTILINE)
+
+private val BULLET_RE = Regex("""^[ \t]*[-*+][ \t]+""", RegexOption.MULTILINE)
+
+private val SPACES_RE = Regex("""[ \t]+""")
+
+/** More than one blank line in a row reads as one. */
+private val BLANK_LINES_RE = Regex("""\n{3,}""")
+
 /** Fence markers go, the code between them stays — it is usually the informative part. */
 private val FENCE_RE = Regex("```[a-zA-Z0-9_+-]*")
 

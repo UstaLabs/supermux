@@ -115,6 +115,9 @@ interface Platform {
     /** The microphone, for dictation. [MicCapture.available] says whether to offer a mic button. */
     val mic: MicCapture
 
+    /** The assistant overlay's system side (#62); null where there is none. */
+    val assistantOverlay: AssistantOverlayHost? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 
@@ -230,6 +233,9 @@ data class Caps(
      * judges the swipe by the momentum's dying tail instead.
      */
     val trackpadMomentum: Boolean = false,
+    /** The assistant overlay (#62): the default Agent can float over other apps (Android's
+     *  "Display over other apps"). Gates the Appearance switch; see [Platform.assistantOverlay]. */
+    val assistantOverlay: Boolean = false,
 )
 
 /**

@@ -28,8 +28,8 @@ test("start(claude) starts a real PTY login with needsCode=true", () => {
   expect(st.kind).toBe("claude")
 })
 
-test("sendCode forwards input to the session", () => {
-  let written = ""
+test("sendCode types the code, then Enter as \\r on its own: a Windows ConPTY never ends agy's line on \\n", async () => {
+  const writes: string[] = []
   let outCb: (c: string) => void = () => {}
   const mgr = new LoginManager({
     paths: { home: "/home/u" }, fileExists: () => false,
@@ -37,14 +37,16 @@ test("sendCode forwards input to the session", () => {
       onStdout: (cb: (c: string) => void) => { outCb = cb },
       onExit: () => {},
       kill: () => {},
-      write: (data: string) => { written += data },
+      write: (data: string) => { writes.push(data) },
     }),
     onChange: () => {}, setInterval: () => 1, clearInterval: () => {},
   })
-  mgr.start("claude")
-  outCb("https://auth.example.com/device")
-  mgr.sendCode("claude", "MYCODE")
-  expect(written).toBe("MYCODE\n")
+  mgr.start("antigravity")
+  outCb("https://accounts.google.com/o/oauth2/auth?client_id=x&state=s1\r\nOr, paste the authorization code here and press Enter:")
+  mgr.sendCode("antigravity", "  4/abc \n")
+  expect(writes).toEqual(["4/abc"])
+  await Bun.sleep(400)
+  expect(writes).toEqual(["4/abc", "\r"])
 })
 
 test("Claude login succeeds when the macOS CLI reports a Keychain credential", () => {

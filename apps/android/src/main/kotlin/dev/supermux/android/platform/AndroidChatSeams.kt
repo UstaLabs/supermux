@@ -277,9 +277,12 @@ internal const val ANDROID_DICTATION_MIME = "audio/wav"
 internal class AndroidLiveTranscript(private val engine: DictationEngine) : LiveTranscript {
     private val _partial = MutableStateFlow("")
     override val partial: StateFlow<String> = _partial.asStateFlow()
+    private val _level = MutableStateFlow(0f)
+    override val level: StateFlow<Float> = _level.asStateFlow()
 
     init {
         engine.onPartial = { _partial.value = it }
+        engine.onRms = { _level.value = recognizerLevel(it) }
     }
 
     override fun start(glossary: List<String>): Boolean =
@@ -288,14 +291,19 @@ internal class AndroidLiveTranscript(private val engine: DictationEngine) : Live
     override suspend fun stop(): String {
         val text = runCatching { engine.stop() }.getOrDefault("")
         _partial.value = ""
+        _level.value = 0f
         return text
     }
 
     override fun cancel() {
         runCatching { engine.cancel() }
         _partial.value = ""
+        _level.value = 0f
     }
 }
+
+/** `SpeechRecognizer`'s meter (about −2 dB silent to 10 dB loud) as normalised loudness 0..1. */
+internal fun recognizerLevel(rmsdB: Float): Float = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
 
 // ── tts ──────────────────────────────────────────────────────────────────────
 

@@ -39,6 +39,7 @@ import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.PairingHolder
 import dev.supermux.android.pairing.androidDeviceName
 import dev.supermux.android.push.AndroidPushRegistrar
+import dev.supermux.android.overlay.AssistantOverlayService
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.android.session.readGroupByProject
 import dev.supermux.android.session.readLegacyCollapsedPaths
@@ -260,6 +261,14 @@ class MainActivity : ComponentActivity() {
                     }
                     lifecycleOwner.lifecycle.addObserver(obs)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+
+                // The assistant overlay (#62): started and stopped from its Appearance switch, and
+                // re-started each time the app comes to the front, because only a service started
+                // while the app is on screen may use the mic for hold-to-talk later.
+                val overlayOn by vm.uiPrefs.assistantOverlay.collectAsStateWithLifecycle(false)
+                LaunchedEffect(overlayOn, appVisible) {
+                    if (appVisible) AssistantOverlayService.sync(this@MainActivity, overlayOn)
                 }
 
                 val workspaces by vm.fleet.workspaces.collectAsStateWithLifecycle()

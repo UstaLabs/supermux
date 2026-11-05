@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
 import { readAntigravityIdentity } from "./adapters/antigravity.js"
+import { antigravityUpdaterEnv } from "../antigravity/updater.js"
 import { readClaudeIdentity } from "./adapters/claude.js"
 import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
@@ -30,9 +31,13 @@ const URLS_RE = new RegExp(URL_RE.source, "g")
 const CODE_RE = /\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+// A Windows ConPTY draws line breaks and runs of blanks as cursor moves (ESC[5;1H, ESC[3C), not as
+// characters: keep them as a line break or a space, or the next line's text runs into a URL.
+const CURSOR_LINE_RE = /\x1b\[[0-9;]*[ABEFHfd]/g
+const CURSOR_COLUMN_RE = /\x1b\[[0-9;]*[CGX]/g
 
 export function stripAnsi(text: string): string {
-  return text.replace(OSC_RE, "").replace(ANSI_RE, "")
+  return text.replace(OSC_RE, "").replace(CURSOR_LINE_RE, "\n").replace(CURSOR_COLUMN_RE, " ").replace(ANSI_RE, "")
 }
 
 /** Device-code logins (codex, grok): a URL and an `XXXX-XXXX` code, once both have appeared. */
@@ -63,6 +68,18 @@ export function parseAntigravityLoginUrl(output: string): string | undefined {
   const google = urls.find(url => { try { return new URL(url).host === "accounts.google.com" } catch { return false } })
   if (google) return google
   return prompt !== undefined ? urls[0] : undefined
+}
+
+/**
+ * Types a pasted code into a login CLI's terminal as a person does: the code, then Enter as its own input.
+ * Enter is "\r", what a keyboard sends: a POSIX pty turns it into the "\n" a line read waits for, and a
+ * Windows ConPTY takes only "\r" as the Enter key (agy never saw a code that ended in "\n").
+ * [open]: false once the login is over, so a late Enter is not typed into nothing.
+ */
+export function typeLoginCode(write: (data: string) => void, code: string, open: () => boolean = () => true): void {
+  write(code.trim())
+  const enter = setTimeout(() => { if (open()) write("\r") }, ENTER_DELAY_MS)
+  enter.unref?.()
 }
 
 /** How long agy waits for the pasted code after printing its URL ("Waiting for authentication (timeout 60s)"). */
@@ -137,7 +154,7 @@ export function loginEnv(extra: Record<string, string>): Record<string, string> 
   return { ...env, ...extra }
 }
 
-export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string): Plan {
+export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string, platform: NodeJS.Platform = process.platform): Plan {
   switch (kind) {
     case "claude": return {
       spawn: { command, args: ["auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], env: loginEnv({ CLAUDE_CONFIG_DIR: directory }), cwd: directory, pty: true },
@@ -176,7 +193,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
       return {
         spawn: {
           command, args: ["-p=Reply with the single word OK."], cwd: directory, pty: true,
-          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }),
+          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(platform === "win32" ? { USERPROFILE: home } : {}), ...antigravityUpdaterEnv(platform) }),
         },
         parse: output => { const url = parseAntigravityLoginUrl(output); return url ? { url } : undefined },
         needsCode: true,
@@ -476,9 +493,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       if (typeof text !== "string" || !text.trim()) throw new CoreError("invalid_input", "code must be a nonempty string")
       if (!state.needsCode || state.phase !== "awaiting_user" || !proc) throw new CoreError("invalid_input", "This login is not waiting for a code")
       const child = proc
-      child.write(text.trim())
-      const enter = setTimeout(() => { if (!finished) child.write("\r") }, ENTER_DELAY_MS)
-      enter.unref?.()
+      typeLoginCode(data => child.write(data), text, () => !finished)
     },
     /** No effect once the login is verifying (the process has exited and the account is being saved). */
     cancel() { if (state.phase !== "verifying") fail(new CoreError("login_cancelled", "Login cancelled"), "cancelled") },

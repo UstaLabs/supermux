@@ -224,6 +224,13 @@ interface LiveTranscript {
 
     /** The running transcript as it grows — committed segments plus the current partial. */
     val partial: StateFlow<String>
+
+    /**
+     * How loud you are while it recognises, as normalised loudness 0..1 (silence 0, loud speech 1),
+     * or null when the recogniser cannot meter. What a listening avatar moves with in this mode,
+     * since [MicCapture.level] only meters a recording.
+     */
+    val level: StateFlow<Float>? get() = null
 }
 
 /**

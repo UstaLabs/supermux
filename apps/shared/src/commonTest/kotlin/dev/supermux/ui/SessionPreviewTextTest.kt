@@ -74,4 +74,24 @@ class SessionPreviewTextTest {
     @Test fun veryLongInputIsBounded() {
         assertTrue(sessionPreviewPlainText("a".repeat(5_000)).length <= 300)
     }
+
+    // A whole message to read (the overlay's bubble, "Read it all"): as plain as a preview, but nothing cut
+    // and its lines kept.
+    @Test fun aWholeMessageIsNeverCut() {
+        val long = "word ".repeat(200).trim()
+        assertEquals(long, messagePlainText(long))
+    }
+
+    @Test fun aWholeMessageKeepsItsLinesAndParagraphs() {
+        assertEquals("First line.\nSecond line.\n\nNew para.", messagePlainText("First line.\nSecond line.\n\n\n\nNew **para**."))
+    }
+
+    @Test fun aWholeMessageKeepsItsListsReadable() {
+        assertEquals("Plan\n• one\n• two\n1. first", messagePlainText("### Plan\n- one\n- two\n1. first"))
+    }
+
+    @Test fun aWholeMessageLosesItsMarkdownAsAPreviewDoes() {
+        assertEquals("Merged dev, see the PR and this", messagePlainText("Merged `dev`, see [the PR](https://x.y/1) and **this**"))
+        assertEquals("a b c", messagePlainText("a   b\t\tc"))
+    }
 }
