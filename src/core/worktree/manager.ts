@@ -1,6 +1,6 @@
 // src/core/worktree/manager.ts
 import { existsSync, readFileSync } from "fs"
-import { cp, mkdir } from "fs/promises"
+import { mkdir } from "fs/promises"
 import { basename, dirname, join, resolve } from "path"
 import { createHash, randomUUID } from "crypto"
 import { home } from "../../shared/home"
@@ -8,7 +8,7 @@ import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
 import { makeLogger } from "../../shared/log"
-import { paths } from "@supermux/platform"
+import { files, paths } from "@supermux/platform"
 
 const log = makeLogger("worktree")
 
@@ -88,7 +88,7 @@ async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Prom
     // Containment guard: never read outside the repo or write outside the worktree.
     if (!paths.isStrictlyInside(resolve(src), resolve(repoRoot)) || !paths.isStrictlyInside(resolve(dst), resolve(worktreeDir))) continue
     if (!existsSync(src)) continue
-    try { await mkdir(dirname(dst), { recursive: true }); await cp(src, dst, { recursive: true }) } catch { /* best effort */ }
+    try { await mkdir(dirname(dst), { recursive: true }); await files.copyTree(src, dst) } catch { /* best effort */ }
   }
 }
 

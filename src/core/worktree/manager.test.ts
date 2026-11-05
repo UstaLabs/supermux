@@ -1,9 +1,9 @@
 // src/core/worktree/manager.test.ts
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, existsSync, writeFileSync, readFileSync } from "fs"
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, readFileSync, symlinkSync } from "fs"
 import { homedir, tmpdir } from "os"
-import { join, resolve, sep } from "path"
+import { join, relative, resolve, sep } from "path"
 import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames, worktreesRoot } from "./manager"
 
 function tmpRepo(): string {
@@ -64,6 +64,30 @@ test("createWorktree copies .worktreeinclude files", async () => {
   writeFileSync(join(repo, ".worktreeinclude"), ".env\n")
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
   expect(readFileSync(join(h.worktreeDir, ".env"), "utf-8")).toBe("SECRET=1")
+})
+
+test("a .worktreeinclude folder's links point into the worktree, never back into the main checkout", async () => {
+  const repo = tmpRepo()
+  mkdirSync(join(repo, "config", "v2"), { recursive: true })
+  writeFileSync(join(repo, "config", "v2", "app.env"), "MODE=main")
+  symlinkSync("v2", join(repo, "config", "current"), "dir")
+  writeFileSync(join(repo, ".worktreeinclude"), "config\n")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "links" })
+  // A session that writes through the link changes its own copy; the main checkout keeps its file.
+  writeFileSync(join(h.worktreeDir, "config", "current", "app.env"), "MODE=worktree")
+  expect(readFileSync(join(repo, "config", "v2", "app.env"), "utf-8")).toBe("MODE=main")
+  expect(readFileSync(join(h.worktreeDir, "config", "v2", "app.env"), "utf-8")).toBe("MODE=worktree")
+})
+
+test("a .worktreeinclude entry that links out of the repo still reaches its file from the worktree", async () => {
+  const repo = tmpRepo()
+  const secrets = mkdtempSync(join(tmpdir(), "mux-wt-secrets-"))
+  writeFileSync(join(secrets, ".env"), "SECRET=2")
+  // Relative, as `ln -s ../x .env` writes it: from the worktree, which sits elsewhere, it would point nowhere.
+  symlinkSync(relative(repo, join(secrets, ".env")), join(repo, ".env"), "file")
+  writeFileSync(join(repo, ".worktreeinclude"), ".env\n")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "outward" })
+  expect(readFileSync(join(h.worktreeDir, ".env"), "utf-8")).toBe("SECRET=2")
 })
 
 test("ensureWorktreeAt recreates a worktree at the same path when the dir AND its branch are gone (merged-session resume)", async () => {

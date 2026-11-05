@@ -1,4 +1,5 @@
-import { existsSync, rmSync, cpSync } from "fs"
+import { existsSync, rmSync } from "fs"
+import { files } from "@supermux/platform"
 import { basename, isAbsolute, join, sep } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { home } from "../../shared/home"
@@ -143,7 +144,7 @@ export async function addPlugin(spec: string, opts: AddOptions = {}, d: Lifecycl
     const src = expandTilde(source.path!)
     if (!existsSync(src)) throw new Error(`local source does not exist: ${src}`)
     if (existsSync(dest)) throw new Error(`destination already exists: ${dest}`)
-    cpSync(src, dest, { recursive: true })
+    await files.copyTree(src, dest)
   }
 
   const scopes = opts.scopes ?? DEFAULT_SCOPES

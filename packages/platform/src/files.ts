@@ -2,10 +2,12 @@
 // type is ignored elsewhere). A file link is a symlink, which Windows lets a standard user create only with Developer
 // Mode: without it the answer is Unsupported, and the caller falls back on purpose (Q5: copy a small file, or keep an
 // account's files to itself) instead of failing halfway, or swallowing EPERM and losing the file.
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { Unsupported } from "./errors.js"
+import { isInside } from "./paths.js"
 
 type LinkType = "file" | "dir" | "junction"
 
@@ -67,4 +69,54 @@ export function canLinkFiles(options: CanLinkOptions = {}): boolean {
   }
   cache.set(platform, can)
   return can
+}
+
+/**
+ * Copies [src] (a folder, a file or a link) to [dest], links as links, so that the copy stands on its own: a link to
+ * something inside [src] points at the same thing inside [dest] (a relative one is kept as written), and a link to
+ * anything else still points at it. The runtime's cp gets one or the other wrong: by default it points every relative
+ * link back into [src], and with verbatimSymlinks a relative link out of [src] points nowhere. Files and folders are
+ * the runtime's to copy. A folder link is made by [linkDirectory] (a junction on Windows), and a file link the OS
+ * refuses (Windows without Developer Mode) is copied as the file it points at.
+ */
+export async function copyTree(src: string, dest: string, options: LinkOptions = {}): Promise<void> {
+  await cp(src, dest, { recursive: true, filter: linksCopiedHere(src, dest, options) })
+}
+
+/** [copyTree], blocking. */
+export function copyTreeSync(src: string, dest: string, options: LinkOptions = {}): void {
+  cpSync(src, dest, { recursive: true, filter: linksCopiedHere(src, dest, options) })
+}
+
+/** cp's filter sees every entry before cp copies it, with the folder for it already made (in Bun and in Node). */
+function linksCopiedHere(src: string, dest: string, options: LinkOptions): (from: string, to: string) => boolean {
+  const root = resolve(src)
+  const copyRoot = resolve(dest)
+  return (from, to) => {
+    if (!lstatSync(from).isSymbolicLink()) return true
+    copyLink(from, to, root, copyRoot, options)
+    return false
+  }
+}
+
+function copyLink(from: string, to: string, root: string, copyRoot: string, options: LinkOptions): void {
+  const written = readlinkSync(from)
+  const target = resolve(dirname(from), written)
+  // Inside the copied folder: the same thing in the copy, which a relative link already means. Outside: where it was.
+  const pointAt = !isInside(target, root) ? target : isAbsolute(written) ? join(copyRoot, relative(root, target)) : written
+  mkdirSync(dirname(to), { recursive: true })
+  // An earlier copy's link or file gives way, as cp's own files do.
+  if (lstatSync(to, { throwIfNoEntry: false })?.isDirectory() === false) rmSync(to)
+  if (statSync(target, { throwIfNoEntry: false })?.isDirectory()) {
+    // A junction's target is absolute: the folder a relative link means is the one beside the copy's link.
+    const windows = (options.platform ?? process.platform) === "win32"
+    linkDirectory(windows ? resolve(dirname(to), pointAt) : pointAt, to, options)
+    return
+  }
+  try {
+    linkFile(pointAt, to, options)
+  } catch (error) {
+    if (!(error instanceof Unsupported)) throw error
+    copyFileSync(target, to)
+  }
 }

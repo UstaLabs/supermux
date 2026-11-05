@@ -6,7 +6,6 @@ import {
   readdirSync,
   rmSync,
   renameSync,
-  cpSync,
   symlinkSync,
   type Stats,
 } from "node:fs"
@@ -87,7 +86,7 @@ export function ensureSharedCursorRuntime(
     if (!isNonEmptyDir(shared)) {
       const here = lstatSafe(linkPath)
       if (isNonEmptyDir(userRuntime)) {
-        cpSync(userRuntime, shared, { recursive: true, dereference: false })
+        files.copyTreeSync(userRuntime, shared)
       } else if (here && here.isDirectory() && !here.isSymbolicLink()) {
         // No canonical install — adopt this home's runtime (instant move).
         rmSync(shared, { recursive: true, force: true })

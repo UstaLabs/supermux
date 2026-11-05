@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { parseAddSource, applyEnable, applyRemove, pluginSummaries, addPlugin, removePlugin, setPluginEnabled } from "./lifecycle"
@@ -80,6 +80,28 @@ test("addPlugin copies a local source into the tree and appends to the registry"
     const reg = loadPluginsRegistry({ file, pluginsDir })
     expect(reg.plugins.map((p) => p.name)).toEqual(["my-plugin"])
     expect(reg.plugins[0]!.source).toEqual({ type: "local", path: src })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a local plugin's own links point into the installed copy, so it keeps working once its source is gone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-links-"))
+  try {
+    const pluginsDir = join(root, "plugins")
+    mkdirSync(pluginsDir, { recursive: true })
+    const file = join(root, "plugins.json")
+    writeFileSync(file, JSON.stringify({ version: 1, plugins: [] }))
+    const src = join(root, "external", "my-plugin")
+    mkdirSync(join(src, "skills", "real"), { recursive: true })
+    writeFileSync(join(src, "skills", "real", "SKILL.md"), "# real")
+    // A relative link means "next to me", in whichever copy it sits.
+    symlinkSync("real", join(src, "skills", "alias"), "dir")
+
+    await addPlugin(src, {}, { file, pluginsDir })
+    rmSync(join(root, "external"), { recursive: true, force: true })
+
+    expect(readFileSync(join(pluginsDir, "my-plugin", "skills", "alias", "SKILL.md"), "utf8")).toBe("# real")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
