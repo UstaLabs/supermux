@@ -1,0 +1,223 @@
+// Card #75: a session exists on Send. A real broker (throwaway state, MUX_TEST_BROKER=1) runs the
+// library's echo fixture as `claude`. The stub waits while a HOLD file exists, so a test can keep an
+// agent "starting" for as long as it needs, and logs each start's folder, so it can count wakes.
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
+import { execFileSync } from "child_process"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { openDb, runMigrations } from "../src/core/storage/db"
+import { MIGRATIONS } from "../src/core/storage/migrations"
+import { Registry } from "../src/core/session-manager/registry"
+
+const REPO = join(import.meta.dir, "..")
+const SEED_ID = "00000000-0000-4000-8000-000000000001"
+const DOZING_ID = "00000000-0000-4000-8000-0000000000d0"
+
+const dir = mkdtempSync(join(tmpdir(), "mux-born-asleep-"))
+const state = join(dir, "state")
+const HOLD = join(dir, "hold")
+const STARTS = join(dir, "starts.log")
+const project = join(dir, "project")
+let broker: ReturnType<typeof Bun.spawn> | undefined
+let base = ""
+let token = ""
+let ws: WebSocket | undefined
+const frames: any[] = []
+
+function freePort(): number {
+  const l = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } })
+  const p = l.port
+  l.stop(true)
+  return p
+}
+
+async function waitFor<T>(what: string, probe: () => T | undefined | false | Promise<T | undefined | false>, timeoutMs = 30_000): Promise<T> {
+  const until = Date.now() + timeoutMs
+  for (;;) {
+    const v = await probe()
+    if (v) return v
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`)
+    await Bun.sleep(50)
+  }
+}
+
+const api = (path: string, init: RequestInit = {}) =>
+  fetch(`${base}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) } })
+
+async function session(id: string): Promise<any> {
+  const list = (await (await api("/sessions")).json()) as any[]
+  return list.find((s) => s.id === id)
+}
+
+async function messages(id: string): Promise<any[]> {
+  const body = (await (await api(`/sessions/${id}/messages`)).json()) as any
+  return Array.isArray(body) ? body : body.entries ?? body.messages ?? []
+}
+
+const replies = (id: string) => frames.filter((f) => f.type === "message_append" && f.session === id && f.entry?.direction === "outbound").map((f) => f.entry.text as string)
+const starting = (id: string) => frames.some((f) => f.type === "agent_state" && f.session === id && f.detail === "starting")
+const startsIn = (folder: string) => (existsSync(STARTS) ? readFileSync(STARTS, "utf8").split("\n").filter((l) => l === folder).length : 0)
+const send = (sessionId: string, text: string, clientId: string) => ws!.send(JSON.stringify({ type: "send", session: sessionId, op: "reply", args: { text }, client_message_id: clientId }))
+
+beforeAll(async () => {
+  const env: Record<string, string | undefined> = { ...process.env, MUX_HOME: dir, MUX_STATE_DIR: state, MUX_TEST_WORKDIR: join(dir, "workdir") }
+  for (const k of [
+    "DO_NOT_TRACK", "MUX_TELEMETRY", "MUX_TELEGRAM_BOT_TOKEN", "MUX_WHATSAPP_GOWA_URL", "MUX_WHATSAPP_GOWA_BASIC_AUTH",
+    "MUX_WHATSAPP_GOWA_DEVICE_ID", "MUX_WHATSAPP_WEBHOOK_PORT", "MUX_WHATSAPP_WEBHOOK_SECRET", "MUX_RELAY_DOMAIN",
+    "MUX_RELAY_BASE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CURSOR_API_KEY", "MUX_SHIM",
+  ]) delete env[k]
+  const stub = join(dir, "stubbin")
+  mkdirSync(stub, { recursive: true })
+  writeFileSync(join(stub, "claude"), [
+    "#!/bin/sh",
+    `echo "$PWD" >> "${STARTS}"`,
+    `while [ -f "${HOLD}" ]; do sleep 0.05; done`,
+    `MODE=echo EXPECT_DEFAULT_DENY=0 FIXTURE_MCP=1 exec bun "${REPO}/packages/supermux-core/tests/fixtures/claude-agent.mjs" "$@"`,
+    "",
+  ].join("\n"))
+  writeFileSync(join(stub, "tmux"), `#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n`)
+  chmodSync(join(stub, "claude"), 0o755)
+  chmodSync(join(stub, "tmux"), 0o755)
+  env.PATH = `${stub}:${env.PATH}`
+  const seed = Bun.spawnSync(["bun", "scripts/test-broker-seed.ts"], { cwd: REPO, env: env as Record<string, string> })
+  token = (JSON.parse(seed.stdout.toString()) as { token: string }).token
+  // A dozing session: it has been asleep since before this boot.
+  const db = openDb(join(state, "db.sqlite3"))
+  runMigrations(db, MIGRATIONS)
+  const registry = new Registry(db)
+  const dozingDir = join(dir, "dozing")
+  mkdirSync(dozingDir)
+  registry.register({ id: DOZING_ID, name: "dozing", agent: "claude", workdir: dozingDir, pid: 0, core: true, agent_home: join(state, "agents", "claude", "dozing") })
+  registry.sessions.suspend(DOZING_ID)
+  db.close()
+  // The repo new sessions get worktrees of.
+  mkdirSync(project)
+  execFileSync("git", ["init", "-q", "-b", "main", project])
+  execFileSync("git", ["-C", project, "config", "user.email", "t@t.t"])
+  execFileSync("git", ["-C", project, "config", "user.name", "t"])
+  writeFileSync(join(project, "README.md"), "hi\n")
+  execFileSync("git", ["-C", project, "add", "."])
+  execFileSync("git", ["-C", project, "commit", "-q", "-m", "init"])
+
+  const port = freePort()
+  base = `http://127.0.0.1:${port}`
+  broker = Bun.spawn(["bun", "src/main.ts"], {
+    cwd: REPO,
+    stdout: Bun.file(join(dir, "broker.log")),
+    stderr: Bun.file(join(dir, "broker.log")),
+    env: {
+      ...(env as Record<string, string>),
+      MUX_TEST_BROKER: "1",
+      MUX_SHIM: "host",
+      MUX_SOCKETS_DIR: join(state, "sockets"),
+      MUX_WEB_PORT: String(port),
+      MUX_WEB_PUBLIC_URL: base,
+      MUX_UPDATE_CHECK: "0",
+      MUX_CURATOR_ENABLED: "0",
+      MUX_WORKTREES_ROOT: join(dir, "worktrees"),
+    },
+  })
+  await waitFor("the broker", async () => (await fetch(`${base}/me`).then((r) => r.status).catch(() => 0)) === 401, 90_000)
+  ws = await new Promise<WebSocket>((resolve, reject) => {
+    const w = new WebSocket(`${base.replace("http", "ws")}/ws?clientSurface=web`, { headers: { Authorization: `Bearer ${token}` } } as any)
+    w.onopen = () => resolve(w)
+    w.onerror = (e) => reject(e)
+  })
+  ws.onmessage = (e) => { try { frames.push(JSON.parse(String(e.data))) } catch {} }
+  // The seed session is the caller of the doors' tools: wait until it answers.
+  send(SEED_ID, "ready?", "web-seed-ready")
+  await waitFor("the seed session's reply", () => replies(SEED_ID).includes("Fixture reply: ready?"), 60_000)
+}, 120_000)
+
+afterAll(async () => {
+  ws?.close()
+  if (broker) { broker.kill("SIGTERM"); await broker.exited }
+  if (process.env.MUX_TEST_KEEP_FIXTURE !== "1") rmSync(dir, { recursive: true, force: true })
+  else console.log("fixture kept:", dir)
+})
+
+// A test that fails while an agent is held must not hold the next test's agents.
+afterEach(() => rmSync(HOLD, { force: true }))
+
+async function launch(body: Record<string, unknown>): Promise<{ res: Response; created: any; ms: number }> {
+  const t0 = performance.now()
+  const res = await api("/sessions", { method: "POST", body: JSON.stringify({ workdir: project, agent: "claude", ...body }) })
+  const ms = performance.now() - t0
+  return { res, created: res.ok ? await res.json() : await res.text(), ms }
+}
+
+test("the launcher answers while the agent is still starting; the first message is logged once under the app's id, then answered", async () => {
+  writeFileSync(HOLD, "")
+  const { res, created } = await launch({ name: "Born asleep", firstMessage: "hello", client_message_id: "web-first-1" })
+  expect(res.status).toBe(200)
+  // The files pane can list the session's folder right away: it waits for the folder, never a 404
+  // (files still being checked out arrive through its live updates).
+  expect((await api(`/fs/list?path=${encodeURIComponent(created.workdir)}`)).status).toBe(200)
+  // Answered while the agent is held at its start: the row exists, asleep, with its message.
+  expect(created.session_branch).toBe("mux/born-asleep")
+  await waitFor("the starting state", () => starting(created.id))
+  expect((await session(created.id)).status).toBe("suspended")
+  const logged = (await messages(created.id)).filter((m) => m.direction === "inbound")
+  expect(logged.map((m) => [m.id, m.text])).toEqual([["in:web:web-first-1", "hello"]])
+  rmSync(HOLD)
+  await waitFor("the reply", () => replies(created.id).includes("Fixture reply: hello"))
+  // Woken: its worktree checked out on its branch, and it started once.
+  expect(execFileSync("git", ["-C", created.workdir, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("mux/born-asleep")
+  expect(startsIn(created.workdir)).toBe(1)
+  expect((await session(created.id)).status).toBe("active")
+  expect((await messages(created.id)).filter((m) => m.id === "in:web:web-first-1")).toHaveLength(1)
+}, 60_000)
+
+test("two messages sent while it starts share one wake and are answered in order", async () => {
+  writeFileSync(HOLD, "")
+  const { created } = await launch({ name: "Two quick", firstMessage: "one", client_message_id: "web-two-1" })
+  await waitFor("the starting state", () => starting(created.id))
+  send(created.id, "two", "web-two-2")
+  await waitFor("the second message logged", async () => (await messages(created.id)).some((m) => m.id === "in:web:web-two-2"))
+  rmSync(HOLD)
+  await waitFor("both replies", () => replies(created.id).includes("Fixture reply: two"))
+  expect(replies(created.id).filter((t) => t.startsWith("Fixture reply"))).toEqual(["Fixture reply: one", "Fixture reply: two"])
+  expect(startsIn(created.workdir)).toBe(1)
+}, 60_000)
+
+test("a message to a dozing session is logged first, wakes it, and is answered", async () => {
+  writeFileSync(HOLD, "")
+  send(DOZING_ID, "wake up", "web-dozing-1")
+  await waitFor("the starting state", () => starting(DOZING_ID))
+  expect((await messages(DOZING_ID)).map((m) => m.id)).toContain("in:web:web-dozing-1")
+  rmSync(HOLD)
+  await waitFor("the reply", () => replies(DOZING_ID).includes("Fixture reply: wake up"))
+  expect((await session(DOZING_ID)).status).toBe("active")
+}, 60_000)
+
+test("Stop while it starts: no reply, the session goes back to sleep, and the next message wakes it", async () => {
+  writeFileSync(HOLD, "")
+  const { created } = await launch({ name: "Stopped early", firstMessage: "never", client_message_id: "web-stop-1" })
+  await waitFor("the agent's start", () => startsIn(created.workdir) === 1)
+  expect((await api(`/sessions/${created.id}/interrupt`, { method: "POST" })).status).toBe(200)
+  rmSync(HOLD)
+  // What started is stopped and the row is asleep again (it was asleep from birth, so the log line is the evidence).
+  await waitFor("put back to sleep", () => readFileSync(join(dir, "broker.log"), "utf8").split("\n").some((l) => l.includes("session_put_back_to_sleep") && l.includes(created.id)))
+  expect((await session(created.id)).status).toBe("suspended")
+  await Bun.sleep(500)
+  expect(replies(created.id).filter((t) => t.startsWith("Fixture reply"))).toEqual([])
+  expect((await messages(created.id)).map((m) => m.id)).toContain("in:web:web-stop-1")
+  send(created.id, "again", "web-stop-2")
+  await waitFor("the reply", () => replies(created.id).includes("Fixture reply: again"))
+  expect(startsIn(created.workdir)).toBe(2)
+}, 60_000)
+
+test("spawn_session (an agent's door) still answers only once the new session is up", async () => {
+  const before = replies(SEED_ID).length
+  send(SEED_ID, `mcp-call mux-shim spawn_session ${JSON.stringify({ workdir: project, name: "Door child" })}`, "web-door-1")
+  const reply = await waitFor("the tool's answer", () => replies(SEED_ID).slice(before).find((t) => t.startsWith("MCP")), 60_000)
+  expect(reply).not.toContain("isError")
+  const id = /"session_id":\s*"([^"]+)"/.exec(reply)?.[1] ?? /([0-9a-f-]{36})/.exec(reply)?.[1]
+  expect(id).toBeTruthy()
+  const child = await session(id!)
+  expect(child.status).toBe("active")
+  expect(startsIn(child.workdir)).toBe(1)
+  send(id!, "hi child", "web-door-2")
+  await waitFor("the child's reply", () => replies(id!).includes("Fixture reply: hi child"))
+}, 90_000)

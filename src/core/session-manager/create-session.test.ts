@@ -101,3 +101,12 @@ test("a session that is gone by the time the spawn returns gets no workspace and
   expect(t.frames).toEqual([])
   expect(created).toEqual({ id: created.id, name: "Kid", workdir: "/w", agent: "claude", model: undefined, reasoningLevel: undefined, permissionMode: undefined, repo_root: undefined, session_branch: undefined })
 })
+
+// Card #75: the launcher's session is created asleep and announced at once; a door's create waits for its start.
+test("asleep is handed to the spawn, and the session is announced with its workspace all the same", async () => {
+  const { deps, frames, spawns } = setup()
+  await createSession(deps, { workdir: "/w", name: "launched", asleep: true })
+  await createSession(deps, { workdir: "/w", name: "door" })
+  expect(spawns.map((a) => a.asleep)).toEqual([true, undefined])
+  expect(frames.filter((f) => f.type === "session_added").map((f) => f.session.name)).toEqual(["launched", "door"])
+})

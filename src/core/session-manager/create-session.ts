@@ -1,7 +1,7 @@
 // The one create path (spec 2026-10-28 §4). The launcher (POST /sessions) and spawn_session start a
-// session through it, and so will delegate and council. It spawns the agent, puts the session in a
-// workspace (its own, or the one it joins) and tells the clients: the workspace frame first, then
-// the full session_added.
+// session through it, and so will delegate and council. It creates the session (the launcher's asleep,
+// card #75; a door's once its agent is up), puts it in a workspace (its own, or the one it joins) and
+// tells the clients: the workspace frame first, then the full session_added.
 import { AgentKind } from "../../shared/agents"
 import type { Session } from "./types"
 import type { WorkspaceDto } from "../workspace/dto"
@@ -27,6 +27,8 @@ export type CreateSessionArgs = {
   viewId?: string
   /** Card #75: this start's trace id, when tracing is on. */
   perfTrace?: string
+  /** Card #75, the launcher: the session is created asleep and announced at once; its first message wakes it. */
+  asleep?: boolean
 }
 
 export type CreatedSession = {
@@ -55,6 +57,7 @@ export type CreateSessionDeps = {
     baseBranch?: string
     inheritFromSessionId?: string
     perfTrace?: string
+    asleep?: boolean
   }): Promise<{ name: string; session_id: string }>
   /** A live (not archived) session. */
   getSession(id: string): Session | undefined
@@ -117,6 +120,7 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     baseBranch: args.baseBranch,
     inheritFromSessionId: args.inheritFrom,
     perfTrace: args.perfTrace,
+    asleep: args.asleep,
   })
   const entry = deps.getSession(r.session_id)
   const t = performance.now()

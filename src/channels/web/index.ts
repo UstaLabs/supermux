@@ -498,6 +498,12 @@ export interface WebChannelOpts {
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   getSessionWorkdir?: (name: string) => string | undefined
+  /**
+   * Card #75: resolves once a folder the broker is making exists (a session born asleep has its
+   * worktree checked out on its first wake), at once for any other path. The files routes, folder
+   * subscriptions and terminals wait on it instead of failing with a missing folder.
+   */
+  folderReady?: (path: string) => Promise<void>
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
@@ -1329,6 +1335,8 @@ export class WebChannel implements Channel {
     if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
 
     await lane.ready()
+    // A session born asleep gets its folder on its first wake: its terminal waits for it (card #75).
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1389,6 +1397,7 @@ export class WebChannel implements Channel {
       try { ws.close(1011, "terminal reset failed") } catch {}
       return
     }
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1936,7 +1945,9 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "fs_sub" && typeof frame.path === "string") {
-      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      const path = frame.path
+      const since = typeof frame.since === "string" ? frame.since : undefined
+      void (this.opts.folderReady?.(path) ?? Promise.resolve()).then(() => this.fss.subscribe(ws, path, since))
       return
     }
     if (frame.type === "fs_unsub" && typeof frame.path === "string") {
@@ -3489,6 +3500,7 @@ export class WebChannel implements Channel {
     if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
+        await this.opts.folderReady?.(p)
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
