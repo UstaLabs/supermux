@@ -20,8 +20,9 @@ grace is gone (the first message goes straight to the agent), and the rest of th
 - **The launcher's 15 s timeout** (step 3): `POST /sessions` rides its own client with 45 s on desktop and
   Android (`SESSION_START_TIMEOUT_MS`, an expect/actual: 45 s for CIO, null on Apple and web, which keep
   NSURLSession's 60 s and BrokerApi's 120 s).
-- Proposed, not built: answer the app before the agent is up (create now, start in the background), plan on
-  card #75.
+- **A session exists on Send** (fix 3, built 2026-11-05): `POST /sessions` registers the row asleep and answers;
+  the first message wakes it on its chain (spec: `docs/superpowers/specs/2026-11-05-session-exists-on-send-design.md`).
+  The map below is the path BEFORE this change; see "Fix 3 measured" at the end.
 
 ## The path at a glance
 
@@ -236,3 +237,27 @@ once).
 - Leftovers from the runs: none in the repos (no `mux/perf75*` branches or worktrees), no processes. Each
   Claude run added one project entry to `~/.claude.json` and a small transcript under `~/.claude/projects/`,
   as every session does.
+
+## Fix 3 measured: A/B against dev under the same load (2026-11-05, after the reboot)
+
+Two shadow brokers side by side, the same `scripts/perf-start-probe.ts` start interleaved between them so both
+saw the same box load (10–25 during the run): **base** = dev `fd1455657` (before), **new** = this branch.
+Launcher start with a first message ("Reply with just the word: ok"), worktree on.
+
+| Start | the launcher has its answer: base → new (median) | first reply: base → new (median) |
+|---|---|---|
+| Claude, supermux (3 pairs) | 7.72 s → **0.18 s** | 11.4 → 13.3 s (pairs 10.2/9.4, 11.4/13.3, 15.3/15.3) |
+| Claude, supermux-website (7 pairs) | 4.4 s → **0.15 s** | 8.9 → 9.4 s (pair differences −0.9 … +3.7 s) |
+| Codex, supermux (3 pairs) | 8.22 s → **0.15 s** | 11.2 → 10.4 s |
+| Codex, supermux-website (3 pairs) | 2.60 s → **0.10 s** | 5.3 → 5.7 s |
+
+- **The wait on Send is gone**: every new start answered in 0.10–0.27 s, against 2.2–10.2 s before.
+- **The time to the first reply is unchanged within the noise.** The work is the same, only no longer waited
+  for. Claude's own boot to `initialize` alone varied 2.6–6.5 s between runs (its claude.ai connectors are
+  fetched at every launch); the step traces of the new starts show no step that the old path did not have.
+- Live checks on the shadow with the real CLIs: all six kinds start from a row born asleep and answer (Cursor
+  with its own plan refusal); two quick messages share one start and are answered in order; Stop during a start
+  leaves no reply and the session asleep, and the next message wakes it; archive during a start leaves no agent
+  running; a broker restart mid-start leaves the session asleep with the message in the chat, and the next message
+  wakes it; the files pane, a terminal and the git badge work right after Send (the files pane waits for git's
+  checkout: ~4 s on the supermux repo).
