@@ -192,6 +192,24 @@ class DesktopLauncherTest {
         assertEquals(listOf("file-1", "file-2"), req.firstAttachments)
     }
 
+    // Card #75: the first message has the app's own id, the one the broker logs it under.
+    @Test fun create_session_names_its_first_message_with_an_id_of_its_own() = runBlocking {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded)
+        app.createSessionWithFirstMessage(
+            workdir = "/proj", agent = "claude", model = null, reasoningLevel = null,
+            text = "hi", staged = emptyList(), worktree = false, baseBranch = null,
+        )
+        app.createSessionWithFirstMessage(
+            workdir = "/proj", agent = "claude", model = null, reasoningLevel = null,
+            text = "hi", staged = emptyList(), worktree = false, baseBranch = null,
+        )
+        val ids = recorded.filter { it.path == "/sessions" }.map { json.decodeFromString<SpawnRequest>(it.body).clientMessageId }
+        assertEquals(2, ids.filterNotNull().toSet().size)
+        assertTrue(ids.all { it!!.startsWith("web-") })
+        assertTrue(recorded.first { it.path == "/sessions" }.body.contains("\"client_message_id\""))
+    }
+
     @Test fun create_session_blank_model_is_omitted_and_worktree_false_is_sent() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)

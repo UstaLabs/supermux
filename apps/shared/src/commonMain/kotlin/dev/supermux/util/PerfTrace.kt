@@ -118,6 +118,73 @@ object PerfTrace {
         ring.since(0).filter { it.name == "chat.open" }.map { it.trace }.distinct().takeLast(max)
     }
 
+    // ── Session starts (card #75): one trace per launcher Send, until the first reply is on screen ──
+
+    private class Start(val trace: String, var workdir: String, val at: Long) { var sessionId: String? = null }
+    private var start: Start? = null
+    private var startSeq = 0
+
+    /** A start is being followed: the frame reducer checks this before looking any closer. */
+    @Volatile var startActive: Boolean = false
+        private set
+
+    /** How long a start is followed: past this, its late frames are a session's normal life. */
+    private const val START_TTL_MS = 5 * 60_000L
+
+    /**
+     * A new session-start trace for the launcher's Send in [workdir], with a `start.send` event. The
+     * create request carries it (`x-mux-trace`), so the broker's half joins it, and the new session's
+     * first frames and draws are marked under it ([startTraceFor]).
+     */
+    fun beginStart(workdir: String, vararg fields: Pair<String, Any?>): String {
+        val trace = synchronized(lock) {
+            val id = "S${launchId.drop(1)}.${++startSeq}"
+            start = Start(id, workdir, elapsedMs())
+            startActive = true
+            id
+        }
+        event("start.send", *fields, trace = trace)
+        return trace
+    }
+
+    /** The start whose create request is about to go out: begun moments ago, its session not known yet. */
+    fun pendingStart(): String? = synchronized(lock) { start?.takeIf { it.sessionId == null && elapsedMs() - it.at < 10_000 }?.trace }
+
+    /** [sessionId] is the session the start in flight created. */
+    fun bindStart(trace: String, sessionId: String) = synchronized(lock) {
+        start?.takeIf { it.trace == trace }?.sessionId = sessionId
+    }
+
+    /** The broker resolved the start's folder to [path] (its frames name that path). */
+    fun startResolved(trace: String, path: String) = synchronized(lock) {
+        start?.takeIf { it.trace == trace }?.workdir = path
+    }
+
+    /**
+     * The start trace [sessionId] belongs to, while fresh. A session the app has not heard about yet
+     * binds to an unbound start when it lives in the start's [workdir] (its worktree's repo root).
+     */
+    fun startTraceFor(sessionId: String, workdir: String? = null, repoRoot: String? = null): String? = synchronized(lock) {
+        val s = start?.takeIf { elapsedMs() - it.at < START_TTL_MS }
+        if (s == null) {
+            startActive = false
+            return@synchronized null
+        }
+        when {
+            s.sessionId == sessionId -> s.trace
+            s.sessionId == null && (repoRoot == s.workdir || workdir == s.workdir) -> { s.sessionId = sessionId; s.trace }
+            else -> null
+        }
+    }
+
+    /** The start is over (its reply is on screen, or it failed): later frames are not timed. */
+    fun endStart(trace: String) = synchronized(lock) {
+        if (start?.trace == trace) {
+            start = null
+            startActive = false
+        }
+    }
+
     // ── Per-type counters: since launch (the panel) and since the last [takeStats] (shipping) ──
 
     private class Agg { var n = 0; var chars = 0L; var micros = 0L; var maxMicros = 0L }

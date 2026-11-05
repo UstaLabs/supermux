@@ -1589,7 +1589,8 @@ fun SessionListScreen(
         )
     }
     val newSessionCard: @Composable () -> Unit = {
-        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        // No extra room above it: under the title band its top lines up with the sheets beside it.
+        NewSessionListRow(onClick = onNewSession)
     }
     val aboveList: @Composable () -> Unit = {
         banner?.let { b ->
@@ -2410,18 +2411,20 @@ fun SessionListFooter(
     val darkNow = appearance != AppearanceMode.LIGHT
     val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
     val themeLabel = if (darkNow) "Switch to light theme" else "Switch to dark theme"
-    Column(Modifier.fillMaxWidth()) {
-        // onSurface at ~14%: on the dark rail `outlineVariant` is nearly invisible.
-        HorizontalDivider(
-            modifier = Modifier.fillMaxWidth(),
-            thickness = 1.dp,
-            color = cs.onSurface.copy(alpha = 0.14f),
-        )
+    // The sidebar's bottom part is a sheet like the panes': the chat's tone, rounded, in the frame's
+    // 6 dp gutter — so its bottom edge lines up with theirs, and no rule sets it off.
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(cs.surfaceContainerLow),
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .testTag("sidebar_footer")
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.End,
         ) {

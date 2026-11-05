@@ -522,13 +522,15 @@ private fun PointerSessionRow(
                         HostBadge(host)
                     }
 
-                    // Status badge — show when status is non-null and not "active".
+                    // Status badge — show when status is non-null and not "active". A suspended
+                    // session that is working is being woken (card #75): it says "starting".
                     val status = s.status
                     if (status != null && status != "active") {
-                        val badgeColor = if (status == "suspended") Color(c.warning)
+                        val waking = status == "suspended" && working
+                        val badgeColor = if (waking) cs.primary else if (status == "suspended") Color(c.warning)
                         else cs.onSurfaceVariant.copy(alpha = 0.6f)
                         Spacer(Modifier.height(2.dp))
-                        Text(status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                        Text(if (waking) "starting" else status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
                     } else {
                         Spacer(Modifier.height(Space.xs))
                     }

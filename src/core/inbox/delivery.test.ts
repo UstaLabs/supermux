@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { InboxStore } from "./store"
 import { InboxDelivery, envelope, type InboxDeliveryDeps } from "./delivery"
+import { SessionChain } from "../session-manager/session-chain"
 import type { Session } from "../session-manager/types"
 import type { Message } from "../session-manager/messages"
 import type { InboundDeliveryResult } from "../session-manager/inbound-delivery"
@@ -247,7 +248,9 @@ test("a burst of sends to a recipient that can't be reached leaves nothing runni
   expect(h.cursor.get("bbbb-2")).toBe(h.store.read("bbbb-2").at(-1)!.id)
 })
 
-test("sends while a pass waits for the recipient line up one more pass, not one each", async () => {
+// Card #75 (one wake path): the pass queued behind a failed wait fails with it instead of waiting the
+// whole timeout again; nothing is lost, the messages stay in the inbox for the next send.
+test("sends while a pass waits fail with that wait, not after a second one, and the next send delivers them all", async () => {
   const waits: Array<(ready: boolean) => void> = []
   const h = harness({ "bbbb-2": {} }, { waitDeliverable: () => new Promise<boolean>((resolve) => { waits.push(resolve) }) })
   h.delivery.send(A, ["bbbb-2"], "1", "queue")
@@ -255,14 +258,15 @@ test("sends while a pass waits for the recipient line up one more pass, not one 
   expect(waits).toHaveLength(1) // the first pass waits
   for (const text of ["2", "3", "4"]) h.delivery.send(A, ["bbbb-2"], text, "queue")
   waits[0]!(false)
-  await tick()
-  expect(waits).toHaveLength(2) // one more pass, for all three
-  waits[1]!(false)
-  await tick()
-  expect(waits).toHaveLength(2) // and no other
   await h.delivery.idle()
+  expect(waits).toHaveLength(1) // the pass queued behind it did not wait again
   expect(h.delivered).toEqual([])
   expect(h.cursor.get("bbbb-2")).toBeUndefined()
+  h.delivery.send(A, ["bbbb-2"], "5", "queue")
+  await tick()
+  waits[1]!(true)
+  await h.delivery.idle()
+  expect(bodies(h.delivered)).toEqual(["1", "2", "3", "4", "5"])
 })
 
 test("a session messaging itself never interrupts its own turn: that message queues", async () => {
@@ -356,4 +360,34 @@ test("observers: sent names sender and recipient; pending holds until the pass t
   expect(h.delivered).toHaveLength(1)
   expect(h.delivery.pending("bbbb-2")).toBe(false)
   expect(changed).toEqual(["bbbb-2", "bbbb-2"])
+})
+
+// Card #75: a session born asleep, or a worker left asleep at boot (#78), is active with no agent at
+// all. It used to be neither "suspended" nor "dead", so nothing woke it and delivery waited 60 s.
+test("an active recipient with no agent at all is woken before delivery", async () => {
+  const rows: Record<string, Partial<Session>> = { "bbbb-2": {} }
+  let adapter: "none" | "alive" = "none"
+  const h = harness(rows, {
+    adapterState: () => adapter,
+    resumeSuspended: async (s) => { h.calls.push(`suspended:${s.id}`); adapter = "alive"; return true },
+  })
+  h.delivery.send(A, ["bbbb-2"], "hello", "queue")
+  await h.delivery.idle()
+  expect(h.calls).toEqual(["suspended:bbbb-2"])
+  expect(bodies(h.delivered)).toEqual(["hello"])
+})
+
+test("with a shared chain, an inbox pass waits its turn behind other work for the same session", async () => {
+  const order: string[] = []
+  const chain = new SessionChain({ isLive: () => true, ensureLive: async () => {} })
+  const h = harness({ "bbbb-2": {} }, { chain, deliver: async (id, text, meta) => { order.push("inbox"); return { ok: true } } })
+  let release!: () => void
+  const web = chain.run("bbbb-2", async () => { await new Promise<void>((r) => { release = r }); order.push("web") })
+  h.delivery.send(A, ["bbbb-2"], "hello", "queue")
+  await tick()
+  expect(h.delivery.pending("bbbb-2")).toBe(true)
+  release()
+  await web
+  await chain.idle()
+  expect(order).toEqual(["web", "inbox"])
 })

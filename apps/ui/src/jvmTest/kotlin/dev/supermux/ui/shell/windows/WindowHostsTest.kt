@@ -229,7 +229,7 @@ class WindowHostsTest {
             newGroupId = "g-new",
             bounds = bounds,
             hostId = "extra-1",
-            edit = { next -> applied = next; next },
+            edit = { transform -> transform(t).also { applied = it } },
         )
         assertNotNull(extra)
         assertEquals(setOf("v2"), extra.claimedViewIds)
@@ -245,7 +245,7 @@ class WindowHostsTest {
         r.setWorkspaceOnMain("ws")
         val t = LayoutNode.Group("g1", listOf("v1"), "v1")
         assertNull(
-            tearOutTab(r, t, "missing", "ws", "g-new", bounds, "extra-1") { it },
+            tearOutTab(r, t, "missing", "ws", "g-new", bounds, "extra-1") { transform -> transform(t) },
         )
         assertTrue(r.extras("ws").isEmpty())
     }
@@ -386,7 +386,7 @@ class WindowHostsTest {
             newGroupId = "g-new",
             bounds = bounds,
             hostId = "extra-2",
-            edit = { next -> applied = next; next },
+            edit = { transform -> transform(t).also { applied = it } },
         )
         assertNotNull(extra)
         val next = applied!!
@@ -407,7 +407,7 @@ class WindowHostsTest {
         val t = LayoutNode.Group("g1", listOf("v1"), "v1")
         assertNotNull(r.tryClaim("ws", setOf("v1"), bounds, "extra-src", t))
         assertNull(
-            tearOutTab(r, t, "v1", "ws", "g-new", bounds, "extra-2") { it },
+            tearOutTab(r, t, "v1", "ws", "g-new", bounds, "extra-2") { transform -> transform(t) },
         )
         assertEquals(1, r.extras("ws").size)
         assertEquals("extra-src", r.extras("ws").single().id)

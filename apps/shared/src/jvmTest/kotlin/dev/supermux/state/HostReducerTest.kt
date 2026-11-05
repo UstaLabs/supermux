@@ -331,6 +331,15 @@ class HostReducerTest {
         assertEquals("cancelled", cancelled.messages["s1"]?.last()?.text)
     }
 
+    // Card #75: a session woken (or put back to sleep) tells every client its status.
+    @Test fun sessionStateCarriesTheLifecycleStatus() {
+        val s = HostState(sessions = listOf(sessionFixture("s1").copy(status = "suspended")))
+        val awake = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", status = "active"))
+        assertEquals("active", awake.sessions.single().status)
+        val untouched = reduceHostFrame(awake, ServerFrame.SessionState(session = "s1", mute = true))
+        assertEquals("active", untouched.sessions.single().status)
+    }
+
     @Test fun sessionStatePatchesPrompts() {
         val s = HostState(sessions = listOf(sessionFixture("s1")))
         val out = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", permissionMode = "ask"))

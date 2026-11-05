@@ -393,6 +393,8 @@ data class SpawnRequest(
      * handoff). The client must not also WS-send this text — that raced spawn.
      */
     val firstMessage: String? = null,
+    /** Card #75: the app's own id for [firstMessage] (`web-<uuid>`), the one the broker logs it under. */
+    @SerialName("client_message_id") val clientMessageId: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -2291,10 +2293,11 @@ class BrokerApi(
         })
     }
 
-    /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
+    /** POST /sessions; [trace] files it under a session start (card #75) rather than the launch. */
+    suspend fun spawn(req: SpawnRequest, trace: String? = null): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
             authHeader()
+            if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })

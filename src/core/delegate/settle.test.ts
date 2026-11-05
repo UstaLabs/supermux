@@ -7,7 +7,7 @@ import { InboxDelivery } from "../inbox/delivery"
 import { InboxStore } from "../inbox/store"
 import type { Session } from "../session-manager/types"
 
-const idle: SettleInputs = { alive: true, running: false, queuedInput: false, backgroundWork: false, pendingRequest: false }
+const idle: SettleInputs = { alive: true, asleep: false, running: false, queuedInput: false, backgroundWork: false, pendingRequest: false }
 
 /** A child "kid" of "par" and a fake clock: `fire()` runs the debounce timer that is due. */
 type Source = SettleSource | undefined
@@ -278,6 +278,29 @@ test("seed (startup): an open task is watched again; a live task is left alone; 
   const top = setup({ source: () => undefined })
   top.settle.seed("kid")
   expect(top.pending()).toEqual([])
+})
+
+// Boot leaves a worker asleep (suspended) until a message wakes it (#78). Asleep is settled: nothing runs, and the
+// nudge, an inbox message, is what wakes it. Unsettled, a child with an open task never heard from its parent again.
+test("seed (startup): an asleep child with an open task is nudged, which wakes it; queued input still holds it", () => {
+  const t = setup()
+  t.set({ alive: false, asleep: true })
+  t.settle.seed("kid")
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "nudge", child: "kid" }])
+  const queued = setup()
+  queued.set({ alive: false, asleep: true, queuedInput: true })
+  queued.settle.seed("kid")
+  queued.fire()
+  expect(queued.sent).toEqual([])
+})
+
+test("seed (startup): an asleep child whose nudge's turn already ran is reported to its parent", () => {
+  const t = setup()
+  t.set({ alive: false, asleep: true })
+  t.settle.seed("kid", { nudged: true, turnSinceNudge: true })
+  t.fire()
+  expect(t.sent).toEqual([{ kind: "notify", child: "kid" }])
 })
 
 test("taskOpenSince: the newest input from the parent or the user is newer than the newest report", () => {

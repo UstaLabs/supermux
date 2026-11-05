@@ -363,9 +363,14 @@ internal fun SidebarRail(
                 }
             }
         }
-        Box(Modifier.width(RAIL_WIDTH).height(1.dp).background(cs.onSurface.copy(alpha = 0.10f)))
+        // The rail's bottom part, as the expanded sidebar's: a sheet in the chat's tone, no rule.
         Column(
-            Modifier.padding(vertical = 6.dp),
+            Modifier
+                .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(cs.surfaceContainerLow)
+                .padding(vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp),
             content = footer,

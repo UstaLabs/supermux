@@ -11,11 +11,16 @@ export function gitAsync(
   args: string[],
   opts?: { timeoutMs?: number; trim?: boolean; okExitCodes?: number[] },
 ): Promise<string> {
+  const timeoutMs = opts?.timeoutMs ?? 30_000
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, encoding: "utf-8", timeout: opts?.timeoutMs ?? 30_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile("git", args, { cwd, encoding: "utf-8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = (err as { code?: unknown } | null)?.code
       if (err && !(typeof code === "number" && opts?.okExitCodes?.includes(code))) {
-        const msg = String(stderr || "").trim() || err.message
+        // A git cut short says so: its stderr then holds only half-written progress.
+        const { killed, signal } = err as { killed?: boolean; signal?: string | null }
+        const msg = killed
+          ? `git ${args[0]} timed out after ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`
+          : signal ? `git ${args[0]} was stopped (${signal})` : String(stderr || "").trim() || err.message
         reject(new Error(msg))
         return
       }

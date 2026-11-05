@@ -674,6 +674,8 @@ sealed interface ServerFrame {
         /** The session switched account (manually or on a usage limit). */
         val account: String? = null,
         val accountLabel: String? = null,
+        /** Card #75: its lifecycle status changed (active once woken, suspended when put back to sleep). */
+        val status: String? = null,
     ) : ServerFrame
 
     /** An account was added or removed: the cached GET /accounts is stale (no payload). */
@@ -1007,6 +1009,8 @@ sealed interface ClientFrame {
         @OptIn(ExperimentalSerializationApi::class)
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
+        /** Card #75: the app's own id for this message (`web-<uuid>`); the broker logs and dedupes it under it. */
+        @SerialName("client_message_id") val clientMessageId: String? = null,
     ) : ClientFrame
 
     @Serializable @SerialName("fs_sub")

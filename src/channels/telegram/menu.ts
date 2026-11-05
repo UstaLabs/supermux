@@ -109,3 +109,23 @@ export function buildMenuEntries(registry: SessionLister): MenuEntry[] {
 export async function setMenu(api: any, entries: MenuEntry[]): Promise<void> {
   await api.setMyCommands(entries, { scope: { type: "all_private_chats" } })
 }
+
+/**
+ * The menu refresh, two ways (card #75): `refresh` for a caller that waits for it, `inBackground` for a
+ * session start, which never does. Neither throws. A failure is logged once: the same error again stays
+ * quiet until a refresh succeeds (with more than 100 sessions every refresh fails BOT_COMMANDS_TOO_MUCH).
+ */
+export function menuRefresher(refresh: () => Promise<void>, warn: (err: string) => void): { refresh(): Promise<void>; inBackground(): void } {
+  let failing: string | undefined
+  const run = async (): Promise<void> => {
+    try {
+      await refresh()
+      failing = undefined
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message !== failing) warn(message)
+      failing = message
+    }
+  }
+  return { refresh: run, inBackground: () => { void run() } }
+}

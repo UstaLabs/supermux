@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildMenuEntries, sanitizeCommand, type SessionLister } from "./menu"
+import { buildMenuEntries, menuRefresher, sanitizeCommand, type SessionLister } from "./menu"
 
 const TG_COMMAND_RE = /^[a-z0-9_]{1,32}$/
 
@@ -112,5 +112,30 @@ describe("buildMenuEntries", () => {
     expect(commands).toContain("sessions")
     expect(commands).toContain("spawn_codex")
     expect(new Set(commands).size).toBe(commands.length)
+  })
+})
+
+describe("menuRefresher (card #75)", () => {
+  test("a session start does not wait for the refresh: inBackground returns while it is still running", () => {
+    let started = 0
+    const menu = menuRefresher(() => { started++; return new Promise<void>(() => {}) }, () => {})
+    menu.inBackground()
+    expect(started).toBe(1)
+  })
+
+  test("the same failure is logged once until a refresh succeeds, and nothing throws", async () => {
+    const warned: string[] = []
+    let fail: string | undefined = "400: BOT_COMMANDS_TOO_MUCH"
+    const menu = menuRefresher(async () => { if (fail) throw new Error(fail) }, (err) => warned.push(err))
+    await menu.refresh()
+    await menu.refresh()
+    menu.inBackground()
+    await Bun.sleep(0)
+    expect(warned).toEqual(["400: BOT_COMMANDS_TOO_MUCH"])
+    fail = undefined
+    await menu.refresh()
+    fail = "400: BOT_COMMANDS_TOO_MUCH"
+    await menu.refresh()
+    expect(warned).toEqual(["400: BOT_COMMANDS_TOO_MUCH", "400: BOT_COMMANDS_TOO_MUCH"])
   })
 })

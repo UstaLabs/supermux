@@ -189,12 +189,16 @@ export async function resumeCursorSession(
     onCursorSessionId?: (name: string, sid: string) => void
     cursorHost?: CursorCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; freshAfterUnloadable?: boolean },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; freshAfterUnloadable?: boolean; account?: string; permissionMode?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.cursorHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
+  // The row's mode, as spawn launches it (card #75: a new session starts through resume). Without it
+  // the host falls back to Cursor's default, "force", which auto-approves every tool.
+  const permissionMode = resolvePermissionMode(AgentKind.Cursor, session.permissionMode)
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     extra: prepareExtra({
@@ -204,6 +208,7 @@ export async function resumeCursorSession(
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
       model: session.model,
+      permissionMode,
     }),
   })
   let adapter: CoreAdapter | undefined
@@ -211,6 +216,7 @@ export async function resumeCursorSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -231,6 +237,7 @@ export async function resumeCursorSession(
       initialSessionId,
       persistSessionId: persistNativeId(deps.onCursorSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
     if (initialSessionId) await adapter.resume()
     else await adapter.start()
@@ -294,6 +301,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onCursorSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       cursorHost: ctx.cursorHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

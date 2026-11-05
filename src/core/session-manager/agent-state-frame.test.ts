@@ -35,3 +35,14 @@ test("bgOpen defaults to 0 when omitted", () => {
   expect(f.waiting).toBe(false)
   expect(f.bgOpen).toBe(0)
 })
+
+// Card #75: "starting" is computed from the session's chain (a wake in flight), never stored.
+test("a session being woken shows as starting, since the wake began, whatever the store says", () => {
+  for (const st of [{ phase: "idle" as const, since: 5 }, { phase: "dead" as const, since: 5 }]) {
+    expect(toAgentStateFrame("s1", st, 0, 1_000))
+      .toEqual({ type: "agent_state", session: "s1", state: "working", working: true, detail: "starting", tool: undefined, since: 1_000, workingSince: 1_000, waiting: false, bgOpen: 0, phase: "thinking" })
+  }
+})
+test("without a wake in flight the store's state is the frame", () => {
+  expect(toAgentStateFrame("s1", { phase: "idle", since: 5 }, 0, undefined).detail).toBeNull()
+})

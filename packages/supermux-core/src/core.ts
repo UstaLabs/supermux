@@ -22,6 +22,7 @@ import {
 import { isHostMcpServer } from "./mcp/brand.js"
 import { BRIDGE_ENV, McpHost, bridgeEntry, type HostLookup } from "./mcp/host.js"
 import { KeeperUnconfirmed } from "./keeper/client.js"
+import { msSince, perfMark } from "./perf-marks.js"
 import type { HostMcpServer, ToolChange } from "./mcp/server.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
@@ -880,7 +881,9 @@ export class Core {
     const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
     // Resolved (and refused under policy "error") before anything launches.
     const launch = forkFrom ? "fork" : resumeId ? "resume" : "create"
+    const contextStarted = performance.now()
     const prepared = await this.prepareContext(driver, input, launch)
+    perfMark(input.id, "core.context", { ms: msSince(contextStarted), launch })
     let session: Session | undefined
     let failed: Error | undefined
     let runtime: AgentRuntime | undefined

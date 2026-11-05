@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -75,6 +76,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -202,6 +204,8 @@ class OverlayUiState {
     var levelTarget by mutableFloatStateOf(0f)
     /** Talking stopped; waiting for the last words before sending. */
     var finishing by mutableStateOf(false)
+    /** Held to talk while the last talk is still [finishing]: the mic opens once that one has its words. */
+    var micWaiting by mutableStateOf(false)
     /** Your words were sent and the answer hasn't come yet: the avatar works meanwhile. */
     var thinking by mutableStateOf(false)
     /** No mic: say so instead of listening. */
@@ -329,6 +333,16 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     )
     dictation.onLive = { latest = it; ui.heard = it }
     dictation.currentText = { latest }
+    // A talk held while the last is still being transcribed waits for those words (the dictation opens no
+    // mic until then), and each talk keeps its own picture of the screen.
+    val turns = remember { TalkTurns() }
+    var talkShot by remember { mutableStateOf<OverlayShot?>(null) }
+    fun listen() {
+        latest = ""
+        ui.heard = ""
+        // There is no permission prompt over other apps: the mic is allowed in supermux.
+        if (mic.available) dictation.startMic() else ui.micMissing = true
+    }
     LaunchedEffect(mic, ui.listening) {
         if (!ui.listening) { ui.levelTarget = 0f; return@LaunchedEffect }
         // Recording for the broker meters the mic; the on-device recogniser meters itself.
@@ -352,10 +366,12 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     LaunchedEffect(ui.finishing, dictation.active, dictation.transcribing) {
         if (ui.finishing && !dictation.active && !dictation.transcribing) {
             val text = latest.trim()
-            val shot = ui.shot?.takeUnless { it.dropped }
+            val shot = talkShot?.takeUnless { it.dropped }
             ui.finishing = false
             ui.heard = ""
-            ui.shot = null
+            // Only its own picture: a talk held meanwhile may have taken the next one.
+            if (ui.shot === talkShot) ui.shot = null
+            talkShot = null
             latest = ""
             if (text.isNotEmpty()) {
                 ui.thinking = true
@@ -368,6 +384,11 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
             } else {
                 println("[OverlayTalk] nothing was heard: nothing sent" + if (shot != null) " (the screen is dropped too)" else "")
             }
+            // A talk held meanwhile has waited for these words: now it listens.
+            if (turns.lastFinished()) {
+                ui.micWaiting = false
+                if (ui.listening) listen()
+            }
         }
     }
     LaunchedEffect(ui.thinking) {
@@ -379,14 +400,27 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     }
     DisposableEffect(dictation) {
         ui.voice = OverlayVoiceControl(
-            start = {
-                latest = ""
-                ui.heard = ""
-                // There is no permission prompt over other apps: the mic is allowed in supermux.
-                if (mic.available) dictation.startMic() else ui.micMissing = true
+            start = { if (turns.start(finishing = ui.finishing)) listen() else ui.micWaiting = true },
+            send = {
+                if (turns.end()) {
+                    // Let go of before the mic was its own: nothing to send, and its picture goes.
+                    ui.micWaiting = false
+                    ui.shot = null
+                } else {
+                    talkShot = ui.shot
+                    ui.finishing = true
+                    dictation.stopMic()
+                }
             },
-            send = { ui.finishing = true; dictation.stopMic() },
-            cancel = { dictation.cancelMic(); ui.heard = ""; latest = "" },
+            cancel = {
+                if (turns.end()) {
+                    ui.micWaiting = false
+                } else {
+                    dictation.cancelMic()
+                    ui.heard = ""
+                    latest = ""
+                }
+            },
         )
         onDispose { ui.voice = null }
     }
@@ -604,13 +638,14 @@ fun OverlayBubble(
             ui.listening -> {
                 BubbleBox(shape, cs.primaryContainer) {
                     Text(
-                        ui.heard.ifBlank { "Listening…" },
+                        ui.heard.ifBlank { if (ui.micWaiting) "One moment…" else "Listening…" },
                         color = cs.onPrimaryContainer,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 4,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    val shot = ui.shot
+                    // Waiting, the picture on show may still be the last talk's.
+                    val shot = ui.shot.takeUnless { ui.micWaiting }
                     val note = when {
                         shot != null && !shot.dropped -> "Your screen goes with this."
                         shot != null -> "Screen dropped: only your words go."
@@ -704,37 +739,53 @@ fun OverlayBubble(
 /** What the bubble keeps for itself around a reply read in full: its padding, the name row, "Open in chat". */
 private val REPLY_CHROME = 100.dp
 
+/** A reply read in full stops growing here, however much room there is; past it, it scrolls. */
+private val REPLY_MAX = 460.dp
+
 /**
- * A reply read in full, in the [room] the bubble has: whole if it fits; otherwise as much as fits, and
- * "Open in chat" for the rest.
+ * A reply read in full: as tall as the [room] the bubble has (up to [REPLY_MAX]), and scrollable past that
+ * by finger, trackpad or mouse wheel. While more of it arrives it stays where you are reading, and follows
+ * the end only while you are at the end ([ReplyFollow]). Fades at its edges say there is more that way;
+ * "Open in chat" carries on in the chat.
  */
 @Composable
 private fun ReplyInFull(text: String, room: Dp, onOpen: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val style = MaterialTheme.typography.bodyMedium
-    val density = LocalDensity.current
-    val lines = with(density) {
-        val line = if (style.lineHeight.isSp) style.lineHeight.toPx() else style.fontSize.toPx() * 1.4f
-        linesThatFit((room - REPLY_CHROME).toPx(), line)
+    val scroll = rememberScrollState()
+    LaunchedEffect(scroll) {
+        val follow = ReplyFollow()
+        snapshotFlow { scroll.value to scroll.maxValue }.collect { (value, max) ->
+            follow.onScroll(value, max)?.let { scroll.scrollTo(it) }
+        }
     }
-    var cutShort by remember(text, lines) { mutableStateOf(false) }
-    Text(
-        text,
-        color = cs.onSurface,
-        style = style,
-        maxLines = lines,
-        overflow = TextOverflow.Ellipsis,
-        onTextLayout = { cutShort = it.hasVisualOverflow },
-        modifier = Modifier.testTag("overlay_reply_full"),
-    )
-    if (cutShort) {
+    // The bubble's own colour, so the fades read as the text running on under its edge.
+    val bubble = cs.surfaceContainerHigh
+    Box(Modifier.heightIn(max = (minOf(room, REPLY_MAX) - REPLY_CHROME).coerceAtLeast(80.dp))) {
         Text(
-            "Open in chat",
-            color = cs.primary,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
+            text,
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.verticalScroll(scroll).testTag("overlay_reply_full"),
         )
+        if (scroll.value > 0) {
+            Box(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().height(18.dp)
+                    .background(Brush.verticalGradient(listOf(bubble, bubble.copy(alpha = 0f)))),
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(18.dp)
+                    .background(Brush.verticalGradient(listOf(bubble.copy(alpha = 0f), bubble))),
+            )
+        }
     }
+    Text(
+        "Open in chat",
+        color = cs.primary,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
+    )
 }
 
 @Composable
