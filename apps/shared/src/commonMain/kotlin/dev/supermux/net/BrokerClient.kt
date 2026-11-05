@@ -118,7 +118,8 @@ class BrokerClient(
                                 if (parsed != null) {
                                     sync.onFrame(parsed is ServerFrame.Snapshot)
                                     _frames.emit(parsed)
-                                    println("[BrokerClient] rx ${parsed::class.simpleName}")
+                                    // Card #76: up to 20 live frames a second per chat — not worth a log line each.
+                                    if (parsed !is ServerFrame.ReplyStream) println("[BrokerClient] rx ${parsed::class.simpleName}")
                                 }
                             }
                         }

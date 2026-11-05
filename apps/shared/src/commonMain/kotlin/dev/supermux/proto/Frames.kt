@@ -115,6 +115,8 @@ data class LogEntry(
     val council_letter: String? = null,
     /** The agent's turn ended in this error (the broker's error reply). */
     val error: Boolean = false,
+    /** Card #76: the live stream this stored reply replaces (only on the live `message_append`; never stored). */
+    val stream: String? = null,
 )
 
 @Serializable
@@ -193,6 +195,8 @@ data class ActivityEvent(
     val direction: String? = null,
     /** `subagent_message` rows with direction "to": "user" | "parent". */
     val sender: String? = null,
+    /** Card #76: on a reasoning row, the live thinking stream it replaces. */
+    val stream: String? = null,
 )
 
 /** A subagent's own counters, as far as the agent reports them (or the broker derives them). */
@@ -485,6 +489,10 @@ data class PermissionModeInfo(
     val default: Boolean = false,
 )
 
+/** Card #76: an open live stream handed over in the snapshot (`streams`), so a reconnect shows the text so far. */
+@Serializable
+data class LiveStreamDto(val stream: String, val kind: String = "reply", val text: String = "")
+
 @Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
@@ -547,6 +555,8 @@ sealed interface ServerFrame {
          * their [projectMembership]) out; fetch `GET /archived-workspaces?slim=1` (card #54).
          */
         val archivedLazy: Boolean = false,
+        /** Card #76: session → its open live streams (only when `subscribe` asked for `streams`). */
+        val streams: Map<String, List<LiveStreamDto>> = emptyMap(),
     ) : ServerFrame
 
     /**
@@ -730,6 +740,17 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("message_append")
     data class MessageAppend(val session: String, val entry: LogEntry) : ServerFrame
+
+    /**
+     * Card #76: more of a reply (or, `kind` "thinking", of the agent's thinking) while it is written. [at] is the
+     * offset of [text] in the stream; `at` 0 is the whole text so far.
+     */
+    @Serializable @SerialName("reply_stream")
+    data class ReplyStream(val session: String, val stream: String, val kind: String = "reply", val at: Int = 0, val text: String = "") : ServerFrame
+
+    /** Card #76: a live stream ended with nothing stored for it: drop it. */
+    @Serializable @SerialName("reply_stream_end")
+    data class ReplyStreamEnd(val session: String, val stream: String) : ServerFrame
 
     /**
      * Read-status advance for one session. Broadcast when any device views a chat

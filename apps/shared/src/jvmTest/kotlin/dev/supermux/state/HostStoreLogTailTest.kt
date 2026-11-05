@@ -181,6 +181,14 @@ class HostStoreLogTailTest {
         assertEquals(listOf("/sessions/a/chat-extras"), h.fetched.toList())
     }
 
+    @Test fun subscribeAsksForLiveTextOnlyWhenTheSurfaceDoes() {
+        val off = Json.parseToJsonElement(subscribeFrameJson(listOf("a"))).jsonObject
+        assertEquals(null, off["streams"])
+        val on = Json.parseToJsonElement(subscribeFrameJson(listOf("a"), streams = true)).jsonObject
+        assertEquals(1, on["streams"]!!.jsonPrimitive.int)
+        assertEquals(setOf("desktop"), LIVE_REPLY_SURFACES)
+    }
+
     @Test fun subscribeAsksForTailsExceptTheChatsOnScreen() {
         val frame = Json.parseToJsonElement(subscribeFrameJson(listOf("a", "b", "a"))).jsonObject
         assertEquals("subscribe", frame["type"]!!.jsonPrimitive.content)

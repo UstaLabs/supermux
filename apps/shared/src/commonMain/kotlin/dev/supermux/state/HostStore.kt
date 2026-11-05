@@ -200,7 +200,7 @@ class HostStore(
     val client = BrokerClient(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
-        subscribeFrame = { req -> subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req) },
+        subscribeFrame = { req -> subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req, streams = deps.clientInfo?.surface in LIVE_REPLY_SURFACES) },
         clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
@@ -335,6 +335,9 @@ class HostStore(
     /** Caller session id → the councils it called (spec §5), ordered by creation. */
     val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> =
         _state.map { it.councils }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Card #76: session → its live reply / thinking (only the chats on screen get any). */
+    val liveReplies: StateFlow<Map<String, List<LiveReply>>> =
+        _state.map { it.live }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     /** Chat messages written while the socket was down, in order; sent after the next snapshot. */
@@ -2792,7 +2795,13 @@ internal const val SNAPSHOT_LOG_TAIL = 1
  * archived workspaces without their views/layout. A broker that predates these fields ignores
  * them and sends everything.
  */
-internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null): String = buildJsonObject {
+/**
+ * Card #76: the surfaces that ask for live replies. Desktop first; each platform joins once it has been checked
+ * on real hardware (Android, iOS, web).
+ */
+internal val LIVE_REPLY_SURFACES = setOf("desktop")
+
+internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null, streams: Boolean = false): String = buildJsonObject {
     put("type", "subscribe")
     // Card #54: the launch's trace and this connection's request, so the broker records its
     // snapshot build under them (ignored by a broker that does not trace).
@@ -2807,4 +2816,6 @@ internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = n
     // and no archived workspaces (fetched right after the snapshot, off the first screen's path).
     put("slimSubagents", true)
     put("lazyArchived", true)
+    // Card #76: replies while they are written (reply_stream frames), for the chats on screen.
+    if (streams) put("streams", 1)
 }.toString()

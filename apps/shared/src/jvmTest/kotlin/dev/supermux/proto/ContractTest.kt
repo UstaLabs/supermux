@@ -27,6 +27,7 @@ class ContractTest {
             "request_open_subagent", "message_append_subagent", "council_update",
             "fs_dir", "fs_gone", "fs_err",
             "accounts_changed", "account_login_state", "agents_changed", "accounts_settings", "session_state_account",
+            "reply_stream", "reply_stream_thinking", "reply_stream_end", "message_append_live", "activity_append_live", "snapshot_live",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -98,8 +99,25 @@ class ContractTest {
                 is ServerFrame.FsDir -> {}
                 is ServerFrame.FsGone -> {}
                 is ServerFrame.FsErr -> {}
+                is ServerFrame.ReplyStream -> {}
+                is ServerFrame.ReplyStreamEnd -> {}
             }
         }
+    }
+
+    // Card #76: live text, and the stored rows that take its place, keep their stream through a strict decode.
+    @Test fun live_text_frames_keep_their_stream_ids() {
+        val reply = json.decodeFromString<ServerFrame>(load("reply_stream")) as ServerFrame.ReplyStream
+        assertEquals("reply", reply.kind)
+        val thinking = json.decodeFromString<ServerFrame>(load("reply_stream_thinking")) as ServerFrame.ReplyStream
+        assertEquals("thinking", thinking.kind)
+        assertEquals(12, thinking.at)
+        val stored = json.decodeFromString<ServerFrame>(load("message_append_live")) as ServerFrame.MessageAppend
+        assertEquals(reply.stream, stored.entry.stream)
+        val row = json.decodeFromString<ServerFrame>(load("activity_append_live")) as ServerFrame.ActivityAppend
+        assertEquals(thinking.stream, row.event.stream)
+        val snapshot = json.decodeFromString<ServerFrame>(load("snapshot_live")) as ServerFrame.Snapshot
+        assertEquals(listOf(reply.stream), snapshot.streams.values.single().map { it.stream })
     }
 
     @Test fun subagent_fields_survive_the_wire() {
