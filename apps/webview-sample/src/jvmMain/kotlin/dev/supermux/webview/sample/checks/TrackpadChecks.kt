@@ -69,6 +69,14 @@ import kotlin.math.min
  *   least a third of the moving cards must have their page more than one presented frame ahead (INCONCLUSIVE otherwise);
  *   with it, at most one in fifty, and the median skew within [SkewRecord.OFF]. One presented frame is what a copy can
  *   see that the display doesn't ([SkewRecord]).
+ * - the frames: with frame sync each frame shows when its transaction commits, so two committed within one refresh show
+ *   only the second, and the refresh before shows nothing new (a user's report, 2026-11-05: "a kind of freeze" while
+ *   scrolling the chat). That check counts the frames Compose drew while the gestures ran that the display showed, and
+ *   those it never did (their drawables' presentedTime): at most one in ten never shown. In this scene's 12 WebGL pages
+ *   (2026-11-05): committed at AppKit's flush, 52 of 481 never showed; committed at once, 29 and 30 of about 480; spaced
+ *   as now, 18 and 24. One a refresh at a display link's, none closer than 15 ms, still lost 11 to 14 of about 480: the
+ *   window server's own misses, where a frame shown a refresh late is replaced by the next (CAMetalLayer's own presents
+ *   would show late instead).
  */
 object TrackpadChecks {
     private val PREVIEWS = listOf(
@@ -231,7 +239,46 @@ object TrackpadChecks {
                 PreviewMarkers.enabled = false
             }
         },
+        Check("mac-a-chat-scrolled-by-trackpad-shows-every-frame-it-draws", timeoutMillis = 120_000) {
+            val mac = platform as MacCheckPlatform
+            val stage = Stage()
+            compose { Scene(stage) }
+            try {
+                stage.list.scrollToItem(0)
+                delay(3_000)
+                val before = MacEngineTesting.frameSyncState(mac.window)
+                val s = mac.density
+                val height = mac.window.contentPane.height * s
+                val top = 80 * s
+                val gestured = gestures(stage, mac, SIDE.value * s / 2, top + (height - top) / 2)
+                val state = MacEngineTesting.frameSyncState(mac.window)
+                val shown = count(state, "shown") - count(before, "shown")
+                val unshown = count(state, "unshown") - count(before, "unshown")
+                println(
+                    "MEASURE trackpad frames: $shown shown, $unshown drawn and never shown; live previews as each gesture began " +
+                        "${gestured.livePerGesture}; frame sync $state",
+                )
+                assertTrue(state.startsWith("on "), "the window's frame sync: $state")
+                if (shown + unshown < 150) throw AssertionError("too few frames to judge: $shown shown, $unshown not ($state)")
+                if (gestured.livePerGesture.any { it < 2 }) throw AssertionError("too few live previews moved: ${gestured.livePerGesture}")
+                assertTrue(
+                    unshown * 10 <= shown + unshown,
+                    "frames the display never showed, a later one replacing each within a refresh: $unshown of ${shown + unshown} ($state)",
+                )
+            } finally {
+                compose(null)
+                delay(300)
+                stage.runtime.clear()
+                stage.runtime.onMemoryPressure()
+                delay(300)
+                stage.scope.cancel()
+            }
+        },
     )
+
+    /** A count the frame sync's state names (`name=<count>`), 0 if it names none. */
+    private fun count(state: String, name: String): Long =
+        Regex("(?:^| )$name=(\\d+)").find(state)?.groupValues?.get(1)?.toLong() ?: 0L
 
     /** From the list's start: the gestures, each after a rest, every copy of the column judged. */
     private suspend fun run(stage: Stage, mac: MacCheckPlatform, label: String): Seen {

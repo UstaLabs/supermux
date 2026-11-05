@@ -33,6 +33,16 @@
  *   (2026-11-01). (A copy of the window, CGWindowListCreateImage, composites what the window server has been sent:
  *   between such a commit and the next refresh it pairs the views' new places with the drawable before, the frame the
  *   display still shows, so a copy can see a page a presented frame ahead of its card. The display doesn't.)
+ * - That transaction is committed as the frame reaches AppKit's thread, at once, as the outermost (what AppKit's thread
+ *   has pending is flushed first), but never within SPACING of a refresh of the commit before: a frame presented with a
+ *   transaction shows when that commits, and nothing queues it as CAMetalLayer queues what it presents by itself, so two
+ *   committed before one refresh show only the second, the refresh before showing nothing new. Nested in AppKit's own
+ *   implicit transaction, each frame went at AppKit's next flush (on macOS 26 a step of its update cycle), where frames
+ *   met: while the chat was read by trackpad (2026-11-05), 8.8 % of them never showed and 11.9 % of refreshes showed
+ *   nothing new (0.6 % and 0.7 % committed at once), and AppKit's thread spent 12 % of its time in those flushes,
+ *   waiting on the render server (2.8 %). Where in the refresh a frame commits matters to the copies above: committed
+ *   at a display link's refresh, their start, copies caught nearly every moving page ahead of its card; and to the
+ *   frame rate: a frame waiting for the display to show the one before (its presented handler) halved it.
  * - presentsWithTransaction is set only once every drawable in flight is wrapped (ARM_FRAMES presented directly first):
  *   a drawable of skiko's own presented on a Metal thread with it would wait on that thread's transaction. A wrapped
  *   drawable presented off AppKit's thread is presented in a transaction of its own, so either value is safe for it.
@@ -50,6 +60,9 @@ static const int64_t WATCHDOG_NANOS = 250 * NSEC_PER_MSEC;
 
 /** Placements no frame took in this long are applied by themselves. */
 static const int64_t STALE_NANOS = 250 * NSEC_PER_MSEC;
+
+/** Of a refresh: a frame that reaches AppKit's thread sooner than this after the commit before waits until then. */
+static const double SPACING = 0.75;
 
 static atomic_llong gPlacementTurn;
 
@@ -86,6 +99,7 @@ long long WVNextPlacement(void) {
 @interface WVFrameSync ()
 - (void)present:(id<CAMetalDrawable>)drawable placements:(NSArray<dispatch_block_t> *)placements synced:(BOOL)synced;
 - (void)dropped:(NSArray<dispatch_block_t> *)placements;
+- (void)shown:(BOOL)shown;
 @end
 
 @implementation WVSyncedDrawable {
@@ -104,6 +118,13 @@ long long WVNextPlacement(void) {
     _sync = sync;
     _placements = placements;
     _synced = synced;
+    if (synced) {
+        // Once the display has shown the frame, or let it pass (a presentedTime of 0: a later one replaced it first).
+        __weak WVFrameSync *weakSync = sync;
+        [drawable addPresentedHandler:^(id<MTLDrawable> presented) {
+            [weakSync shown:presented.presentedTime > 0];
+        }];
+    }
     return self;
 }
 
@@ -151,9 +172,13 @@ long long WVNextPlacement(void) {
     int _armed;
     BOOL _active;
     dispatch_queue_t _watchdog;
-    // What it did, for the checks; close: frames presented here within 6 ms of the one before (within a refresh).
-    uint64_t _synced, _close, _direct, _late, _dropped, _stale;
+    // What it did, for the checks; close: frames presented here within 6 ms of the one before (within a refresh); shown
+    // and unshown: synced frames the display showed, and those it never did.
+    uint64_t _synced, _close, _direct, _late, _dropped, _stale, _shown, _unshown;
     CFTimeInterval _lastPresent;
+    // When AppKit's thread last committed a frame, and whether a frame waits for SPACING after it.
+    CFTimeInterval _lastCommit;
+    BOOL _spacing;
 }
 
 - (instancetype)initWithLayer:(CAMetalLayer *)layer window:(NSWindow *)window {
@@ -194,6 +219,11 @@ long long WVNextPlacement(void) {
         flush = [self takeAllLocked];
     }
     os_unfair_lock_unlock(&_lock);
+    if (!wanted) {
+        // The frames drawn in sync that wait go now, their placements with them.
+        while ([self presentWaiting:YES]) {
+        }
+    }
     for (dispatch_block_t placement in flush) placement();
     if (!wanted) self.layer.presentsWithTransaction = NO;
 }
@@ -295,7 +325,7 @@ long long WVNextPlacement(void) {
     [_unpresented addObject:frame];
     os_unfair_lock_unlock(&_lock);
     WVOnMain(NO, ^{
-        [self presentOnMain:frame];
+        [self presentWaiting:NO];
     });
     __weak WVFrameSync *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, WATCHDOG_NANOS), _watchdog, ^{
@@ -319,44 +349,92 @@ long long WVNextPlacement(void) {
     return taken;
 }
 
-/** AppKit's thread: frame's placements and its drawable, in one transaction. */
-- (void)presentOnMain:(WVFrame *)frame {
+/**
+ * AppKit's thread: the oldest frame waiting, its placements and its drawable in one transaction committed at once, the
+ * outermost (what AppKit's thread has pending is flushed first); unless, but with force, the commit before was less than
+ * SPACING of a refresh ago: then at that much after it. NO if none was presented.
+ */
+- (BOOL)presentWaiting:(BOOL)force {
     CFTimeInterval now = CACurrentMediaTime();
+    NSScreen *screen = self.window.screen;
+    double refresh = 1.0 / (screen.maximumFramesPerSecond > 0 ? (double)screen.maximumFramesPerSecond : 60.0);
+    CFTimeInterval at = _lastCommit + SPACING * refresh;
     os_unfair_lock_lock(&_lock);
-    NSArray<WVFrame *> *taken = [self takeThroughLocked:frame];
-    _synced += taken.count;
-    if (taken.count > 0) {
+    WVFrame *frame = force || now >= at ? _unpresented.firstObject : nil;
+    BOOL later = !frame && !_spacing && _unpresented.count > 0;
+    if (later) _spacing = YES;
+    if (frame) {
+        [_unpresented removeObjectAtIndex:0];
+        _synced++;
         if (now - _lastPresent < 0.006) _close++;
         _lastPresent = now;
     }
     BOOL active = _active;
     os_unfair_lock_unlock(&_lock);
+    if (later) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((at - now) * NSEC_PER_SEC)),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+            WVOnMain(NO, ^{
+                self->_spacing = NO;
+                [self presentWaiting:NO];
+            });
+        });
+    }
+    if (!frame) return NO;
+    _lastCommit = now;
     CAMetalLayer *layer = self.layer;
     if (active && layer && !layer.presentsWithTransaction) layer.presentsWithTransaction = YES;
+    [CATransaction flush];
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     for (dispatch_block_t placement in frame.placements) placement();
-    for (WVFrame *each in taken) {
-        [each.drawable present];
-        each.drawable = nil;
-    }
+    [frame.drawable present];
+    frame.drawable = nil;
     [CATransaction commit];
     frame.placements = nil;
+    // A frame still waiting goes SPACING after this one (it came before: nothing else calls for it).
+    if (!force) [self presentWaiting:NO];
+    return YES;
 }
 
-/** The watchdog's queue: AppKit's thread hasn't presented frame yet; it is presented now, and those before it. */
+/** Any thread (once the display showed a synced frame, or a later one replaced it): for the checks. */
+- (void)shown:(BOOL)shown {
+    os_unfair_lock_lock(&_lock);
+    if (shown) {
+        _shown++;
+    } else {
+        _unshown++;
+    }
+    os_unfair_lock_unlock(&_lock);
+}
+
+/**
+ * The watchdog's queue: AppKit's thread hasn't presented frame yet; it is presented now, and those before it, and their
+ * placements go to AppKit's thread.
+ */
 - (void)presentLate:(WVFrame *)frame {
     os_unfair_lock_lock(&_lock);
     NSArray<WVFrame *> *taken = [self takeThroughLocked:frame];
     _late += taken.count;
     os_unfair_lock_unlock(&_lock);
     if (taken.count == 0) return;
+    NSMutableArray<dispatch_block_t> *placements = [NSMutableArray array];
     [CATransaction begin];
     for (WVFrame *each in taken) {
         [each.drawable present];
         each.drawable = nil;
+        [placements addObjectsFromArray:each.placements ?: @[]];
+        each.placements = nil;
     }
     [CATransaction commit];
+    if (placements.count > 0) {
+        WVOnMain(NO, ^{
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            for (dispatch_block_t placement in placements) placement();
+            [CATransaction commit];
+        });
+    }
 }
 
 /** Any thread: a drawable skiko dropped unpresented gives its placements to the next frame. */
@@ -380,9 +458,9 @@ long long WVNextPlacement(void) {
 /** AppKit's thread: what it is, and what it did. */
 - (NSString *)describe {
     os_unfair_lock_lock(&_lock);
-    NSString *state = [NSString stringWithFormat:@"%@ armed=%d synced=%llu close=%llu direct=%llu late=%llu dropped=%llu stale=%llu pending=%lu",
+    NSString *state = [NSString stringWithFormat:@"%@ armed=%d synced=%llu close=%llu direct=%llu late=%llu dropped=%llu stale=%llu pending=%lu shown=%llu unshown=%llu",
                                                  _active ? @"on" : (_wanted ? @"arming" : @"off"), _armed, _synced, _close, _direct,
-                                                 _late, _dropped, _stale, (unsigned long)(_pending.count + _recorded.count)];
+                                                 _late, _dropped, _stale, (unsigned long)(_pending.count + _recorded.count), _shown, _unshown];
     os_unfair_lock_unlock(&_lock);
     return [state stringByAppendingFormat:@" transaction=%d", self.layer.presentsWithTransaction ? 1 : 0];
 }
