@@ -76,6 +76,9 @@ class DesktopPlatform : Platform {
         // AWT turns a Mac trackpad's two-finger scroll into wheel events that run on into the
         // system's momentum, with no "fingers lifted" in between.
         trackpadMomentum = isMacOs(),
+        // The assistant overlay (#62): the Agent in always-on-top windows over every app, behind its
+        // Appearance switch. macOS and Windows; a Linux compositor may not keep it on top.
+        assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,
     )
 
     /** The shared Compose terminal. No `SwingPanel` is left on the terminal path: the grid is
@@ -144,6 +147,19 @@ class DesktopPlatform : Platform {
     override val files: FileAccess = DesktopFileAccess()
 
     override val mic: MicCapture = DesktopMicCapture()
+
+    /**
+     * The assistant overlay (#62): on macOS and Windows a window may float over other apps without asking;
+     * macOS asks for the mic the first time hold-to-talk records. Elsewhere there is no overlay.
+     */
+    override val assistantOverlay: dev.supermux.ui.platform.AssistantOverlayHost? =
+        if (dev.supermux.desktop.overlay.desktopOverlaySupported) {
+            object : dev.supermux.ui.platform.AssistantOverlayHost {
+                override fun canDrawOverOtherApps(): Boolean = true
+                override fun openPermissionPage() = Unit
+                override suspend fun requestMic(): Boolean = true
+            }
+        } else null
 
     /** Process-wide, not per-window — see [SharedDesktopTts]. */
     override val tts: TtsEngine get() = SharedDesktopTts
