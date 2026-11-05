@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { TextDecoder } from 'node:util'
 import { connectKeeper, type KeeperConnection } from '../keeper/client.js'
+import { agentExitError } from '../keeper/exit.js'
 import type { KeeperWelcome } from '../keeper/protocol.js'
 
 type Pending = { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -97,7 +98,7 @@ export async function transport(
           if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq, ev.stale)
           else if (ev.type === 'stderr') conn.ack(ev.seq)
         }
-        if (!closed) fail(new Error('Claude process exited'), true)
+        if (!closed) fail(agentExitError('Claude', conn.exitStatus()), true)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         if (closed) return

@@ -285,6 +285,8 @@ class ChatActions(
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
     /** Opens Settings ▸ Accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
+    /** Opens the agent's own sign-in, Settings ▸ Providers (the link when the system login's sign-in expired); null = none. */
+    val openSignIn: (() -> Unit)? = null,
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -295,9 +297,10 @@ fun rememberChatActions(
     /** Override the proxy load (the headless SM_LINKS_MENU hook injects a canned list). */
     loadProxies: (suspend () -> List<ProxyDto>)? = null,
     openAccounts: (() -> Unit)? = null,
+    openSignIn: (() -> Unit)? = null,
 ): ChatActions {
     val composerActions = rememberComposerActions(app, session.id, session.workdir)
-    return remember(app, session.id, composerActions, loadProxies, openAccounts) {
+    return remember(app, session.id, composerActions, loadProxies, openAccounts, openSignIn) {
         ChatActions(
             send = { text, fileIds -> app.sendMessage(session.id, text, fileIds) },
             interrupt = { app.interrupt(session.id) },
@@ -325,6 +328,7 @@ fun rememberChatActions(
             ensureAccounts = { app.ensureAccounts() },
             setAccount = { id -> app.setSessionAccount(session.id, id) },
             openAccounts = openAccounts,
+            openSignIn = openSignIn,
         )
     }
 }
@@ -477,6 +481,7 @@ fun ChatPanel(
         accounts = sessionAccounts,
         switch = accountSwitch,
         onOpenAccounts = actions.openAccounts,
+        onSignIn = actions.openSignIn,
     )
 
     var pendingRespondIds by remember(session.id) { mutableStateOf(setOf<String>()) }

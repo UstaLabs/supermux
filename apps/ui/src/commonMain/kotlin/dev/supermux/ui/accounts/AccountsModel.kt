@@ -142,9 +142,18 @@ fun hasAccountChoice(all: List<AccountDto>?, agent: String): Boolean =
 
 fun isSystemAccountId(id: String?): Boolean = id.isNullOrBlank() || id.endsWith(":system")
 
-/** "Refused: <the API's words>" — why an account is marked unavailable (null when it is not). */
+/** The code of a mark (and of a usage error) the broker gives a login its provider refused: sign in again. */
+const val SIGN_IN_EXPIRED = "account_expired"
+
+/** Whether [account] is marked unavailable because its sign-in expired (or was revoked). */
+fun signInExpired(account: AccountDto): Boolean = account.unavailable?.code == SIGN_IN_EXPIRED
+
+/** Why an account is marked unavailable (null when it is not): "Sign-in expired", or "Refused: <the API's words>". */
 fun accountUnavailableText(account: AccountDto): String? =
-    account.unavailable?.let { u -> u.reason.trim().ifBlank { null }?.let { "Refused: $it" } ?: "Refused by the agent's API" }
+    account.unavailable?.let { u ->
+        if (u.code == SIGN_IN_EXPIRED) "Sign-in expired"
+        else u.reason.trim().ifBlank { null }?.let { "Refused: $it" } ?: "Refused by the agent's API"
+    }
 
 // ── guided login ───────────────────────────────────────────────────────────────────────────────
 

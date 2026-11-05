@@ -342,3 +342,9 @@ test("every desktop installer is built with the tag as the app's version", () =>
   expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(4)
   expect(publishJob).toContain('CLIENT_DESKTOP_VERSION="$V"')
 })
+
+test("a release attaches its iOS build to the internal TestFlight group only; external review is opt-in", () => {
+  const job = workflow.slice(workflow.indexOf("  assign-testflight:"))
+  expect(job).toContain("TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}")
+  expect(job).not.toMatch(/TESTFLIGHT_GROUP: "[^"]*Developer Beta/)
+})

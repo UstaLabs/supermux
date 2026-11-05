@@ -248,4 +248,36 @@ class AccountsUiTest {
         onNodeWithText("Refused: Your organization has disabled", substring = true).assertIsDisplayed()
         onNodeWithTag("account-unavailable:claude-work").assertDoesNotExist()
     }
+
+    // ── an expired sign-in (#63) ───────────────────────────────────────────────────────────────
+
+    private val cursorExpired = AccountUnavailableDto(
+        reason = "Cursor sign-in expired — sign in to Cursor again.", since = "2026-11-04T10:40:58.000Z", code = "account_expired")
+    private val cursorSystem = AccountDto(id = "cursor:system", agent = "cursor", method = "system", label = "System login", system = true,
+        unavailable = cursorExpired)
+    private val cursorWork = AccountDto(id = "cursor-work", agent = "cursor", method = "subscription", label = "Work",
+        createdAt = "2026-10-03T00:00:00.000Z", unavailable = cursorExpired)
+
+    @Test fun an_expired_system_sign_in_says_so_and_offers_its_sign_in_again() = runComposeUiTest {
+        val signIns = mutableListOf<String>()
+        content {
+            AccountsSettingsScreen(AccountsActions(accounts = MutableStateFlow(listOf(cursorSystem))), topBarShown = true, onSignInAgain = { signIns += it })
+        }
+        waitForIdle()
+        onNodeWithTag("account-unavailable:cursor:system").assertIsDisplayed()
+        onNodeWithText("Sign-in expired", substring = true).assertIsDisplayed()
+        onNodeWithText("Refused:", substring = true).assertDoesNotExist()
+        onNodeWithTag("account-sign-in:cursor:system").performClick()
+        assertEquals(listOf("cursor"), signIns)
+    }
+
+    @Test fun an_added_account_whose_sign_in_expired_says_how_to_sign_it_in_again() = runComposeUiTest {
+        content {
+            AccountsSettingsScreen(AccountsActions(accounts = MutableStateFlow(listOf(cursorWork))), topBarShown = true, onSignInAgain = {})
+        }
+        waitForIdle()
+        onNodeWithText("Sign-in expired. Remove it, then add it again to sign in.").assertIsDisplayed()
+        // The system login's sign-in flow would not sign this account in.
+        onNodeWithTag("account-sign-in:cursor-work").assertDoesNotExist()
+    }
 }

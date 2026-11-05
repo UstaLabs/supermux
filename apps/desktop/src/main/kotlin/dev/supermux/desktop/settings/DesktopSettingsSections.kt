@@ -52,6 +52,7 @@ fun DesktopSettingsSection(
             actions = rememberAccountsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
+            onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
         )
         SettingsSection.Devices -> DevicesSettingsScreen(
             actions = rememberDevicesSettingsActions(host),

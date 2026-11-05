@@ -31,6 +31,7 @@ class PairingHolder(
             store = SecureTokenStore().asPairingStore(),
             scope = scope,
             httpFactory = { cioHttpFactory()(null) },
+            deviceName = androidDeviceName(),
         )
     },
 ) : ViewModel() {
@@ -48,3 +49,6 @@ class PairingHolder(
      */
     internal fun clearForTest() = onCleared()
 }
+
+/** This phone's name on a host it pairs with: first-run pairing and Add host both offer it. */
+internal fun androidDeviceName(): String = android.os.Build.MODEL?.ifBlank { null } ?: "Android phone"

@@ -4,9 +4,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.dragAndDrop
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -36,12 +44,12 @@ import kotlin.test.assertEquals
 @OptIn(ExperimentalTestApi::class)
 class WalkthroughViewTest {
 
-    private fun state() = WalkthroughState("s1").apply {
+    private fun state(firstBody: String = "A") = WalkthroughState("s1").apply {
         applyWalkthrough(
             Walkthrough(
                 id = "w1", sessionId = "s1", title = "Tour", revision = 1,
                 steps = listOf(
-                    WalkthroughStep(id = "a", ord = 0, title = "First step", bodyMd = "A"),
+                    WalkthroughStep(id = "a", ord = 0, title = "First step", bodyMd = firstBody),
                     WalkthroughStep(id = "b", ord = 1, title = "Second step", bodyMd = "B"),
                 ),
             ),
@@ -53,10 +61,12 @@ class WalkthroughViewTest {
         repos: List<dev.supermux.net.RepoDiff> = emptyList(),
         read: (String, String) -> Result<String> = { _, _ -> Result.success("") },
         baseText: (suspend (String, String, Boolean) -> dev.supermux.net.BlobText)? = null,
+        clipboard: Clipboard = FakeClipboard(),
     ): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
             LocalPlatform provides FakePlatform(),
+            LocalClipboard provides clipboard,
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 WalkthroughView(
@@ -98,6 +108,67 @@ class WalkthroughViewTest {
         onNodeWithTag("walkthrough_view").performKeyInput { pressKey(Key.DirectionLeft) }
         waitForIdle()
         assertEquals(0, state.stepIndex)
+    }
+
+    // A step's text selects and copies like a chat reply (#69). The slideshow pages on a horizontal
+    // drag, so a mouse drag over the text must select instead of paging, and the keys and a finger
+    // swipe must still page.
+
+    private val sentence = "Select this sentence of the first step."
+
+    @Test
+    fun a_mouse_drag_over_a_step_selects_and_copies_its_text_instead_of_paging() = runComposeUiTest {
+        val state = state(firstBody = sentence)
+        val clipboard = FakeClipboard()
+        setContent(host(state, clipboard = clipboard))
+        waitForIdle()
+        val body = onNodeWithText(sentence)
+        val layout = body.textLayout()
+
+        // Right to left: the direction that pages forward.
+        body.performMouseInput {
+            dragAndDrop(
+                layout.getBoundingBox(sentence.length - 1).centerRight - Offset(1f, 0f),
+                layout.getBoundingBox(0).centerLeft + Offset(1f, 0f),
+            )
+        }
+        // On the slideshow, not the body: a drag that paged would have taken the body away.
+        onNodeWithTag("walkthrough_view").copyShortcut()
+        waitForIdle()
+
+        assertEquals(sentence, clipboard.text)
+        assertEquals(0, state.stepIndex, "the drag paged the slideshow")
+    }
+
+    @Test
+    fun the_arrow_keys_still_page_once_step_text_is_selected() = runComposeUiTest {
+        val state = state(firstBody = sentence)
+        setContent(host(state))
+        waitForIdle()
+        val body = onNodeWithText(sentence)
+
+        body.performMouseInput { doubleClick(body.pointAt("Select this sen".length)) }
+        waitForIdle()
+        onNodeWithTag("walkthrough_view").performKeyInput { pressKey(Key.DirectionRight) }
+        waitForIdle()
+
+        assertEquals(1, state.stepIndex)
+    }
+
+    @Test
+    fun a_finger_swipe_over_step_text_still_pages() = runComposeUiTest {
+        val state = state(firstBody = sentence)
+        setContent(host(state))
+        waitForIdle()
+        val body = onNodeWithText(sentence)
+        val layout = body.textLayout()
+
+        body.performTouchInput {
+            swipeLeft(startX = layout.getBoundingBox(sentence.length - 1).right, endX = layout.getBoundingBox(0).left)
+        }
+        waitForIdle()
+
+        assertEquals(1, state.stepIndex)
     }
 
     @Test

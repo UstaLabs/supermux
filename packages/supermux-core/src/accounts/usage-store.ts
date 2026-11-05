@@ -29,9 +29,9 @@ export class UsageStore {
       if (root?.unavailable && typeof root.unavailable === "object") {
         for (const [id, raw] of Object.entries(root.unavailable as Record<string, unknown>)) {
           if (this.refused.has(id) || !raw || typeof raw !== "object") continue
-          const { reason, since } = raw as Record<string, unknown>
+          const { reason, since, code } = raw as Record<string, unknown>
           const at = typeof since === "string" ? Date.parse(since) : NaN
-          if (typeof reason === "string" && Number.isFinite(at)) this.refused.set(id, { reason, since: new Date(at) })
+          if (typeof reason === "string" && Number.isFinite(at)) this.refused.set(id, { reason, since: new Date(at), ...(typeof code === "string" && code ? { code } : {}) })
         }
       }
       const accounts = root?.accounts
@@ -67,9 +67,9 @@ export class UsageStore {
   unavailable(id: string): AccountUnavailable | undefined { return this.refused.get(id) }
 
   /** Marks `id` unavailable; false when it already was (the first reason and time are kept). */
-  markUnavailable(id: string, reason: string, since = new Date()): boolean {
+  markUnavailable(id: string, reason: string, since = new Date(), code?: string): boolean {
     if (this.refused.has(id)) return false
-    this.refused.set(id, { reason, since })
+    this.refused.set(id, { reason, since, ...(code ? { code } : {}) })
     this.schedule()
     return true
   }
@@ -100,8 +100,8 @@ export class UsageStore {
       const kept = windows.filter(w => w.resetsAt && w.resetsAt.getTime() > now).map(w => ({ name: w.name, usedPercent: w.usedPercent, resetsAt: w.resetsAt!.toISOString() }))
       if (kept.length) accounts[id] = kept
     }
-    const unavailable: Record<string, { reason: string; since: string }> = {}
-    for (const [id, mark] of this.refused) unavailable[id] = { reason: mark.reason, since: mark.since.toISOString() }
+    const unavailable: Record<string, { reason: string; since: string; code?: string }> = {}
+    for (const [id, mark] of this.refused) unavailable[id] = { reason: mark.reason, since: mark.since.toISOString(), ...(mark.code ? { code: mark.code } : {}) }
     const text = JSON.stringify({ version: 1, accounts, ...(this.refused.size ? { unavailable } : {}) })
     const run = this.saving.then(async () => {
       await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })

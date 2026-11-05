@@ -115,6 +115,7 @@ import dev.supermux.ui.accounts.agentDisplayName
 import dev.supermux.ui.accounts.hasAccountChoice
 import dev.supermux.ui.accounts.isSystemAccountId
 import dev.supermux.ui.accounts.sessionSwitchFailureText
+import dev.supermux.ui.accounts.signInExpired
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.GeistMonoFontFamily
@@ -171,6 +172,8 @@ class RunSettingsAccount(
     val refusal: String? = null,
     /** Opens Settings ▸ Accounts; offered when the current account is unavailable. */
     val onOpenAccounts: (() -> Unit)? = null,
+    /** Opens the agent's own sign-in (Settings ▸ Providers); offered instead when the system login's sign-in expired. */
+    val onSignIn: (() -> Unit)? = null,
 ) {
     /** The account chosen by hand (null while Auto is chosen) or run on. */
     val current: AccountDto? = selectedId?.let { id -> accounts.firstOrNull { it.id == id } }
@@ -203,6 +206,7 @@ class RunSettingsAccount(
             accounts: List<AccountDto>?,
             switch: SessionAccountSwitch,
             onOpenAccounts: (() -> Unit)? = null,
+            onSignIn: (() -> Unit)? = null,
         ): RunSettingsAccount? {
             val list = accountsFor(accounts.orEmpty(), agent)
             val onSystem = isSystemAccountId(accountId)
@@ -218,6 +222,7 @@ class RunSettingsAccount(
                 pendingId = switch.pendingId,
                 refusal = switch.refusal,
                 onOpenAccounts = onOpenAccounts,
+                onSignIn = onSignIn,
             )
         }
     }
@@ -651,7 +656,13 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
     }
     val current = account.current
     if (current != null && account.unavailable) {
-        UnavailableNotice(current, account.onOpenAccounts?.let { open -> { onDismiss(); open() } })
+        // An expired system sign-in is fixed by signing in again, not by anything under Accounts.
+        val signIn = account.onSignIn?.takeIf { current.system && signInExpired(current) }
+        UnavailableNotice(
+            current,
+            account.onOpenAccounts?.takeIf { signIn == null }?.let { open -> { onDismiss(); open() } },
+            signIn?.let { open -> { onDismiss(); open() } },
+        )
     }
     if (account.offersAuto) {
         // Auto first, and the default: the account with the most room left when the chat starts.
@@ -694,7 +705,7 @@ private fun AccountOptions(sheet: Boolean, account: RunSettingsAccount, onBack: 
 
 /** Atop the Account list while the current account is unavailable: why, and where to log in again. */
 @Composable
-private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?) {
+private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?, onSignIn: (() -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     val danger = LocalSemantics.current.danger
     Column(
@@ -719,23 +730,27 @@ private fun UnavailableNotice(account: AccountDto, onOpenAccounts: (() -> Unit)?
             accountUnavailableText(account)?.let {
                 Text(it, color = cs.onSurfaceVariant, fontSize = 11.5.sp, lineHeight = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            if (onOpenAccounts != null) {
-                Text(
-                    "Open Accounts",
-                    color = cs.primary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable(onClick = onOpenAccounts)
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .padding(vertical = 2.dp)
-                        .testTag("run_settings_open_accounts"),
-                )
-            }
+            if (onOpenAccounts != null) NoticeLink("Open Accounts", onOpenAccounts, "run_settings_open_accounts")
+            if (onSignIn != null) NoticeLink("Sign in again", onSignIn, "run_settings_sign_in")
         }
     }
     HorizontalDivider(Modifier.padding(bottom = 4.dp), color = cs.onSurface.copy(alpha = 0.07f))
+}
+
+@Composable
+private fun NoticeLink(label: String, onClick: () -> Unit, tag: String) {
+    Text(
+        label,
+        color = MaterialTheme.colorScheme.primary,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .padding(vertical = 2.dp)
+            .testTag(tag),
+    )
 }
 
 /** Why the last pick was refused (busy, not running…): one quiet line under the rows. */

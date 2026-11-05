@@ -186,6 +186,27 @@ class AppShellTest {
         appForeground = appForeground,
     )
 
+    // #57: with no title band (iPad, Android, the web) the shell draws the sidebar toggle in a band
+    // of the sidebar's own — the only on-screen way a tablet collapses and restores its sidebar, and
+    // it must not move between the two states.
+    @Test fun without_a_title_band_the_sidebar_toggle_stays_in_one_spot_in_both_states() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = twoWorkspaceApp()
+        setPlatformContent {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        val open = onNodeWithTag("sidebar_toggle").assertIsDisplayed().getBoundsInRoot()
+        onNodeWithTag("sidebar_toggle").performClick()
+        waitForIdle()
+        assertTrue(ui.sidebarCollapsed)
+        onNodeWithTag("sidebar_rail").assertIsDisplayed()
+        assertEquals(open, onNodeWithTag("sidebar_toggle").getBoundsInRoot(), "the toggle does not move")
+        onNodeWithTag("sidebar_toggle").performClick()
+        waitForIdle()
+        assertTrue(!ui.sidebarCollapsed)
+    }
+
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
         val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())

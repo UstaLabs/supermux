@@ -14,8 +14,8 @@ import com.journeyapps.barcodescanner.ScanOptions
  * [ActivityResultContract][androidx.activity.result.contract.ActivityResultContract],
  * so there is zero CameraX/ImageAnalysis boilerplate and no Google-Play-Services
  * runtime dependency (works on de-Googled / offline-first devices — exactly our
- * self-hosting audience). The decoded string is the pairing URL we feed straight
- * into [dev.supermux.net.PairUrl.parse].
+ * self-hosting audience). The decoded string — the desktop host's claim QR or a
+ * pairing link — goes straight into [dev.supermux.pairing.PairingCode.parse].
  */
 
 /** ZXing scan options: QR-only, no beep, free orientation. */

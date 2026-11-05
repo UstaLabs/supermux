@@ -37,6 +37,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.supermux.android.chat.SessionChatFallback
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.PairingHolder
+import dev.supermux.android.pairing.androidDeviceName
 import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.android.session.readGroupByProject
@@ -323,7 +324,7 @@ class MainActivity : ComponentActivity() {
                         val next = if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK
                         themeScope.launch { themeUiPrefs.putAppearance(next) }
                     },
-                    defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
+                    defaultDeviceName = androidDeviceName(),
                     groupByProject = groupByProject,
                     onGroupByProjectChange = { value ->
                         groupByProject = value

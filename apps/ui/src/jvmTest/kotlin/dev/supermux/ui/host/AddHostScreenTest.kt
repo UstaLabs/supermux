@@ -31,18 +31,53 @@ class AddHostScreenTest {
         needsInsecureOptIn: (String) -> Boolean = { false },
         onClaimByUrl: suspend (String, String, Boolean) -> AddHostResult = { _, _, _ -> AddHostResult.Error("stop") },
         onClaim: suspend (dev.supermux.host.PairingPayload, String) -> AddHostResult = { _, _ -> AddHostResult.Error("stop") },
+        onClaimLegacy: suspend (dev.supermux.net.PairUrl) -> AddHostResult = { AddHostResult.Error("stop") },
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(LocalPlatform provides platform) {
             AddHostScreen(
                 onBack = {},
                 defaultDeviceName = "This device",
                 onClaim = onClaim,
-                onClaimLegacy = { AddHostResult.Error("stop") },
+                onClaimLegacy = onClaimLegacy,
                 onClaimByUrl = onClaimByUrl,
                 onAdded = {},
                 needsInsecureOptIn = needsInsecureOptIn,
             )
         }
+    }
+
+    @Test fun aPastedClaimIsClaimed() = runComposeUiTest {
+        val claims = mutableListOf<String>()
+        val links = mutableListOf<String>()
+        setContent(
+            screen(
+                FakePlatform(caps = NO_CAPS.copy(camera = false)),
+                onClaim = { p, name -> claims += "${p.hostId} ${p.claimSecret} $name"; AddHostResult.Error("stop") },
+                onClaimLegacy = { pair -> links += "${pair.baseUrl} ${pair.token}"; AddHostResult.Error("stop") },
+            ),
+        )
+        onNodeWithTag("add_host_paste_field").performTextInput(
+            """{"v":1,"action":"pair","hostId":"amsfen6cjgpd7pjqw6nimlahvy","name":"b","claimSecret":"s3cret"}""",
+        )
+        onNodeWithTag("add_host_paste_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf("amsfen6cjgpd7pjqw6nimlahvy s3cret This device"), claims)
+        assertEquals(emptyList(), links)
+    }
+
+    @Test fun aPastedLinkIsAddedByItsToken() = runComposeUiTest {
+        val links = mutableListOf<String>()
+        setContent(
+            screen(
+                FakePlatform(caps = NO_CAPS.copy(camera = false)),
+                onClaim = { _, _ -> error("a link is not a claim") },
+                onClaimLegacy = { pair -> links += "${pair.baseUrl} ${pair.token}"; AddHostResult.Error("stop") },
+            ),
+        )
+        onNodeWithTag("add_host_paste_field").performTextInput("https://host:9898/pair?t=abc123")
+        onNodeWithTag("add_host_paste_submit").performClick()
+        waitForIdle()
+        assertEquals(listOf("wss://host:9898 abc123"), links)
     }
 
     @Test fun scanMode_isAbsentWithoutACamera() = runComposeUiTest {

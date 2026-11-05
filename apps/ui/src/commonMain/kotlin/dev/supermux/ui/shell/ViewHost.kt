@@ -69,6 +69,11 @@ import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.files.TreeViewStates
+import dev.supermux.ui.files.editorAbsolutePath
+import dev.supermux.ui.files.fileNotFoundNotice
+import dev.supermux.ui.files.parentOf
+import dev.supermux.ui.files.tappedFileMissing
+import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
@@ -269,6 +274,7 @@ fun ViewHost(
                         // intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
                         onNavigate = { p, line -> onOpenFile(p, line, null) },
+                        onOpenFile = onOpenFile,
                         modifier = modifier.testTag("editor-$workdir"),
                     )
                 "diff" -> DiffPaneForWorkspace(
@@ -342,7 +348,6 @@ private fun ChatViewPane(
         UnknownViewHint("chat", modifier)
         return
     }
-    val notices = LocalPlatform.current.notices
     val finish = FinishBindings(
         job = finishJobs[sessionId],
         readiness = { actions.finishReadiness(sessionId) },
@@ -356,24 +361,9 @@ private fun ChatViewPane(
         verifySave = { actions.verifySave(sessionId, it) },
         sendToAgent = { actions.sendMessage(sessionId, it) },
     )
-    // A tap on a file path in the transcript opens a `file` pane — by its absolute path when it lies
-    // outside the workspace. One the host says is gone is reported rather than opened.
-    val tapScope = rememberCoroutineScope()
+    // A tap on a file path in the transcript opens a `file` pane.
     val tapFileSystem = actions.sessionFileSystem(sessionId)
-    val openTappedPath: (FilePathRef) -> Unit = { ref ->
-        val rel = workspaceOpenPath(ref, workdir)
-        if (rel == null) {
-            notices.show("That's the workspace folder itself")
-        } else {
-            tapScope.launch {
-                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.editorAbsolutePath(workdir, rel))) {
-                    notices.show(dev.supermux.ui.files.fileNotFoundNotice(ref.path))
-                } else {
-                    onOpenFile(rel, ref.line, ref.endLine)
-                }
-            }
-        }
-    }
+    val openTappedPath = rememberOpenTappedPath(workdir, tapFileSystem, onOpenFile)
     val state = chatState(sessionId)
     val acts = chatActions(session)
     // Images an agent writes as host paths (`![](out/shot.png)`) read through this host; relative
@@ -544,6 +534,46 @@ fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
     toEditorPath(ref.path, workdir, inferHomeDir(workdir))
 
 /**
+ * The editor keys a tapped [ref] may name, in the order to try them. A relative path is tried under
+ * [relativeTo] first (a markdown file's own folder, absolute: what its links mean), then at the
+ * workspace root (where an agent's paths start). Empty only for the workspace folder itself.
+ */
+fun tappedPathCandidates(ref: FilePathRef, workdir: String, relativeTo: String? = null): List<String> {
+    val path = ref.path.trim()
+    val relative = !path.startsWith("/") && !path.startsWith("~")
+    val inFolder = if (relativeTo != null && relative) workspaceOpenPath(FilePathRef("$relativeTo/$path"), workdir) else null
+    return listOfNotNull(inFolder, workspaceOpenPath(ref, workdir)).distinct()
+}
+
+/**
+ * Opens a file path tapped in markdown (a chat transcript, a file's preview) as a `file` pane, by its
+ * absolute path when it lies outside the workspace: the first of [tappedPathCandidates] the host
+ * does not say is gone. One that is gone everywhere is reported rather than opened.
+ */
+@Composable
+private fun rememberOpenTappedPath(
+    workdir: String,
+    fileSystem: FileSystemService?,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
+    relativeTo: String? = null,
+): (FilePathRef) -> Unit {
+    val notices = LocalPlatform.current.notices
+    val scope = rememberCoroutineScope()
+    return { ref ->
+        val candidates = tappedPathCandidates(ref, workdir, relativeTo)
+        if (candidates.isEmpty()) {
+            notices.show("That's the workspace folder itself")
+        } else {
+            scope.launch {
+                val found = candidates.firstOrNull { !tappedFileMissing(fileSystem, editorAbsolutePath(workdir, it)) }
+                if (found == null) notices.show(fileNotFoundNotice(ref.path))
+                else onOpenFile(found, ref.line, ref.endLine)
+            }
+        }
+    }
+}
+
+/**
  * Session-scoped terminal adapter:
  * - terminalId "agent" → the agent PTY
  * - any other id → a session scratch terminal
@@ -635,6 +665,7 @@ private fun FilePaneForWorkspace(
     documents: DocumentStore,
     lspSessionId: String?,
     onNavigate: (path: String, line: Int) -> Unit,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
 ) {
     // Resolve the id against the LIVE session list: a workspace whose primary session has been
@@ -642,6 +673,14 @@ private fun FilePaneForWorkspace(
     // pane's status up while every call no-ops. Unresolved -> the quiet "code intelligence is off"
     // note the pane already draws for a chat-less workspace.
     val lspSession = actions.resolvedSessionId(lspSessionId)
+    // A file link in the markdown preview opens the way a path tapped in chat does, tried in this
+    // file's own folder first.
+    val openLink = rememberOpenTappedPath(
+        workdir,
+        actions.fileSystemFor(workspaceId),
+        onOpenFile,
+        relativeTo = parentOf(editorAbsolutePath(workdir, path)),
+    )
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt): the collected values
     // start at the defaults for one frame, then settle on what was persisted.
     val prefs = LocalUiPrefs.current
@@ -666,6 +705,7 @@ private fun FilePaneForWorkspace(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         onNavigate = onNavigate,
+        onOpenFile = openLink,
         rawBytes = { abs -> actions.fileSystemFor(workspaceId)?.raw(abs) ?: Result.failure(IllegalStateException("Host offline")) },
         fileSystem = actions.fileSystemFor(workspaceId),
         modifier = modifier.fillMaxSize(),

@@ -128,6 +128,14 @@ test("GET /accounts carries an unavailable mark (reason + since) until it is cle
   expect((await call("GET", "/accounts?agent=claude")).body.accounts[0]).not.toHaveProperty("unavailable")
 })
 
+test("GET /accounts names the code of a mark the host can act on (a sign-in that expired)", async () => {
+  const { call, usage } = setup()
+  await channel!.start()
+  usage.markUnavailable("cursor:system", "Cursor sign-in expired — sign in to Cursor again.", new Date("2026-11-04T10:40:58.000Z"), "account_expired")
+  const cursor = (await call("GET", "/accounts?agent=cursor")).body.accounts[0]
+  expect(cursor.unavailable).toEqual({ reason: "Cursor sign-in expired — sign in to Cursor again.", since: "2026-11-04T10:40:58.000Z", code: "account_expired" })
+})
+
 test("POST /accounts adds an api_key account (secret never returned); DELETE removes it; accounts_changed is broadcast", async () => {
   const { call, frames, registry } = setup()
   await channel!.start()

@@ -18,7 +18,7 @@ class WindowsWindowChromeTest {
 
     @Test fun insetsReserveTheNativeCaptionButtonsAtTheTopRight() {
         val i = chromeInsets(ChromeOs.Windows, customChrome = true, windowsCaptionButtons = 141.dp)
-        assertEquals(ChromeInsets(start = 0.dp, end = 141.dp, band = WindowsTitleBarHeight), i)
+        assertEquals(ChromeInsets(start = SidebarBandControlsWidth, end = 141.dp, band = WindowsTitleBarHeight), i)
         assertEquals(LinuxTitleBarHeight, i.band, "the band is the strip row, as on Linux")
         assertEquals(ChromeInsets.None, chromeInsets(ChromeOs.Windows, customChrome = false))
     }

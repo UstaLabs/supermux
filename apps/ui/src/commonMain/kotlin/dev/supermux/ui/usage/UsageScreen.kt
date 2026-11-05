@@ -80,6 +80,7 @@ import dev.supermux.net.UsageResponse
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.chat.parseChatTs
+import dev.supermux.ui.accounts.SIGN_IN_EXPIRED
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -384,6 +385,30 @@ fun accountCardTitle(provider: String, account: String?): String =
 fun accountCardTag(base: String, accountId: String?): String =
     if (accountId.isNullOrBlank()) base else "${base}_$accountId"
 
+/** A card's line when it has no numbers: the sign-in notice for a refused login, the broker's words otherwise. */
+@Composable
+private fun UsageUnavailable(provider: String, error: String?, errorCode: String?, onSignIn: (() -> Unit)?, signInTag: String) {
+    if (errorCode == SIGN_IN_EXPIRED) SignInExpiredNotice(provider, errorCode, onSignIn, signInTag)
+    else Text(error ?: "Not available", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+}
+
+/**
+ * For a login the provider refused ([errorCode] [SIGN_IN_EXPIRED]): "<provider> sign-in expired", with
+ * "Sign in again" when the host can take the user to the sign-in ([onSignIn]). Under last-known numbers
+ * too: the store keeps them when a later fetch fails. Nothing for any other error.
+ */
+@Composable
+private fun SignInExpiredNotice(provider: String, errorCode: String?, onSignIn: (() -> Unit)?, signInTag: String) {
+    if (errorCode != SIGN_IN_EXPIRED) return
+    val cs = MaterialTheme.colorScheme
+    Text("$provider sign-in expired", color = cs.onSurface, fontSize = 12.sp)
+    if (onSignIn != null) {
+        OutlinedButton(onClick = onSignIn, modifier = Modifier.padding(top = Space.sm).testTag(signInTag)) {
+            Text("Sign in again", color = cs.onSurface, fontSize = 13.sp)
+        }
+    }
+}
+
 /** Label for the system login's card: only needed to tell it apart from the agent's other accounts. */
 private fun systemCardLabel(usage: UsageResponse?, agent: String): String? =
     if (usage?.accounts?.any { it.agent == agent } == true) "System login" else null
@@ -406,6 +431,8 @@ fun ClaudeUsageCard(
     onRedeemed: () -> Unit = {},
     account: String? = null,
     accountId: String? = null,
+    errorCode: String? = null,
+    onSignIn: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -425,7 +452,7 @@ fun ClaudeUsageCard(
         refreshingTag = "usage_refreshing_claude",
     ) {
         if (claude == null) {
-            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            UsageUnavailable("Claude", error, errorCode, onSignIn, accountCardTag("usage_sign_in_claude", accountId))
         } else {
             UsageWindowRow("5-hour window", claude.fiveHour.used, formatResetIso(claude.fiveHour.resetsAt, now))
             UsageWindowRow("7-day window", claude.sevenDay.used, formatResetIso(claude.sevenDay.resetsAt, now))
@@ -462,6 +489,7 @@ fun ClaudeUsageCard(
                     modifier = Modifier.padding(top = Space.xs).testTag("claude_redeem_note"),
                 )
             }
+            SignInExpiredNotice("Claude", errorCode, onSignIn, accountCardTag("usage_sign_in_claude", accountId))
         }
     }
     if (showDialog && resets != null) {
@@ -532,6 +560,8 @@ fun CodexUsageCard(
     onRedeemed: () -> Unit = {},
     account: String? = null,
     accountId: String? = null,
+    errorCode: String? = null,
+    onSignIn: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
@@ -566,7 +596,7 @@ fun CodexUsageCard(
         } else null,
     ) {
         if (codex == null) {
-            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            UsageUnavailable("Codex", error, errorCode, onSignIn, accountCardTag("usage_sign_in_codex", accountId))
         } else {
             codex.windows.forEach { window ->
                 UsageWindowRow(
@@ -604,6 +634,7 @@ fun CodexUsageCard(
                     modifier = Modifier.padding(top = Space.xs).testTag("codex_redeem_note"),
                 )
             }
+            SignInExpiredNotice("Codex", errorCode, onSignIn, accountCardTag("usage_sign_in_codex", accountId))
         }
     }
     if (showDialog && codex != null) {
@@ -657,6 +688,8 @@ fun CursorUsageCard(
     now: Long = nowMs(),
     account: String? = null,
     accountId: String? = null,
+    errorCode: String? = null,
+    onSignIn: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
@@ -670,12 +703,13 @@ fun CursorUsageCard(
         refreshingTag = "usage_refreshing_cursor",
     ) {
         if (cursor == null) {
-            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            UsageUnavailable("Cursor", error, errorCode, onSignIn, accountCardTag("usage_sign_in_cursor", accountId))
         } else {
             UsageWindowRow("Usage", cursor.totalPercentUsed, formatResetIso(cursor.billingCycleEnd, now))
             if (cursor.spendAvailable) {
                 UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
             }
+            SignInExpiredNotice("Cursor", errorCode, onSignIn, accountCardTag("usage_sign_in_cursor", accountId))
         }
     }
 }
@@ -722,6 +756,8 @@ fun GrokUsageCard(
     now: Long = nowMs(),
     account: String? = null,
     accountId: String? = null,
+    errorCode: String? = null,
+    onSignIn: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
@@ -735,7 +771,7 @@ fun GrokUsageCard(
         refreshingTag = "usage_refreshing_grok",
     ) {
         if (grok == null) {
-            Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            UsageUnavailable("Grok", error, errorCode, onSignIn, accountCardTag("usage_sign_in_grok", accountId))
         } else {
             UsageWindowRow(grokPeriodLabel(grok.periodType), grok.percentUsed, formatResetIso(grok.billingPeriodEnd, now))
             // Only worth their own rows when xAI splits the pool across more than one product.
@@ -753,6 +789,7 @@ fun GrokUsageCard(
             if (grok.prepaidBalance > 0) {
                 UsageFooterRow("Prepaid balance", "${grok.prepaidBalance.toLong()}")
             }
+            SignInExpiredNotice("Grok", errorCode, onSignIn, accountCardTag("usage_sign_in_grok", accountId))
         }
     }
 }
@@ -844,6 +881,7 @@ fun UsageScreen(
     topBarShown: Boolean = false,
     standalone: Boolean = false,
     now: Long = nowMs(),
+    onSignIn: ((agent: String, accountId: String?) -> Unit)? = null,
 ) {
     val usage by actions.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
@@ -872,6 +910,7 @@ fun UsageScreen(
         modifier = modifier,
         topBarShown = topBarShown,
         standalone = standalone,
+        onSignIn = onSignIn,
     )
 }
 
@@ -900,6 +939,8 @@ fun UsageScreen(
     standalone: Boolean = false,
     onRedeemed: () -> Unit = {},
     onRedeemClaude: (suspend () -> ClaudeResetResult?)? = null,
+    /** "Sign in again" on a card whose login the provider refused: the agent, and the added account's id (null = the system login). */
+    onSignIn: ((agent: String, accountId: String?) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
@@ -942,13 +983,13 @@ fun UsageScreen(
             containerColor = cs.background,
             modifier = Modifier.testTag("usage_screen"),
         ) { padding ->
-            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, modifier.padding(padding))
+            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, onSignIn, modifier.padding(padding))
         }
     } else {
         Column(modifier.fillMaxSize().testTag("usage_screen")) {
             UsageHeaderRow(loading, onBack, onRefresh)
             HorizontalDivider(color = cs.outlineVariant)
-            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, Modifier)
+            UsageBody(usage, loading, onRedeem, onRedeemClaude, now, onRedeemed, onSignIn, Modifier)
         }
     }
 }
@@ -1004,8 +1045,10 @@ private fun UsageBody(
     onRedeemClaude: (suspend () -> ClaudeResetResult?)?,
     now: Long,
     onRedeemed: () -> Unit,
+    onSignIn: ((agent: String, accountId: String?) -> Unit)?,
     modifier: Modifier,
 ) {
+    val signInFor: (String) -> (() -> Unit)? = { agent -> onSignIn?.let { { it(agent, null) } } }
     val cs = MaterialTheme.colorScheme
     Box(modifier.fillMaxSize().testTag("usage_body")) {
         when {
@@ -1039,8 +1082,10 @@ private fun UsageBody(
                         onRedeem = onRedeemClaude,
                         onRedeemed = onRedeemed,
                         account = systemCardLabel(usage, "claude"),
+                        errorCode = usage?.errorCodes?.get("claude"),
+                        onSignIn = signInFor("claude"),
                     )
-                    AccountUsageCards(usage, "claude", now)
+                    AccountUsageCards(usage, "claude", now, onSignIn)
                     CodexUsageCard(
                         usage?.codex,
                         usage?.errors?.get("codex"),
@@ -1050,8 +1095,10 @@ private fun UsageBody(
                         now = now,
                         onRedeemed = onRedeemed,
                         account = systemCardLabel(usage, "codex"),
+                        errorCode = usage?.errorCodes?.get("codex"),
+                        onSignIn = signInFor("codex"),
                     )
-                    AccountUsageCards(usage, "codex", now)
+                    AccountUsageCards(usage, "codex", now, onSignIn)
                     CursorUsageCard(
                         usage?.cursor,
                         usage?.errors?.get("cursor"),
@@ -1059,15 +1106,17 @@ private fun UsageBody(
                         refreshing = usage?.refreshing?.contains("cursor") == true,
                         now = now,
                         account = systemCardLabel(usage, "cursor"),
+                        errorCode = usage?.errorCodes?.get("cursor"),
+                        onSignIn = signInFor("cursor"),
                     )
-                    AccountUsageCards(usage, "cursor", now)
+                    AccountUsageCards(usage, "cursor", now, onSignIn)
                     OpenCodeUsageCard(
                         usage?.opencode,
                         usage?.errors?.get("opencode"),
                         asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
                         refreshing = usage?.refreshing?.contains("opencode") == true,
                     )
-                    AccountUsageCards(usage, "opencode", now)
+                    AccountUsageCards(usage, "opencode", now, onSignIn)
                     GrokUsageCard(
                         usage?.grok,
                         usage?.errors?.get("grok"),
@@ -1075,8 +1124,10 @@ private fun UsageBody(
                         refreshing = usage?.refreshing?.contains("grok") == true,
                         now = now,
                         account = systemCardLabel(usage, "grok"),
+                        errorCode = usage?.errorCodes?.get("grok"),
+                        onSignIn = signInFor("grok"),
                     )
-                    AccountUsageCards(usage, "grok", now)
+                    AccountUsageCards(usage, "grok", now, onSignIn)
                 }
             }
         }
@@ -1088,15 +1139,16 @@ private fun UsageBody(
  * They read the same way but offer no redeem: those endpoints spend the system login's resets.
  */
 @Composable
-private fun AccountUsageCards(usage: UsageResponse?, agent: String, now: Long) {
+private fun AccountUsageCards(usage: UsageResponse?, agent: String, now: Long, onSignIn: ((agent: String, accountId: String?) -> Unit)?) {
     usage?.accounts?.filter { it.agent == agent }?.forEach { a ->
         val asOf = formatFetchedAt(a.fetchedAt, now)
+        val signIn = onSignIn?.let { { it(agent, a.id) } }
         when {
             !a.quota -> NoQuotaAccountCard(a)
-            agent == "claude" -> ClaudeUsageCard(a.claude, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
-            agent == "codex" -> CodexUsageCard(a.codex, a.error, asOf = asOf, refreshing = a.refreshing, now = now, account = a.label, accountId = a.id)
-            agent == "cursor" -> CursorUsageCard(a.cursor, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
-            agent == "grok" -> GrokUsageCard(a.grok, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id)
+            agent == "claude" -> ClaudeUsageCard(a.claude, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id, errorCode = a.errorCode, onSignIn = signIn)
+            agent == "codex" -> CodexUsageCard(a.codex, a.error, asOf = asOf, refreshing = a.refreshing, now = now, account = a.label, accountId = a.id, errorCode = a.errorCode, onSignIn = signIn)
+            agent == "cursor" -> CursorUsageCard(a.cursor, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id, errorCode = a.errorCode, onSignIn = signIn)
+            agent == "grok" -> GrokUsageCard(a.grok, a.error, asOf, a.refreshing, now, account = a.label, accountId = a.id, errorCode = a.errorCode, onSignIn = signIn)
             else -> NoQuotaAccountCard(a)
         }
     }

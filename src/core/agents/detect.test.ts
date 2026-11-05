@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { authCredPath, detectAgent, hasStoredCredential } from "./detect"
+import { applySignInExpiry, authCredPath, detectAgent, hasStoredCredential } from "./detect"
 
 const paths = { home: "/home/u" }
 
@@ -75,4 +75,18 @@ test("grok's own `agent` binary does not make cursor look installed", () => {
   expect(detectAgent("cursor", probes, paths).installed).toBe(false)
   expect(detectAgent("grok", probes, paths).installed).toBe(true)
   expect(detectAgent("cursor", { hasBinary: (b: string) => b === "cursor-agent", fileExists: () => false }, paths).installed).toBe(true)
+})
+
+// The credential file outlives the login: cursor-agent keeps an expired auth.json, so "file exists" said
+// Ready while Cursor refused every request. The provider's refusal (the system account's sign-in mark) wins.
+test("a login its provider refused reads as signed out with signInExpired, whatever file is on disk", () => {
+  const probes = { hasBinary: (b: string) => b === "cursor-agent" || b === "claude", fileExists: () => true }
+  const statuses = [detectAgent("cursor", probes, paths), detectAgent("claude", probes, paths), detectAgent("grok", probes, paths)]
+  const result = applySignInExpiry(statuses, (kind) => kind === "cursor" || kind === "grok")
+  expect(result.map((s) => [s.kind, s.installed, s.authed, s.signInExpired ?? false])).toEqual([
+    ["cursor", true, false, true],
+    ["claude", true, true, false],
+    // Not installed, so never "authed": nothing to sign in again to.
+    ["grok", false, false, false],
+  ])
 })

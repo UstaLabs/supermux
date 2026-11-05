@@ -1,5 +1,5 @@
-import { test, expect, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "fs"
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
@@ -367,15 +367,31 @@ test("fetchCodexUsage returns an empty model list when the payload has no model_
 
 // ── Cursor ──
 
-test("fetchCursorUsage returns usage from sqlite + API", async () => {
-  const dbPath = join(tmpDir, "state.vscdb")
-  const db = new Database(dbPath)
-  db.run("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
-  db.run("INSERT INTO ItemTable (key, value) VALUES (?, ?)", [
-    "cursorAuth/accessToken",
-    "cursor-token-abc",
-  ])
-  db.close()
+// cursor-agent's own login, as `cursor-agent login` writes it (Linux: $XDG_CONFIG_HOME/cursor/auth.json).
+function writeCursorAuth(dir: string, auth: Record<string, unknown> = { accessToken: "cursor-token-abc", refreshToken: "r" }): string {
+  mkdirSync(join(dir, "cursor"), { recursive: true })
+  const path = join(dir, "cursor", "auth.json")
+  writeFileSync(path, JSON.stringify(auth))
+  return path
+}
+
+// What api2.cursor.sh answers for a session token that expired or was revoked (captured 2026-11-04).
+const CURSOR_NOT_LOGGED_IN = JSON.stringify({
+  code: "unauthenticated",
+  message: "Error",
+  details: [{
+    type: "aiserver.v1.ErrorDetails",
+    debug: {
+      error: "ERROR_NOT_LOGGED_IN",
+      details: { title: "Authentication error", detail: "If you are logged in, try logging out and back in.", isRetryable: false, analyticsMetadata: { actionRequired: "login" } },
+      isExpected: true,
+    },
+    value: "CAISVQoUQXV0aGVudGljYXRpb24gZXJyb3I",
+  }],
+})
+
+test("fetchCursorUsage returns usage for cursor-agent's own login", async () => {
+  const authPath = writeCursorAuth(tmpDir)
 
   globalThis.fetch = (async (url: any, init: any) => {
     expect(url).toBe(
@@ -396,7 +412,7 @@ test("fetchCursorUsage returns usage from sqlite + API", async () => {
     )
   }) as typeof fetch
 
-  const result = await fetchCursorUsage(dbPath)
+  const result = await fetchCursorUsage(authPath)
   expect(result).not.toBeNull()
   expect(result!.totalPercentUsed).toBe(45.3)
   expect(result!.totalSpendCents).toBe(1200)
@@ -408,11 +424,7 @@ test("fetchCursorUsage returns usage from sqlite + API", async () => {
 })
 
 test("fetchCursorUsage marks spend unavailable for the current planUsage shape", async () => {
-  const dbPath = join(tmpDir, "cursor-current.vscdb")
-  const db = new Database(dbPath)
-  db.run("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
-  db.run("INSERT INTO ItemTable (key, value) VALUES (?, ?)", ["cursorAuth/accessToken", "t"])
-  db.close()
+  const authPath = writeCursorAuth(tmpDir, { accessToken: "t" })
   globalThis.fetch = (async () => new Response(JSON.stringify({
     billingCycleStart: "1782894225499",
     billingCycleEnd: "1785572625499",
@@ -420,7 +432,7 @@ test("fetchCursorUsage marks spend unavailable for the current planUsage shape",
     spendLimitUsage: { overallLimit: 0, overallRemaining: 0 },
   }))) as unknown as typeof fetch
 
-  const result = await fetchCursorUsage(dbPath)
+  const result = await fetchCursorUsage(authPath)
   expect(result!.totalPercentUsed).toBe(0)
   expect(result!.spendAvailable).toBe(false)
   expect(result!.totalSpendCents).toBe(0)
@@ -429,14 +441,56 @@ test("fetchCursorUsage marks spend unavailable for the current planUsage shape",
   expect(result!.billingCycleEndIso).toBe(new Date(1785572625499).toISOString())
 })
 
-test("fetchCursorUsage returns null when db missing", async () => {
-  const result = await fetchCursorUsage(join(tmpDir, "nonexistent.vscdb"))
-  expect(result).toBeNull()
+test("fetchCursorUsage returns null when cursor-agent has no login", async () => {
+  expect(await fetchCursorUsage(join(tmpDir, "nowhere", "cursor", "auth.json"))).toBeNull()
+  expect(await fetchCursorUsage(writeCursorAuth(join(tmpDir, "no-token"), { refreshToken: "r" }))).toBeNull()
+})
+
+// The system login's card read the Cursor IDE's token store (~/.config/Cursor/User/globalStorage/state.vscdb),
+// a different app's login that supermux never runs: an IDE not opened for months answered 401 while the
+// cursor-agent login every Cursor session uses was fine.
+test("by default fetchCursorUsage reads the login cursor-agent sessions use, never the Cursor IDE's", async () => {
+  const xdg = join(tmpDir, "xdg")
+  writeCursorAuth(xdg, { accessToken: "agent-token" })
+  const savedXdg = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = xdg
+  let bearer: string | undefined
+  globalThis.fetch = (async (_url: any, init: any) => {
+    bearer = init?.headers.Authorization
+    return new Response(JSON.stringify({ planUsage: { totalPercentUsed: 12 } }))
+  }) as typeof fetch
+  try {
+    const result = await fetchCursorUsage()
+    expect(bearer).toBe("Bearer agent-token")
+    expect(result!.totalPercentUsed).toBe(12)
+  } finally {
+    if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = savedXdg
+  }
+})
+
+test("an expired or revoked Cursor sign-in is account_expired, in plain words", async () => {
+  const authPath = writeCursorAuth(tmpDir)
+  globalThis.fetch = (async () => new Response(CURSOR_NOT_LOGGED_IN, { status: 401 })) as unknown as typeof fetch
+
+  const error = await fetchCursorUsage(authPath).then(() => undefined, (err: unknown) => err as Error & { code?: string })
+  expect(error?.code).toBe("account_expired")
+  expect(error?.message).toBe("Cursor sign-in expired — sign in to Cursor again.")
+})
+
+test("other Cursor usage failures read plainly, never as an HTTP status or a response body", async () => {
+  const authPath = writeCursorAuth(tmpDir)
+  globalThis.fetch = (async () => new Response("{\"code\":\"unavailable\",\"message\":\"upstream connect error\"}", { status: 503 })) as unknown as typeof fetch
+
+  const error = await fetchCursorUsage(authPath).then(() => undefined, (err: unknown) => err as Error & { code?: string })
+  expect(error).toBeDefined()
+  expect(error!.code).toBeUndefined()
+  expect(error!.message).toBe("Couldn't read Cursor usage right now — try again in a moment.")
 })
 
 // ── opencode ──
 
-test("fetchOpenCodeUsage aggregates token usage and cost from opencode.db", async () => {
+test("fetchOpenCodeUsage aggregates token usage and cost from the messages of a store without per-session totals", async () => {
   const dbPath = join(tmpDir, "opencode.db")
   const db = new Database(dbPath)
   db.run("CREATE TABLE session (id TEXT PRIMARY KEY)")
@@ -466,6 +520,44 @@ test("fetchOpenCodeUsage aggregates token usage and cost from opencode.db", asyn
   expect(result!.cacheWriteTokens).toBe(5)
 })
 
+test("fetchOpenCodeUsage sums the totals opencode keeps per session and parses no message body", async () => {
+  // opencode keeps each session's cost and tokens on its row (its `session_usage` migration backfilled
+  // them). Message bodies can be huge — a real store holds a 290 MB one — and parsing all of them on
+  // the broker's event loop stalled it past the other providers' 10 s fetch timeouts.
+  const dbPath = join(tmpDir, "opencode.db")
+  const db = new Database(dbPath)
+  db.run(`CREATE TABLE session (
+    id TEXT PRIMARY KEY, cost REAL DEFAULT 0 NOT NULL,
+    tokens_input INTEGER DEFAULT 0 NOT NULL, tokens_output INTEGER DEFAULT 0 NOT NULL,
+    tokens_reasoning INTEGER DEFAULT 0 NOT NULL, tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+    tokens_cache_write INTEGER DEFAULT 0 NOT NULL)`)
+  db.run("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)")
+  db.run("INSERT INTO session VALUES ('s1', 0.05, 100, 50, 7, 10, 5), ('s2', 0.03, 200, 80, 0, 0, 0)")
+  const bodies = [
+    JSON.stringify({ role: "user" }),
+    JSON.stringify({ role: "assistant", cost: 0.05, tokens: { input: 100, output: 50, reasoning: 7, cache: { read: 10, write: 5 } } }),
+    JSON.stringify({ role: "assistant", cost: 0.03, tokens: { input: 200, output: 80, reasoning: 0, cache: { read: 0, write: 0 } } }),
+  ]
+  bodies.forEach((data, i) => db.run("INSERT INTO message VALUES (?, ?, ?)", [`m${i}`, i < 2 ? "s1" : "s2", data]))
+  db.close()
+
+  const parse = spyOn(JSON, "parse")
+  try {
+    const result = await fetchOpenCodeUsage(dbPath)
+    expect(parse.mock.calls.filter(([text]) => bodies.includes(text as string))).toEqual([])
+    expect(result).not.toBeNull()
+    expect(result!.sessions).toBe(2)
+    expect(result!.messages).toBe(3)
+    expect(result!.totalCostUsd).toBeCloseTo(0.08, 5)
+    expect(result!.inputTokens).toBe(300)
+    expect(result!.outputTokens).toBe(130)
+    expect(result!.cacheReadTokens).toBe(10)
+    expect(result!.cacheWriteTokens).toBe(5)
+  } finally {
+    parse.mockRestore()
+  }
+})
+
 test("fetchOpenCodeUsage returns null when the db is missing (free tier, no sessions yet)", async () => {
   const result = await fetchOpenCodeUsage(join(tmpDir, "nonexistent.db"))
   expect(result).toBeNull()
@@ -477,7 +569,7 @@ test("fetchAllUsage assembles all providers, captures errors when all creds miss
   const result = await fetchAllUsage({
     claudeCredsPath: join(tmpDir, "no-claude.json"),
     codexAuthPath: join(tmpDir, "no-codex.json"),
-    cursorDbPath: join(tmpDir, "no-cursor.vscdb"),
+    cursorAuthPath: join(tmpDir, "no-cursor", "auth.json"),
     opencodeDbPath: join(tmpDir, "no-opencode.db"),
     grokAuthPath: join(tmpDir, "no-grok.json"),
   })
@@ -492,6 +584,21 @@ test("fetchAllUsage assembles all providers, captures errors when all creds miss
   expect(result.errors.cursor).toBe("credentials not found")
   expect(result.errors.opencode).toBe("no usage recorded yet")
   expect(result.errors.grok).toBe("credentials not found or token expired")
+})
+
+test("fetchAllUsage names the code of a refused login beside its words (the /usage command)", async () => {
+  const authPath = writeCursorAuth(tmpDir)
+  globalThis.fetch = (async () => new Response(CURSOR_NOT_LOGGED_IN, { status: 401 })) as unknown as typeof fetch
+  const result = await fetchAllUsage({
+    claudeCredsPath: join(tmpDir, "no-claude.json"),
+    codexAuthPath: join(tmpDir, "no-codex.json"),
+    cursorAuthPath: authPath,
+    opencodeDbPath: join(tmpDir, "no-opencode.db"),
+    grokAuthPath: join(tmpDir, "no-grok.json"),
+  })
+  expect(result.cursor).toBeNull()
+  expect(result.errors.cursor).toBe("Cursor sign-in expired — sign in to Cursor again.")
+  expect(result.errorCodes).toEqual({ cursor: "account_expired" })
 })
 
 // ── Claude banked resets ──

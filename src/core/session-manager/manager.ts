@@ -244,6 +244,8 @@ export class SessionManager {
   bootResumeTimeoutMs = bootResumeTimeoutMs(process.env.MUX_BOOT_RESUME_TIMEOUT_MS)
   /** resumeAtBoot's resumes until they settle (a timed-out one keeps running without an adapter). */
   private readonly bootResumes = new Map<string, Promise<void>>()
+  /** The error of each session's last failed resumeSuspended (see resumeFailure). */
+  private readonly resumeFailures = new Map<string, unknown>()
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
     this.registry = registry
@@ -1588,6 +1590,7 @@ export class SessionManager {
   async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     let resumedRuntimePid: number | null = null
+    this.resumeFailures.delete(session.id)
     try {
       log.info("resume_suspended_begin", {
         name: session.name,
@@ -1625,8 +1628,14 @@ export class SessionManager {
       return true
     } catch (err: any) {
       log.error("resume_suspended_failed", { name: session.name, err: String(err) })
+      this.resumeFailures.set(session.id, err)
       return false
     }
+  }
+
+  /** Why the last resumeSuspended of `id` failed, when it threw (the chat notice says it, e.g. an expired sign-in). */
+  resumeFailure(id: string): unknown {
+    return this.resumeFailures.get(id)
   }
 
   /** Archived → live. */

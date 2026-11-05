@@ -21,7 +21,7 @@ package dev.supermux.ui
  * know both shapes:
  *  - workspaces OFF → [SESSION_LIST] with [sessionRow] rows.
  *  - workspaces ON  → the sidebar renders `workspaces_list` with
- *    `workspace_row_<workspaceId>` rows (snake_case, local to `SessionsRail` —
+ *    `workspace_row_<workspaceId>` rows (snake_case, local to the sidebar list —
  *    not canonical, because only the web and desktop shells have a workspace
  *    sidebar). `tests/ui/compose-dom.ts` accepts either.
  *

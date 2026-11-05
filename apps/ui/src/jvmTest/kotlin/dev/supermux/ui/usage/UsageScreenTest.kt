@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AccountUsage
@@ -833,5 +834,85 @@ class UsageScreenTest {
         onNodeWithText("Codex usage API 401").assertExists()
         // Cursor has no added account, so its card keeps the bare title.
         onNodeWithText("Cursor").assertExists()
+    }
+
+    // ── a login its provider refused (#63) ───────────────────────────────────────────────────────────
+    // The broker names the reason (`errorCodes`), so the card says it plainly and offers the existing
+    // sign-in instead of whatever the provider answered.
+
+    private val cursorRefused = UsageResponse(
+        cursor = null,
+        errors = mapOf("cursor" to "Cursor sign-in expired — sign in to Cursor again."),
+        errorCodes = mapOf("cursor" to "account_expired"),
+    )
+
+    @Test fun a_refused_login_reads_sign_in_expired_and_offers_sign_in_again() = runComposeUiTest {
+        val signIns = mutableListOf<Pair<String, String?>>()
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = cursorRefused, loading = false, onBack = {}, onRedeem = { null },
+                    onSignIn = { agent, account -> signIns += agent to account },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Cursor sign-in expired").assertIsDisplayed()
+        onNodeWithTag("usage_sign_in_cursor").assertIsDisplayed().performClick()
+        assertEquals(listOf<Pair<String, String?>>("cursor" to null), signIns)
+    }
+
+    @Test fun an_added_account_whose_login_was_refused_offers_its_own_sign_in() = runComposeUiTest {
+        val signIns = mutableListOf<Pair<String, String?>>()
+        val usage = fixtureUsage().copy(
+            accounts = listOf(
+                AccountUsage(
+                    id = "cursor-work", agent = "cursor", label = "Work", method = "subscription",
+                    error = "Cursor sign-in expired — sign in to Cursor again.", errorCode = "account_expired",
+                ),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = usage, loading = false, onBack = {}, onRedeem = { null },
+                    onSignIn = { agent, account -> signIns += agent to account },
+                )
+            }
+        }
+        waitForIdle()
+        // Below the fold of the test window: scroll the card in first, or the click lands outside it.
+        onNodeWithTag("usage_sign_in_cursor_cursor-work").performScrollTo().performClick()
+        assertEquals(listOf<Pair<String, String?>>("cursor" to "cursor-work"), signIns)
+        // The system login's card has usage, so it offers nothing.
+        onNodeWithTag("usage_sign_in_cursor").assertDoesNotExist()
+    }
+
+    @Test fun without_a_way_to_sign_in_the_card_still_says_it_plainly() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = cursorRefused, loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Cursor sign-in expired").assertIsDisplayed()
+        onNodeWithText("Sign in again").assertDoesNotExist()
+    }
+
+    // The store keeps the last numbers when a later fetch fails: a login refused after a good fetch still says so.
+    @Test fun last_known_numbers_still_say_the_sign_in_expired() = runComposeUiTest {
+        val usage = fixtureUsage().copy(
+            errors = mapOf("cursor" to "Cursor sign-in expired — sign in to Cursor again."),
+            errorCodes = mapOf("cursor" to "account_expired"),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null }, onSignIn = { _, _ -> })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("20% used").assertExists()
+        onNodeWithText("Cursor sign-in expired").assertExists()
+        onNodeWithTag("usage_sign_in_cursor").assertExists()
     }
 }

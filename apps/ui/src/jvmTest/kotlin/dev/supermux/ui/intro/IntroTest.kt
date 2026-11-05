@@ -7,6 +7,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.net.HostIdentity
+import dev.supermux.net.PairClaimResult
 import dev.supermux.pairing.InMemoryPairingTokenStore
 import dev.supermux.state.SettingsKeys
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -27,6 +29,12 @@ import kotlin.test.assertTrue
  * pointer = hit targets), the seen flag it writes, and the parts that used to be Android-only
  * platform code: the QR hero now goes through `Platform.scanQr()` and is gated on `Caps.camera`.
  */
+/** The desktop host wizard's QR (HostWizard.kt `encodePairingPayload`): a one-time claim, not a link. */
+private const val CLAIM_QR =
+    """{"v":1,"action":"pair","hostId":"amsfen6cjgpd7pjqw6nimlahvy","name":"studio",""" +
+        """"relayUrl":"https://h-amsfen6cjgpd7pjqw6nimlahvy.relay.supermux.dev","directUrl":"http://127.0.0.1:9898",""" +
+        """"claimSecret":"s3cret"}"""
+
 @OptIn(ExperimentalTestApi::class)
 class IntroTest {
 
@@ -195,6 +203,49 @@ class IntroTest {
         settle()
         assertEquals(1, platform.scans)
         onNodeWithTag("pair_tofu_dialog").assertIsDisplayed()
+    }
+
+    @Test fun the_connect_page_reads_the_desktop_hosts_claim_qr() = runComposeUiTest {
+        // Card #59: the desktop wizard's QR is a JSON claim; this page rejected it outright.
+        mainClock.autoAdvance = false
+        val platform = cameraPlatform(qr = CLAIM_QR)
+        setPlatformContent(platform, pointer = false, widthClass = WindowWidthClass.Compact) {
+            OnboardingFlow(pairing = testPairing(), onPaired = {})
+        }
+        settle()
+        onNodeWithTag("intro_day_rail_3").performClick()
+        settle()
+        onNodeWithTag("intro_scan").performClick()
+        settle()
+        onNodeWithTag("intro_error").assertDoesNotExist()
+        onNodeWithTag("pair_tofu_dialog").assertIsDisplayed()
+    }
+
+    @Test fun the_connect_page_pairs_with_the_desktop_hosts_claim_qr_once_confirmed() = runComposeUiTest {
+        mainClock.autoAdvance = false
+        val store = InMemoryPairingTokenStore()
+        val redeemed = mutableListOf<String>()
+        var paired = 0
+        val pairing = testPairing(store, claim = { url, secret, name ->
+            redeemed += "$url $secret $name"
+            PairClaimResult(host = HostIdentity(hostId = "amsfen6cjgpd7pjqw6nimlahvy"), deviceToken = "minted", name = name)
+        })
+        setPlatformContent(cameraPlatform(qr = CLAIM_QR), pointer = false, widthClass = WindowWidthClass.Compact) {
+            OnboardingFlow(pairing = pairing, onPaired = { paired++ })
+        }
+        settle()
+        onNodeWithTag("intro_day_rail_3").performClick()
+        settle()
+        onNodeWithTag("intro_scan").performClick()
+        settle()
+        assertEquals(emptyList(), redeemed)
+        assertEquals(null, store.load())
+        onNodeWithTag("pair_tofu_confirm").performClick()
+        settle()
+        assertEquals(listOf("https://h-amsfen6cjgpd7pjqw6nimlahvy.relay.supermux.dev s3cret Test phone"), redeemed)
+        assertEquals("minted", store.load())
+        assertEquals("wss://h-amsfen6cjgpd7pjqw6nimlahvy.relay.supermux.dev", store.loadBaseUrl())
+        assertEquals(1, paired)
     }
 
     @Test fun the_connect_page_pairs_a_pasted_link_and_persists_only_on_confirm() = runComposeUiTest {
