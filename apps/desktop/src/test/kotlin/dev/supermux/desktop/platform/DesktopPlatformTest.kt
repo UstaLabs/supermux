@@ -155,11 +155,29 @@ class DesktopPlatformTest {
         assertNotNull(staged)
         assertTrue(staged.isFile, "the bytes must be on disk before a handler is invoked")
         assertEquals("hello", staged.readText())
-        assertEquals(
-            File(System.getProperty("java.io.tmpdir"), "supermux-attachments"),
-            staged.parentFile,
-        )
+        assertEquals(File(System.getProperty("java.io.tmpdir")).canonicalFile, staged.parentFile.parentFile.canonicalFile)
         staged.delete()
+    }
+
+    /**
+     * The staging folder was a fixed `<tmp>/supermux-attachments`: on Linux /tmp belongs to every user, so another one
+     * could make that folder first, read what was staged there, or plant a link the next attachment was written through.
+     */
+    @Test
+    fun `attachments are staged in a folder of this process that only this user can read`() {
+        val first = stageAttachmentForTest("a-${System.nanoTime()}.txt", "hello".toByteArray())
+        val second = stageAttachmentForTest("b-${System.nanoTime()}.txt", "x".toByteArray())
+        assertNotNull(first)
+        assertNotNull(second)
+        val dir = first.parentFile
+        assertEquals(dir, second.parentFile, "one staging folder per process")
+        assertTrue(dir.name.startsWith("supermux-attachments") && dir.name != "supermux-attachments", "not the shared fixed name: ${dir.name}")
+        if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+            val perms = java.nio.file.Files.getPosixFilePermissions(dir.toPath())
+            assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(perms))
+        }
+        first.delete()
+        second.delete()
     }
 
     /**

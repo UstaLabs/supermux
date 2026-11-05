@@ -113,16 +113,22 @@ internal fun safeFileName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
 
 /**
- * Stage [bytes] under the JVM temp dir so the OS handler has a real path to open.
+ * Stage [bytes] in this process's private folder under the JVM temp dir, so the OS handler has a real path to open.
  *
  * `internal` (aliased as `stageAttachmentForTest`) because it is the only half of
  * [DesktopFileAccess.openExternally] a test can exercise — actually opening would fork a real
  * viewer on the developer's desktop.
  */
 internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
-    val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
-    File(dir, name).also { it.writeBytes(bytes) }
+    File(attachmentsDir, name).also { it.writeBytes(bytes) }
 }.getOrNull()
+
+/**
+ * This process's staging folder, made on first use. [java.nio.file.Files.createTempDirectory] gives it a name no one
+ * can guess and, on POSIX, owner-only permissions. A fixed `<tmp>/supermux-attachments` was shared on Linux, where /tmp
+ * belongs to every user: another one could make it first, read what was staged there, or plant a link in it.
+ */
+private val attachmentsDir: File by lazy { java.nio.file.Files.createTempDirectory("supermux-attachments-").toFile() }
 
 /**
  * Open a local file with the OS default handler (viewer / player / folder).
