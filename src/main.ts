@@ -154,7 +154,8 @@ import {
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readEnvText } from "./shared/env-file"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
+import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
@@ -934,13 +935,7 @@ function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } 
 const gitStatusService = new GitStatusService({
   compute: (s) => computeLiteStatus(s),
   resolveGitDirs: (s) => resolveGitDirs(s.workdir),
-  watch: (dir, onEvent) => {
-    try {
-      const w = fsWatch(dir, { persistent: false }, () => onEvent())
-      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
-      return { close: () => { try { w.close() } catch {} } }
-    } catch { return { close: () => {} } }
-  },
+  watch: (dir, onEvent) => watchDir(dir, () => onEvent()),
   onChange: (id, git) => webChannel?.broadcastToAll({ type: "session_git", session: id, git }),
   schedule: (fn, ms) => setTimeout(fn, ms),
   cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -2011,8 +2006,8 @@ try {
   const dir = join(getMuxHome(), "agent-memory")
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
-  fsWatch(dir, (_event, file) => {
-    const m = typeof file === "string" ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
+  watchDir(dir, (file) => {
+    const m = file ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
     const id = m?.[1]
     if (!id) return
     clearTimeout(pending.get(id))
@@ -2029,13 +2024,7 @@ const worktreeService = new WorktreeService({
     .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
-  watch: (dir, onEvent) => {
-    try {
-      const w = fsWatch(dir, { persistent: false }, (_e, file) => onEvent(file ? String(file) : null))
-      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
-      return { close: () => { try { w.close() } catch {} } }
-    } catch { return { close: () => {} } }
-  },
+  watch: (dir, onEvent) => watchDir(dir, onEvent),
 })
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
