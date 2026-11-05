@@ -103,7 +103,6 @@ src/core/update/apply.test.ts | archAssetKeyFor and friends assume the test runs
 src/core/worktree/finish.test.ts | openPrForSession times out at 5 s (git push is slow on the runner); passed on the earlier Bun 1.3.14 runs | #29 | flaky
 src/core/worktree/inventory.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "lists every worktree with its owners (live / archived / orph" | #29
 src/core/worktree/service.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "worktrees whose repo is gone are one orphans summary, paged " | #29
-src/core/worktree/verify.test.ts | expected false got true; first: "runVerify reports pass/fail with output" | #29
 src/shared/paths.test.ts | expects /-joined state paths (…/host-key); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
 src/shared/preflight.test.ts | expected true got false; first: "missing tmux is a WARNING, not fatal, when an agent CLI exis" | #29
 tests/agent-detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "authCredPath builds the per-kind credential paths" | #29
