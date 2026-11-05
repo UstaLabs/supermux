@@ -156,6 +156,5 @@ tests/web-attachments-roundtrip.test.ts | file locked or denied (EBUSY); first: 
 tests/web-inbound-attachments.test.ts | file locked or denied (EBUSY); first: "web inbound with attachment: messages row carries attachment" | #29
 tests/web-push-roundtrip.test.ts | file locked or denied (EBUSY); first: "extractPreview returns truncated text" | #29
 tests/web-session-crud.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "POST /sessions → spawns and returns session" | #29
-tests/windows-staging.test.ts | fails; first: "sessiond compilation honors an explicit Windows x64 target" | #29
 tests/workdir-diff.test.ts | fails; first: "computeWorkdirDiff > untracked filename with shell metachara" | #29
 tests/workdir-paths.test.ts | symlink without the privilege (#37); first: "normalizeExistingWorkdir resolves symlinks to the actual dir" | #29

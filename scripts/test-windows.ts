@@ -1,7 +1,7 @@
 // The `windows` lane in .github/workflows/ci.yml runs the broker and core test suite on Windows through this file,
 // against tests/windows-quarantine.txt: the files that fail on Windows today. That list may only shrink. The run
 // fails when a file NOT on it fails (a new Windows regression), when a file on it now passes (take it off), and
-// when it names a file that no longer exists.
+// when it names a file the lane does not run. The files ci.yml's `windows-desktop` job runs are left to that job.
 //
 // Files run in chunks, each one `bun test --isolate` with a JUnit report, so one hung or crashing file cannot sink
 // the rest. A file the report leaves out (it threw while loading), and every file of a chunk that failed without
@@ -151,6 +151,21 @@ export function discoverTestFiles(root: string, roots: readonly string[] = TEST_
   return files.sort()
 }
 
+/**
+ * The test files ci.yml's `windows-desktop` job hands to `bun test` (the broker's Windows seams, the release job's own
+ * list). This lane leaves them to it, so no file runs twice on Windows.
+ */
+export function filesRunByWindowsDesktop(ci: string): string[] {
+  const text = ci.replace(/\r\n/g, "\n")
+  const start = text.indexOf("\n  windows-desktop:\n")
+  if (start < 0) return []
+  const rest = text.slice(start + 1)
+  const end = rest.search(/\n  [\w-]+:\n/)
+  const job = end < 0 ? rest : rest.slice(0, end)
+  const files = job.match(/[\w./-]+[._](?:test|spec)\.(?:js|jsx|ts|tsx)\b/g) ?? []
+  return [...new Set(files.map(normalizeTestPath))].sort()
+}
+
 /** The quarantine after a run: still-failing files keep their reason, new ones get a dated one, fixed ones go. */
 export function quarantineFromReport(results: readonly FileResult[], existing: readonly QuarantineEntry[], today: string): string {
   const known = new Map(existing.map(entry => [entry.file, entry]))
@@ -211,7 +226,7 @@ function summary(v: Verdict, results: readonly FileResult[], quarantine: readonl
   }
   section("NEW failures, not in tests/windows-quarantine.txt (fix them, or quarantine them with a reason):", v.newFailures)
   section("Quarantined files that now PASS (take them off the list):", v.nowPassing)
-  section("Quarantine entries for files that no longer exist (remove them):", v.staleEntries)
+  section("Quarantine entries for files this lane does not run, gone or left to windows-desktop (remove them):", v.staleEntries)
   return lines.join("\n")
 }
 
@@ -247,7 +262,10 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(`wrote ${opt.writeQuarantine}`)
     return 0
   }
-  const files = discoverTestFiles(ROOT)
+  const ci = join(ROOT, ".github", "workflows", "ci.yml")
+  const elsewhere = new Set(existsSync(ci) ? filesRunByWindowsDesktop(readFileSync(ci, "utf8")) : [])
+  if (elsewhere.size) console.log(`left to the windows-desktop job: ${[...elsewhere].join(", ")}`)
+  const files = discoverTestFiles(ROOT).filter(file => !elsewhere.has(file))
   const quarantine = existsSync(opt.quarantine) ? parseQuarantine(readFileSync(opt.quarantine, "utf8")) : []
   const { chunked, alone } = splitRun(files, quarantine)
   const work = mkdtempSync(join(tmpdir(), "mux-win-tests-"))

@@ -234,6 +234,7 @@ jobs:
             -Script "$env:GITHUB_WORKSPACE\scripts\windows-vm\ci-smoke.ps1" `
             -ScriptArgs @("-Repo", $env:GITHUB_WORKSPACE, "-Bun", (Join-Path $bunDir "bun.exe")) `
             -ReadPaths @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)
+      # The files windows-desktop hands to `bun test` run there only: scripts/test-windows.ts reads its list here.
       - name: Broker and core tests, against the Windows quarantine
         if: always()
         run: bun scripts/test-windows.ts --report windows-test-report.json

@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
   chunk,
   discoverTestFiles,
   failed,
+  filesRunByWindowsDesktop,
   normalizeTestPath,
   parseJunit,
   parseQuarantine,
@@ -185,5 +186,47 @@ describe("discoverTestFiles", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+// Two lanes test on Windows: `windows-desktop` runs the broker's Windows seams (the release job's own list) beside the
+// desktop host tests, and `windows` runs the rest of the suite through scripts/test-windows.ts. No file runs in both.
+describe("filesRunByWindowsDesktop", () => {
+  test("the files ci.yml's windows-desktop job hands to bun test, not its gradle filters or another job's files", () => {
+    const ci = [
+      "jobs:",
+      "  windows:",
+      "    steps:",
+      "      - run: bun test tests/other.test.ts",
+      "  windows-desktop:",
+      "    steps:",
+      "      - name: Test native Windows broker seams",
+      "        run: >",
+      "          bun test",
+      "          tests/windows-staging.test.ts",
+      "          src/core/process/launcher.test.ts",
+      "      - name: Test desktop native-host integration",
+      "        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*'",
+      "",
+      "  kotlin:",
+      "    steps:",
+      "      - run: bun test tests/kotlin-side.test.ts",
+      "",
+    ].join("\r\n")
+    expect(filesRunByWindowsDesktop(ci)).toEqual(["src/core/process/launcher.test.ts", "tests/windows-staging.test.ts"])
+  })
+
+  test("none when there is no such job", () => {
+    expect(filesRunByWindowsDesktop("jobs:\n  ts:\n    steps: []\n")).toEqual([])
+  })
+
+  // A quarantined file the lane no longer runs could never be taken off the list: the lane calls it stale and fails.
+  test("in this repo: files that exist, none of them on the Windows quarantine", () => {
+    const root = join(import.meta.dir, "..")
+    const files = filesRunByWindowsDesktop(readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8"))
+    expect(files).toContain("src/core/process/launcher.test.ts")
+    for (const file of files) expect(existsSync(join(root, file)), file).toBe(true)
+    const quarantined = parseQuarantine(readFileSync(join(root, "tests", "windows-quarantine.txt"), "utf8")).map(e => e.file)
+    expect(quarantined.filter(file => files.includes(file))).toEqual([])
   })
 })
