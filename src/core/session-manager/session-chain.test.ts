@@ -213,3 +213,41 @@ test("ensureLiveWith throws what made the resume fail, so the chat can say why",
   expect((archived as Error).message).toContain("the archive could not be restored")
   await ensureLiveWith(liveness({ id: "s", status: "suspended" }), "s")
 })
+
+test("ensureLiveWith never starts a draft: its first message in the app does", async () => {
+  let resumed = 0
+  const draft = { id: "d", status: "active", user_status: "draft" }
+  const deps: LivenessDeps = {
+    session: () => draft,
+    resumeFromArchive: async () => ({ ok: true }),
+    resumeSuspended: async () => { resumed++; return true },
+    adapterState: () => "none",
+    resumeAdapter: async () => {},
+    waitDeliverable: async () => false,
+  }
+  await expect(ensureLiveWith(deps, "d")).rejects.toThrow(/draft/)
+  expect(resumed).toBe(0)
+})
+
+test("ensureLiveWith waits for a boot resume still in flight instead of starting a second one", async () => {
+  let resumed = 0
+  let state: "none" | "alive" | "dead" = "none"
+  const row = { id: "a", status: "active" }
+  let finishBoot!: () => void
+  const boot = new Promise<void>((r) => { finishBoot = () => { state = "alive"; r() } })
+  const deps: LivenessDeps = {
+    session: () => row,
+    resumeFromArchive: async () => ({ ok: true }),
+    resumeSuspended: async () => { resumed++; return true },
+    adapterState: () => state,
+    resumeAdapter: async () => {},
+    waitDeliverable: async () => state === "alive",
+    bootResume: () => (state === "none" ? boot : undefined),
+  }
+  const live = ensureLiveWith(deps, "a")
+  await Bun.sleep(5)
+  expect(resumed).toBe(0)
+  finishBoot()
+  await live
+  expect(resumed).toBe(0)
+})

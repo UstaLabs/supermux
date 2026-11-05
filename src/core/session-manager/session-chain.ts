@@ -180,7 +180,7 @@ export async function deliverOnChain<T>(chain: SessionChain, id: string, handOve
 /** What deciding and making a session live needs (the inbox's deps satisfy it). */
 export type LivenessDeps = {
   /** The session row, archived ones included. */
-  session(id: string): { id: string; status?: string } | undefined
+  session(id: string): { id: string; status?: string; user_status?: string | null } | undefined
   resumeFromArchive(id: string): Promise<{ ok: boolean; error?: string }>
   resumeSuspended(session: any): Promise<boolean>
   /** Why the last resumeSuspended of `id` failed, when it threw (SessionManager.resumeFailure). */
@@ -192,6 +192,8 @@ export type LivenessDeps = {
   deliverableTimeoutMs?: number
   /** Takes input right now (SessionManager.isDeliverable). */
   isDeliverable?(id: string): boolean
+  /** Boot's resume of this session while it has not settled (one that ran past boot's cap keeps going). */
+  bootResume?(id: string): Promise<void> | undefined
 }
 
 /** Up and taking input: an active row whose adapter is alive and deliverable. */
@@ -208,6 +210,11 @@ export function isLiveWith(deps: LivenessDeps, id: string): boolean {
 export async function ensureLiveWith(deps: LivenessDeps, id: string): Promise<void> {
   const row = deps.session(id)
   if (!row) throw new Error(`session ${id} no longer exists`)
+  // A draft has no agent, branch or worktree yet: the app's first message makes it a session, then wakes it.
+  if (row.user_status === "draft") throw new Error("it is a draft: its first message in the app starts it")
+  // Boot is still resuming it: wait for that resume rather than start a second agent beside it.
+  const boot = deps.bootResume?.(id)
+  if (boot) await boot.catch(() => {})
   if (row.status === "archived") {
     const restored = await deps.resumeFromArchive(id)
     if (!restored.ok) throw new Error(`restore from archive failed: ${restored.error ?? "unknown"}`)

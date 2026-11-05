@@ -43,7 +43,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 }
 
 import { startSocketServer } from "./core/session-manager/socket-server"
-import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
+import { createSupervisor, isDraftSession, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
@@ -1144,6 +1144,7 @@ const liveness = {
   resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
   waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
   isDeliverable: (id) => sessionManager.isDeliverable(id),
+  bootResume: (id) => sessionManager.bootResume(id),
 } satisfies LivenessDeps
 /** Sessions whose first wake a door (spawn_session, delegate, council, …) waits for: a failure is its caller's to report. */
 const doorStarts = new Set<string>()
@@ -1167,7 +1168,8 @@ const sessionChain = new SessionChain({
   onWakeFailed: (id, err) => {
     const s = registry.sessions.getById(id)
     log.warn("session_wake_failed", { id, name: s?.name, err: err instanceof Error ? err.message : String(err) })
-    if (!s || doorStarts.has(id)) return
+    // A draft is not started from here (its first message in the app does): nothing to say in its chat.
+    if (!s || doorStarts.has(id) || isDraftSession(s)) return
     // A start cut short by the broker stopping: the reason is the restart, not what failed under it
     // (git's half-written progress, a keeper that went away).
     void notifySession(id, wakeFailureNotice(s.agent, shuttingDown ? new Error("supermux restarted while it was starting") : err))

@@ -265,6 +265,11 @@ export class SessionManager {
     return this.bootResumes.has(sessionId)
   }
 
+  /** That resume, while it has not settled (card #75: a wake waits for it instead of starting a second runtime). */
+  bootResume(sessionId: string): Promise<void> | undefined {
+    return this.bootResumes.get(sessionId)
+  }
+
   adapterFor(sessionId: string): AgentAdapter | undefined {
     return this.runtimes.get(sessionId)?.adapter
   }
