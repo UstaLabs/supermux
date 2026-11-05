@@ -40,6 +40,8 @@ function makeCtx(run: Run, over: Partial<ConnectCtx> = {}): ConnectCtx {
     println: () => {},
     ask: async () => null,
     confirm: async (_p, def) => def,
+    startDetached: () => { throw new Error("tailscale starts nothing in the background") },
+    stopTree: () => {},
     ...over,
   }
 }

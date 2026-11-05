@@ -2,7 +2,8 @@ import { test, expect } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { delimiter, join } from "path"
-import { extractFirstUrl, realRun, which } from "./run"
+import { extractFirstUrl, realRun, realStartDetached, realStopTree, which } from "./run"
+import { readFileSync } from "fs"
 
 /** A command named [name] in a new folder put at the front of PATH after start, as main.ts adds the agent bin folders. */
 function onPathAfterStart(name: string): () => void {
@@ -102,4 +103,24 @@ test("realRun gives the child the environment as it is now", async () => {
   } finally {
     delete process.env.MUX_LATE_TUNNEL_VAR
   }
+})
+
+// The quick and random tunnels were started with `sh -c "nohup ... & echo $!"` and stopped with `kill $(cat pidfile)`:
+// neither works on Windows, which has no sh. A tunnel CLI is started detached instead, its output going to a log.
+test("realStartDetached starts a child that writes its output to the log; realStopTree ends it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mux-detached-"))
+  const log = join(dir, "tunnel.log")
+  const pid = realStartDetached([process.execPath, "-e", "console.log('tunnel up'); setInterval(() => {}, 1000)"], log)
+  try {
+    expect(pid).toBeGreaterThan(0)
+    let text = ""
+    for (let i = 0; i < 50 && !text.includes("tunnel up"); i++) { await Bun.sleep(100); text = readFileSync(log, "utf8") }
+    expect(text).toContain("tunnel up")
+  } finally {
+    realStopTree(pid)
+  }
+  let alive = true
+  for (let i = 0; i < 50 && alive; i++) { await Bun.sleep(100); try { process.kill(pid, 0) } catch { alive = false } }
+  expect(alive).toBe(false)
+  rmSync(dir, { recursive: true, force: true })
 })

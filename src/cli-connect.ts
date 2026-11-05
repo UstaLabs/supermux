@@ -12,7 +12,7 @@
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { createInterface } from "readline"
-import { realRun, which } from "./core/tunnels/run"
+import { realRun, realStartDetached, realStopTree, which } from "./core/tunnels/run"
 import type { Ask, Confirm, ConnectCtx, Println, Run, TunnelProvider } from "./core/tunnels/types"
 import { resolveMode } from "./core/tunnels/types"
 import { PROVIDERS, getProvider } from "./core/tunnels/registry"
@@ -332,6 +332,8 @@ export async function runConnectCommand(args: string[], deps: ConnectDeps = {}):
     println,
     ask,
     confirm,
+    startDetached: realStartDetached,
+    stopTree: realStopTree,
   }
 
   // --status / --off first (no provider needed)

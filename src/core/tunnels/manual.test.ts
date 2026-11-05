@@ -19,6 +19,8 @@ function ctx(overrides: Partial<ConnectCtx> = {}): ConnectCtx {
     println: () => {},
     ask: async () => null,
     confirm: async (_p, def) => def,
+    startDetached: () => { throw new Error("manual starts nothing in the background") },
+    stopTree: () => {},
     ...overrides,
   }
 }

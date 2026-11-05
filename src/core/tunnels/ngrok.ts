@@ -13,6 +13,8 @@
 // Even the 4040 local-API read goes through `ctx.run(["curl", ...])` so it's
 // fakeable; URLs are pulled from that JSON.
 
+import { join } from "path"
+import { startBackground, stopBackground } from "./background"
 import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
 
@@ -101,8 +103,8 @@ export const ngrokProvider: TunnelProvider = {
   /** Provision the tunnel for the resolved mode and return its public URL. */
   async up(ctx: ConnectCtx): Promise<TunnelResult> {
     const mode = resolveMode(this, ctx)
-    const pidFile = `${ctx.stateDir}/ngrok.pid`
-    const log = `${ctx.stateDir}/ngrok.log`
+    const pidFile = join(ctx.stateDir, "ngrok.pid")
+    const log = join(ctx.stateDir, "ngrok.log")
 
     if (mode.id === "reserved") {
       // Domain: prefer the user-supplied hint, else ask. (No TTY ⇒ ask ⇒ null.)
@@ -112,14 +114,9 @@ export const ngrokProvider: TunnelProvider = {
       if (!domain) throw new Error("a reserved domain is required for a stable ngrok tunnel")
 
       // The durable run serves the tunnel FOREVER — we must NOT await it (that
-      // would hang the command). Launch it DETACHED (nohup ⇒ survives this CLI),
+      // would hang the command). Launch it DETACHED (it survives this CLI),
       // record its PID for down(). The URL is deterministic: https://<domain>.
-      await ctx.run([
-        "sh",
-        "-c",
-        `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
-          `nohup ngrok http --domain=${domain} ${ctx.port} > "${log}" 2>&1 < /dev/null & echo $! > "${pidFile}"`,
-      ])
+      startBackground(ctx, ["ngrok", "http", `--domain=${domain}`, ctx.port], log, pidFile)
       return {
         publicUrl: `https://${domain}`,
         stable: true,
@@ -132,12 +129,7 @@ export const ngrokProvider: TunnelProvider = {
 
     // random: launch an anonymous tunnel DETACHED (same reasoning — it serves
     // forever), then read its URL from the local 4040 API once it's up.
-    await ctx.run([
-      "sh",
-      "-c",
-      `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
-        `nohup ngrok http ${ctx.port} > "${log}" 2>&1 < /dev/null & echo $! > "${pidFile}"`,
-    ])
+    startBackground(ctx, ["ngrok", "http", ctx.port], log, pidFile)
 
     let url: string | undefined
     for (let i = 0; i < 15; i++) {
@@ -169,12 +161,7 @@ export const ngrokProvider: TunnelProvider = {
    */
   async down(ctx: ConnectCtx): Promise<void> {
     try {
-      const pidFile = `${ctx.stateDir}/ngrok.pid`
-      await ctx.run([
-        "sh",
-        "-c",
-        `[ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null; rm -f "${pidFile}"`,
-      ])
+      stopBackground(ctx, join(ctx.stateDir, "ngrok.pid"))
     } catch {
       // nothing to stop
     }

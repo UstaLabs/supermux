@@ -1,6 +1,8 @@
 // Real process runner + small helpers. The `Run` type lives in types.ts; this is
 // the production implementation. Tests inject a fake Run instead of using realRun.
 
+import { closeSync, mkdirSync, openSync } from "fs"
+import { dirname } from "path"
 import { proc as platformProc } from "@supermux/platform"
 import type { Run, RunResult } from "./types"
 
@@ -75,6 +77,28 @@ export const realRun: Run = async (argv, opts) => {
     stdout,
     stderr: timedOut ? `${stderr}\n[timed out after ${opts?.timeoutMs}ms]` : stderr,
   } satisfies RunResult
+}
+
+/**
+ * Production ConnectCtx.startDetached: [argv] runs on after `supermux connect` exits (its own group, no window), its
+ * output and errors written to [log] from the start. Returns its pid, which stopTree ends.
+ */
+export function realStartDetached(argv: string[], log: string): number {
+  mkdirSync(dirname(log), { recursive: true })
+  const out = openSync(log, "w")
+  try {
+    // platform-ok: spawnDefaults spread first; a detached background tunnel, no shell
+    const child = Bun.spawn(argv, { ...platformProc.spawnDefaults(), detached: true, stdin: "ignore", stdout: out, stderr: out })
+    child.unref()
+    return child.pid
+  } finally {
+    closeSync(out)
+  }
+}
+
+/** Production ConnectCtx.stopTree: ends a background tunnel and what it started. */
+export function realStopTree(pid: number): void {
+  platformProc.killTree(pid)
 }
 
 /** Is a binary on PATH? The PATH of now: without one, Bun.which searches the PATH the process started with. */

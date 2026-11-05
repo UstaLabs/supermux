@@ -30,6 +30,8 @@ function makeCtx(
     println: (s) => out.push(s),
     ask: async () => null,
     confirm: async (_p, def) => def,
+    startDetached: () => { throw new Error("netbird starts nothing in the background") },
+    stopTree: () => {},
     ...over,
   }
   return { ctx, out }
