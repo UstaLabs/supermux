@@ -456,11 +456,17 @@ Terminal=false
     /**
      * True iff a definition from before install ids is installed and runs [stateDir]'s broker: what
      * an earlier version of this app wrote, if anything did (HostSupervisor's first id-aware launch).
-     * The bin dir as each format writes it (XML-escaped, a PowerShell literal), then a separator.
+     * The bin dir as each format writes it, then a separator: as is, XML-escaped (plist), systemd-quoted
+     * (Environment=, ExecStart=), sh-quoted (XDG env file) and inside the XDG Exec= line, a PowerShell literal.
      */
     fun unstampedRuns(env: OsEnv = SystemOsEnv, stateDir: Path): Boolean = runCatching {
         val bin = stateDir.resolve(HostBinaries.BIN_SUBDIR).toString()
-        val names = listOf(bin, xml(bin), bin.replace("'", "''")).distinct().joinToString("|") { Regex.escape(it) }
+        val sh = shQuote(bin).removeSurrounding("'")
+        val forms = listOf(
+            bin, xml(bin), sdQuote(bin).removeSurrounding("\""), sdExecQuote(bin).removeSurrounding("\""),
+            sh, xdgQuote(sh).removeSurrounding("\""), powershellLiteral(bin).removeSurrounding("'"),
+        )
+        val names = forms.distinct().joinToString("|") { Regex.escape(it) }
         val runs = Regex("""(?:$names)[\\/;:'"<]""")
         slots(env).any { it.unstamped && (runs.containsMatchIn(it.text) || runs.containsMatchIn(it.env.orEmpty())) }
     }.getOrDefault(false)

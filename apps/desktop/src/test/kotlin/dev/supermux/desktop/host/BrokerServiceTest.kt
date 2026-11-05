@@ -818,6 +818,28 @@ class BrokerServiceTest {
         assertEquals(emptyList(), env.ran)
     }
 
+    @Test fun unstampedRunsSeesTheStateDirAsEachLinuxFormatEscapesIt() {
+        // A unit's ExecStart= and Environment= double backslashes and %, the XDG Exec= line escapes its own
+        // way: a state dir whose path has them (every path on Windows, a rare one on Linux) is still this one.
+        val state = Path.of("C:\\Users\\a 50%\\.mux\\state")
+        val legacy = BrokerService.Spec(state.resolve("desktop-assets/bin/supermux-broker"), emptyMap(), state.resolve("desktop-broker.log"))
+        val unitHome = createTempDirectory()
+        val unitEnv = FakeOsEnv(os = OsEnv.Os.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val unit = unitHome.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent)
+        Files.writeString(unit, BrokerService.systemdUnit(legacy))
+        assertTrue(BrokerService.unstampedRuns(unitEnv, state), Files.readString(unit))
+
+        val xdgHome = createTempDirectory()
+        val xdgEnv = FakeOsEnv(os = OsEnv.Os.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val envFile = xdgHome.resolve(".config/supermux/broker.env")
+        val entry = xdgHome.resolve(".config/autostart/supermux-host.desktop")
+        BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(legacy))
+        BrokerService.writePrivate(entry, BrokerService.xdgAutostart(legacy, envFile))
+        assertTrue(BrokerService.unstampedRuns(xdgEnv, state), Files.readString(entry))
+        assertFalse(BrokerService.unstampedRuns(xdgEnv, Path.of("C:\\Users\\a 50%\\.mux\\other")), "another state dir's broker is not this one")
+    }
+
     @Test fun anotherCopysPortIsReadFromItsDefinitionOnEveryOs() {
         // Where its broker runs, as each format writes MUX_WEB_PORT. A definition of ours is not another copy's.
         fun on9899(s: BrokerService.Spec) = stamped(s, theirs).let { it.copy(env = it.env + ("MUX_WEB_PORT" to "9899")) }
