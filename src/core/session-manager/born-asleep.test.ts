@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { execFileSync } from "child_process"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join, sep } from "path"
 import { openDb, runMigrations } from "../storage/db"
@@ -15,8 +15,10 @@ import { AgentKind } from "../../shared/agents"
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
+// The real path, as the repo's root comes back from git: on Windows the temp folder can be an 8.3 short name
+// (C:\Users\RUNNER~1\…) that git and realpath spell long, and the worktree's folder is named from that spelling.
 function tmp(prefix: string): string {
-  const d = mkdtempSync(join(tmpdir(), prefix))
+  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
   dirs.push(d)
   return d
 }
