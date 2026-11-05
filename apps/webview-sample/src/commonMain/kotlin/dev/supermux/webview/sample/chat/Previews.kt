@@ -54,8 +54,12 @@ enum class PreviewBridge {
  * [variant]. Built once, in the chat's model: [content] is what the list item's web view shows, the same object every
  * time the item is composed.
  * @property height the view's fixed height, or null for a view that follows its page's height (up to [MAX_WRAP]).
- * @property initial a wrap-content view's height until its page reports one: close to its usual height, so the first
- *   layout is close to the real one.
+ * @property initial a wrap-content view's height until its page reports one, on a phone's card (up to [MID_WIDTH]):
+ *   its page's own height there, never less, so the first layout is the real one ([initialFor]).
+ * @property initialMid the same for a card from [MID_WIDTH] to [WIDE_WIDTH] wide: some pages fill their card at their
+ *   full size from there (a card, a clock face), others wrap less.
+ * @property initialWide the same for a card [WIDE_WIDTH] wide and more, a tablet's or a desktop window's: the pages'
+ *   wide layout (`@media (min-width: 460px)`).
  * @property pane whether the page takes every touch (iOS) and the wheel (macOS): drag-to-rotate, a game, a card that
  *   scrolls inside itself. Embeds leave a drag to the chat.
  * @property stage the page's own background, top and bottom, for its placeholder; null when the page follows the theme.
@@ -74,19 +78,43 @@ class PreviewSpec(
     val pane: Boolean = false,
     val hint: String? = null,
     val bridge: PreviewBridge = PreviewBridge.None,
+    val initialMid: Dp = initial,
+    val initialWide: Dp = initialMid,
 ) {
     /** The page's path on [PREVIEW_ORIGIN]. */
     val entry: String = "$slug.html"
 
     val content: WebContent.Bundle = WebContent.Bundle(PREVIEW_ORIGIN, PreviewFiles(this), entry)
 
+    /**
+     * A wrap-content view's first height in a card [width] wide: its page's height there or a little more, never less.
+     * A view laid out shorter than its page grows when the page reports, which moves the rows after it; one laid out a
+     * little taller keeps its height while it shows (the library takes a smaller height once the row has scrolled out).
+     * Between a phone's card and [MID_WIDTH] the pages change from one to the other: the larger of the two.
+     */
+    fun initialFor(width: Dp): Dp = when {
+        width >= WIDE_WIDTH -> initialWide
+        width >= MID_WIDTH -> initialMid
+        width > PHONE_WIDTH -> maxOf(initial, initialMid)
+        else -> initial
+    }
+
     /** The same preview as another page, [slug]: a new content, for a preview the agent makes again. */
     fun again(slug: String): PreviewSpec =
-        PreviewSpec(slug, template, variant, title, kind, height, accent, stage, initial, pane, hint, bridge)
+        PreviewSpec(slug, template, variant, title, kind, height, accent, stage, initial, pane, hint, bridge, initialMid, initialWide)
 
     companion object {
         /** The tallest a wrap-content preview grows: a taller page scrolls inside it. */
         val MAX_WRAP: Dp = 560.dp
+
+        /** A phone's card: the iPhone 15 Pro's, 393 pt less the chat's margins and the agent's avatar. */
+        val PHONE_WIDTH: Dp = 329.dp
+
+        /** From here the flip cards and clock faces are at their full size, and the mixer as short as on a desktop. */
+        val MID_WIDTH: Dp = 393.dp
+
+        /** The pages' wide layout: `@media (min-width: 460px)` (the form's two columns, the loaders' one row). */
+        val WIDE_WIDTH: Dp = 460.dp
     }
 }
 

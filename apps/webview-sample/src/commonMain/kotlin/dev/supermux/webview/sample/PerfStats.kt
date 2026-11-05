@@ -8,6 +8,7 @@ import dev.supermux.webview.engine.WebEngineFactory
 import dev.supermux.webview.engine.WebEngineResult
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.time.TimeSource
 
 /**
  * The engines [delegate] makes, counted for the perf lab: how many were created and destroyed (the churn), how many
@@ -15,6 +16,23 @@ import kotlin.math.max
  * engine, the fake or a real one. Main thread only, like the pool that calls it.
  */
 class EngineCounter(private val delegate: WebEngineFactory) : WebEngineFactory {
+    /**
+     * Hears what each engine is asked to do, with how long the call took (the calling thread's time, the main thread's for
+     * all but the suspending calls): the chat's probe (`-chat-probe`) lines its slow frames up against it. Null: nothing
+     * is timed.
+     */
+    var trace: ((String) -> Unit)? = null
+
+    /** [block], timed for [trace] as [what], if anyone listens. */
+    private inline fun <T> timed(what: String, block: () -> T): T {
+        val listener = trace ?: return block()
+        val start = TimeSource.Monotonic.markNow()
+        val result = block()
+        val micros = start.elapsedNow().inWholeMicroseconds
+        listener("$what ${micros / 1000}.${(micros % 1000) / 100} ms")
+        return result
+    }
+
     /** Engines created. */
     var created: Int = 0
         private set
@@ -47,11 +65,11 @@ class EngineCounter(private val delegate: WebEngineFactory) : WebEngineFactory {
         peakEngines = existing
     }
 
-    override suspend fun create(config: EngineConfig): WebEngineResult = when (val result = delegate.create(config)) {
+    override suspend fun create(config: EngineConfig): WebEngineResult = when (val result = timed("engine create") { delegate.create(config) }) {
         is WebEngineResult.Created -> {
             created++
             peakEngines = max(peakEngines, existing)
-            WebEngineResult.Created(Counted(result.engine))
+            WebEngineResult.Created(Counted(result.engine, created))
         }
         is WebEngineResult.Unavailable -> {
             unavailable++
@@ -60,25 +78,35 @@ class EngineCounter(private val delegate: WebEngineFactory) : WebEngineFactory {
     }
 
     /** [engine] as the pool sees it: every call goes through to it, and the ones that count are counted. */
-    private inner class Counted(private val engine: WebEngine) : WebEngine by engine {
+    private inner class Counted(private val engine: WebEngine, private val number: Int) : WebEngine by engine {
         private var released = false
 
         override fun load(content: WebContent) {
             loads++
-            engine.load(content)
+            timed("engine $number load ${content.key.substringAfterLast('/')}") { engine.load(content) }
         }
 
         override fun restoreState(state: ByteArray, content: WebContent): Boolean =
-            engine.restoreState(state, content).also { if (it) loads++ }
+            timed("engine $number restore ${content.key.substringAfterLast('/')}") { engine.restoreState(state, content) }.also { if (it) loads++ }
 
-        override suspend fun snapshot(): ImageBitmap? = engine.snapshot()?.also { snapshots++ }
+        override suspend fun snapshot(): ImageBitmap? = timed("engine $number snapshot") { engine.snapshot() }?.also { snapshots++ }
+
+        override suspend fun saveState(): ByteArray? = timed("engine $number save") { engine.saveState() }
+
+        override suspend fun reset(): Boolean = timed("engine $number reset") { engine.reset() }
+
+        override fun replayState() = timed("engine $number replay") { engine.replayState() }
+
+        override fun setVisible(visible: Boolean) = timed("engine $number visible $visible") { engine.setVisible(visible) }
+
+        override fun configure(setup: dev.supermux.webview.engine.PageSetup) = timed("engine $number configure") { engine.configure(setup) }
 
         override fun release() {
             if (!released) {
                 released = true
                 destroyed++
             }
-            engine.release()
+            timed("engine $number release") { engine.release() }
         }
     }
 }

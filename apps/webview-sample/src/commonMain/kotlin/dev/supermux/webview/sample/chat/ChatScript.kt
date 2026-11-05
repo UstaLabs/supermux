@@ -62,10 +62,10 @@ object Previews {
     val heroAurora = spec("hero-aurora", "gradient-hero", "aurora", "Hero · Aurora", Css, 220.dp, 0xFF6EE7D8, 0xFF1E3A8A, 0xFF5B21B6)
     val heroSunrise = spec("hero-sunrise", "gradient-hero", "sunrise", "Hero · Sunrise", Css, 200.dp, 0xFFFFB347, 0xFFFF6B6B, 0xFFFFA94D)
     val heroOcean = spec("hero-ocean", "gradient-hero", "ocean", "Hero · Ocean", Css, 240.dp, 0xFF38BDF8, 0xFF1E40AF, 0xFF0E7490)
-    val loadersViolet = wrap("loaders-violet", "loaders", "violet", "Eight loaders", Css, 0xFF7C5CFF, initial = 320.dp)
-    val loadersCoral = wrap("loaders-coral", "loaders", "coral", "Loaders · coral", Css, 0xFFFF6F61, initial = 320.dp)
-    val flipCard = wrap("flip-card", "card-flip", "card", "3D card flip", Css, 0xFF6366F1, initial = 270.dp, hint = "tap to flip")
-    val flipPass = wrap("flip-pass", "card-flip", "pass", "Boarding pass", Css, 0xFF14B8A6, initial = 270.dp, hint = "tap to flip")
+    val loadersViolet = wrap("loaders-violet", "loaders", "violet", "Eight loaders", Css, 0xFF7C5CFF, initial = 325.dp, wide = 241.dp)
+    val loadersCoral = wrap("loaders-coral", "loaders", "coral", "Loaders · coral", Css, 0xFFFF6F61, initial = 325.dp, wide = 241.dp)
+    val flipCard = wrap("flip-card", "card-flip", "card", "3D card flip", Css, 0xFF6366F1, initial = 261.dp, mid = 300.dp, hint = "tap to flip")
+    val flipPass = wrap("flip-pass", "card-flip", "pass", "Boarding pass", Css, 0xFF14B8A6, initial = 271.dp, mid = 313.dp, hint = "tap to flip")
     val typeBold = spec("type-bold", "kinetic-type", "bold", "Kinetic type", Css, 200.dp, 0xFFFFD43B, 0xFF0A0A0A, 0xFF000000)
     val typePastel = spec("type-pastel", "kinetic-type", "pastel", "Kinetic type · pastel", Css, 180.dp, 0xFFF472B6, 0xFFFFF7ED, 0xFFFDF2E9)
 
@@ -82,33 +82,33 @@ object Previews {
         "fireworks-city", "fireworks", "city", "Fireworks over the city", Canvas, 240.dp, 0xFFFF6FB5, 0xFF141436, 0xFF05050F,
         hint = "tap to launch",
     )
-    val voiceNote = wrap("voice-note", "waveform", "note", "Voice note", Canvas, 0xFF22C55E, initial = 92.dp, hint = "tap to play")
-    val voiceLive = wrap("voice-live", "waveform", "live", "Recording", Canvas, 0xFFEF4444, initial = 112.dp)
+    val voiceNote = wrap("voice-note", "waveform", "note", "Voice note", Canvas, 0xFF22C55E, initial = 93.dp, hint = "tap to play")
+    val voiceLive = wrap("voice-live", "waveform", "live", "Recording", Canvas, 0xFFEF4444, initial = 114.dp)
     val confetti = wrap("confetti", "confetti", "default", "Confetti", Canvas, 0xFFFF5D8F, height = 200.dp, hint = "tap the button")
 
     // SVG
-    val barsUsers = wrap("bars-users", "bar-chart", "users", "Weekly active users", Svg, 0xFF6366F1, initial = 286.dp)
-    val barsRevenue = wrap("bars-revenue", "bar-chart", "revenue", "Revenue by region", Svg, 0xFF14B8A6, initial = 286.dp)
-    val barsBuilds = wrap("bars-builds", "bar-chart", "builds", "CI build minutes", Svg, 0xFFF59E0B, initial = 286.dp)
+    val barsUsers = wrap("bars-users", "bar-chart", "users", "Weekly active users", Svg, 0xFF6366F1, initial = 287.dp)
+    val barsRevenue = wrap("bars-revenue", "bar-chart", "revenue", "Revenue by region", Svg, 0xFF14B8A6, initial = 287.dp)
+    val barsBuilds = wrap("bars-builds", "bar-chart", "builds", "CI build minutes", Svg, 0xFFF59E0B, initial = 287.dp)
     val lineLatency = wrap("line-latency", "line-chart", "latency", "p95 latency", Svg, 0xFF0EA5E9, initial = 266.dp)
     val lineStars = wrap("line-stars", "line-chart", "stars", "GitHub stars", Svg, 0xFFF5B000, initial = 266.dp)
-    val ringsActivity = wrap("rings-activity", "progress-rings", "activity", "Activity rings", Svg, 0xFFFF2D55, initial = 230.dp, hint = "tap to replay")
-    val ringsGoals = wrap("rings-goals", "progress-rings", "goals", "Release goals", Svg, 0xFF8B5CF6, initial = 230.dp, hint = "tap to replay")
+    val ringsActivity = wrap("rings-activity", "progress-rings", "activity", "Activity rings", Svg, 0xFFFF2D55, initial = 226.dp, hint = "tap to replay")
+    val ringsGoals = wrap("rings-goals", "progress-rings", "goals", "Release goals", Svg, 0xFF8B5CF6, initial = 226.dp, hint = "tap to replay")
     val blobCandy = spec("blob-candy", "blob", "candy", "Morphing blob", Svg, 220.dp, 0xFFFF6FB5, 0xFFFFE3F1, 0xFFFFD6C2)
     val blobLagoon = spec("blob-lagoon", "blob", "lagoon", "Lagoon blob", Svg, 200.dp, 0xFF2DD4BF, 0xFFDDF7F4, 0xFFD3E8FF)
-    val clockClassic = wrap("clock-classic", "clock", "classic", "Analog clock", Svg, 0xFFEF4444, initial = 182.dp)
-    val clockMinimal = wrap("clock-minimal", "clock", "minimal", "Minimal clock", Svg, 0xFF6366F1, initial = 190.dp)
+    val clockClassic = wrap("clock-classic", "clock", "classic", "Analog clock", Svg, 0xFFEF4444, initial = 183.dp, mid = 210.dp)
+    val clockMinimal = wrap("clock-minimal", "clock", "minimal", "Minimal clock", Svg, 0xFF6366F1, initial = 189.dp, mid = 203.dp)
     val weatherSunny = wrap("weather-sunny", "weather", "sunny", "Weather · Istanbul", Svg, 0xFFFFB020, initial = 250.dp)
     val weatherRain = wrap("weather-rain", "weather", "rain", "Weather · London", Svg, 0xFF60A5FA, initial = 250.dp)
 
     // Interactive, over the bridge
-    val counter = wrap("counter", "counter", "default", "A counter the app keeps", Interactive, 0xFF6366F1, initial = 190.dp, bridge = Counter)
-    val mixer = wrap("mixer", "color-mixer", "default", "Colour mixer", Interactive, 0xFFFF6A3D, initial = 310.dp, bridge = Colour)
+    val counter = wrap("counter", "counter", "default", "A counter the app keeps", Interactive, 0xFF6366F1, initial = 193.dp, bridge = Counter)
+    val mixer = wrap("mixer", "color-mixer", "default", "Colour mixer", Interactive, 0xFFFF6A3D, initial = 360.dp, mid = 312.dp, bridge = Colour)
     val breakout = spec(
         "breakout", "breakout", "default", "Breakout", Interactive, 320.dp, 0xFF22D3EE, 0xFF0F172A, 0xFF020617,
         pane = true, hint = "drag the paddle", bridge = Game,
     )
-    val form = wrap("form", "form", "default", "Book a demo", Interactive, 0xFF10B981, initial = 520.dp, hint = "type in it", bridge = Form)
+    val form = wrap("form", "form", "default", "Book a demo", Interactive, 0xFF10B981, initial = 515.dp, wide = 439.dp, hint = "type in it", bridge = Form)
     val codeKotlin = spec(
         "code-kotlin", "code-card", "kotlin", "WebViewDemo.kt", Interactive, 260.dp, 0xFF7F52FF, 0xFF1E1F29, 0xFF16171F,
         pane = true, hint = "scrolls inside", bridge = Code,
@@ -147,7 +147,11 @@ object Previews {
         pane = pane, hint = hint, bridge = bridge,
     )
 
-    /** A preview that follows the theme, wrapping its page's height unless it says a [height]. */
+    /**
+     * A preview that follows the theme, wrapping its page's height unless it says a [height]. Its first height is its
+     * page's, measured in WKWebView (macOS, 2026-11-05) on a phone's card ([initial], 329 dp), from [PreviewSpec.MID_WIDTH]
+     * ([mid]) and from [PreviewSpec.WIDE_WIDTH] ([wide]), plus 2 dp for the fonts of other engines ([PreviewSpec.initialFor]).
+     */
     private fun wrap(
         slug: String,
         template: String,
@@ -160,7 +164,9 @@ object Previews {
         pane: Boolean = false,
         hint: String? = null,
         bridge: PreviewBridge = PreviewBridge.None,
-    ) = PreviewSpec(slug, template, variant, title, kind, height, Color(accent), null, initial, pane, hint, bridge)
+        mid: Dp = initial,
+        wide: Dp = mid,
+    ) = PreviewSpec(slug, template, variant, title, kind, height, Color(accent), null, initial, pane, hint, bridge, mid, wide)
 }
 
 /**

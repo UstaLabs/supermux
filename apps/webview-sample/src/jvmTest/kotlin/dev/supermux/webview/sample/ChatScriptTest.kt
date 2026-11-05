@@ -3,6 +3,7 @@ package dev.supermux.webview.sample
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.sample.chat.AgentMessage
 import dev.supermux.webview.sample.chat.PreviewAssets
+import dev.supermux.webview.sample.chat.PreviewSpec
 import dev.supermux.webview.sample.chat.Previews
 import dev.supermux.webview.sample.chat.UserMessage
 import dev.supermux.webview.sample.chat.chatScript
@@ -29,6 +30,26 @@ class ChatScriptTest {
         assertTrue(previews.count { it.height == null } >= 10, "wrap-content previews: ${previews.count { it.height == null }}")
         assertTrue(answers.any { it.previews.size == 2 }, "an answer with a second preview")
         assertTrue(answers.any { it.text.startsWith("${previews.size}, across $messages messages") }, "the agent counts right")
+    }
+
+    /**
+     * A wrap-content preview's first height is its page's on the card it is shown on (2026-11-05: the guesses were a
+     * phone's, and on the Mac's 680 dp cards 13 of 20 pages then resized on screen, by up to 83 dp). Between a phone's
+     * card and the mid width, where the pages change from one height to the other, it is the larger of the two.
+     */
+    @Test fun aWrapContentPreviewsFirstHeightFollowsItsCardsWidth() {
+        val wrapped = Previews.all.filter { it.height == null }
+        for (spec in wrapped) {
+            assertEquals(spec.initial, spec.initialFor(329.dp), "${spec.slug} on an iPhone 15 Pro's card")
+            assertEquals(maxOf(spec.initial, spec.initialMid), spec.initialFor(360.dp), "${spec.slug} between a phone's and the mid width")
+            assertEquals(spec.initialMid, spec.initialFor(PreviewSpec.MID_WIDTH), "${spec.slug} from the mid width")
+            assertEquals(spec.initialWide, spec.initialFor(680.dp), "${spec.slug} on a desktop's or a tablet's card")
+            assertTrue(spec.initialFor(680.dp) <= PreviewSpec.MAX_WRAP && spec.initial <= PreviewSpec.MAX_WRAP, "${spec.slug} within its cap")
+        }
+        // The pages measured with a wide layout of their own: the form's two columns, the loaders' one row.
+        assertEquals(439.dp, Previews.form.initialFor(680.dp))
+        assertEquals(241.dp, Previews.loadersViolet.initialFor(680.dp))
+        assertEquals(515.dp, Previews.form.initialFor(329.dp))
     }
 
     @Test fun everyPreviewIsBundledWithItsVariant() {

@@ -77,6 +77,10 @@ EOF_PLIST
 # java_args <extra argument elements>: the sample on the classpath, its glue extracted into the run's own directory.
 java_args() {
   printf '%s' "<string>$JAVA</string><string>-Xmx2g</string><string>-Dskiko.renderApi=METAL</string>"
+  # JFR=1: a Java Flight Recording of the run, kept in its directory.
+  if [[ -n "${JFR:-}" ]]; then
+    printf '%s' "<string>-XX:StartFlightRecording=filename=$RUN_DIR/run.jfr,settings=profile,dumponexit=true</string>"
+  fi
   printf '%s' "<string>-Ddev.supermux.webview.cacheDir=$RUN_DIR/cache</string>"
   printf '%s' "<string>-cp</string><string>$LIB/*</string><string>dev.supermux.webview.sample.MainKt</string>$1"
 }

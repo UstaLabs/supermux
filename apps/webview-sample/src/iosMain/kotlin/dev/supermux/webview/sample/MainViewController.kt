@@ -14,6 +14,7 @@ import dev.supermux.webview.sample.checks.IosChecks
 import dev.supermux.webview.sample.checks.IosMeasurements
 import dev.supermux.webview.sample.checks.Measurements
 import androidx.compose.runtime.LaunchedEffect
+import dev.supermux.webview.sample.chat.ChatProbe
 import dev.supermux.webview.sample.chat.ChatRun
 import dev.supermux.webview.sample.chat.ChatState
 import platform.Foundation.NSProcessInfo
@@ -27,7 +28,9 @@ import platform.UIKit.UIViewController
  * - `-screen chat|perflab|overlays|checks` opens that screen (device-checks/ios-sim.sh opens the perf lab).
  * - `-chat-run read|scroll|fling` starts that run of the chat 3 s after launch; it prints a `chat-perf:` line.
  *   `-chat-baseline` shows the previews as still pictures, the baseline the web views are measured against;
- *   `-chat-cache` composes rows ahead of the screen (`ChatState.cacheWindow`).
+ *   `-chat-cache` composes rows ahead of the screen (`ChatState.cacheWindow`). `-chat-probe` turns the chat's probe on
+ *   ([dev.supermux.webview.sample.chat.ChatProbe]): the run prints what moved under the reader's eyes, the previews'
+ *   resizes and the slow frames, as `chat-probe:` lines.
  * - `-chat-shots` copies the window at a few places in the chat into `Documents/shots/` ([ChatShots]).
  * - `-engine-checks` (device-checks/ios-engine-checks.sh) runs the engine's conformance checks instead (those it shares
  *   with macOS, then the iOS engine's own, `IosChecks`), prints a `CHECK` line for each, and exits; `-only <name>` runs
@@ -53,7 +56,8 @@ fun MainViewController(): UIViewController {
     val chatRun = argument(arguments, "-chat-run")?.let { name -> ChatRun.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
     val shots = "-chat-shots" in arguments
     val lab = platformPerfLab()
-    val chat = ChatState(lab, cacheWindow = "-chat-cache" in arguments).apply { baseline = "-chat-baseline" in arguments }
+    val probe = if ("-chat-probe" in arguments) ChatProbe() else null
+    val chat = ChatState(lab, cacheWindow = "-chat-cache" in arguments, probe = probe).apply { baseline = "-chat-baseline" in arguments }
     return ComposeUIViewController {
         SampleApp(
             lab,

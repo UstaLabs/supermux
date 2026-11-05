@@ -51,10 +51,15 @@ enum class ChatRun(val label: String) {
  * numbers its runs report. Main thread only.
  * @param cacheWindow whether the list composes rows ahead of the screen (a viewport ahead, half one behind) instead of
  *   Compose's default prefetch of the next row: spreads a fling's composition over the frames' idle time.
+ * @param probe what the chat's layout does as it moves, with the engines' calls (`-chat-probe`): its runs print it.
  */
 @Stable
 @OptIn(ExperimentalFoundationApi::class)
-class ChatState(val lab: PerfLabState, val cacheWindow: Boolean = false) {
+class ChatState(val lab: PerfLabState, val cacheWindow: Boolean = false, val probe: ChatProbe? = null) {
+    init {
+        if (probe != null) lab.engines.trace = probe::event
+    }
+
     /** Every row, oldest first. The list shows them newest at the bottom ([itemAt]). */
     val items = mutableStateListOf<ChatItem>().apply { addAll(chatScript()) }
 
@@ -207,6 +212,7 @@ class ChatState(val lab: PerfLabState, val cacheWindow: Boolean = false) {
         try {
             list.scrollToItem(0)
             rest(recorder, SETTLE_MILLIS)
+            probe?.begin(run.label)
             when (run) {
                 ChatRun.Read -> {
                     val screen = max(list.layoutInfo.viewportSize.height * READ_STEP, MIN_STEP_DP * density)
@@ -227,6 +233,7 @@ class ChatState(val lab: PerfLabState, val cacheWindow: Boolean = false) {
             }
             finished = true
         } finally {
+            probe?.end()
             val report = recorder.report(
                 name = if (finished) run.label else "${run.label} (stopped)",
                 setup = "chat · $previewCount previews in $messageCount messages, ${if (baseline) "as still pictures" else "as web views"}" +

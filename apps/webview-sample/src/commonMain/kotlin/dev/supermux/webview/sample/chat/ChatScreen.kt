@@ -15,6 +15,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -62,6 +63,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -89,6 +96,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import dev.supermux.webview.ConsoleLevel
 import dev.supermux.webview.LocalWebSurfaceHints
 import dev.supermux.webview.WebSizing
@@ -119,6 +127,13 @@ object ChatTags {
 
 /** The widest the conversation gets: on a tablet, a desktop window or an unfolded Fold it sits in the middle. */
 private val MAX_CHAT_WIDTH = 720.dp
+
+/** The list's margins, left and right together. */
+private val LIST_MARGINS = 24.dp
+
+/** The agent's avatar, and with the gap after it, what it takes of an agent's row before its bubble and previews. */
+private val AVATAR = 32.dp
+private val AVATAR_SPACE = 40.dp
 
 private val USER_SHAPE = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)
 private val AGENT_SHAPE = RoundedCornerShape(6.dp, 20.dp, 20.dp, 20.dp)
@@ -156,6 +171,14 @@ fun ChatScreen(chat: ChatState, onOpen: (Screen) -> Unit, modifier: Modifier = M
     LaunchedEffect(chat) { chat.notices.collectLatest { chat.snackbars.showSnackbar(it) } }
     // three.js and the kit, read from the resources before the first 3D preview asks for them.
     LaunchedEffect(Unit) { withContext(Dispatchers.Default) { PreviewAssets.warm() } }
+    // The probe looks at every frame, before it is laid out: what the last one showed.
+    val probe = chat.probe
+    if (probe != null) {
+        LaunchedEffect(probe, density) {
+            probe.density = density
+            while (true) withFrameNanos { probe.frame(it, chat.list.layoutInfo) }
+        }
+    }
     val scope = rememberCoroutineScope()
     ChatTheme {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -311,11 +334,30 @@ private fun Menu(chat: ChatState, onOpen: (Screen) -> Unit) {
 
 @Composable
 private fun MessageList(chat: ChatState) {
+    val probe = chat.probe
+    val probed = if (probe == null) {
+        Modifier
+    } else {
+        Modifier.nestedScroll(probe.connection).onGloballyPositioned { c ->
+            val bounds = c.boundsInWindow()
+            probe.viewport(bounds.top, bounds.bottom)
+        }
+    }
+    // The previews' card width: the list's, less its margins, at most the conversation's, less the agent's avatar. A
+    // preview whose page follows its height is laid out at its page's height there from its first frame (initialFor).
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val cardWidth = min(maxWidth - LIST_MARGINS, MAX_CHAT_WIDTH) - AVATAR_SPACE
+        Messages(chat, probe, probed, cardWidth)
+    }
+}
+
+@Composable
+private fun Messages(chat: ChatState, probe: ChatProbe?, probed: Modifier, cardWidth: Dp) {
     LazyColumn(
         state = chat.list,
         reverseLayout = true,
-        modifier = Modifier.fillMaxSize().testTag(ChatTags.List),
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 16.dp),
+        modifier = probed.fillMaxSize().testTag(ChatTags.List),
+        contentPadding = PaddingValues(start = LIST_MARGINS / 2, end = LIST_MARGINS / 2, top = 12.dp, bottom = 16.dp),
     ) {
         items(
             count = chat.items.size,
@@ -338,11 +380,18 @@ private fun MessageList(chat: ChatState) {
                 (item is UserMessage) == (above is UserMessage) -> 6.dp
                 else -> 16.dp
             }
-            Box(Modifier.fillMaxWidth().padding(top = gap), contentAlignment = Alignment.TopCenter) {
+            val placed = if (probe == null) {
+                Modifier
+            } else {
+                val key = item.id
+                DisposableEffect(probe, key) { onDispose { probe.gone(key) } }
+                Modifier.onGloballyPositioned { c -> probe.placed(key, c.positionInWindow().y, c.size.height) }
+            }
+            Box(placed.fillMaxWidth().padding(top = gap), contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.widthIn(max = MAX_CHAT_WIDTH).fillMaxWidth()) {
                     when (item) {
                         is UserMessage -> UserRow(item)
-                        is AgentMessage -> AgentRow(item, chat)
+                        is AgentMessage -> AgentRow(item, chat, cardWidth)
                         is DayMarker -> DayRow(item)
                         is TypingIndicator -> TypingRow()
                     }
@@ -386,11 +435,11 @@ private fun UserRow(message: UserMessage) {
 }
 
 @Composable
-private fun AgentRow(message: AgentMessage, chat: ChatState) {
+private fun AgentRow(message: AgentMessage, chat: ChatState, cardWidth: Dp) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth()) {
-        AgentAvatar(32.dp)
-        Spacer(Modifier.width(8.dp))
+        AgentAvatar(AVATAR)
+        Spacer(Modifier.width(AVATAR_SPACE - AVATAR))
         Column(Modifier.weight(1f)) {
             // One text for the name and the time: a row that scrolls in lays out as few texts as it can.
             val small = MaterialTheme.typography.labelSmall
@@ -410,7 +459,8 @@ private fun AgentRow(message: AgentMessage, chat: ChatState) {
             )
             for (preview in message.previews) {
                 Spacer(Modifier.height(8.dp))
-                if (chat.baseline) StillCard(preview) else PreviewCard(preview, chat)
+                val initial = preview.initialFor(cardWidth)
+                if (chat.baseline) StillCard(preview, initial) else PreviewCard(preview, initial, chat)
             }
         }
     }
@@ -419,10 +469,11 @@ private fun AgentRow(message: AgentMessage, chat: ChatState) {
 /**
  * One live preview: its web view in a rounded card, with a caption under it. The state is the item's own, keyed by
  * the preview's content: an item that scrolls back is a new view of the same page, which shows its snapshot at its
- * height at once and adopts the page while it is still parked.
+ * height at once and adopts the page while it is still parked. A page that follows its height is laid out at
+ * [initial] until it reports one: its own height on this card ([PreviewSpec.initialFor]).
  */
 @Composable
-private fun PreviewCard(spec: PreviewSpec, chat: ChatState) {
+private fun PreviewCard(spec: PreviewSpec, initial: Dp, chat: ChatState) {
     val cs = MaterialTheme.colorScheme
     val state = rememberWebViewState(spec.content)
     // On the state: handlers outlive engines, so one registration serves every engine that shows the page.
@@ -436,6 +487,18 @@ private fun PreviewCard(spec: PreviewSpec, chat: ChatState) {
             if (line.level == ConsoleLevel.Error) println("chat-preview ${spec.slug}: ${line.message} (${line.source}:${line.line})")
         }
     }
+    val probe = chat.probe
+    val probed = if (probe == null) {
+        Modifier
+    } else {
+        LaunchedEffect(state, probe) {
+            snapshotFlow { state.phase.toString() to state.contentSize?.height?.value }
+                .collect { (phase, reported) -> probe.cardState(spec.slug, phase, reported) }
+        }
+        DisposableEffect(state, probe) { onDispose { probe.cardGone(spec.slug) } }
+        val guess = if (spec.height == null) initial.value else Float.NaN
+        Modifier.onGloballyPositioned { c -> probe.card(spec.slug, guess, c.positionInWindow().y, c.size.height) }
+    }
     Column(
         Modifier.fillMaxWidth()
             .clip(CARD_SHAPE)
@@ -446,10 +509,10 @@ private fun PreviewCard(spec: PreviewSpec, chat: ChatState) {
             val height = spec.height
             WebView(
                 state,
-                modifier = Modifier.fillMaxWidth()
+                modifier = probed.fillMaxWidth()
                     .then(if (height != null) Modifier.height(height) else Modifier)
                     .testTag(ChatTags.preview(spec.slug)),
-                sizing = if (height != null) WebSizing.Fill else WebSizing.WrapContentHeight(max = PreviewSpec.MAX_WRAP, initial = spec.initial),
+                sizing = if (height != null) WebSizing.Fill else WebSizing.WrapContentHeight(max = PreviewSpec.MAX_WRAP, initial = initial),
                 placeholder = { PreviewPlaceholder(spec) },
             )
         }
@@ -459,7 +522,7 @@ private fun PreviewCard(spec: PreviewSpec, chat: ChatState) {
 
 /** The baseline's card: the same card at the preview's height, with its placeholder where the web view would be. */
 @Composable
-private fun StillCard(spec: PreviewSpec) {
+private fun StillCard(spec: PreviewSpec, initial: Dp) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth()
@@ -467,7 +530,7 @@ private fun StillCard(spec: PreviewSpec) {
             .background(cs.surfaceContainerLow)
             .border(1.dp, cs.outlineVariant, CARD_SHAPE),
     ) {
-        Box(Modifier.fillMaxWidth().height(spec.height ?: spec.initial)) { PreviewPlaceholder(spec) }
+        Box(Modifier.fillMaxWidth().height(spec.height ?: initial)) { PreviewPlaceholder(spec) }
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,

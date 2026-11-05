@@ -13,6 +13,7 @@ import dev.supermux.webview.sample.checks.MacCheckPlatform
 import dev.supermux.webview.sample.checks.MacChecks
 import dev.supermux.webview.sample.checks.Measurements
 import dev.supermux.webview.sample.checks.MotionChecks
+import dev.supermux.webview.sample.chat.ChatProbe
 import dev.supermux.webview.sample.chat.ChatRun
 import dev.supermux.webview.sample.chat.ChatState
 import dev.supermux.webview.sample.chat.PreviewMarkers
@@ -27,7 +28,9 @@ import dev.supermux.webview.sample.windows.windowsChecksMain
 import dev.supermux.webview.sample.windows.windowsLabMain
 import dev.supermux.webview.sample.windows.windowsProbeMain
 import dev.supermux.webview.testing.MacEngineTesting
+import kotlinx.coroutines.delay
 import java.io.File
+import kotlin.system.exitProcess
 
 /**
  * The desktop sample: `./gradlew :webview-sample:run`, or on the Mac through `device-checks/mac-*.sh`. With the macOS
@@ -48,6 +51,11 @@ import java.io.File
  * - `-chat-skew` scrolls the chat by trackpad gestures and measures how far its live previews' pages are from their
  *   cards (ChatSkewRun): a `MEASURE chat-skew` line, then it exits. `-no-frame-sync` moves page views at their layout,
  *   not with skiko's frames: its baseline.
+ * - `-chat-probe` turns the chat's probe on (ChatProbe): its runs print what moved under the reader's eyes, the
+ *   previews' resizes and the slow frames, as `chat-probe:` lines.
+ * - `-chat-shift` reads the chat by trackpad gestures with the probe on (ChatShiftRun), to its start and back, then
+ *   exits. `-exit-after-run` makes a `-chat-run` exit once its run has printed its line.
+ * - `-window <width>x<height>` opens the window at that size, in dp (1100 x 1000 by default).
  */
 fun main(args: Array<String>) {
     when (System.getProperty("webview.sample.checks")) {
@@ -67,6 +75,8 @@ fun main(args: Array<String>) {
     val measure = "-engine-measure" in args
     val perfLab = "-perf-lab" in args
     val chatSkew = "-chat-skew" in args
+    val chatShift = "-chat-shift" in args
+    val chatProbe = chatShift || "-chat-probe" in args
     // The previews draw their lines from their first load on (PreviewMarkers).
     if (chatSkew) PreviewMarkers.enabled = true
     // Page views that move at their layout, not with skiko's frames: the skew runs' baseline.
@@ -78,9 +88,11 @@ fun main(args: Array<String>) {
     val screen = argument(args, "-screen")?.let { name -> Screen.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
         ?: Screen.Chat
     val chatRun = argument(args, "-chat-run")?.let { name -> ChatRun.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+    // -window <width>x<height>, in dp: a phone's width puts the chat's previews at a phone's card width.
+    val windowSize = argument(args, "-window")?.split("x")?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 2 }
     val label = if (real) MACOS_ENGINE_LABEL else FAKE_ENGINE_LABEL
     application {
-        val state = rememberWindowState(width = 1100.dp, height = 1000.dp)
+        val state = rememberWindowState(width = (windowSize?.get(0) ?: 1100).dp, height = (windowSize?.get(1) ?: 1000).dp)
         Window(onCloseRequest = ::exitApplication, title = "webview-sample · $label", state = state) {
             if (checks || measure) {
                 val platform = remember { MacCheckPlatform(window, out, state) }
@@ -104,16 +116,32 @@ fun main(args: Array<String>) {
                 val chat = remember(lab) { ChatState(lab) }
                 SampleApp(lab, engineLabel = label, initialScreen = Screen.Chat, chatState = chat)
                 ChatSkewRun(window, chat, out)
+            } else if (chatShift) {
+                val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
+                // -chat-baseline: still pictures instead of web views, what the web views are measured against.
+                val chat = remember(lab) { ChatState(lab, probe = ChatProbe()).apply { baseline = "-chat-baseline" in args } }
+                SampleApp(lab, engineLabel = label, initialScreen = Screen.Chat, chatState = chat)
+                ChatShiftRun(window, chat, out)
             } else {
                 val lab = remember { if (real) platformPerfLab() else samplePerfLab() }
+                val chat = remember(lab) { ChatState(lab, probe = if (chatProbe) ChatProbe() else null) }
                 SampleApp(
                     lab,
                     engineLabel = label,
                     initialScreen = screen,
                     pickFiles = { request -> pickFiles(window, request) },
                     chatRun = chatRun,
+                    chatState = chat,
                 )
                 if (shots != null) ShotRequest(window, shots, screen.name.lowercase())
+                // -exit-after-run: the chat's run, then `CHECKS DONE`, which `CHAT_RUN=… mac-engine-checks.sh` waits for.
+                if (chatRun != null && "-exit-after-run" in args) {
+                    LaunchedEffect(chat) {
+                        while (chat.lastReport == null) delay(200)
+                        println("CHECKS DONE passed=1 failed=0")
+                        exitProcess(0)
+                    }
+                }
             }
         }
     }
