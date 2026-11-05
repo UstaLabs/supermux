@@ -41,6 +41,8 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
     implementation(libs.jbr.api)
+    // The assistant overlay's native calls (#62): AppKit window behaviour, Quartz permissions and key tap.
+    implementation(libs.jna)
     // Linux tray: StatusNotifierItem + dbusmenu (host/linux/SniTray.kt). Only ever dialled on Linux.
     implementation(libs.dbus.java.core)
     implementation(libs.dbus.java.transport.native.unixsocket)

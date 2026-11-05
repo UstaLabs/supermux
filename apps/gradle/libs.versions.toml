@@ -50,6 +50,8 @@ navigationEvent = "1.1.0"  # CMP 1.12.0's ui module requires navigationevent-com
 # JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
 # :desktop:run, :desktop:hotRun, and packaged apps; it remains a safe null facade in stock-JDK tests.
 jbrApi = "1.10.1"
+# JNA (Apache-2.0): the desktop assistant overlay's few native calls (macOS AppKit/Quartz, Windows user32).
+jna = "5.19.1"
 markdown = "0.7.6"
 kotlinxBrowser = "0.5.0"
 # 3.5.0: its Kotlin/Native klibs are abi_version 2.4.0, which the 2.3.21 compiler refused; the
@@ -114,6 +116,7 @@ dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = 
 dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbusJava" }
 coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 jbr-api = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbrApi" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 # GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
 # own native MarkdownView, so Kotlin/Native dead-code-strips this from the Apple framework.
 markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
