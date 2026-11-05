@@ -92,8 +92,9 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       // on the session's own inbox file, nothing broader (the file key alone would pass any text).
       expect(Object.keys(after.files).filter((file) => file.startsWith("<home>/rules/"))).toEqual([CODEX_INBOX_RULES_FILE])
       expect(after.files[CODEX_INBOX_RULES_FILE]).toBe(CODEX_INBOX_RULES)
-      // The session policy (default mode) is the same one the broker passed statically before.
-      expect(after.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"', "-c", 'mcp_servers.mux-shim.default_tools_approval_mode="approve"'])
+      // The session policy (default mode) is the same one the broker passed statically before. Card #76 adds one
+      // switch in front of it: the app-server streams reasoning summaries (`model_reasoning_summary`).
+      expect(after.args).toEqual(["app-server", "-c", 'model_reasoning_summary="auto"', "-c", 'sandbox_mode="danger-full-access"', "-c", 'approval_policy="never"', "-c", 'mcp_servers.mux-shim.default_tools_approval_mode="approve"'])
       expect(after.instructions!.channel).toBe("thread/start developerInstructions")
       expect(after.files["<home>/AGENTS.md"]).toBeUndefined()
     }
