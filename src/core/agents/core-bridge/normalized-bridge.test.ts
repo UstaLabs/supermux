@@ -138,16 +138,20 @@ test("an antigravity denial warning becomes the visible reply, after any buffere
   const b = createNormalizedBridge({ agent: "antigravity", emit: (e) => events.push(e) })
   b.handle(env({ kind: "assistant-delta", messageId: "m", text: "Trying." }))
   b.handle(env({ kind: "warning", source: "antigravity", message: "Antigravity denied: run_command — switch permission mode to allow" }))
+  // The buffered text streamed live (card #76): it is stored under its stream, then the denial follows.
+  const stream = (events[0] as any).stream
   expect(events).toEqual([
-    { kind: "assistant-message", text: "Trying." },
+    { kind: "live-delta", stream, streamKind: "reply", text: "Trying." },
+    { kind: "live-end", stream, final: true },
+    { kind: "assistant-message", text: "Trying.", stream },
     { kind: "assistant-message", text: "Antigravity denied: run_command — switch permission mode to allow" },
   ])
   // Warnings from other sources stay silent.
   b.handle(env({ kind: "warning", source: "acp", message: "meh" }))
-  expect(events).toHaveLength(2)
+  expect(events).toHaveLength(4)
   // The denial counts as the last reply: an identical final message is not repeated.
   b.handle(env({ kind: "assistant-message", messageId: "m2", text: "Antigravity denied: run_command — switch permission mode to allow" }))
-  expect(events).toHaveLength(2)
+  expect(events).toHaveLength(4)
 })
 
 test("child assistant text, tool calls and errors never reach the parent stream", () => {
@@ -160,10 +164,15 @@ test("child assistant text, tool calls and errors never reach the parent stream"
   b.handle(env({ kind: "error", message: "child blew up", subagentId: "a1" }))
   b.flush()
   expect(events).toEqual([])
-  // The parent's own buffered text is untouched by the child's deltas.
+  // The parent's own buffered text is untouched by the child's deltas (and streams live, card #76).
   b.handle(env({ kind: "assistant-delta", messageId: "p", text: "PELICAN" }))
   b.flush()
-  expect(events).toEqual([{ kind: "assistant-message", text: "PELICAN" }])
+  const stream = (events[0] as any).stream
+  expect(events).toEqual([
+    { kind: "live-delta", stream, streamKind: "reply", text: "PELICAN" },
+    { kind: "live-end", stream, final: true },
+    { kind: "assistant-message", text: "PELICAN", stream },
+  ])
 })
 
 test("codex child tool calls do not drive the parent's tool-call events", () => {
@@ -215,4 +224,82 @@ test("replayed subagent bodies are ignored like other replay", () => {
   const b = createNormalizedBridge({ agent: "claude", emit: (e) => events.push(e) })
   b.handle(env({ kind: "subagent", subagentId: "a1", phase: "started", replay: true }))
   expect(events).toEqual([])
+})
+
+// Card #76: live text.
+function live(agent = "claude") {
+  const events: AgentEvent[] = []
+  const b = createNormalizedBridge({ agent, emit: (e) => events.push(e) })
+  return { b, events }
+}
+
+test("a reply streams under one id and its stored message carries it", () => {
+  const { b, events } = live()
+  b.handle(env({ kind: "assistant-delta", messageId: "m:1", text: "Hel" }))
+  b.handle(env({ kind: "assistant-delta", messageId: "m:1", text: "lo" }))
+  b.handle(env({ kind: "assistant-message", messageId: "m:1", text: "Hello" }))
+  const stream = (events[0] as any).stream
+  expect(typeof stream).toBe("string")
+  expect(events).toEqual([
+    { kind: "live-delta", stream, streamKind: "reply", text: "Hel" },
+    { kind: "live-delta", stream, streamKind: "reply", text: "lo" },
+    { kind: "live-end", stream, final: true },
+    { kind: "assistant-message", text: "Hello", stream },
+  ])
+})
+
+test("each text block gets its own stream", () => {
+  const { b, events } = live()
+  b.handle(env({ kind: "assistant-delta", messageId: "m:1", text: "a" }))
+  b.handle(env({ kind: "assistant-message", messageId: "m:1", text: "a" }))
+  b.handle(env({ kind: "assistant-delta", messageId: "m:2", text: "b" }))
+  const ids = events.filter(e => e.kind === "live-delta").map(e => (e as any).stream)
+  expect(ids.length).toBe(2)
+  expect(ids[0]).not.toBe(ids[1])
+})
+
+test("thinking streams; an empty thinking delta opens nothing; the reasoning final closes it", () => {
+  const { b, events } = live()
+  b.handle(env({ kind: "reasoning-delta", reasoningId: "m:0", text: "" }))
+  expect(events).toEqual([])
+  b.handle(env({ kind: "reasoning-delta", reasoningId: "m:0", text: "Plan" }))
+  const stream = (events[0] as any).stream
+  expect(events[0]).toEqual({ kind: "live-delta", stream, streamKind: "thinking", text: "Plan" })
+  expect(b.handle(env({ kind: "reasoning", reasoningId: "m:0", text: "Plan", redacted: false }))).toBe(stream)
+  expect(events[1]).toEqual({ kind: "live-end", stream, final: true })
+  expect(b.handle(env({ kind: "reasoning", reasoningId: "other", redacted: true }))).toBeUndefined()
+})
+
+test("subagent and replayed text never streams", () => {
+  const { b, events } = live()
+  b.handle(env({ kind: "assistant-delta", messageId: "m:1", text: "child", subagentId: "sub1" }))
+  b.handle(env({ kind: "reasoning-delta", reasoningId: "r", text: "child", subagentId: "sub1" }))
+  b.handle(env({ kind: "assistant-delta", messageId: "m:2", text: "old", replay: true }))
+  expect(events).toEqual([])
+})
+
+test("a final the bridge drops (same text again) ends its stream without a final", () => {
+  const { b, events } = live()
+  b.handle(env({ kind: "assistant-message", messageId: "m:1", text: "same" }))
+  b.handle(env({ kind: "assistant-delta", messageId: "m:2", text: "same" }))
+  b.handle(env({ kind: "assistant-message", messageId: "m:2", text: "same" }))
+  const stream = (events[1] as any).stream
+  expect(events.slice(1)).toEqual([
+    { kind: "live-delta", stream, streamKind: "reply", text: "same" },
+    { kind: "live-end", stream, final: false },
+  ])
+})
+
+test("flush stores the pending text under its stream and ends the rest", () => {
+  const { b, events } = live("grok")
+  b.handle(env({ kind: "reasoning-delta", reasoningId: "reasoning:1", text: "hm" }))
+  b.handle(env({ kind: "assistant-delta", messageId: "assistant:1", text: "partial" }))
+  b.flush()
+  const thinking = (events[0] as any).stream
+  const reply = (events[1] as any).stream
+  expect(events.slice(2)).toEqual([
+    { kind: "live-end", stream: reply, final: true },
+    { kind: "assistant-message", text: "partial", stream: reply },
+    { kind: "live-end", stream: thinking, final: false },
+  ])
 })
