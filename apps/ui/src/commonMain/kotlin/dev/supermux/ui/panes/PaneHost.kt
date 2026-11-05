@@ -1,5 +1,6 @@
 package dev.supermux.ui.panes
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -518,7 +519,7 @@ private val TabFlare = 8.dp
 /** Tabs share the strip's width equally, never narrower or wider than this; the row's end padding. */
 private val TabMinWidth = 112.dp
 private val TabMaxWidth = 200.dp
-private val TabRowPadding = 8.dp
+private val TabRowPadding = 8.dp // after the last tab, before the +
 
 /** A tab's room besides its title: 11 + 6 dp padding, 16 + 7 dp icon, 6 + 16 dp ×, 4 dp to fade. */
 private val TabChromeWidth = 66.dp
@@ -530,7 +531,7 @@ private val StripFade = 30.dp
  * The active tab, cut from its sheet: [TabCorner] top corners from [TabTopInset] down to the strip's
  * bottom, where a [TabFlare] concave curve either side turns it into the sheet below.
  */
-private fun DrawScope.drawSheetTab(tone: Color) {
+private fun DrawScope.drawSheetTab(tone: Color, leftFlare: Boolean = true) {
     val top = TabTopInset.toPx()
     val r = CornerRadius(TabCorner.toPx())
     val f = TabFlare.toPx()
@@ -538,11 +539,14 @@ private fun DrawScope.drawSheetTab(tone: Color) {
     val h = size.height
     val path = Path().apply {
         addRoundRect(RoundRect(0f, top, w, h, topLeftCornerRadius = r, topRightCornerRadius = r))
-        // Each flare is its corner square less a quarter circle: filled where tab meets sheet.
-        moveTo(-f, h)
-        arcTo(Rect(-2 * f, h - 2 * f, 0f, h), 90f, -90f, false)
-        lineTo(0f, h)
-        close()
+        // Each flare is its corner square less a quarter circle: filled where tab meets sheet. None
+        // on the left of a tab flush with its sheet's edge, which runs straight down into it.
+        if (leftFlare) {
+            moveTo(-f, h)
+            arcTo(Rect(-2 * f, h - 2 * f, 0f, h), 90f, -90f, false)
+            lineTo(0f, h)
+            close()
+        }
         moveTo(w + f, h)
         arcTo(Rect(w, h - 2 * f, w + 2 * f, h), 90f, 90f, false)
         lineTo(w, h)
@@ -749,6 +753,12 @@ private fun GroupHost(
     val active = group.activeViewId ?: group.viewIds.first()
     // The tone of the active view's content: its sheet, and the tab cut from it.
     val sheet = LocalSheetColor.current(active)
+    var activeFlushStart by remember { mutableStateOf(false) }
+    val sheetStartCorner by animateDpAsState(
+        targetValue = if (activeFlushStart) 0.dp else SheetCorner,
+        animationSpec = Motion.stateChange(),
+        label = "sheet-start-corner",
+    )
     Column(modifier.fillMaxSize().padding(horizontal = PaneGutter)) {
         PaneTabStrip(
             groupId = group.id,
@@ -756,6 +766,7 @@ private fun GroupHost(
             activeViewId = active,
             sheetColor = sheet,
             labelFont = labelFont,
+            onActiveFlushStart = { activeFlushStart = it },
             titleFor = titleFor,
             // Name the group; do NOT hand back a rebuilt `group`. This lambda is
             // captured by the tab's pointer handler and can outlive this composition.
@@ -784,8 +795,9 @@ private fun GroupHost(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(bottom = PaneGutter * 2)
-                // The sheet: the content's own surface, rounded like a menu, in the frame.
-                .clip(RoundedCornerShape(SheetCorner))
+                // The sheet: the content's own surface, rounded like a menu, in the frame — square
+                // at the top-start under a first tab cut from it at the very edge.
+                .clip(RoundedCornerShape(topStart = sheetStartCorner, topEnd = SheetCorner, bottomEnd = SheetCorner, bottomStart = SheetCorner))
                 .background(sheet)
                 .onGloballyPositioned { coords ->
                     dragState.registerPane(group.id, coords.boundsInRoot())
@@ -968,6 +980,12 @@ fun PaneTabStrip(
     sheetColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
     /** The tabs' label font: the active tab is as wide as its title needs, measured in it. */
     labelFont: FontFamily = FontFamily.Default,
+    /**
+     * Whether the active tab is the first and starts flush with the sheet's start edge (nothing,
+     * such as window controls, sets the row in): its sheet's top-start corner squares off then, so
+     * the tab's edge runs straight down into the sheet's.
+     */
+    onActiveFlushStart: (Boolean) -> Unit = {},
 ) = BoxWithConstraints(modifier.fillMaxWidth()) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -992,7 +1010,7 @@ fun PaneTabStrip(
     // cut it, and the others split what is left.
     val minPx = with(density) { TabMinWidth.toPx() }
     val maxPx = with(density) { TabMaxWidth.toPx() }
-    val availablePx = stripWidthPx - addSlotPx - 2 * rowPadPx
+    val availablePx = stripWidthPx - addSlotPx - rowPadPx
     val tabCount = displayIds.size.coerceAtLeast(1)
     val textMeasurer = rememberTextMeasurer()
     val activeTitle = titleFor(activeViewId)
@@ -1019,11 +1037,17 @@ fun PaneTabStrip(
     val activeTabPx = maxOf(tabPx, if (activeWantPx > equalPx) activeWantPx else tabPx)
     fun widthOf(id: String): Float = if (id == activeViewId) activeTabPx else tabPx
     fun targetXForIndex(index: Int): Float {
-        var x = rowPadPx
+        var x = 0f
         for (i in 0 until index.coerceIn(0, displayIds.size)) x += widthOf(displayIds[i])
         return x
     }
-    val stripContentWidthPx = 2 * rowPadPx + displayIds.sumOf { widthOf(it).toDouble() }.toFloat() + addSlotPx
+    val stripContentWidthPx = rowPadPx + displayIds.sumOf { widthOf(it).toDouble() }.toFloat() + addSlotPx
+    // How far the platform's window controls set the row in (the collapsed sidebar's band): none
+    // means the first tab starts at the sheet's very edge.
+    var rowInsetPx by remember { mutableStateOf(0f) }
+    val activeHidden = dragState?.let { d -> (d.isDragging && d.draggingViewId == activeViewId) || d.settling?.viewId == activeViewId } == true
+    val activeFlushStart = rowInsetPx < 1f && displayIds.firstOrNull() == activeViewId && !activeHidden
+    SideEffect { onActiveFlushStart(activeFlushStart) }
     // The tab under the pointer: no separator beside it, and the ghost of a hover on it.
     var hoveredTab by remember { mutableStateOf<String?>(null) }
     val dragging = dragState?.isDragging == true
@@ -1108,6 +1132,10 @@ fun PaneTabStrip(
                         )
                     }
                 }
+                .onGloballyPositioned { coords ->
+                    val inset = coords.positionInRoot().x - (viewport.value?.left ?: coords.positionInRoot().x)
+                    if (inset != rowInsetPx) rowInsetPx = inset
+                }
                 .horizontalScroll(scroll),
         ) {
             Box(
@@ -1120,7 +1148,7 @@ fun PaneTabStrip(
                 // under the active pointerInput; visual order is purely animated X.
                 val stableIds = viewIds.ifEmpty { displayIds }
                 fun targetXForOrder(order: List<String>, index: Int): Float {
-                    var x = rowPadPx
+                    var x = 0f
                     for (i in 0 until index.coerceIn(0, order.size)) x += widthOf(order[i])
                     return x
                 }
@@ -1241,7 +1269,7 @@ fun PaneTabStrip(
                                 .drawBehind {
                                     when {
                                         hidden -> Unit
-                                        selected -> drawSheetTab(sheetColor)
+                                        selected -> drawSheetTab(sheetColor, leftFlare = !(at == 0 && rowInsetPx < 1f))
                                         tabHovered && !dragging -> drawRoundRect(
                                             color = ghost,
                                             topLeft = Offset(1.dp.toPx(), TabTopInset.toPx() + 2.dp.toPx()),
