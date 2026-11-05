@@ -42,7 +42,8 @@ test("resolve on Windows: .exe, then .cmd, then .ps1 within a name, names in the
   expect(proc.resolve(["C:\\Tools\\codex"], {}, windowsFiles("C:\\Tools\\codex.CMD"))).toBe("C:\\Tools\\codex.cmd")
 })
 
-test("resolve on POSIX: a folder named like the command is not the command", () => {
+// Real files and a ":"-separated PATH: a Windows temp folder (C:\...) cannot be put in one.
+test.skipIf(process.platform === "win32")("resolve on POSIX: a folder named like the command is not the command", () => {
   const dir = mkdtempSync(join(tmpdir(), "mux-resolve-"))
   mkdirSync(join(dir, "first", "tool"), { recursive: true })
   mkdirSync(join(dir, "second"))
