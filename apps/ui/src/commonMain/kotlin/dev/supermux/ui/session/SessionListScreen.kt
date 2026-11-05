@@ -1584,7 +1584,8 @@ fun SessionListScreen(
         )
     }
     val newSessionCard: @Composable () -> Unit = {
-        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        // No extra room above it: under the title band its top lines up with the sheets beside it.
+        NewSessionListRow(onClick = onNewSession)
     }
     val aboveList: @Composable () -> Unit = {
         banner?.let { b ->
