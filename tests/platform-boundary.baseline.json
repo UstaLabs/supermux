@@ -48,7 +48,7 @@
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostingPrefs.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/KeepAwakeControls.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt": 3,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 2,
+    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopMedia.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopPlatform.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/WindowsWindowChrome.kt": 1,
