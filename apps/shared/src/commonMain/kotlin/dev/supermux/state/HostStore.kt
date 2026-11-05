@@ -140,6 +140,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -512,11 +513,19 @@ class HostStore(
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
-            stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
-            // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the first,
-            // heavy frame to finish (~0.9 s at launch on desktop, card #54), and every frame —
-            // the 2.3 MB snapshot included — was decoded there. Frames still reduce in [stateScope].
-            stateScope.launch(Dispatchers.Default) { client.run() }
+            // The socket opens only once this collector listens: `frames` keeps no replay, so a
+            // snapshot that arrived while the caller's (UI) thread was still busy — before it first
+            // ran this coroutine — was dropped, and the app showed no sessions until a reconnect
+            // (card #76; HostStoreStartupRaceTest).
+            stateScope.launch {
+                client.frames
+                    // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the
+                    // first, heavy frame to finish (~0.9 s at launch on desktop, card #54), and every
+                    // frame — the 2.3 MB snapshot included — was decoded there. Frames still reduce
+                    // in [stateScope].
+                    .onSubscription { stateScope.launch(Dispatchers.Default) { client.run() } }
+                    .collect { guarded("reduce") { reduce(it) } }
+            }
             ensureViewingHeartbeat()
         }
     }
