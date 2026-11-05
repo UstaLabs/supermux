@@ -17,6 +17,8 @@ import { ensureBrokerShimEntries } from "../../session-manager/trust"
 import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
 import { muxShimMode, muxShimModeFor } from "../../mux-tools/mode"
 import { watchClaudeMuxShimDuplicates } from "../../mux-tools/duplicates"
+import { lapTimer } from "../../perf/perf-log"
+import { startTraces } from "../../perf/start-trace"
 
 const log = makeLogger("agents/claude/core-host")
 
@@ -204,11 +206,15 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
+      // Card #75: where the prepare step's time goes, for a session start being traced.
+      const laps = lapTimer()
       const plugins = pluginsFor(extra.sessionName)
+      laps.lap("plugins")
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.
       // An rpc worker has only the rpc tools (no message_session), so it gets no inbox block.
       const instructions = sessionInstructions({ agent: "claude", sessionName: extra.sessionName, workdir: extra.workdir, id: registration.id, sessionId: extra.rpcMcpConfig ? undefined : registration.id, inboxDir })
+      laps.lap("instructions")
       // "external" (C3a): mux-shim is NOT a context server for Claude: it comes from the user's
       // ~/.claude.json (system account, written by session-manager/trust.ts) or from the
       // account's extra --mcp-config (account-env.ts). Adding it here too would register its tools
@@ -221,6 +227,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const host = muxShimModeFor("claude") === "host"
       // A system-account session reads mux-shim from ~/.claude.json: make sure it is still ours.
       if (!host && !extra.rpcMcpConfig) ensureBrokerShimEntries()
+      laps.lap("shimEntries")
       const mcpServers = extra.rpcMcpConfig
         ? (host ? [muxRpcHostServer] : parseRpcMcpServers(extra.rpcMcpConfig))
         : (host ? [muxShimHostServer] : [])
@@ -235,6 +242,8 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         strictMcp: false,
         nativeMemory: false,
       })
+      laps.lap("environment")
+      startTraces.markSession(registration.id, "host.prepare.laps", { laps: laps.laps, plugins: plugins.length, instructionsChars: instructions.length }, true)
       const args = extra.rpcMcpConfig ? [...(prepared.args ?? []), "--strict-mcp-config"] : (prepared.args ?? [])
       // Claude keeps the user's global ~/.claude.json, whose `mux-shim` MCP entry
       // reads the session identity from the PROCESS env (the tmux-era spawn set

@@ -259,6 +259,8 @@ if (process.env.MODE === 'setup-hang') {
       const id = process.env.MODE === 'wrong-resume' ? 'ffffffff-ffff-4fff-8fff-ffffffffffff' : session
       send(initFrame(id))
     }
+    // Broker journeys that call the broker's own tools (FIXTURE_MCP=1) in echo mode.
+    if (process.env.MODE === 'echo' && mcp.size && typeof text === 'string' && text.startsWith('mcp-call ')) { hanging = {session, uuid}; void mcpCall(hanging, text); return }
     // Broker UI journeys: the real answer shape, echoing the prompt.
     if (process.env.MODE === 'echo') {
       send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: `Fixture reply: ${text}`}]}})

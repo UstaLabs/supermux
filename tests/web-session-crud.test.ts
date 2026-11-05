@@ -143,6 +143,19 @@ test("POST /sessions with firstMessage → forwarded to spawn", async () => {
   expect(spawnCalls[0].firstMessage).toBe("pick up here")
 })
 
+// Card #75: the app names its first message, so a retried create can't deliver it twice.
+test("POST /sessions forwards the app's id for the first message; one not in the app's shape is dropped", async () => {
+  const post = (extra: object) => fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", firstMessage: "hi", ...extra }),
+  })
+  expect((await post({ client_message_id: "web-6f1c2a9e-4d" })).status).toBe(200)
+  expect((await post({ client_message_id: "in:telegram:1" })).status).toBe(200)
+  expect((await post({})).status).toBe(200)
+  expect(spawnCalls.map((c) => c.firstMessageId)).toEqual(["web-6f1c2a9e-4d", undefined, undefined])
+})
+
 test("POST /sessions with userStatus:in_progress → spawns as usual", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
     method: "POST",

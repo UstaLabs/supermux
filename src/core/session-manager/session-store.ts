@@ -292,6 +292,13 @@ export class SessionStore {
     session.agent_home = agentHome
   }
 
+  /** A session born asleep gets its base commits when its worktree is checked out (card #75). */
+  setBaseCommits(id: string, commits: Record<string, string>): void {
+    this.db.run("UPDATE sessions SET base_commits = ? WHERE id = ?", [JSON.stringify(commits), id])
+    const session = this.cache.get(id)
+    if (session) session.base_commits = commits
+  }
+
   setTmuxWindowId(id: string, windowId: string | undefined): void {
     this.db.run("UPDATE sessions SET tmux_window_id = ? WHERE id = ?", [windowId ?? null, id])
     const session = this.cache.get(id)

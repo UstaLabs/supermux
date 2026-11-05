@@ -2,6 +2,8 @@ package dev.supermux.ui.chat
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -72,6 +74,29 @@ class ChatPanelTest {
             onNodeWithTag("working_stop").performClick()
             runOnIdle { assertEquals(1, interrupts) }
         }
+
+    // Card #75: a session that was asleep is being woken (agent_state detail "starting").
+    private val starting = AgentStatus(phase = "thinking", state = "working", working = true, detail = "starting")
+
+    @Test fun a_session_being_woken_says_starting_on_the_header_status_line() = runComposeUiTest {
+        setPlatformContent {
+            ChatPanel(session = session, state = ChatState(agent = starting), actions = ChatActions(), draft = "", onDraftChange = {}, showHeader = true)
+        }
+        waitForIdle()
+        onNodeWithText("starting…").assertIsDisplayed()
+        onNodeWithText("thinking…").assertDoesNotExist()
+    }
+
+    @Test fun a_session_being_woken_says_starting_in_a_headerless_transcript_with_its_stop() = runComposeUiTest {
+        var interrupts = 0
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            ChatPanel(session = session, state = ChatState(agent = starting), actions = ChatActions(interrupt = { interrupts++ }), draft = "", onDraftChange = {}, showHeader = false)
+        }
+        waitForIdle()
+        onAllNodesWithText("starting", substring = true).onFirst().assertIsDisplayed()
+        onNodeWithTag("working_stop").performClick()
+        runOnIdle { assertEquals(1, interrupts) }
+    }
 
     @Test fun an_empty_session_offers_starter_prompts_that_send() = runComposeUiTest {
         val sent = mutableListOf<String>()

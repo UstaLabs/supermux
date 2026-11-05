@@ -233,6 +233,11 @@ class HostStore(
     // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
     private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
     private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
+    // Session starts (card #75): POST /sessions answers once the worktree is made and the agent is up,
+    // and CIO's 15 s default cut that short on desktop and Android. Its own client where the platform's
+    // deadline is too short ([SESSION_START_TIMEOUT_MS]); elsewhere [api].
+    private val httpStart = lazy { SESSION_START_TIMEOUT_MS?.let { deps.httpFactory(it) } }
+    private val apiStart by lazy { apiOverride ?: httpStart.value?.let { BrokerApi(baseUrl, token, it) } ?: api }
 
     /** This host's record id in the fleet, set by [FleetStore] when it dials; null = no media cache. */
     @Volatile private var mediaHost: String? = null
@@ -566,6 +571,7 @@ class HostStore(
         _state.update { reduceHostFrame(it, frame) }
         val micros = PerfTrace.elapsedMicros() - start
         PerfTrace.countReduce(frame::class.simpleName ?: "?", micros)
+        if (PerfTrace.startActive) markStartFrame(frame)
         if (frame is ServerFrame.Snapshot) {
             PerfTrace.milestone(
                 "state.snapshot.reduced",
@@ -577,6 +583,29 @@ class HostStore(
             )
         }
         onFrameEffects(frame)
+    }
+
+    /** Card #75: the first frames of the session a launcher Send is creating, under its start trace. */
+    private fun markStartFrame(frame: ServerFrame) {
+        when (frame) {
+            is ServerFrame.SessionAdded -> PerfTrace.startTraceFor(frame.session.id, frame.session.workdir, frame.session.repo_root)
+                ?.let { PerfTrace.once("start.session_added", "session" to frame.session.id, trace = it) }
+            is ServerFrame.MessageAppend -> PerfTrace.startTraceFor(frame.session)?.let { trace ->
+                when {
+                    frame.entry.direction.startsWith("in") -> PerfTrace.once("start.message.echoed", trace = trace)
+                    frame.entry.direction == "outbound" && frame.entry.op == "reply" ->
+                        PerfTrace.once("start.reply.arrived", "chars" to frame.entry.text?.length, trace = trace)
+                }
+            }
+            is ServerFrame.AgentState -> if (frame.working) {
+                // Card #75: "starting" is the session being woken; the agent is working once it says so.
+                val mark = if (frame.detail == "starting") "start.agent.starting" else "start.agent.working"
+                PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once(mark, "detail" to frame.detail, trace = it) }
+            }
+            is ServerFrame.ActivityAppend -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.activity", trace = it) }
+            is ServerFrame.CommandsChanged -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.commands", "count" to frame.commands.size, trace = it) }
+            else -> {}
+        }
     }
 
     // ── Load-time trace shipping (card #54) ─────────────────────────────────────────────────────
@@ -826,12 +855,13 @@ class HostStore(
     private fun nowIso(): String = deps.nowIso()
 
     /** Append an optimistic outbound bubble so the user's message shows instantly, before the
-     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in the
-     *  MessageAppend reducer. Only echoes when there is text (attachments-only stay quiet). */
-    fun appendLocalEcho(sessionId: String, text: String) {
+     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Replaced in the
+     *  MessageAppend reducer by the broker's copy of the message sent as [clientMessageId] (card #75).
+     *  Only echoes when there is text (attachments-only stay quiet). */
+    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
-            id = "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = clientMessageId?.let(::localEchoId) ?: "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
@@ -863,7 +893,7 @@ class HostStore(
         val queuedSessions = queued.map { it.session }.toSet()
         _pendingSend.update { it intersect queuedSessions }
         if (queued.isEmpty()) return
-        queued.forEach { appendLocalEcho(it.session, it.args.text.trim()) }
+        queued.forEach { appendLocalEcho(it.session, it.args.text.trim(), it.clientMessageId) }
         stateScope.launch { queued.forEach { deliverOrQueue(it) } }
     }
 
@@ -872,9 +902,12 @@ class HostStore(
      *  after the reconnect snapshot. */
     fun sendMessage(sessionId: String, text: String, attachments: List<String> = emptyList()) {
         if (text.isBlank() && attachments.isEmpty()) return
-        appendLocalEcho(sessionId, text.trim())
+        // Card #75: one id for this message wherever it goes: the frame, a retry after a reconnect,
+        // the broker's log and dedupe, and the local copy the broker's copy replaces.
+        val clientMessageId = newClientMessageId()
+        appendLocalEcho(sessionId, text.trim(), clientMessageId)
         markPendingSend(sessionId)
-        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }))
+        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }), clientMessageId = clientMessageId)
         stateScope.launch { deliverOrQueue(frame) }
     }
 
@@ -905,7 +938,7 @@ class HostStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         stateScope.launch {
             runApi("spawn") {
-                api.spawn(
+                apiStart.spawn(
                     SpawnRequest(
                         workdir = workdir.trim(),
                         name = name?.trim()?.ifBlank { null },
@@ -1756,7 +1789,7 @@ class HostStore(
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
-        api.spawn(
+        apiStart.spawn(
             dev.supermux.net.SpawnRequest(
                 workdir = workdir,
                 name = name?.ifBlank { null },
@@ -2624,21 +2657,31 @@ class HostStore(
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String {
+        // Card #75: the launcher's Send began a start trace; its requests and frames join it.
+        val startTrace = PerfTrace.pendingStart()
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
+        var t = PerfTrace.elapsedMs()
         val validation = runCatching { api.validatePath(workdir) }.getOrNull()
             ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
+        if (startTrace != null) {
+            PerfTrace.event("start.validated", "ms" to PerfTrace.elapsedMs() - t, trace = startTrace)
+            if (!resolvedPath.isNullOrBlank()) PerfTrace.startResolved(startTrace, resolvedPath)
+        }
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
         }
         // Before the spawn: the broker delivers them with the first turn (see the KDoc).
+        t = PerfTrace.elapsedMs()
         val attachmentIds = staged.mapNotNull { s ->
             uploadResumable(LAUNCHER_UPLOAD_SESSION, s.source, s.name, s.mime, s.kind) { _, _ -> }
         }
+        if (startTrace != null && staged.isNotEmpty()) PerfTrace.event("start.uploaded", "ms" to PerfTrace.elapsedMs() - t, "files" to attachmentIds.size, trace = startTrace)
+        t = PerfTrace.elapsedMs()
         val resp = try {
-            api.spawn(
+            apiStart.spawn(
                 SpawnRequest(
                     workdir = resolvedPath,
                     name = name?.ifBlank { null },
@@ -2655,13 +2698,23 @@ class HostStore(
                     inheritFrom = inheritFrom?.ifBlank { null },
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
+                    clientMessageId = if ((firstMessage ?: text).isNotBlank() || attachmentIds.isNotEmpty()) newClientMessageId() else null,
                 ),
+                trace = startTrace,
             )
-        } catch (t: Throwable) {
-            remapSpawnFailure(t)
+        } catch (e: Throwable) {
+            if (startTrace != null) {
+                PerfTrace.event("start.failed", "ms" to PerfTrace.elapsedMs() - t, "error" to e.message?.take(200), trace = startTrace)
+                PerfTrace.endStart(startTrace)
+            }
+            remapSpawnFailure(e)
         }
-        return resolveSpawnId(resp, _state.value.sessions)
-            ?: throw IllegalStateException("Session created but id not available yet")
+        val id = resolveSpawnId(resp, _state.value.sessions)
+        if (startTrace != null) {
+            PerfTrace.event("start.response", "ms" to PerfTrace.elapsedMs() - t, "session" to id, trace = startTrace)
+            if (id != null) PerfTrace.bindStart(startTrace, id)
+        }
+        return id ?: throw IllegalStateException("Session created but id not available yet")
     }
 
     /**
@@ -2713,7 +2766,7 @@ class HostStore(
      *  name match when the broker returns a blank id). Throws on a broker refusal so the caller can
      *  surface it via [remapSpawnFailure] — unlike the fire-and-forget [spawn]. */
     suspend fun spawnRequest(request: SpawnRequest): String? =
-        resolveSpawnId(api.spawn(request), _state.value.sessions)
+        resolveSpawnId(apiStart.spawn(request), _state.value.sessions)
 
     /** On-device-STT path: JSON draft → cleaned text (long-timeout dictation client). */
     suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse? =
@@ -2753,6 +2806,7 @@ class HostStore(
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
         if (httpSpeak.isInitialized()) httpSpeak.value.close()
         if (httpMedia.isInitialized()) httpMedia.value.close()
+        if (httpStart.isInitialized()) httpStart.value?.close()
     }
 
     private companion object {

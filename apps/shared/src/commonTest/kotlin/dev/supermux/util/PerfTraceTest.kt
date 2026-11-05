@@ -95,4 +95,36 @@ class PerfTraceTest {
         assertNull(serverTimingMs(null))
         assertNull(serverTimingMs("cache;desc=hit"))
     }
+
+    /** Card #75: one trace per launcher Send, which the new session's frames and draws join. */
+    @Test fun aSessionStartFollowsItsSessionByIdOrByItsFolderAndEnds() {
+        val cursor = PerfTrace.cursor()
+        val trace = PerfTrace.beginStart("/repo/app", "agent" to "claude")
+        assertTrue(trace.startsWith("S") && trace.contains(PerfTrace.launchId.drop(1)))
+        assertEquals("start.send", PerfTrace.since(cursor).last { it.trace == trace }.name)
+        assertEquals(trace, PerfTrace.pendingStart())
+        assertTrue(PerfTrace.startActive)
+        // Another session's frames are not this start's; the new one is known by its repo root.
+        assertNull(PerfTrace.startTraceFor("other", workdir = "/elsewhere", repoRoot = "/elsewhere"))
+        assertEquals(trace, PerfTrace.startTraceFor("s1", workdir = "/wt/uuid", repoRoot = "/repo/app"))
+        assertEquals(trace, PerfTrace.startTraceFor("s1"))
+        // Bound: no longer pending, and a second new session in the same folder is not it.
+        assertNull(PerfTrace.pendingStart())
+        assertNull(PerfTrace.startTraceFor("s2", repoRoot = "/repo/app"))
+        PerfTrace.endStart(trace)
+        assertNull(PerfTrace.startTraceFor("s1"))
+        assertTrue(!PerfTrace.startActive)
+    }
+
+    @Test fun aStartBoundByItsResponseUsesTheResolvedFolder() {
+        val trace = PerfTrace.beginStart("~/repo")
+        PerfTrace.startResolved(trace, "/home/u/repo")
+        assertEquals(trace, PerfTrace.startTraceFor("s9", repoRoot = "/home/u/repo"))
+        val next = PerfTrace.beginStart("/home/u/other")
+        assertNotEquals(trace, next)
+        PerfTrace.bindStart(next, "s10")
+        assertEquals(next, PerfTrace.startTraceFor("s10"))
+        assertNull(PerfTrace.startTraceFor("s9"))
+        PerfTrace.endStart(next)
+    }
 }

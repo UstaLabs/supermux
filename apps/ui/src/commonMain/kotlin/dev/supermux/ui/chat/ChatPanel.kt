@@ -135,6 +135,7 @@ import dev.supermux.ui.countToolsSince
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
+import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -556,6 +557,19 @@ fun ChatPanel(
             dev.supermux.util.PerfTrace.firstMilestone("chat.complete", "items" to timelineItems.size, "messages" to messages.size, "activity" to activity.size, trace = trace)
         }
     }
+    // Card #75: a session the launcher just started — the first frame that draws its chat, and the
+    // first that draws its agent's reply, end that start's trace.
+    val firstReplyId = remember(messages) { messages.firstOrNull { it.direction == "outbound" && it.op == "reply" }?.id }
+    LaunchedEffect(session.id, firstReplyId) {
+        if (!dev.supermux.util.PerfTrace.startActive) return@LaunchedEffect
+        val trace = dev.supermux.util.PerfTrace.startTraceFor(session.id) ?: return@LaunchedEffect
+        withFrameNanos { }
+        dev.supermux.util.PerfTrace.firstMilestone("start.chat.shown", "session" to session.id, trace = trace)
+        if (firstReplyId != null) {
+            dev.supermux.util.PerfTrace.firstMilestone("start.reply.drawn", "session" to session.id, trace = trace)
+            dev.supermux.util.PerfTrace.endStart(trace)
+        }
+    }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
@@ -767,10 +781,14 @@ fun ChatPanel(
         dead -> null
         working && agent != null -> {
             if (hideTools) {
-                val base = if (agent.detail == "running") "running" else "thinking"
+                val base = when (agent.detail) { "running" -> "running"; "starting" -> "starting"; else -> "thinking" }
                 formatLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
             } else {
-                if (agent.detail == "running") "running ${agent.tool ?: "tool"}…" else "thinking…"
+                when (agent.detail) {
+                    "running" -> "running ${agent.tool ?: "tool"}…"
+                    "starting" -> "starting…"
+                    else -> "thinking…"
+                }
             }
         }
         sending -> "sending…"
@@ -1338,14 +1356,14 @@ private fun WorkingIndicator(
     // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
     val label = if (detailLow) {
         formatLowWorkingStatus(
-            baseLabel = if (agent.detail == "running") "working" else "thinking",
+            baseLabel = workingBaseLabel(agent.detail),
             detail = agent.detail,
             tool = agent.tool,
             toolCount = toolCount,
             durationLabel = durationLabel,
         )
     } else {
-        val base = (if (agent.detail == "running") "working" else "thinking") +
+        val base = workingBaseLabel(agent.detail) +
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }

@@ -1,6 +1,8 @@
 // src/main.ts
 import { avatarRev } from "./core/agents/avatar"
 import { PerfLog } from "./core/perf/perf-log"
+import { msSince, startTraces } from "./core/perf/start-trace"
+import { setPerfMarkSink } from "../packages/supermux-core/src/perf-marks.js"
 import { getMuxHome } from "./core/memory/init"
 import { paneSessionId } from "./core/session-manager/pane-owner"
 import { TelegramChannel } from "./channels/telegram"
@@ -41,11 +43,14 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 }
 
 import { startSocketServer } from "./core/session-manager/socket-server"
-import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
+import { createSupervisor, isDraftSession, reconcileOnStartup } from "./core/session-manager/supervisor"
 import { acquirePidFile, isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
-import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
+import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
+import { createAsleep, type CreateAsleepDeps } from "./core/session-manager/born-asleep"
+import { folderReady } from "./core/session-manager/folder-ready"
+import { SessionChain, deliverOnChain, ensureLiveWith, isLiveWith, type ChainDelivery, type LivenessDeps } from "./core/session-manager/session-chain"
 import { SessionManager } from "./core/session-manager/manager"
 import { announceCreated, createSession, type CreateSessionArgs, type CreateSessionDeps, type CreatedSession } from "./core/session-manager/create-session"
 import { closeGrokCoreHost, getGrokCoreHost } from "./core/agents/grok/core-host-provider"
@@ -115,7 +120,7 @@ import type { InboundDeliveryResult } from "./core/session-manager/inbound-deliv
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
 import { agentGreetingPrompt, checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
-import { buildMenuEntries } from "./channels/telegram/menu"
+import { buildMenuEntries, menuRefresher } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
@@ -151,14 +156,14 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
-import { startFailureNotice } from "./core/agents/start-failure"
+import { startFailureNotice, wakeFailureNotice } from "./core/agents/start-failure"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { refreshPathFromRegistry, withAgentBinDirs } from "./core/agents/bin-dirs"
@@ -189,7 +194,7 @@ import { DisplayManager } from "./core/display/manager"
 import { LinuxXvfbProvider } from "./core/display/providers/linux-xvfb"
 import { MacosScreenProvider } from "./core/display/providers/macos-screen"
 import { ActivityStore } from "./core/session-manager/activity-store"
-import { AgentStateStore } from "./core/session-manager/agent-state-store"
+import { AgentStateStore, type AgentState } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { BackgroundTaskStore, type BgTaskKind } from "./core/session-manager/background-task-store"
 import { SubagentStore } from "./core/session-manager/subagent-store"
@@ -225,7 +230,7 @@ import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { antigravityKeyringLogin } from "./core/agents/antigravity/keyring"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
-import { createWorktree, ensureWorktreeAt, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
+import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
@@ -397,6 +402,11 @@ process.on("exit", () => releasePidFile(PID_FILE))
 const dbPath = join(STATE_DIR, "db.sqlite3")
 // Load-time tracing (card #54): off unless MUX_PERF=1 or `bun scripts/perf-timeline.ts on`.
 const perfLog = new PerfLog({ dir: join(STATE_DIR, "perf"), envEnabled: process.env.MUX_PERF === "1" })
+// Card #75: a session start's trace (StartTraces), and the core's own launch marks (keeper, initialize,
+// first frames) joined to it by session id. While tracing is off begin() hands out no trace, so no
+// session is ever bound and every mark is a no-op.
+startTraces.setLog(perfLog)
+setPerfMarkSink((sessionId, event, fields) => startTraces.markSession(sessionId, event, fields, true))
 let db: ReturnType<typeof openDb>
 try {
   db = openDb(dbPath)
@@ -1086,6 +1096,12 @@ let agentRpc: ReturnType<typeof createAgentRpc>
 const telegram: TelegramChannel | undefined = hasTelegram
   ? new TelegramChannel({ token: TG_TOKEN!, fileStore })
   : undefined
+// The Telegram /command menu (one entry per session). A session start refreshes it in the background
+// (card #75); a failure is logged once until a refresh succeeds.
+const telegramMenu = menuRefresher(
+  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry)) },
+  (err) => log.warn("refresh_telegram_menu_failed", { err }),
+)
 const WA_GOWA_URL = appConfig.whatsappGowaUrl || undefined
 const hasWhatsApp = !!WA_GOWA_URL
 const whatsapp: WhatsAppChannel | undefined = hasWhatsApp
@@ -1111,6 +1127,66 @@ mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
 let inboxDelivery: InboxDelivery | undefined
 const inboxStore = new InboxStore(SESSION_INBOX_DIR)
 
+// Card #75: one chain per session, the only place a session's agent is woken (a new session's first
+// start, a dozing one's resume, a crashed one's revive) and the queue its messages wait in meanwhile.
+// The inbox, the app's and Telegram's messages and the doors that start a session all go through it.
+// Its deps are lazy thunks: the SessionManager is constructed just below.
+const liveness = {
+  session: (id) => registry.sessions.getById(id),
+  resumeFromArchive: (id) => sessionManager.resumeFromArchive(id),
+  resumeSuspended: (s) => sessionManager.resumeSuspended(s),
+  resumeFailure: (id) => sessionManager.resumeFailure(id),
+  adapterState: (id) => {
+    const adapter = sessionManager.adapterFor(id)
+    if (!adapter) return "none"
+    return adapter instanceof CoreAdapter && !adapter.isAlive() ? "dead" : "alive"
+  },
+  resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
+  waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
+  isDeliverable: (id) => sessionManager.isDeliverable(id),
+  bootResume: (id) => sessionManager.bootResume(id),
+} satisfies LivenessDeps
+/** Sessions whose first wake a door (spawn_session, delegate, council, …) waits for: a failure is its caller's to report. */
+const doorStarts = new Set<string>()
+/** The folders git is checking a session's worktree out into right now (the files pane and terminals wait for them). */
+const checkoutsInFlight = new Set<string>()
+/** gracefulShutdown has begun (declared here: the session chain reads it). */
+let shuttingDown = false
+const sessionChain = new SessionChain({
+  isLive: (id) => isLiveWith(liveness, id),
+  ensureLive: (id) => ensureLiveWith(liveness, id),
+  // "starting" while a wake is in flight; the session's real state once it is over, and its status
+  // (active, or still suspended after a failure) for every client, not only one taking a new snapshot.
+  onWaking: (id, waking) => {
+    webChannel?.broadcastToAll(agentStateFrame(id))
+    if (!waking) broadcastSessionStatus(id)
+  },
+  putToSleep: async (id) => {
+    await sessionManager.putToSleep(id)
+    broadcastSessionStatus(id)
+  },
+  onWakeFailed: (id, err) => {
+    const s = registry.sessions.getById(id)
+    log.warn("session_wake_failed", { id, name: s?.name, err: err instanceof Error ? err.message : String(err) })
+    // A draft is not started from here (its first message in the app does): nothing to say in its chat.
+    if (!s || doorStarts.has(id) || isDraftSession(s)) return
+    // A start cut short by the broker stopping: the reason is the restart, not what failed under it
+    // (git's half-written progress, a keeper that went away).
+    void notifySession(id, wakeFailureNotice(s.agent, shuttingDown ? new Error("supermux restarted while it was starting") : err))
+  },
+})
+
+/** Card #75: a session's lifecycle status (active, suspended) changed: every client hears it. */
+function broadcastSessionStatus(id: string): void {
+  const status = registry.sessions.getById(id)?.status
+  if (status) webChannel?.broadcastToAll({ type: "session_state", session: id, status })
+}
+
+/** A session's agent_state frame: "starting" while its chain wakes it, else what the store says. */
+function agentStateFrame(id: string, st: AgentState = agentStateStore.get(id)) {
+  return toAgentStateFrame(id, st, bgOpenCount(id), sessionChain.wakingSince(id))
+}
+
 // The SessionManager component owns per-session runtime state (Move 2). The
 // thin aliases below keep existing call sites unchanged while the handlers
 // migrate into the component stage by stage.
@@ -1128,7 +1204,7 @@ const sessionManager = new SessionManager(registry, {
     // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
     // no other state change. Mutates nothing — it just re-emits the same frame
     // the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgOpenCount(id))),
+    onDelivered: (id) => webChannel?.broadcastToAll(agentStateFrame(id)),
     onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
     // Input from its parent (inbox) or the user begins a delegated child's task (decision #21). Fired only
     // for a real hand-over: a deduped retry or a missing adapter starts nothing.
@@ -1150,6 +1226,7 @@ const sessionManager = new SessionManager(registry, {
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
     forgetReplyTarget: (id) => replyTargets.forget(id),
     retireWorkspaceIfEmpty: (workspaceId) => archiveWorkspaceIfEmpty(workspaceId),
+    cancelWake: (id) => sessionChain.cancel(id),
   },
   children: { archived: (s, how) => { childSettle.forget(s.id); delegatedChildren.archived(s, how); councils.memberArchived(s, how) } },
   councils: {
@@ -1192,7 +1269,15 @@ const sessionManager = new SessionManager(registry, {
   orchestration: {
     // spawn_session: the app's create path, so the new session gets its workspace and the full frames.
     spawnSession: async (args) => {
-      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel })
+      const trace = startTraces.begin()
+      startTraces.mark(trace, "request", { via: "spawn_session", agent: args.agent ?? AgentKind.Claude, model: args.model, worktree: true, firstMessage: false })
+      const t0 = performance.now()
+      const created = await createSessionWithWorkspace({ workdir: args.workdir, name: args.requestedName, agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, perfTrace: trace })
+        .catch((err) => {
+          startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+          throw err
+        })
+      startTraces.mark(trace, "created", { ms: msSince(t0), session: created.id, workdir: created.workdir })
       return { name: created.name, session_id: created.id }
     },
     refreshTelegramMenu,
@@ -1243,16 +1328,8 @@ inboxDelivery = new InboxDelivery({
   store: inboxStore,
   cursor: new InboxCursorStore(db),
   messageLog,
-  session: (id) => registry.sessions.getById(id),
-  resumeFromArchive: (id) => sessionManager.resumeFromArchive(id),
-  resumeSuspended: (s) => sessionManager.resumeSuspended(s),
-  adapterState: (id) => {
-    const adapter = sessionManager.adapterFor(id)
-    if (!adapter) return "none"
-    return adapter instanceof CoreAdapter && !adapter.isAlive() ? "dead" : "alive"
-  },
-  resumeAdapter: async (id) => { await sessionManager.adapterFor(id)?.resume() },
-  waitDeliverable: (id, ms) => sessionManager.waitDeliverable(id, ms),
+  ...liveness,
+  chain: sessionChain,
   deliver: (id, text, meta) => sessionManager.deliver(id, text, meta),
   agentOf: (id) => registry.sessions.getById(id)?.agent,
   sent: (from, to) => childSettle.sent(from, to),
@@ -1584,6 +1661,12 @@ async function interruptClaudePane(_sessionId: string): Promise<void> {}
 // status itself — idle is reflected from the session: Claude's interrupt marker
 // in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
+  // Card #75: Stop while the session is starting ends the start: what started goes back to sleep and
+  // the messages waiting for it are not delivered (they stay in the chat).
+  if (sessionChain.waking(sessionId)) {
+    sessionChain.cancel(sessionId)
+    return { ok: true }
+  }
   const r = await runInterrupt({ adapter: runtimes.get(sessionId)?.adapter })
   if (r.ok && turnStartedAt.has(sessionId)) turnInterrupted.add(sessionId)
   return r
@@ -1786,6 +1869,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   let turnsStarted = 0
   let crashes = 0
   adapter.on("assistant-message", (ev: any) => {
+    startTraces.markSession(sessionId, "reply.first", { chars: typeof ev?.text === "string" ? ev.text.length : undefined }, true)
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
     // end with nothing. The message itself is stored before the send now, so a
@@ -1807,6 +1891,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
   })
   adapter.on("activity", (ev: any) => {
+    startTraces.markSession(sessionId, "activity.first", { kind: ev?.events?.[0]?.kind, tool: ev?.events?.[0]?.tool }, true)
     try {
       for (const a of ev?.events ?? []) {
         // A subagent's conversation is kept (and persisted) with its card as well.
@@ -1826,6 +1911,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   })
   adapter.on("task", (ev: TaskEvent) => applyTaskEvent(sessionId, ev))
   adapter.on("turn-start", () => {
+    startTraces.markSession(sessionId, "turn.started", undefined, true)
     turnsStarted++
     // The card first: the state change below writes "Thinking" into it, and alone it would recreate an evicted card without its name.
     delegatedChildren.turnStarted(sessionId)
@@ -1835,6 +1921,11 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     settleChanged(sessionId)
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
+    // Card #75: the first turn is the end of a new session's start trace.
+    if (startTraces.traceOf(sessionId)) {
+      startTraces.markSession(sessionId, "turn.completed", { error: ev?.error ? String(ev.error).slice(0, 200) : undefined }, true)
+      startTraces.close(sessionId)
+    }
     agentStateStore.applyEvent(sessionId, "Stop")
     // Codex pushes no reliable change event (skills/changed never fired, 0.164.0): ask its app-server again,
     // so a skill the turn added shows up.
@@ -2186,7 +2277,6 @@ function sessionCreateDeps(): CreateSessionDeps {
     workspaceDto: (id) => wsDto(id),
     broadcast: (frame) => webChannel?.broadcastToAll(frame),
     broadcastProjects,
-    refreshTelegramMenu,
     sessionFrame: (entry) => sessionAddedPayload(entry),
     sessionEffort: (entry) => sessionEffort(entry),
   }
@@ -2690,7 +2780,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionAgentState: (id) => {
       const s = registry.get(id)
       const st = s ? agentStateStore.get(s.id) : { phase: "idle" as const, since: 0 }
-      const { type: _type, session: _session, ...payload } = toAgentStateFrame(s?.id ?? id, st, bgOpenCount(s?.id ?? id))
+      const { type: _type, session: _session, ...payload } = agentStateFrame(s?.id ?? id, st)
       return payload
     },
     getSessionBgTasks: (id) => {
@@ -2824,6 +2914,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     finishSession: async (id, req) => finishSessionById(id, req),
     finishReadiness: (id) => finishReadinessById(id),
     spawnSession: async (args) => {
+      // Card #75: one trace per start, the app's own when it sent one.
+      const trace = startTraces.begin(args.perfTrace)
+      startTraces.mark(trace, "request", { via: "launcher", agent: args.agent ?? AgentKind.Claude, model: args.model, worktree: args.worktree !== false, firstMessage: !!args.firstMessage?.trim(), attachments: args.firstAttachments?.length ?? 0, device: args.device })
+      const t0 = performance.now()
       const created = await createSessionWithWorkspace({
         workdir: args.workdir,
         name: args.name,
@@ -2837,34 +2931,35 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         inheritFrom: args.inheritFrom,
         workspaceId: args.workspaceId,
         viewId: args.viewId,
+        perfTrace: trace,
+        // Card #75: answered as soon as the session exists; its agent starts on the wake below.
+        asleep: true,
+      }).catch((err) => {
+        startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+        throw err
       })
-      // Continue / spawn first turn: deliver AFTER session_added (the create path sent it) so the
-      // client already has the row when message_append lands. spawnSession has already waited for
-      // a persistent agent to connect. The launcher's first turn may carry files (uploaded before
-      // the spawn); those go through the same log+deliver tail as a WS `send`.
+      startTraces.mark(trace, "created", { ms: msSince(t0), session: created.id, workdir: created.workdir })
+      // The first turn, after session_added (the create path sent it) so the client already has the
+      // row when message_append lands: logged now under the app's own id, then handed to the
+      // session's chain, which wakes it. It may carry files (uploaded before the create). Without a
+      // first message the session is woken anyway, as a launched session always started. The
+      // launcher waits for neither; a wake that fails is said in the chat by the chain.
       if (registry.get(created.id)) {
         const first = args.firstMessage?.trim()
-        if (args.firstAttachments?.length) {
-          const messageId = `spawn-${Date.now()}`
-          // Same reason as below: do not hold the spawn response for the turn.
+        if (first || args.firstAttachments?.length) {
           void routeWebInbound({
             channel: "web",
             chat_id: "web",
-            message_id: messageId,
+            message_id: args.firstMessageId ?? `web-${randomUUID()}`,
             user: args.device ?? "web",
             user_id: args.device ?? "web",
             ts: new Date().toISOString(),
             text: first,
             target_session_id: created.id,
-            attachments: args.firstAttachments,
+            ...(args.firstAttachments?.length ? { attachments: args.firstAttachments } : {}),
           }).catch((err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
-        } else if (first) {
-          // Core adapters resolve send() when the TURN completes; the launcher
-          // must navigate to the new chat as soon as the message is handed
-          // over, not after the agent's first reply, so this is not awaited.
-          void deliverUserMessage(created.id, first).then((delivered) => {
-            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: created.id, reason: delivered.reason })
-          }, (err) => log.warn("spawn_first_message_failed", { id: created.id, reason: String(err) }))
+        } else {
+          void sessionChain.wake(created.id).catch(() => {})
         }
       }
       return created
@@ -3136,6 +3231,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     startDisplay: (args) => displayManager.start({ sessionDisplayName: args.sessionName, provider: args.provider as any, device: args.device, width: args.width, height: args.height }),
     stopDisplay: (id) => displayManager.stop(id),
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
+    folderReady: (path) => folderReady({
+      sessions: () => registry.list(),
+      pending: (id) => sessionChain.pending(id),
+      exists: (p) => existsSync(p),
+      checkoutsInFlight: () => [...checkoutsInFlight],
+      sleep: (ms) => Bun.sleep(ms),
+      now: () => Date.now(),
+    }, path),
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
       if (!s || !isPersistentRuntimeSession(s)) return undefined
@@ -3461,12 +3564,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
 void getUsageStore().seedFromLocal()
 
 async function refreshTelegramMenu() {
-  if (!telegram) return
-  try {
-    await telegram.refreshMenu(buildMenuEntries(registry))
-  } catch (err: any) {
-    log.warn("refresh_telegram_menu_failed", { err: err?.message ?? String(err) })
-  }
+  await telegramMenu.refresh()
 }
 
 
@@ -3497,26 +3595,32 @@ function releaseDraftAttachmentRefs(payload: { attachments?: Array<{ file_id?: s
 const killSession = (id: string) => sessionManager.kill(id)
 
 
-// When a session's worktree was removed (e.g. its branch was merged via finish),
-// the recorded workdir no longer exists. Spawning `claude --resume` into a missing
-// cwd makes it die on startup, and the inbound message is then silently queued to a
-// dead session (no reply, spinner forever). Recreate the worktree at the SAME path —
-// so claude's cwd-keyed transcript still matches — before any resume/respawn spawns
-// into it. No-op when the workdir is healthy or the session isn't worktree-backed.
+// Before a session's agent starts (resume), its worktree is checked out if it isn't there: a session
+// born asleep's, for the first time (card #75), or one whose folder was removed (e.g. its branch was
+// merged via finish). Spawning `claude --resume` into a missing cwd makes it die on startup, so it is
+// made at the SAME path, which keeps claude's cwd-keyed transcript matching. A fresh checkout gets the
+// base commits review diffs against, and the git pane starts watching it. A checkout that fails fails
+// the start with git's reason; it never falls back to the main repo. No-op when the workdir is
+// healthy or the session isn't worktree-backed.
 async function ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void> {
   if (!session.repo_root || !session.session_branch) return
-  if (existsSync(session.workdir)) return
-  log.warn("worktree_missing_recreating", { id: session.id, name: session.name, workdir: session.workdir, branch: session.session_branch })
-  await ensureWorktreeAt({
+  if (existsSync(session.workdir) && readdirSync(session.workdir).length > 0) return
+  const t = performance.now()
+  checkoutsInFlight.add(session.workdir)
+  const { created } = await ensureWorktreeAt({
     repoRoot: session.repo_root,
     workdir: session.workdir,
     sessionBranch: session.session_branch,
     baseBranch: session.base_branch || "HEAD",
-  })
-  log.info("worktree_recreated", { id: session.id, name: session.name, workdir: session.workdir })
+    onCheckedOut: () => { checkoutsInFlight.delete(session.workdir) },
+  }).finally(() => { checkoutsInFlight.delete(session.workdir) })
+  startTraces.markSession(session.id, "worktree", { ms: msSince(t), created })
+  if (!created) return
+  registry.sessions.setBaseCommits(session.id, captureBaseCommits(session.workdir))
+  gitStatusService.sync(gitServiceSessions())
+  gitStatusService.retrack(session.id)   // its git dirs exist now
+  log.info("worktree_checked_out", { id: session.id, name: session.name, workdir: session.workdir, branch: session.session_branch })
 }
-
-const resumeSuspendedSession = (session: Parameters<SessionManager["resumeSuspended"]>[0]) => sessionManager.resumeSuspended(session)
 
 const resumeFromArchive = (sessionId: string) => sessionManager.resumeFromArchive(sessionId)
 
@@ -3584,6 +3688,8 @@ const server = await startSocketServer({
 // every agent, message_id dedupe, and the "Sending…" reconcile broadcast. Kept as a local function so the many
 // existing call sites read unchanged.
 async function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+  // Card #75: a new session's first message on its way to the agent (a no-op once its start is over).
+  startTraces.markSession(sessionId, "message.delivering", { chars: text.length, channel: meta?.channel }, true)
   // The turn can finish before deliver() resolves (a fast agent answers inside the hand-off), so
   // the turn is opened first and dropped again if the hand-off fails.
   const opened = openTelemetryTurn(sessionId, meta)
@@ -3593,6 +3699,18 @@ async function deliverInbound(sessionId: string, text: string, meta: any): Promi
   })
   if (opened && (!r.ok || (r as { deduped?: boolean }).deduped)) turnStartedAt.delete(opened)
   return r
+}
+
+/**
+ * Card #75: the one way a user's message reaches a session's agent, once it is logged: on the
+ * session's chain, waking the session first when its agent isn't up. Resolves when the message is
+ * handed over (`turn` resolves when that turn ends) or isn't: Stop, archive or kill dropped it, or
+ * the wake failed, which the chain reports in the chat once. Nothing is re-sent on its own.
+ */
+async function deliverToSession(sessionId: string, text: string, meta: any): Promise<ChainDelivery<InboundDeliveryResult>> {
+  // This message's chat is where anything about it goes, a failed wake included.
+  if (typeof meta?.chat_id === "string" && meta.chat_id) replyTargets.note(sessionId, meta.chat_id)
+  return deliverOnChain(sessionChain, sessionId, () => deliverInbound(sessionId, text, meta))
 }
 
 function postBrokerInbound(sessionId: string, text: string): void {
@@ -3642,7 +3760,9 @@ async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered
   // message): adapter.send for every agent.
   // chat_id "web" so the agent's reply routes back to the visible web chat.
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
-  const r = await deliverInbound(s.id, text, meta)
+  const sent = await deliverToSession(s.id, text, meta)
+  if (!sent.handed) return { ok: false, delivered: 0, reason: sent.why === "cancelled" ? "stopped" : "the session did not start" }
+  const r = await sent.turn
   if (!r.ok) return { ok: false, delivered: 0, reason: "agent adapter not ready" }
   for (const c of open) reviewStore.update(c.id, { status: "submitted" })
   return { ok: true, delivered: open.length }
@@ -3659,12 +3779,19 @@ async function deliverUserMessage(sessionId: string, text: string): Promise<{ ok
     messageLog.append(s.id, { id: `in:web:${messageId}`, ts: new Date().toISOString(), direction: "inbound", channel: "web", chat_id: "web", message_id: messageId, text })
   } catch (err: any) { log.error("deliver_message_append_failed", { session: s.name, err: err?.message ?? String(err) }) }
   const meta = { channel: "web", chat_id: "web", message_id: messageId }
-  const r = await deliverInbound(s.id, text, meta)
+  const sent = await deliverToSession(s.id, text, meta)
+  if (!sent.handed) return { ok: false, reason: sent.why === "cancelled" ? "stopped" : "the session did not start" }
+  const r = await sent.turn
   if (!r.ok) return { ok: false, reason: "agent adapter not ready" }
   return { ok: true }
 }
 
-async function spawnSession(args: {
+/**
+ * The direct start: the agent is started here, before anything else can reach the session. Only
+ * agent-rpc workers use it now: their MCP config is not a row field, so a resume could not rebuild
+ * them. Every other session is born asleep (spawnSession).
+ */
+async function spawnSessionDirect(args: {
   workdir: string
   requestedName?: string
   agent?: AgentKind
@@ -3688,16 +3815,24 @@ async function spawnSession(args: {
   id?: string
   /** council: a worktree made beforehand (all of a council's are made before any member starts). */
   worktreeHandle?: WorktreeHandle
+  /** Card #75: this start's trace id (StartTraces.begin), when tracing is on. */
+  perfTrace?: string
 }) {
   const agent = args.agent ?? AgentKind.Claude
+  const trace = args.perfTrace
+  let t = performance.now()
   // An agent that is not installed is refused here so every door (web, shim spawn_session, /spawn,
   // drafts' first message, agent-rpc workers) says so, instead of a keeper that never comes up.
   assertAgentInstalled(agent)
+  startTraces.mark(trace, "installed", { ms: msSince(t), agent })
+  t = performance.now()
   // Before any worktree/name work: an unknown, foreign or unsupported account fails the request. No
   // account, or "auto", is Auto (decision #18): the account with the most room left.
-  const asked = !args.account || args.account === AUTO_ACCOUNT ? await brokerAccounts.autoAccount(agent) : args.account
+  const auto = !args.account || args.account === AUTO_ACCOUNT
+  const asked = auto ? await brokerAccounts.autoAccount(agent) : args.account
   const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
   const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
+  startTraces.mark(trace, "account", { ms: msSince(t), auto, account: account ?? "system" })
   const inheritSrc = args.inheritFromSessionId
     ? registry.sessions.getById(args.inheritFromSessionId)
     : undefined
@@ -3712,17 +3847,23 @@ async function spawnSession(args: {
     wt = args.worktreeHandle
     effectiveWorkdir = wt.worktreeDir
   } else if (args.worktree !== false) {
+    t = performance.now()
     const info = await getRepoInfo(workdir)
+    startTraces.mark(trace, "repo", { ms: msSince(t), eligible: info.eligible })
     if (info.eligible && info.repoRoot) {
+      t = performance.now()
       try {
         wt = await createWorktree({
           repoRoot: info.repoRoot,
           baseBranch: args.baseBranch || info.currentBranch || "HEAD",
           sessionName: requestedName || deriveName(workdir),
+          onPhase: trace ? (name, fields) => startTraces.mark(trace, `worktree.${name}`, fields) : undefined,
         })
         effectiveWorkdir = wt.worktreeDir
+        startTraces.mark(trace, "worktree", { ms: msSince(t) })
       } catch (err) {
         log.warn("worktree_create_failed", { workdir, error: String(err) })
+        startTraces.mark(trace, "worktree", { ms: msSince(t), failed: String(err).slice(0, 200) })
         if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
         // Fall back to spawning directly in the repo (today's behavior).
       }
@@ -3734,6 +3875,11 @@ async function spawnSession(args: {
     { agent, model: args.model, reasoningLevel: args.reasoningLevel },
     lookupModels,
   )
+  // Card #75: the id is minted here (every agent's spawn takes it) so the agent's own startup marks
+  // (keeper, initialize, first frames) find this start's trace.
+  const spawnId = args.id ?? (trace ? randomUUID() : undefined)
+  if (spawnId) startTraces.bind(spawnId, trace)
+  t = performance.now()
   const r = await spawnSessionHelper(
     {
       registry,
@@ -3771,8 +3917,13 @@ async function spawnSession(args: {
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
-    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: args.id },
-  )
+    { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, permissionMode: args.permissionMode, account, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig, parentSessionId: args.parentSessionId, workspaceId: args.workspaceId, id: spawnId },
+  ).catch((err) => {
+    startTraces.mark(trace, "spawn_failed", { ms: msSince(t), err: String(err).slice(0, 200) })
+    if (spawnId) startTraces.close(spawnId)
+    throw err
+  })
+  startTraces.mark(trace, "spawned", { ms: msSince(t), session: r.session_id, agent })
   // Claude's row now exists synchronously (born in the spawn path). Wait for
   // the shim to CONNECT — proof the window survived and the agent came up —
   // while polling window liveness so an instant death fast-fails instead of
@@ -3803,14 +3954,16 @@ async function spawnSession(args: {
         type: "session_added",
         session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
-      await refreshTelegramMenu()
+      // The one menu refresh of a start, never waited for (card #75).
+      telegramMenu.inBackground()
     }
   } else if (registered?.core && !registered.internal && !registered.parent_session_id) {
     webChannel?.broadcastToAll({
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
     })
-    await refreshTelegramMenu()
+    // The one menu refresh of a start, never waited for (card #75).
+    telegramMenu.inBackground()
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
@@ -3848,6 +4001,135 @@ async function spawnSession(args: {
   return r
 }
 
+type SpawnSessionArgs = Parameters<typeof spawnSessionDirect>[0] & {
+  /** The launcher: answer as soon as the row exists; its first message (or a background wake) starts it. */
+  asleep?: boolean
+}
+
+/**
+ * Card #75: a session exists the moment it is asked for. Its row is registered asleep, with its name,
+ * branch, account and agent's home, and its agent starts on its first wake, through resume, like a
+ * session that dozed off. A door that starts a session (spawn_session, delegate, council, the curator,
+ * /spawn, a draft's first message) waits for that wake and answers once the agent is up, as before;
+ * the launcher (`asleep`) answers at once.
+ */
+async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; session_id: string }> {
+  if (args.rpcMcpConfig) return spawnSessionDirect(args)
+  const agent = args.agent ?? AgentKind.Claude
+  const trace = args.perfTrace
+  let t = performance.now()
+  // An agent that is not installed is refused here so every door says so, instead of a start that never comes up.
+  assertAgentInstalled(agent)
+  startTraces.mark(trace, "installed", { ms: msSince(t), agent })
+  t = performance.now()
+  // An unknown, foreign or unsupported account fails the request. No account, or "auto", is Auto
+  // (decision #18): the account with the most room left, picked from what is known now (fix 2, card #75).
+  const auto = !args.account || args.account === AUTO_ACCOUNT
+  const asked = auto ? await brokerAccounts.autoAccount(agent) : args.account
+  const requestedAccount = await brokerAccounts.resolveSessionAccount(agent, asked)
+  const account = isSystemAccount(requestedAccount) ? undefined : requestedAccount
+  startTraces.mark(trace, "account", { ms: msSince(t), auto, account: account ?? "system" })
+  const inheritSrc = args.inheritFromSessionId ? registry.sessions.getById(args.inheritFromSessionId) : undefined
+  const workdir = normalizeExistingWorkdir(args.workdir)
+  t = performance.now()
+  const row = await createAsleep(bornAsleepDeps(), {
+    workdir,
+    // An explicit name, then the inherited session's; else derived from the folder (the repo, not a worktree).
+    requestedName: args.requestedName?.trim() || inheritSrc?.name || undefined,
+    agent,
+    model: args.model,
+    reasoningLevel: args.reasoningLevel,
+    permissionMode: args.permissionMode,
+    account,
+    worktree: args.worktree,
+    baseBranch: args.baseBranch,
+    requireWorktree: args.requireWorktree,
+    internal: args.internal,
+    parentSessionId: args.parentSessionId,
+    workspaceId: args.workspaceId,
+    id: args.id,
+    worktreeHandle: args.worktreeHandle,
+  }).catch((err) => {
+    startTraces.mark(trace, "create_failed", { ms: msSince(t), err: String(err).slice(0, 200) })
+    throw err
+  })
+  // The start's own marks from here on (the worktree at wake, the keeper, initialize) find it by the session's id.
+  startTraces.bind(row.id, trace)
+  startTraces.mark(trace, "row", { ms: msSince(t), session: row.id, worktree: !!row.session_branch })
+  // What this start made, read now: the copy below writes a peer's worktree fields into the same row
+  // object, and a failed start must remove only its own branch, never the peer's checkout.
+  const made = row.session_branch && row.repo_root && !args.worktreeHandle
+    ? { repoRoot: row.repo_root, workdir: row.workdir, branch: row.session_branch }
+    : undefined
+  if (!row.session_branch) {
+    // Same-workdir continue (worktree: false): copy project/worktree metadata so the new session
+    // groups under the real project and Finish stays available. Prefer explicit inheritFrom, else any
+    // peer already bound to this folder.
+    const peer =
+      (inheritSrc?.repo_root && inheritSrc.session_branch ? inheritSrc : undefined)
+      ?? [...registry.list(), ...registry.listArchived()].find(
+        (s) => s.id !== row.id && s.workdir === row.workdir && !!s.repo_root && !!s.session_branch,
+      )
+    if (peer?.repo_root && peer.session_branch) {
+      registry.sessions.setWorktree(row.id, { repo_root: peer.repo_root, base_branch: peer.base_branch || "HEAD", session_branch: peer.session_branch })
+    }
+  }
+  if (!args.asleep) await wakeForDoor(row, made)
+  const s = registry.get(row.id) ?? row
+  if (!s.internal && !s.parent_session_id) {
+    // A door's session is announced once it is up, as before (the create path's full frame replaces
+    // this thin one); the launcher's create path announces it itself. One menu refresh, never waited for.
+    if (!args.asleep) {
+      webChannel?.broadcastToAll({
+        type: "session_added",
+        session: { id: s.id, name: s.name, workdir: s.workdir, mute: false, connected: true, agent: s.agent, capabilities: sessionCapabilities(s.agent), user_status: s.user_status, sort_order: s.sort_order, draft_payload: s.draft_payload, ...sessionAccountFields(s) },
+      })
+    }
+    telegramMenu.inBackground()
+  }
+  if (!s.internal) telemetry.record("session.created", sessionTelemetryProps(s))
+  gitStatusService.sync(gitServiceSessions())
+  return { name: s.name, session_id: s.id }
+}
+
+/**
+ * A door waits for its session's first wake. One that fails is removed again and its caller hears
+ * why, as when a spawn failed before: the row archived, and the branch made for it at Send (with its
+ * worktree, if the wake got that far) deleted, since nothing was done in them. Only what this start
+ * made (`made`): a shared checkout is its owner's, and a worktree made beforehand (a council's) is its
+ * maker's to remove.
+ */
+async function wakeForDoor(row: Session, made: { repoRoot: string; workdir: string; branch: string } | undefined): Promise<void> {
+  doorStarts.add(row.id)
+  try {
+    await sessionChain.wake(row.id)
+  } catch (err) {
+    log.warn("session_start_failed", { id: row.id, name: row.name, err: err instanceof Error ? err.message : String(err) })
+    try { await sessionManager.kill(row.id) } catch (killErr) { log.warn("session_start_cleanup_failed", { id: row.id, err: String(killErr) }) }
+    registry.unregister(row.id)
+    if (made) {
+      await removeWorktree(made.repoRoot, made.workdir, made.branch, { force: true }).catch((rmErr) => log.warn("session_start_branch_cleanup_failed", { id: row.id, err: String(rmErr) }))
+    }
+    throw err
+  } finally {
+    doorStarts.delete(row.id)
+  }
+}
+
+/** createAsleep's collaborators (card #75); a function declaration, so a start at any point of boot can use it. */
+function bornAsleepDeps(): CreateAsleepDeps {
+  return {
+    registry,
+    repoInfo: (dir) => getRepoInfo(dir),
+    existingBranches: (repoRoot) => existingBranchNames(repoRoot),
+    createBranch: (repoRoot, branch, baseBranch) => createSessionBranch(repoRoot, branch, baseBranch),
+    worktreesRoot: () => worktreesRoot(),
+    stateDir: STATE_DIR,
+    captureBaseCommits: (dir) => captureBaseCommits(dir),
+    newId: () => randomUUID(),
+  }
+}
+
 /** The one create path (spec §4): the launcher (POST /sessions) and spawn_session call it. */
 function createSessionWithWorkspace(args: CreateSessionArgs): Promise<CreatedSession> {
   return createSession(sessionCreateDeps(), args)
@@ -3866,6 +4148,9 @@ async function delegateSession(args: {
   const parent = registry.get(args.parentId)
   if (!parent) throw new Error("unknown session")
   const workspaceId = (db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(parent.id) as { workspace_id: string | null } | null)?.workspace_id ?? undefined
+  const trace = startTraces.begin()
+  startTraces.mark(trace, "request", { via: "delegate", agent: args.agent, model: args.model, worktree: args.checkout === "worktree", firstMessage: true })
+  const t0 = performance.now()
   const r = await spawnSession({
     workdir: parent.workdir,
     requestedName: args.title?.trim() || nameFromTask(args.task),
@@ -3877,7 +4162,12 @@ async function delegateSession(args: {
     requireWorktree: args.checkout === "worktree",
     parentSessionId: parent.id,
     workspaceId,
+    perfTrace: trace,
+  }).catch((err) => {
+    startTraces.mark(trace, "failed", { ms: msSince(t0), err: String(err).slice(0, 200) })
+    throw err
   })
+  startTraces.mark(trace, "created", { ms: msSince(t0), session: r.session_id })
   const child = registry.get(r.session_id)
   if (!child) throw new Error("the child session ended before it was given its task")
   delegatedChildren.started(child, args.task, args.callId)
@@ -4021,15 +4311,10 @@ ch.on("inbound", async (msg: InboundMessage) => {
     return
   }
 
-  // Lazy resume: if the session is suspended, re-spawn it before delivering the message
+  // A suspended session is woken by this message on its chain, after it is logged (below); a failed
+  // wake is said in this chat once. Telegram shows no "starting", so it says so here.
   if (session.status === "suspended") {
     await ch.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${session.name}"...`, disable_notification: true })
-    const resumed = await resumeSuspendedSession(session)
-    if (!resumed) {
-      const text = startFailureNotice("resume", session.name, sessionManager.resumeFailure(session.id), `Failed to resume suspended session "${session.name}". Try /kill and re-spawn.`)
-      await ch.send({ op: "reply", chat_id: msg.chat_id, text, disable_notification: false })
-      return
-    }
   }
 
   const activeId = registry.getActive(msg.chat_id)
@@ -4079,7 +4364,12 @@ ch.on("inbound", async (msg: InboundMessage) => {
       ts: msg.ts,
         ...attachmentMeta(msg.attachments),
     }
-    const r = await deliverInbound(session.id, decision.text, meta)
+    const sent = await deliverToSession(session.id, decision.text, meta)
+    if (!sent.handed) {
+      log.info("send_inbound.not_delivered", { session: session.name, why: sent.why })
+      return
+    }
+    const r = await sent.turn
     if (!r.ok) {
       log.warn("send_inbound.adapter_missing", { session: session.name, agent: session.agent ?? "claude" })
       await ch.send({
@@ -4126,23 +4416,23 @@ bgTaskStore.on("change", (sessionId: string) => {
   childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "bg_tasks", session: sessionId, tasks: bgTaskStore.get(sessionId) })
   // waiting/bgOpen live on agent_state — re-derive whenever tasks move.
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+  webChannel?.broadcastToAll(agentStateFrame(sessionId))
 })
 subagentStore.on("change", (sessionId: string, subagent: { background?: boolean }) => {
   childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagent_update", session: sessionId, subagent })
   // A background subagent starting or finishing moves the "waiting · N background" count.
   if (subagent.background === true) {
-    webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+    webChannel?.broadcastToAll(agentStateFrame(sessionId))
   }
 })
 subagentStore.on("clear", (sessionId: string) => {
   childSettle.changed(sessionId)
   webChannel?.broadcastToAll({ type: "subagents_cleared", session: sessionId })
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, agentStateStore.get(sessionId), bgOpenCount(sessionId)))
+  webChannel?.broadcastToAll(agentStateFrame(sessionId))
 })
 agentStateStore.on("change", (sessionId: string, state) => {
-  webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgOpenCount(sessionId)))
+  webChannel?.broadcastToAll(agentStateFrame(sessionId, state))
   // Deferred model/effort applies drain on the idle transition (the queue and
   // the rollback-on-failure live in the SessionManager). Fire and forget.
   void sessionManager.drainPendingReapply(sessionId, state.phase)
@@ -4189,8 +4479,14 @@ function routeWebInbound(msg: InboundMessage): Promise<void> {
       const sessionEntry = registry.get(sid)
       const sessionId = sessionEntry?.id ?? sid
       log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      // On the session's chain: a sleeping session (a new one, a dozing one) is woken first.
+      const sent = await deliverToSession(sessionId, text, meta)
+      if (!sent.handed) {
+        log.info("web_inbound_not_delivered", { sid, why: sent.why })
+        return
+      }
       try {
-        const r = await deliverInbound(sessionId, text, meta)
+        const r = await sent.turn
         if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
       } catch (err: any) {
         const msgText = err?.message ?? String(err)
@@ -4212,28 +4508,14 @@ if (webChannel) {
     // is keyed by UUID (getById). Resolving a display name instead needs
     // resolveName(); the rest of the web path (hasSession/adapterSend) also
     // uses getById.
+    // A sleeping session (born asleep, or dozing) is woken by its message, on its chain, after the
+    // message is logged (routeWebInbound): the app shows it starting meanwhile (card #75).
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
-    if (targetSession?.status === "suspended") {
-      await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
-      const resumed = await resumeSuspendedSession(targetSession)
-      if (!resumed) {
-        await notifySession(targetSession.id, startFailureNotice("resume", targetSession.name, sessionManager.resumeFailure(targetSession.id)))
-        return
-      }
-    }
-    // First message to a draft: spawn its agent, then deliver to the now-live
-    // session. spawnSession/spawnClaudeSession always mint a NEW row (for claude
-    // the row is created async by the shim's onRegister with a fresh uuid), so
-    // there is no way to adopt the draft's id here. Instead we HARD-DELETE the
-    // vestigial draft row FIRST — that frees its display name in the registry so
-    // the spawned agent claims the SAME name (otherwise ensureUnique would
-    // uniquify it to "<name>-2") and leaves no archived "settled" ghost — then
-    // spawn a fresh in_progress session and route the message to it. On spawn
-    // failure the draft is restored verbatim (same id) so nothing is lost. The
-    // spawn's own onRegister emits session_added for the new live row; we only
-    // add the draft's session_removed here (and session_added on the restore
-    // path). Net result: exactly one session, no orphan/ghost draft.
-    let inbound = msg
+    // First message to a draft (card #75): the draft's own row becomes a session born asleep, with the
+    // same id and name, so the chat the user is typing in is the session's, and this message wakes it
+    // (routeWebInbound below). The draft row is replaced rather than adopted: deleting it first frees its
+    // name for the session. If the session can't be made (its agent isn't installed, the branch can't be
+    // made), the draft is put back as it was, with the reason in its chat.
     if (targetSession && targetSession.user_status === "draft") {
       const draftSnapshot = {
         id: targetSession.id,
@@ -4249,25 +4531,22 @@ if (webChannel) {
       }
       releaseDraftAttachmentRefs(draftSnapshot.draft_payload)
       registry.sessions.deleteById(targetSession.id)   // frees the name, no ghost
-      webChannel?.broadcastToAll({ type: "session_removed", id: draftSnapshot.id })
-      let started: ReturnType<typeof registry.resolveName>
-      let spawnError: unknown
       try {
-        const spawned = await spawnSession({
+        const started = await spawnSession({
+          id: draftSnapshot.id,
           workdir: draftSnapshot.workdir,
           requestedName: draftSnapshot.name,
           agent: draftSnapshot.agent,
           model: draftSnapshot.model,
           reasoningLevel: draftSnapshot.reasoningLevel,
+          asleep: true,
         })
-        started = registry.resolveName(spawned.name)
+        const row = registry.get(started.session_id)
+        if (row) announceCreatedSession(row)
       } catch (err: any) {
-        spawnError = err
         log.error("draft_spawn_failed", { id: draftSnapshot.id, name: draftSnapshot.name, err: err?.message ?? String(err) })
-      }
-      if (!started) {
         // Restore the draft (same id, still a draft) and re-add it client-side.
-        registry.sessions.register(draftSnapshot)
+        if (!registry.sessions.getById(draftSnapshot.id)) registry.sessions.register(draftSnapshot)
         bumpDraftAttachmentRefs(draftSnapshot.draft_payload)
         webChannel?.broadcastToAll({
           type: "session_added",
@@ -4287,14 +4566,12 @@ if (webChannel) {
             draft_payload: draftSnapshot.draft_payload,
           },
         })
-        // The draft row was restored just above, so the session exists again and
-        // the notice has a home.
-        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, spawnError))
+        // The draft row was restored just above, so the session exists again and the notice has a home.
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err))
         return
       }
-      inbound = { ...msg, target_session_id: started.id }
     }
-    void routeWebInbound(inbound)
+    void routeWebInbound(msg)
   })
 }
 
@@ -4618,7 +4895,6 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
 if (whatsapp) await whatsapp.start()
 if (telegram) await telegram.start()
 
-let shuttingDown = false
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true

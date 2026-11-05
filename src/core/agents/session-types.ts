@@ -53,6 +53,8 @@ export type ResumeRow = {
   prompts?: boolean
   permissionMode?: string | null
   role?: string
+  /** The session's account (card #75: a resume used to drop it, so a session fell back to the system login). */
+  account?: string | null
 }
 
 /** The session-row slice an applyConfig dialect reads. `agent_home` is

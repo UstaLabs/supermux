@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { applyConfig, commandContext, resumeAntigravitySession, spawn } from "./session"
+import { applyConfig, commandContext, resumeAntigravitySession, resume, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createAntigravityCoreHost, type AntigravityCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -196,4 +196,26 @@ describe("antigravity core spawn/resume dialect", () => {
     expect(child.calls[0]!.options.permissions).toEqual({ kind: "antigravity", mode: "plan" })
     await adapter.stop()
   })
+})
+
+// Card #75: a session is born asleep and its first start is a resume of a row that never ran.
+test("antigravity: resume of a never-started row starts fresh under the row's account", async () => {
+    const child = fakeChildFactory()
+    const host = makeHost(child.factory)
+    const accounts: unknown[] = []
+    const register = host.register.bind(host)
+    host.register = ((r: Parameters<typeof register>[0]) => {
+      accounts.push(r.account)
+      const { account: _skip, ...rest } = r
+      return register(rest)
+    }) as typeof host.register
+    const workdir = tmp("mux-antigravity-born-")
+    const { adapter } = await resume(
+      { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, antigravityHost: host },
+      { id: "born-asleep", workdir, agent_home: join(workdir, ".home"), account: "acc-antigravity" } as never,
+      "born-asleep",
+    )
+    expect(accounts).toEqual(["acc-antigravity"])
+    expect(child.opens.at(-1)?.resumeId).toBeUndefined()
+    await adapter.stop()
 })

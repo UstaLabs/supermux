@@ -146,7 +146,9 @@ fun WorkspaceRow(
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "workspace-drag-elevation")
-    val suspended = sessionStatus != null && sessionStatus != "active"
+    // A suspended session whose agent is working is being woken (card #75): "starting", and not dimmed.
+    val waking = sessionStatus == "suspended" && working
+    val suspended = !waking && sessionStatus != null && sessionStatus != "active"
     val branch = w.branch?.takeIf { it.isNotBlank() }
     val twoLine = branch != null || host != null
 
@@ -163,6 +165,7 @@ fun WorkspaceRow(
         else -> cs.onSurfaceVariant
     }
     val trailing = when {
+        waking -> "starting"
         suspended -> sessionStatus.orEmpty()
         projectTag != null -> projectTag
         working -> ""

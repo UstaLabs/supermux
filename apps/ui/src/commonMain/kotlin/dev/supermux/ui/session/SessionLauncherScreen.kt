@@ -171,6 +171,7 @@ import dev.supermux.workspace.launchLocation
 import dev.supermux.workspace.orderProjectCatalog
 import dev.supermux.workspace.projectLocationKey
 import dev.supermux.workspace.projectOwning
+import dev.supermux.util.PerfTrace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -908,6 +909,8 @@ fun SessionLauncherScreen(
         // screen and cancelling this coroutine) as soon as the broker binds it, and the dispose
         // flush must not write the just-sent text back. A failure re-arms the draft save.
         draftCleared = true
+        // Card #75: one trace from this Send to the first reply on screen.
+        PerfTrace.beginStart(wd.trim(), "agent" to agent, "model" to model, "worktree" to wantsWorktree, "files" to toUpload.size)
         scope.launch {
             // A retained chip list (Android) outlives this screen, so the next launcher must not
             // open with this message's files. Kept only on a real failure, for the retry; a
