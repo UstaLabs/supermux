@@ -3,6 +3,7 @@ import type { Session } from "../session-manager/types"
 import type { Message } from "../session-manager/messages"
 import type { InboundDeliveryResult } from "../session-manager/inbound-delivery"
 import type { InboxCouncilTag, InboxMessage, InboxSender, InboxStore } from "./store"
+import { CancelledError, SessionChain, ensureLiveWith, type ChainToken } from "../session-manager/session-chain"
 
 const log = makeLogger("inbox/delivery")
 
@@ -29,6 +30,11 @@ export type InboxDeliveryDeps = {
   sent?(from: string, to: string): void
   /** `pending(id)` may have changed: a message waits for `id`, or a pass for it ended. */
   changed?(id: string): void
+  /**
+   * The broker's one per-session chain (card #75), so inbox passes, the app's messages and wakes run
+   * in one order and a session is woken in one place. Default: a chain of the inbox's own.
+   */
+  chain?: SessionChain
 }
 
 /** What the recipient agent reads (spec §1.4). */
@@ -45,13 +51,17 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export class InboxDelivery {
-  private readonly chains = new Map<string, Promise<void>>()
+  private readonly chain: SessionChain
   /** Recipients with a pass waiting to start: it reads every message appended before it starts. */
   private readonly queued = new Set<string>()
   /** Busy mode of the messages this process appended. After a restart every message queues. */
   private readonly busyOf = new Map<string, InboxBusy>()
 
-  constructor(private readonly deps: InboxDeliveryDeps) {}
+  constructor(private readonly deps: InboxDeliveryDeps) {
+    // Its own chain checks every pass (ensureLiveWith returns at once for a deliverable session);
+    // the broker's shared chain also knows when a session needs no check at all.
+    this.chain = deps.chain ?? new SessionChain({ isLive: () => false, ensureLive: (id) => ensureLiveWith(deps, id) })
+  }
 
   /**
    * message_session (spec §1.2). Throws before writing anything when a recipient is unknown.
@@ -78,17 +88,12 @@ export class InboxDelivery {
    * its inbox deliveries. A delegated child's card uses it before handing your message over.
    */
   wake(id: string): Promise<void> {
-    const previous = this.chains.get(id) ?? Promise.resolve()
-    const woken = previous.then(() => this.ensureLive(id))
-    const settled: Promise<void> = woken.catch(() => {})
-    this.chains.set(id, settled)
-    void settled.finally(() => { if (this.chains.get(id) === settled) this.chains.delete(id) })
-    return woken
+    return this.chain.wake(id)
   }
 
   /** True while a message waits for `id` or a pass is handing its messages over (or waking it). */
   pending(id: string): boolean {
-    return this.queued.has(id) || this.chains.has(id)
+    return this.queued.has(id) || this.chain.pending(id)
   }
 
   /** Startup (spec §1.3, step 5): deliver everything after each recipient's cursor. */
@@ -100,8 +105,8 @@ export class InboxDelivery {
   }
 
   /** Resolves once no delivery pass is running (tests, startup). */
-  async idle(): Promise<void> {
-    while (this.chains.size) await Promise.all([...this.chains.values()])
+  idle(): Promise<void> {
+    return this.chain.idle()
   }
 
   /**
@@ -112,16 +117,13 @@ export class InboxDelivery {
   private kick(id: string): void {
     if (this.queued.has(id)) return
     this.queued.add(id)
-    const previous = this.chains.get(id) ?? Promise.resolve()
-    const next: Promise<void> = previous
-      .then(() => { this.queued.delete(id); return this.deliverPending(id) })
-      .catch((err) => { log.warn("inbox_delivery_failed", { session: id, err: errText(err) }) })
-      .finally(() => {
-        if (this.chains.get(id) !== next) return
-        this.chains.delete(id)
-        this.observe(() => this.deps.changed?.(id))
+    void this.chain.run(id, (token) => { this.queued.delete(id); return this.deliverPending(id, token) })
+      .catch((err) => {
+        // Cancelled (Stop, archive, kill) before its turn: what it would have read stays for the next pass.
+        this.queued.delete(id)
+        if (!(err instanceof CancelledError)) log.warn("inbox_delivery_failed", { session: id, err: errText(err) })
       })
-    this.chains.set(id, next)
+      .finally(() => { if (!this.chain.pending(id)) this.observe(() => this.deps.changed?.(id)) })
   }
 
   /** An observer that throws never breaks a send or a pass. */
@@ -129,10 +131,10 @@ export class InboxDelivery {
     try { fn() } catch (err) { log.warn("inbox_observer_failed", { err: errText(err) }) }
   }
 
-  private async deliverPending(id: string): Promise<void> {
+  private async deliverPending(id: string, token: ChainToken): Promise<void> {
     const pending = this.deps.store.after(id, this.deps.cursor.get(id))
     if (!pending.length) return
-    await this.ensureLive(id)
+    await this.chain.wakeNow(id, token)
     for (const message of pending) {
       const busy = this.busyOf.get(message.id) ?? "queue"
       this.busyOf.delete(message.id)
@@ -156,22 +158,6 @@ export class InboxDelivery {
         (err) => { log.warn("inbox_deliver_threw", { session: id, message: message.id, err: errText(err) }) },
       )
       this.deps.cursor.set(id, message.id)
-    }
-  }
-
-  /** Spec §1.3, steps 0–2: archived → restore, suspended → resume, crashed → resume the adapter. */
-  private async ensureLive(id: string): Promise<void> {
-    const row = this.deps.session(id)
-    if (!row) throw new Error(`session ${id} no longer exists`)
-    if (row.status === "archived") {
-      const restored = await this.deps.resumeFromArchive(id)
-      if (!restored.ok) throw new Error(`restore from archive failed: ${restored.error ?? "unknown"}`)
-    } else if (row.status === "suspended") {
-      if (!(await this.deps.resumeSuspended(row))) throw new Error("resuming the suspended session failed")
-    }
-    if (this.deps.adapterState(id) === "dead") await this.deps.resumeAdapter(id)
-    if (!(await this.deps.waitDeliverable(id, this.deps.deliverableTimeoutMs ?? 60_000))) {
-      throw new Error("session did not become deliverable")
     }
   }
 

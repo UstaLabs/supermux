@@ -140,3 +140,44 @@ export class SessionChain {
     try { this.deps.onWaking?.(id, waking) } catch (err) { log.warn("chain_on_waking_failed", { session: id, err: String(err) }) }
   }
 }
+
+/** What deciding and making a session live needs (the inbox's deps satisfy it). */
+export type LivenessDeps = {
+  /** The session row, archived ones included. */
+  session(id: string): { id: string; status?: string } | undefined
+  resumeFromArchive(id: string): Promise<{ ok: boolean; error?: string }>
+  resumeSuspended(session: any): Promise<boolean>
+  /** "none": no adapter registered; "dead": its core session failed or closed. */
+  adapterState(id: string): "none" | "alive" | "dead"
+  resumeAdapter(id: string): Promise<void>
+  waitDeliverable(id: string, timeoutMs: number): Promise<boolean>
+  deliverableTimeoutMs?: number
+  /** Takes input right now (SessionManager.isDeliverable). */
+  isDeliverable?(id: string): boolean
+}
+
+/** Up and taking input: an active row whose adapter is alive and deliverable. */
+export function isLiveWith(deps: LivenessDeps, id: string): boolean {
+  const row = deps.session(id)
+  return !!row && (row.status ?? "active") === "active" && deps.adapterState(id) === "alive" && (deps.isDeliverable?.(id) ?? false)
+}
+
+/**
+ * Make a session deliverable: archived → restore it; asleep (suspended, or active with no agent at
+ * all: born asleep, or not resumed at boot) → resume it; crashed → revive its adapter; then wait
+ * until it takes input. Throws when it can't.
+ */
+export async function ensureLiveWith(deps: LivenessDeps, id: string): Promise<void> {
+  const row = deps.session(id)
+  if (!row) throw new Error(`session ${id} no longer exists`)
+  if (row.status === "archived") {
+    const restored = await deps.resumeFromArchive(id)
+    if (!restored.ok) throw new Error(`restore from archive failed: ${restored.error ?? "unknown"}`)
+  } else if (row.status === "suspended" || deps.adapterState(id) === "none") {
+    if (!(await deps.resumeSuspended(row))) throw new Error("resuming the suspended session failed")
+  }
+  if (deps.adapterState(id) === "dead") await deps.resumeAdapter(id)
+  if (!(await deps.waitDeliverable(id, deps.deliverableTimeoutMs ?? 60_000))) {
+    throw new Error("session did not become deliverable")
+  }
+}
