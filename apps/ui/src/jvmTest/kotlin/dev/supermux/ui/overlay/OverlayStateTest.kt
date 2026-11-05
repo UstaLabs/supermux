@@ -151,4 +151,36 @@ class OverlayStateTest {
         assertEquals(null, f.onScroll(value = 50, max = 200))
         assertEquals(null, f.onScroll(value = 50, max = 400))
     }
+
+    // ── one talk after another: a talk started while the last still waits for its words waits too ──
+
+    @Test fun aTalkWithNothingBeforeItListensAtOnce() = assertTrue(TalkTurns().start(finishing = false))
+
+    @Test fun aTalkWhileTheLastIsStillFinishingWaits() = assertFalse(TalkTurns().start(finishing = true))
+
+    @Test fun theWaitingTalkListensOnceTheLastHasItsWords() {
+        val turns = TalkTurns()
+        turns.start(finishing = true)
+        assertTrue(turns.lastFinished())
+    }
+
+    @Test fun aWaitingTalkLetGoOfEarlyHadNothingOfItsOwn() {
+        val turns = TalkTurns()
+        turns.start(finishing = true)
+        assertTrue(turns.end(), "it never had the mic: nothing of its own to stop or send")
+        assertFalse(turns.lastFinished(), "let go of already: it mustn't start listening")
+    }
+
+    @Test fun aTalkThatHadTheMicEndsAsUsual() {
+        val turns = TalkTurns()
+        turns.start(finishing = false)
+        assertFalse(turns.end())
+    }
+
+    @Test fun theLastFinishingWithNobodyWaitingStartsNothing() {
+        val turns = TalkTurns()
+        turns.start(finishing = false)
+        turns.end()
+        assertFalse(turns.lastFinished())
+    }
 }

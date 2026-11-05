@@ -149,3 +149,32 @@ class ReplyFollow {
         const val SLACK = 2
     }
 }
+
+/**
+ * Hold-to-talk, one talk after another. The dictation opens no mic while the last talk is still being
+ * transcribed, so a talk started then waits for those words and listens once they are in; let go of
+ * before that, it had nothing of its own. (It used to say "Listening…" over a mic that never opened.)
+ */
+class TalkTurns {
+    private var waiting = false
+
+    /** A talk starts: true to open the mic now, false while the last talk is still [finishing]. */
+    fun start(finishing: Boolean): Boolean {
+        waiting = finishing
+        return !finishing
+    }
+
+    /** The talk is let go of, sent or cancelled: true when it was still waiting and never had the mic. */
+    fun end(): Boolean {
+        val waited = waiting
+        waiting = false
+        return waited
+    }
+
+    /** The last talk has its words: true when a talk is waiting for them and should listen now. */
+    fun lastFinished(): Boolean {
+        val go = waiting
+        waiting = false
+        return go
+    }
+}
