@@ -1,6 +1,7 @@
 // Processes. Only what the runtimes get wrong or leave out (platform-layer spec §3.3): Node and Bun signal a
 // process the same way everywhere, but say nothing about who owns it; Bun.which searches the PATH the process started
 // with, never .ps1, and Node has no which at all.
+import { spawn as nodeSpawn } from "node:child_process"
 import { accessSync, constants, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
@@ -116,4 +117,38 @@ export function resolve(names: readonly string[], env: CommandEnvironment = proc
  */
 export function spawnDefaults(): { env: Record<string, string | undefined>; windowsHide: boolean } {
   return { env: { ...process.env }, windowsHide: true }
+}
+
+export interface KillTreeOptions {
+  /** The signal on POSIX; SIGTERM by default. Windows has none: taskkill /F ends the tree. */
+  signal?: NodeJS.Signals
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** Starts taskkill (tests); node:child_process's spawn by default. */
+  spawn?: (command: string, args: string[], options: { stdio: "ignore"; windowsHide: true }) => { on(event: "error", listener: () => void): unknown }
+  /** Sends a signal (tests); process.kill by default. */
+  kill?: (pid: number, signal: NodeJS.Signals) => void
+}
+
+/**
+ * Ends [pid] and what it started. Windows: `taskkill /T /F` (it has no signals, and a .cmd shim's cmd.exe is the root,
+ * not the CLI). Elsewhere: the signal to the process group [pid] leads (a detached child, a terminal's session), else to
+ * [pid] alone. A process already gone is not an error.
+ */
+export function killTree(pid: number, options: KillTreeOptions = {}): void {
+  const kill = options.kill ?? ((target: number, signal: NodeJS.Signals) => { process.kill(target, signal) })
+  const signal = options.signal ?? "SIGTERM"
+  if ((options.platform ?? process.platform) === "win32") {
+    // Without taskkill, the process itself at least (process.kill is TerminateProcess there).
+    const alone = () => { try { kill(pid, signal) } catch { /* gone */ } }
+    try {
+      ;(options.spawn ?? nodeSpawn)("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", alone)
+    } catch { alone() }
+    return
+  }
+  try {
+    kill(-pid, signal)
+  } catch {
+    try { kill(pid, signal) } catch { /* gone */ }
+  }
 }

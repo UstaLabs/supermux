@@ -72,3 +72,34 @@ test("spawnDefaults: the environment as it is at the call, and no console window
     delete process.env.MUX_SPAWN_DEFAULTS_PROBE
   }
 })
+
+// Eight ways to end a process tree, three of them in the broker and core: on Windows a .cmd shim's cmd.exe is the root,
+// so killing only the child left the real CLI running; elsewhere only a detached child leads a group to signal.
+test("killTree on Windows runs taskkill over the whole tree, with no window", () => {
+  const started: unknown[][] = []
+  const spawn = (...args: unknown[]) => { started.push(args); return { on: () => undefined } }
+  proc.killTree(4321, { platform: "win32", spawn })
+  expect(started).toEqual([["taskkill", ["/PID", "4321", "/T", "/F"], { stdio: "ignore", windowsHide: true }]])
+})
+
+test("killTree elsewhere signals the group the process leads, else the process, and a gone one is no error", () => {
+  const sent: [number, string][] = []
+  const noGroup = (pid: number, signal: string) => {
+    sent.push([pid, signal])
+    if (pid < 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+  }
+  proc.killTree(77, { platform: "linux", kill: noGroup })
+  expect(sent).toEqual([[-77, "SIGTERM"], [77, "SIGTERM"]])
+  const leader: [number, string][] = []
+  proc.killTree(78, { platform: "darwin", signal: "SIGKILL", kill: (pid, signal) => { leader.push([pid, signal]) } })
+  expect(leader).toEqual([[-78, "SIGKILL"]])
+  const gone = () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) }
+  expect(() => proc.killTree(79, { platform: "linux", kill: gone })).not.toThrow()
+})
+
+test("killTree on Windows ends the process itself when taskkill cannot be started", () => {
+  const sent: number[] = []
+  const missing = () => { throw Object.assign(new Error("spawn taskkill ENOENT"), { code: "ENOENT" }) }
+  proc.killTree(4322, { platform: "win32", spawn: missing, kill: (pid) => { sent.push(pid) } })
+  expect(sent).toEqual([4322])
+})

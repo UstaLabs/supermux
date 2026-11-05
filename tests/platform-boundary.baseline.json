@@ -175,7 +175,7 @@
     "packages/supermux-core/scripts/context-live-update.ts": 1,
     "packages/supermux-core/scripts/context-live.ts": 1,
     "packages/supermux-core/scripts/context-probe.ts": 2,
-    "packages/supermux-core/src/accounts/login.ts": 7,
+    "packages/supermux-core/src/accounts/login.ts": 5,
     "packages/supermux-core/src/antigravity/index.ts": 1,
     "packages/supermux-core/src/environment/antigravity.ts": 5,
     "packages/supermux-core/src/environment/host-binary.ts": 1,
@@ -300,15 +300,14 @@
   },
   "signals": {
     "packages/supermux-core/scripts/context-probe.ts": 3,
-    "packages/supermux-core/src/accounts/login.ts": 2,
+    "packages/supermux-core/src/accounts/login.ts": 1,
     "packages/supermux-core/src/keeper/client.ts": 3,
     "packages/supermux-core/src/keeper/keeper.ts": 1,
     "scripts/smoke-core-entries.ts": 1,
-    "src/core/agents/install.ts": 2,
+    "src/core/agents/install.ts": 1,
     "src/core/editor/changes.ts": 1,
     "src/core/git/exec.ts": 1,
-    "src/core/terminal/zmx/backend.ts": 1,
-    "src/main.ts": 1
+    "src/core/terminal/zmx/backend.ts": 1
   },
   "spawn": {
     "packages/supermux-core/examples/kanban/server.ts": 1,

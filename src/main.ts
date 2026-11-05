@@ -239,7 +239,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { paths } from "@supermux/platform"
+import { paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -2338,11 +2338,10 @@ function spawnLoginProc(kind: string) {
       child.stderr?.on("data", (d) => cb(d.toString()))
     },
     onExit: (cb: (code: number | null) => void) => { exitCb = cb; child.on("exit", cb) },
+    // The CLI and what it started: its group when detached, its tree on Windows (a .cmd shim's cmd.exe is the root).
     kill: () => {
-      try {
-        if (detached && child.pid) process.kill(-child.pid, "SIGTERM")
-        else child.kill()
-      } catch {}
+      if (child.pid) proc.killTree(child.pid)
+      else try { child.kill() } catch {}
     },
     write: (data: string) => { try { child.stdin?.write(data) } catch {} },
   }

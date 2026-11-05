@@ -293,10 +293,7 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
     write: data => { try { terminal?.write(data) } catch { /* closed */ } },
     kill: () => {
       if (exited) return
-      if (process.platform !== "win32") { try { child.kill() } catch { /* gone */ } return }
-      try {
-        spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true }).on("error", () => { try { child.kill() } catch { /* gone */ } })
-      } catch { try { child.kill() } catch { /* gone */ } }
+      proc.killTree(child.pid)
     },
   }
 }
@@ -326,11 +323,10 @@ export const defaultLoginRunner: LoginRunner = input => {
   // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
   // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
   child.on("close", code => exit(code))
+  // The CLI and what it started: its group (spawned detached), or on Windows its tree.
   const signal = (name: NodeJS.Signals) => {
-    try {
-      if (child.pid && process.platform !== "win32") process.kill(-child.pid, name)
-      else child.kill(name)
-    } catch { /* already gone */ }
+    if (child.pid) proc.killTree(child.pid, { signal: name })
+    else try { child.kill(name) } catch { /* already gone */ }
   }
   return {
     onOutput: listener => { output.push(listener) },
