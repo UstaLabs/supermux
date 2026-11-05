@@ -39,12 +39,12 @@
 // retained as best-effort and will work again if Cursor un-deprecates StreamChat
 // (it already speaks the exact wire format) or as the basis for the Run port.
 
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { defaultRead, readJson } from "../auth"
 import { authCredPath } from "../../agents/detect"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("agent-api:cursor")
 
@@ -225,7 +225,7 @@ export function cursorAdapter(opts: CursorAdapterOpts = {}): AgentApi {
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
   const authPath = opts.authPath ?? authCredPath("cursor", {
-    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME,
+    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME,
     appData: process.env.APPDATA, platform: process.platform,
   })
 

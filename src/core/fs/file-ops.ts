@@ -1,9 +1,9 @@
 import { readFile, writeFile, rename, mkdir, open, lstat, stat, realpath, rm, unlink } from "fs/promises"
 import { randomBytes } from "crypto"
-import { homedir } from "os"
 import { basename, dirname, join } from "path"
 import { FsError, toFsError } from "./errors"
 import type { FsEntry, FsOp } from "./types"
+import { home as userHome } from "../../shared/home"
 
 export const MAX_READ_BYTES = 1024 * 1024
 const BINARY_SCAN_BYTES = 8 * 1024
@@ -90,7 +90,7 @@ async function exists(p: string): Promise<boolean> {
 export interface OpOptions {
   trashDir?: string
   platform?: NodeJS.Platform
-  /** The user's home folder, which delete refuses (default `os.homedir()`; tests override it). */
+  /** The user's home folder, which delete refuses (default: the user's home, home(); tests override it). */
   homeDir?: string
 }
 
@@ -98,7 +98,7 @@ export interface OpOptions {
 async function refuseProtected(path: string, opts: OpOptions): Promise<void> {
   const parent = dirname(path)
   if (parent === path) throw new FsError("EACCES", "refusing to delete the root folder")
-  const home = opts.homeDir ?? homedir()
+  const home = opts.homeDir ?? userHome()
   const real = await realpath(path).catch(() => path)
   const homeReal = await realpath(home).catch(() => home)
   if (path === home || real === homeReal) throw new FsError("EACCES", `refusing to delete the home folder: ${path}`)
@@ -137,7 +137,7 @@ export async function applyOp(op: FsOp, opts: OpOptions = {}): Promise<void> {
 }
 
 function defaultTrashDir(platform: NodeJS.Platform): string {
-  return platform === "darwin" ? join(homedir(), ".Trash") : join(homedir(), ".local", "share", "Trash")
+  return platform === "darwin" ? join(userHome(), ".Trash") : join(userHome(), ".local", "share", "Trash")
 }
 
 async function uniqueName(dir: string, name: string): Promise<string> {

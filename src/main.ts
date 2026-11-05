@@ -170,7 +170,7 @@ import {
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
-import { homedir, hostname, tmpdir } from "os"
+import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
@@ -276,7 +276,7 @@ if (IS_TEST_BROKER) {
 // per-user bin dir the installer added to shell rc — which this long-running
 // process never sourced. Put those dirs on PATH up front so both detection
 // (hasBinary) and spawning can see an agent the user installs at runtime.
-process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
+process.env.PATH = withAgentBinDirs(process.env.PATH, home())
 
 // Git is optional: agents run in any folder, git only adds worktrees, diffs and change status. On a
 // Mac without the Xcode Command Line Tools /usr/bin/git is Apple's stub, which opens an install
@@ -694,7 +694,7 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
-    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
     appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     env: process.env,
   },
@@ -702,7 +702,7 @@ const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
 /** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
 function assertAgentInstalled(kind: AgentKind): void {
   const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
-  if (!detectAgent(kind, probes, { home: homedir() }).installed) throw new AgentNotInstalledError(kind)
+  if (!detectAgent(kind, probes, { home: home() }).installed) throw new AgentNotInstalledError(kind)
 }
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
@@ -2431,7 +2431,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: homedir() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: home() }).installed,
     // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
     // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
     refreshPath: async () => {
@@ -3442,7 +3442,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
     paths: {
-      home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+      home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
       appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     },
     fileExists: existsSync,

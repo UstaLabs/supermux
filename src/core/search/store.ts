@@ -2,14 +2,14 @@ import { readdirSync, readFileSync, existsSync } from "fs"
 import { basename, join } from "path"
 import type { Db } from "../storage/db"
 import { splitSections } from "./sections"
-import { homedir } from "os"
+import { home } from "../../shared/home"
 
 function encodeProjectDir(cwd: string): string {
   return cwd.replace(/\/$/, "").replace(/[/.]/g, "-")
 }
 
 function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
-  return join(homedir(), ".claude", "projects", encodeProjectDir(cwd), `${claudeSessionId}.jsonl`)
+  return join(home(), ".claude", "projects", encodeProjectDir(cwd), `${claudeSessionId}.jsonl`)
 }
 
 export interface KnowledgeHit {

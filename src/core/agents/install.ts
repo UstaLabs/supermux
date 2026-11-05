@@ -12,7 +12,6 @@
 // Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
 // without real installs.
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
-import { homedir } from "os"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
@@ -21,6 +20,7 @@ import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./
 import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
 import { resolveCommand } from "../process/launcher"
 import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
+import { home as userHome } from "../../shared/home"
 
 const log = makeLogger("agents/install")
 
@@ -149,7 +149,7 @@ export interface InstallDeps {
   spawn?: InstallSpawnFn
   /** Re-probe whether the agent's binary is on PATH (after the installer ran). */
   isInstalled: (kind: AgentKind) => boolean
-  /** Home dir for resolving per-user bin dirs. Defaults to homedir(). */
+  /** Home dir for resolving per-user bin dirs. Defaults to the user's home (home()). */
   home?: string
   /** Defaults to process.platform. */
   platform?: NodeJS.Platform
@@ -253,7 +253,7 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
   }
 
   const baseEnv = deps.env ?? process.env
-  const home = deps.home ?? homedir()
+  const home = deps.home ?? userHome()
   const hasCommand = deps.hasCommand ?? ((name: string) => resolveCommand([name], installEnv(baseEnv, home, platform), platform) !== null)
   const recipe = installRecipeFor(kind, platform, hasCommand)
   if ("unsupported" in recipe) {

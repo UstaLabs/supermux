@@ -1,17 +1,16 @@
 import { chmod, lstat, mkdir, open, readdir, readlink, rm, rmdir, unlink } from "node:fs/promises"
-import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 import { CoreError } from "../errors.js"
 import { assertVaultId } from "./vault.js"
 import type { Account, HomeLayout, HomeRoots } from "./types.js"
-import { Unsupported, files, paths } from "@supermux/platform"
+import { dirs, files, paths, Unsupported } from "@supermux/platform"
 
 export function claudeRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.claudeRoot ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+  return resolve(roots.claudeRoot ?? process.env.CLAUDE_CONFIG_DIR ?? join(dirs.home(), ".claude"))
 }
 
 export function codexRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.codexRoot ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"))
+  return resolve(roots.codexRoot ?? process.env.CODEX_HOME ?? join(dirs.home(), ".codex"))
 }
 
 /** Claude: history, settings and extensions shared; .credentials.json, .claude.json, sessions/, ide/ stay private. */

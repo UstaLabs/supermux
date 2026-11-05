@@ -9,12 +9,12 @@
 // unavailable or throws.
 
 import { readFileSync, writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { readPcm16 } from "../wav"
 import { DictationConnections, RealtimeConnection, type TranscriptionConfig } from "./realtime-connection"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("stt-codex-realtime")
 
@@ -357,7 +357,7 @@ export function codexRealtimeEngine(opts: CodexRealtimeEngineOpts = {}): SttEngi
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
-  const authPath = opts.authPath ?? join(homedir(), ".codex", "auth.json")
+  const authPath = opts.authPath ?? join(home(), ".codex", "auth.json")
   const connectWs: ConnectWsFn = opts.connectWs ?? ((url, protocols) => new WebSocket(url, protocols) as unknown as RealtimeWs)
   const modelDefault = opts.model ?? DEFAULT_MODEL
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
