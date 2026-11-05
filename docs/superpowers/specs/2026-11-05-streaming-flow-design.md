@@ -21,8 +21,10 @@ once, and Grok and Antigravity stall for 300 ms and then drop about 100.
    the stream has ended the constant drops to 75 ms. A burst spreads over about 150 ms; a trickle flows at the
    model's own pace; the head trails arrival by about 150 ms.
 2. **Whole words.** While the stream is open, the head only moves through text that is followed by whitespace. The
-   trailing run of letters may be a half word, so it waits for the next batch. Two exceptions: a run longer than 32
-   chars (long tokens, CJK) and the end of the stream.
+   trailing run of letters may be a half word, so it waits for the next batch. Three exceptions:
+   - a run longer than 32 chars (long tokens, CJK);
+   - no new text for 300 ms (a pause after a whole word must not hide it);
+   - the end of the stream.
 3. **Ink edge.** The text is laid out up to the end of the word the head is in, so a word never wraps in view. A
    character's opacity is the larger of:
    - its distance behind the head over 24 chars, `clamp((head - i) / 24, 0, 1)`;
@@ -44,7 +46,7 @@ Thinking rows keep today's behaviour in this card.
 | Unit | Where | Does | Depends on |
 |---|---|---|---|
 | `RevealClock` | `shared/commonMain/.../chat/RevealClock.kt` | Pure pacing state: `advance(nowMs, text, done)`, `head`, `laidOut`, `alphaAt(i, nowMs)`, `animating`. A `reduced` flag switches it to option A. | nothing |
-| `blockSourceEnds` | same file | For a block list and its source, where each text block's raw text ends in the source. This maps a block's characters to source indices from its end. | `MdBlock` |
+| `blockSourceEnds` | `ui/commonMain/.../chat/LiveReveal.kt` | For a block list and its source, where each text block's raw text ends in the source. This maps a block's characters to source indices from its end. | `MdBlock` |
 | `LiveReveal` | `ui/commonMain/.../chat/LiveReveal.kt` | `LiveRevealState` (the clock, plus snapshot state that draws read), `rememberLiveReveal`, the frame loop (runs only while animating, so tests reach idle), and `Modifier.inkEdge`. | `RevealClock` |
 | `MarkdownBody(reveal = …)` | `ui/.../chat/Markdown.kt` | Optional. When given, text blocks (prose, heading, list item, quote) pass their layout to `inkEdge`. Code, tables and images just follow the pace. `MdText` gains an `onTextLayout` passthrough. | `LiveReveal` |
 | `LocalReduceMotion` | `ui/.../theme` | A CompositionLocal, default false. Desktop provides it from the OS: macOS `defaults read com.apple.universalaccess reduceMotion`, GNOME `enable-animations`; Windows stays false. | — |
@@ -76,7 +78,7 @@ These stay as they are:
 
 - **`RevealClockTest`** (shared, pure):
   - pace: τ, floor, catch-up when done;
-  - the trailing half word waits, with the long-token and done exceptions;
+  - the trailing half word waits, with the long-token, pause and done exceptions;
   - `laidOut` is the word the head is in;
   - alpha: positional edge, age floor, past-head zero;
   - idle once caught up and dry;
