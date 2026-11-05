@@ -41,6 +41,12 @@ interface TearOffPlatform {
     /** The bounds, frame included, a NEW window needs for its content to be [contentSize] at [contentTopLeft]. */
     fun frameForContent(contentTopLeft: Offset, contentSize: Size): WindowBounds
 
+    /**
+     * Where a NEW window will show the tab, from its content's top-left, until it has drawn it:
+     * past the room its own window controls take at the start of its strip.
+     */
+    fun newWindowTabOffset(): Offset = Offset.Zero
+
     /** Hide a window this drag opened while the tab is over another window — or show it again. */
     fun setHidden(hostId: String, hidden: Boolean)
 
@@ -212,9 +218,9 @@ class TabDragWorld(
             carrierStart = null,
             pointer = origin + h.pointer / scale,
         )
-        // A fresh window shows the tab at its content's top-left: open it so the pointer holds it
+        // A fresh window shows the tab at the start of its strip: open it so the pointer holds it
         // where it held the tab. Once it is on screen, follow() uses where the tab really is.
-        val bounds = platform.frameForContent(s.pointer - s.grab, s.contentSize)
+        val bounds = platform.frameForContent(s.pointer - s.grab - platform.newWindowTabOffset(), s.contentSize)
         val torn = tearOutTab(
             registry = registry,
             tree = layoutSync.tree,
@@ -402,10 +408,10 @@ class TabDragWorld(
         }
     }
 
-    /** Where the carrier shows the tab, from its content's top-left; the top-left until it has drawn it. */
+    /** Where the carrier shows the tab, from its content's top-left; where a new window will, until it has drawn it. */
     private fun tabOffset(s: Session): Offset {
-        val scale = platform.scale(s.carrier) ?: return Offset.Zero
-        val tab = panes[s.carrier]?.endpoint?.drag?.tabBoundsOf(s.viewId) ?: return Offset.Zero
+        val scale = platform.scale(s.carrier) ?: return platform.newWindowTabOffset()
+        val tab = panes[s.carrier]?.endpoint?.drag?.tabBoundsOf(s.viewId) ?: return platform.newWindowTabOffset()
         return tab.topLeft / scale
     }
 

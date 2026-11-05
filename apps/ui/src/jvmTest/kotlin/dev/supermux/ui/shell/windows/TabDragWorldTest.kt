@@ -64,6 +64,17 @@ class TabDragWorldTest {
     }
 
     @Test
+    fun `a new window opens so the pointer holds the tab past that window's own controls`() {
+        val f = Fixture()
+        // The new window's strip starts past its traffic lights.
+        f.platform.newWindowTab = Offset(78f, 0f)
+        assertTrue(f.mainTearOff.takeOverOutside(f.handoffB(pointer = Offset(500f, -40f))))
+        assertEquals(WindowBounds(492f, 50f, 1000f, 700f), f.windows.registry.extras().single().bounds)
+        f.world.move(Offset(700f, 300f))
+        assertEquals(592f, f.windows.registry.extras().single().bounds.x, "following before it is on screen keeps that")
+    }
+
+    @Test
     fun `a host only moves a window that has nothing but the dragged tab`() {
         val f = Fixture()
         // The main window is never moved by a tab, whatever it holds.
@@ -361,6 +372,7 @@ private class FakePlatform : TearOffPlatform {
     val sentBack = mutableListOf<String>()
     val following = mutableSetOf<String>()
     var live = false
+    var newWindowTab = Offset.Zero
 
     private fun shown(hostId: String) = windows[hostId]?.takeIf { hostId !in hidden }
 
@@ -378,6 +390,8 @@ private class FakePlatform : TearOffPlatform {
 
     override fun frameForContent(contentTopLeft: Offset, contentSize: Size) =
         WindowBounds(contentTopLeft.x, contentTopLeft.y, contentSize.width, contentSize.height)
+
+    override fun newWindowTabOffset() = newWindowTab
 
     override fun setHidden(hostId: String, hidden: Boolean) {
         if (hidden) this.hidden += hostId else this.hidden -= hostId

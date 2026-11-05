@@ -11,11 +11,13 @@ import dev.supermux.ui.shell.windows.TearOffPlatform
 import dev.supermux.ui.shell.windows.WindowBounds
 import dev.supermux.ui.shell.windows.WindowHostRegistry
 import java.awt.AWTEvent
+import java.awt.Dimension
 import java.awt.GraphicsEnvironment
 import java.awt.Insets
 import java.awt.KeyEventDispatcher
 import java.awt.KeyboardFocusManager
 import java.awt.Point
+import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.Window
 import java.awt.event.AWTEventListener
@@ -35,7 +37,7 @@ import kotlin.math.roundToInt
  * point (as in `PaneAreaFit.jvm.kt`).
  */
 internal object DesktopTearOff : TearOffPlatform {
-    private class Entry(val window: Window, val extra: Boolean, val focus: WindowAdapter)
+    private class Entry(val window: Window, val focus: WindowAdapter)
 
     private val windows = LinkedHashMap<String, Entry>()
     /** Front-to-back order, best effort: bumped when a window gains focus or we raise it. */
@@ -62,7 +64,7 @@ internal object DesktopTearOff : TearOffPlatform {
         installEscape()
     }
 
-    fun register(hostId: String, window: Window, extra: Boolean) {
+    fun register(hostId: String, window: Window) {
         windows[hostId]?.let { old -> old.window.removeWindowFocusListener(old.focus) }
         val focus = object : WindowAdapter() {
             override fun windowGainedFocus(e: WindowEvent) {
@@ -70,7 +72,7 @@ internal object DesktopTearOff : TearOffPlatform {
             }
         }
         window.addWindowFocusListener(focus)
-        windows[hostId] = Entry(window, extra, focus)
+        windows[hostId] = Entry(window, focus)
         raised[hostId] = ++stamp
     }
 
@@ -124,9 +126,9 @@ internal object DesktopTearOff : TearOffPlatform {
     }
 
     override fun frameForContent(contentTopLeft: Offset, contentSize: Size): WindowBounds {
-        // Decorated like the extra windows already open, or the platform's usual frame.
-        val insets = windows.values.firstOrNull { it.extra && it.window.isShowing }?.window?.insets
-            ?: defaultFrameInsets()
+        // Framed like the windows already open, which all wear the same chrome (DesktopWindowChrome.kt),
+        // or the platform's usual frame before any is on screen.
+        val insets = windows.values.firstNotNullOfOrNull { measuredFrame(it.window) } ?: defaultFrameInsets()
         val usable = usableScreenAt(contentTopLeft)
         val width = (contentSize.width + insets.left + insets.right)
             .coerceAtMost(usable?.width?.toFloat() ?: Float.MAX_VALUE)
@@ -134,6 +136,10 @@ internal object DesktopTearOff : TearOffPlatform {
             .coerceAtMost(usable?.height?.toFloat() ?: Float.MAX_VALUE)
         return WindowBounds(contentTopLeft.x - insets.left, contentTopLeft.y - insets.top, width, height)
     }
+
+    /** Past the traffic lights on macOS, at their fallback width (DesktopWindowChrome.kt): a new window has no sidebar. */
+    override fun newWindowTabOffset(): Offset =
+        Offset(chromeInsets(ChromeOs.of(), customChrome = false, sidebarControls = false).start.value, 0f)
 
     override fun setHidden(hostId: String, hidden: Boolean) {
         if (hidden) this.hidden.add(hostId) else this.hidden.remove(hostId)
@@ -210,6 +216,14 @@ internal object DesktopTearOff : TearOffPlatform {
 
     // ── Screens ──────────────────────────────────────────────────────────────────────
 
+    /** [window]'s frame around its content, measured while it is on screen. */
+    private fun measuredFrame(window: Window): Insets? {
+        if (!window.isShowing) return null
+        val content = (window as? RootPaneContainer)?.contentPane ?: return null
+        val at = runCatching { content.locationOnScreen }.getOrNull() ?: return null
+        return frameInsets(window.bounds, at, content.size)
+    }
+
     private fun usableScreenAt(p: Offset): java.awt.Rectangle? {
         if (GraphicsEnvironment.isHeadless()) return null
         val device = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
@@ -221,7 +235,7 @@ internal object DesktopTearOff : TearOffPlatform {
         return java.awt.Rectangle(b.x + i.left, b.y + i.top, b.width - i.left - i.right, b.height - i.top - i.bottom)
     }
 
-    /** A system-decorated window's frame, before any extra window has shown us the real one. */
+    /** A system-decorated window's frame, before any window has shown us the real one. */
     private fun defaultFrameInsets(): Insets {
         val os = System.getProperty("os.name").orEmpty().lowercase()
         return when {
@@ -230,4 +244,14 @@ internal object DesktopTearOff : TearOffPlatform {
             else -> Insets(37, 0, 0, 0)
         }
     }
+}
+
+/**
+ * The frame around a [contentSize] content at [contentOnScreen], in a window at [windowBounds]:
+ * none under our own chrome, where the content is the whole window.
+ */
+internal fun frameInsets(windowBounds: Rectangle, contentOnScreen: Point, contentSize: Dimension): Insets {
+    val left = contentOnScreen.x - windowBounds.x
+    val top = contentOnScreen.y - windowBounds.y
+    return Insets(top, left, windowBounds.height - top - contentSize.height, windowBounds.width - left - contentSize.width)
 }
