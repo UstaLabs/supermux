@@ -102,3 +102,14 @@ test("writeEnvPublicUrl clears a stale MUX_PROXY_BASE_DOMAIN when none is given,
   expect(env).not.toContain("MUX_PROXY_BASE_DOMAIN")
   expect(env).toContain("FOO=bar")
 })
+
+// A .env a Windows editor saved (CRLF): the old reader skipped every such line, so this rewrite dropped them all.
+test("writeEnvPublicUrl keeps the keys of a .env saved with CRLF line ends", () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".env"), "MUX_TELEGRAM_BOT_TOKEN=123:abc\r\nMUX_RELAY_DOMAIN=relay.example\r\n")
+  writeEnvPublicUrl(dir, "8787", "https://x.trycloudflare.com")
+  const text = readFileSync(join(dir, ".env"), "utf8")
+  expect(text).toContain("MUX_TELEGRAM_BOT_TOKEN=123:abc\n")
+  expect(text).toContain("MUX_RELAY_DOMAIN=relay.example\n")
+  expect(text).toContain("MUX_WEB_PUBLIC_URL=https://x.trycloudflare.com\n")
+})

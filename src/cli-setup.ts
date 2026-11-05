@@ -16,6 +16,7 @@
 import { existsSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
+import { envText, readEnvText } from "./shared/env-file"
 import { IS_COMPILED } from "./shared/build-info"
 import { username } from "./shared/home"
 
@@ -83,23 +84,6 @@ function resolveStateDir(): string {
   const home = process.env.HOME || homedir()
   const muxHome = process.env.MUX_HOME ?? join(home, ".mux")
   return process.env.MUX_STATE_DIR ?? join(muxHome, "state")
-}
-
-/** Parse `KEY=value` lines into a map (mirrors how the broker reads .env). */
-function parseEnvFile(text: string): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const line of text.split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m) map.set(m[1]!, m[2]!)
-  }
-  return map
-}
-
-/** Serialize a key→value map back to `.env` text (insertion order). */
-function serializeEnv(map: Map<string, string>): string {
-  let out = ""
-  for (const [k, v] of map) out += `${k}=${v}\n`
-  return out
 }
 
 const UNIT_TEMPLATE = (execPath: string): string =>
@@ -390,7 +374,7 @@ export async function runSetupCommand(
   }
 
   const existed = existsSync(envPath)
-  const map = existed ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existed ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
 
   // Desired keys. Token only if one was supplied.
   const desired: Array<[string, string]> = [
@@ -419,7 +403,7 @@ export async function runSetupCommand(
 
   // Write only if we added something or the file didn't exist yet.
   if (changed || !existed) {
-    writeFileSync(envPath, serializeEnv(map))
+    writeFileSync(envPath, envText(map))
   }
   // Always tighten perms (cheap, and fixes a stray loose mode on re-run).
   chmodSync(envPath, 0o600)

@@ -153,6 +153,7 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
+import { readEnvText } from "./shared/env-file"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
@@ -367,9 +368,8 @@ if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
 
 // load .env
 try {
-  for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m && process.env[m[1]!] === undefined) process.env[m[1]!] = m[2]!
+  for (const [key, value] of readEnvText(readFileSync(ENV_FILE, "utf8"))) {
+    if (process.env[key] === undefined) process.env[key] = value
   }
 } catch {}
 

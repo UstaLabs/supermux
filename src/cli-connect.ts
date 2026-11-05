@@ -29,6 +29,7 @@ import { openDb } from "./core/storage/db"
 import { SettingsStore } from "./core/settings/store"
 import type { TunnelRecord } from "./core/settings/app-config"
 import { validateWebEnv } from "./shared/web-env"
+import { readEnvText } from "./shared/env-file"
 import { loadOrCreateHostKey } from "./core/host-identity"
 
 interface Flags {
@@ -84,8 +85,8 @@ function resolveStateDir(): string {
 function resolvePort(stateDir: string, flagPort?: string): string {
   if (flagPort) return flagPort
   try {
-    const m = readFileSync(join(stateDir, ".env"), "utf8").match(/^MUX_WEB_PORT=(.*)$/m)
-    if (m && m[1]) return m[1].trim()
+    const port = readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_WEB_PORT")?.trim()
+    if (port) return port
   } catch {
     /* no .env yet */
   }
@@ -95,8 +96,7 @@ function resolvePort(stateDir: string, flagPort?: string): string {
 /** Hosted relay domain from the setup-generated .env. Empty means explicitly disabled. */
 function readHostedRelayDomain(stateDir: string): string | undefined {
   try {
-    const m = readFileSync(join(stateDir, ".env"), "utf8").match(/^MUX_RELAY_DOMAIN=(.*)$/m)
-    return m?.[1]?.trim() || undefined
+    return readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_RELAY_DOMAIN")?.trim() || undefined
   } catch {
     return undefined
   }

@@ -11,22 +11,7 @@ import { SettingsStore } from "../settings/store"
 import { DeviceStore } from "../../channels/web/device-store"
 import type { AppConfig } from "../settings/app-config"
 import type { Run, Println } from "./types"
-
-/** Parse `KEY=value` lines into a map (mirrors how the broker reads .env). */
-function parseEnvFile(text: string): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const line of text.split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m) map.set(m[1]!, m[2]!)
-  }
-  return map
-}
-
-function serializeEnv(map: Map<string, string>): string {
-  let out = ""
-  for (const [k, v] of map) out += `${k}=${v}\n`
-  return out
-}
+import { envText, readEnvText } from "../../shared/env-file"
 
 /**
  * Upsert MUX_WEB_PORT + MUX_WEB_PUBLIC_URL in `<stateDir>/.env`, CLOBBERING any
@@ -42,7 +27,7 @@ export function writeEnvPublicUrl(
 ): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const envPath = join(stateDir, ".env")
-  const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_WEB_PORT", port)
   map.set("MUX_WEB_PUBLIC_URL", url)
   // Wildcard (subdomain) mode is env-driven: set it when present, clear a stale
@@ -50,7 +35,7 @@ export function writeEnvPublicUrl(
   // base domain that silently breaks routing).
   if (proxyBaseDomain) map.set("MUX_PROXY_BASE_DOMAIN", proxyBaseDomain)
   else map.delete("MUX_PROXY_BASE_DOMAIN")
-  writeFileSync(envPath, serializeEnv(map))
+  writeFileSync(envPath, envText(map))
   chmodSync(envPath, 0o600)
 }
 
@@ -60,9 +45,9 @@ export function writeEnvPublicUrl(
 export function setEnvRelayDomain(stateDir: string, domain: string): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const envPath = join(stateDir, ".env")
-  const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_RELAY_DOMAIN", domain)
-  writeFileSync(envPath, serializeEnv(map))
+  writeFileSync(envPath, envText(map))
   chmodSync(envPath, 0o600)
 }
 
