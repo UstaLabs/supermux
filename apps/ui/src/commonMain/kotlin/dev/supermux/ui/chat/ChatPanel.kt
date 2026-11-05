@@ -234,6 +234,8 @@ data class ChatState(
     val listedSessions: Set<String> = emptySet(),
     /** The host holds this chat's whole history page and extras (card #54's "fully shown" mark). */
     val historyLoaded: Boolean = true,
+    /** Card #76: this chat's reply / thinking being written now (thinking first). */
+    val live: List<dev.supermux.state.LiveReply> = emptyList(),
 )
 
 /**
@@ -355,6 +357,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     val loadedChats by app.loadedChats.collectAsState()
     val historyLoaded = sessionId in loadedChats
+    val liveMap by app.liveReplies.collectAsState()
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -374,6 +377,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
         listedSessions = listedSessions,
         historyLoaded = historyLoaded,
+        live = liveMap[sessionId].orEmpty(),
     )
 }
 
@@ -393,12 +397,16 @@ internal fun uniqueTimelineKeys(items: List<TimelineItem>): List<String> {
 }
 
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
-    is TimelineItem.Msg -> "m:${item.entry.id}"
+    // Card #76: a stored row with a stream keeps the key its live row had, so the swap keeps its slot.
+    is TimelineItem.Msg -> "m:${item.entry.stream ?: item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
-    is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
+    is TimelineItem.Activity -> item.event.stream?.let { "a:$it" } ?: "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
     is TimelineItem.SubagentCard -> "s:${item.subagent.id}"
     is TimelineItem.CouncilCard -> "c:${item.council.id}"
 }
+
+/** Card #76: a live row's key, the same one its stored row will have (see [timelineItemKey]). */
+private fun liveRowKey(row: dev.supermux.state.LiveReply): String = if (row.thinking) "a:${row.stream}" else "m:${row.stream}"
 
 /**
  * Full chat surface for [session].
@@ -539,8 +547,11 @@ fun ChatPanel(
     val activity = state.activity
     val subagents = state.subagents
     val councils = state.councils
-    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
+    // Card #76: while anything is live, the redacted "Thinking…" spinner row is not needed: the live rows are the progress.
+    val live = state.live
+    val liveIdle = live.isEmpty()
+    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils, liveIdle) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working && liveIdle, councils = councils)
     }
     // Card #54: the chat-open trace's two screen marks — the first frame that draws any of this
     // chat, and the first that draws it with its whole history loaded.
@@ -557,6 +568,11 @@ fun ChatPanel(
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
+    // Card #76: what is being written now. A live row whose stored row already arrived is not drawn twice
+    // (two rows with one key would throw).
+    val liveRows = remember(live, timelineKeys) {
+        if (live.isEmpty()) live else timelineKeys.toHashSet().let { taken -> live.filterNot { liveRowKey(it) in taken } }
+    }
     // Medium: runs of consecutive tool rows render as one tool-call group.
     val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
     val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
@@ -648,7 +664,10 @@ fun ChatPanel(
         var followScroll by remember(session.id) { mutableStateOf(false) }
         // Medium folds a tool run into its first row and draws nothing for the rest, so "the last row"
         // is the last row that draws, not the last index.
-        val lastShown by rememberUpdatedState(remember(timelineItems, toolRuns) { shownTail(timelineItems.size, toolRuns).first })
+        // Card #76: live rows come after the timeline, so the last one of them is the transcript's last row.
+        val lastShown by rememberUpdatedState(remember(timelineItems, toolRuns, liveRows.size) {
+            if (liveRows.isNotEmpty()) timelineItems.size + liveRows.size - 1 else shownTail(timelineItems.size, toolRuns).first
+        })
         val panelActive by rememberUpdatedState(active)
         val followSlop = with(density) { FOLLOW_SLOP.toPx() }
         // Growth that lands mid-scroll is held, and applied when that scroll settles if the reader is
@@ -699,13 +718,16 @@ fun ChatPanel(
                 }
             }
         }
-        LaunchedEffect(session.id, timelineItems.size, working, active) {
+        // Card #76: live rows count as rows: one appearing is followed like a new message, and the stored row
+        // taking a live row's place adds none.
+        val rowCount = timelineItems.size + liveRows.size
+        LaunchedEffect(session.id, rowCount, working, active) {
             if (!active) return@LaunchedEffect
-            val target = timelineItems.size - 1
+            val target = rowCount - 1
             if (target < 0) return@LaunchedEffect
             val first = prevSize < 0
             // A find hit on screen holds the transcript where it is.
-            if (first || (timelineItems.size > prevSize && autoFollow && find.current < 0)) {
+            if (first || (rowCount > prevSize && autoFollow && find.current < 0)) {
                 followScroll = true
                 try {
                     if (first) listState.scrollToItem(target) else listState.animateScrollToItem(target)
@@ -715,7 +737,7 @@ fun ChatPanel(
                     followScroll = false
                 }
             }
-            prevSize = timelineItems.size
+            prevSize = rowCount
         }
 }
 
@@ -1064,6 +1086,11 @@ fun ChatPanel(
                             )
                         }
                     }
+                }
+                // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
+                items(liveRows, key = ::liveRowKey) { row ->
+                    if (row.thinking) LiveThinkingRow(row, folded = liveRows.any { !it.thinking })
+                    else LiveReplyRow(row, onOpenFile)
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".

@@ -217,6 +217,47 @@ class ChatAutoscrollTest {
         assertTrue(onScreen("A new message arrived."), "back at the end, a new message is followed again")
     }
 
+    // Card #76: the reply while it is written.
+    private fun live(text: String) = dev.supermux.state.LiveReply(stream = "k1", kind = "reply", text = text)
+
+    @Test fun at_the_end_a_live_reply_is_followed_as_it_grows() = runComposeUiTest {
+        panel()
+        state = state.copy(live = listOf(live("Live paragraph one.")))
+        waitForIdle()
+        assertTrue(onScreen("Live paragraph one."), "the live reply is followed into view")
+        state = state.copy(live = listOf(live("Live paragraph one.\n\n" + paragraphs("Live", 12) + "\n\nLive tail.")))
+        waitForIdle()
+        assertTrue(onScreen("Live tail."), "its growing end stays in view")
+    }
+
+    @Test fun a_live_reply_growing_does_not_move_a_reader_inside_the_last_reply() = runComposeUiTest {
+        panel()
+        val anchor = readInsideTheLastReply()
+        val before = topOf(anchor)!!
+        state = state.copy(live = listOf(live("Live paragraph one.")))
+        waitForIdle()
+        state = state.copy(live = listOf(live("Live paragraph one.\n\nLive paragraph two.")))
+        waitForIdle()
+        assertEquals(before, topOf(anchor) ?: Float.NaN, 1f, "live text below the reader moved the transcript")
+    }
+
+    @Test fun the_stored_message_takes_the_live_replys_place_without_a_jump() = runComposeUiTest {
+        panel()
+        state = state.copy(live = listOf(live("Live paragraph one.\n\nThe live end.")))
+        waitForIdle()
+        val before = topOf("Live paragraph one.")!!
+        state = state.copy(
+            messages = state.messages + entry(7, "Live paragraph one.\n\nThe live end.").copy(stream = "k1"),
+            live = emptyList(),
+        )
+        waitForIdle()
+        // Same row, same place: at most the finished message's time / copy row is added below, and the
+        // transcript, being at its end, follows that.
+        val after = topOf("Live paragraph one.") ?: fail("the stored reply is not laid out")
+        assertTrue(kotlin.math.abs(after - before) <= 64f, "the swap moved the reply from $before to $after")
+        assertTrue(onScreen("The live end."), "the end stays in view")
+    }
+
     private companion object {
         const val END = "The very end of the reply."
     }
