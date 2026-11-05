@@ -7,7 +7,7 @@
 #include <jni.h>
 
 /** MacGlue.ABI; Gradle's stageMacGlue reads it from here. Change both together. */
-#define WV_ABI_VERSION 4
+#define WV_ABI_VERSION 5
 
 /**
  * The upcalls: MacGlue.onEvent's `type`, and what its fields hold (the plan's Task 3 table; GlueEvent.kt decodes it).

@@ -143,6 +143,18 @@ class NavigationRulesTest {
         assertEquals(NavigationVerdict.Refuse, decide(floor, isMainFrame = false, own = OwnNavigation.Floor))
     }
 
+    /** The floor on the bundles' scheme (macOS) is the floor: only the engine's own floor navigation reaches it. */
+    @Test fun theBundleFloorIsReachedOnlyByTheEnginesOwnFloorNavigation() {
+        val floor = WebKitUrls.BUNDLE_FLOOR_URL
+        assertEquals(NavigationVerdict.Own, decide(floor, NavigationKind.BackForward, own = OwnNavigation.Floor))
+        assertEquals(NavigationVerdict.Own, decide(floor, NavigationKind.Other, own = OwnNavigation.Floor, bundle = plugin))
+        assertEquals(NavigationVerdict.Refuse, decide(floor, NavigationKind.BackForward, bundle = plugin))
+        assertEquals(NavigationVerdict.Refuse, decide(floor, NavigationKind.BackForward, own = OwnNavigation.History, bundle = plugin))
+        assertEquals(NavigationVerdict.Refuse, decide(floor, NavigationKind.Link, bundle = plugin))
+        assertEquals(NavigationVerdict.Refuse, decide(floor, isMainFrame = false, own = OwnNavigation.Floor))
+        assertEquals(NavigationVerdict.Refuse, decide(floor, opensWindow = true, bundle = plugin))
+    }
+
     @Test fun onlyTheLeasesBundleIsServed() {
         assertEquals(NavigationVerdict.Refuse, decide("webview-bundle://plugin-2.invalid/", bundle = plugin))
         assertEquals(NavigationVerdict.Refuse, decide("webview-bundle://plugin-1.invalid/", bundle = null))

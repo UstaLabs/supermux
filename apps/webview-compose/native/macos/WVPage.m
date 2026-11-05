@@ -27,14 +27,15 @@ typedef NS_ENUM(int, WVQuestionKind) {
 @property(nonatomic, weak) WVPage *page;
 @end
 
-/** Serves the lease's bundle through the engine (TASK_START, TASK_STOP), holding its page weakly. */
+/**
+ * Serves the lease's bundle through the engine (TASK_START, TASK_STOP), holding its page weakly; and the floor
+ * (WebKitUrls.FLOOR_HTML) itself, at floorHost, a host no bundle has: on the bundles' scheme, so WebKit keeps the page in
+ * its WebContent process from a bundle page to the floor and from the floor to the next one (WebKitUrls.BUNDLE_FLOOR_URL).
+ */
 @interface WVBundleHandler : NSObject <WKURLSchemeHandler>
 @property(nonatomic, weak) WVPage *page;
-@end
-
-/** Serves the floor (WebKitUrls.FLOOR_HTML) at any URL of its scheme. */
-@interface WVFloorHandler : NSObject <WKURLSchemeHandler>
-@property(nonatomic, copy) NSString *html;
+@property(nonatomic, copy) NSString *floorHost;
+@property(nonatomic, copy) NSString *floorHtml;
 @end
 
 /** One engine's native side (D3–D6): its WKWebView and view, delegates, questions, scheme tasks and epochs. */
@@ -44,7 +45,7 @@ typedef NS_ENUM(int, WVQuestionKind) {
 @property(nonatomic, readonly) WVPageView *view;
 - (instancetype)initWithToken:(jlong)token profile:(int)profile store:(NSString *)storeUuid mediaNeedsGesture:(BOOL)gesture
                         world:(NSString *)worldName handler:(NSString *)handlerName bundleScheme:(NSString *)bundleScheme
-                  floorScheme:(NSString *)floorScheme floorHtml:(NSString *)floorHtml;
+                    floorHost:(NSString *)floorHost floorHtml:(NSString *)floorHtml;
 - (void)relayMessage:(WKScriptMessage *)message;
 - (void)startTask:(id<WKURLSchemeTask>)task;
 - (void)stopTask:(id<WKURLSchemeTask>)task;
@@ -60,8 +61,20 @@ static NSError *WVUnknownHost(void) {
     return [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotFindHost userInfo:nil];
 }
 
+/** Whether url is the floor: on the bundles' scheme, at floorHost (any path). */
+static BOOL WVIsFloor(NSURL *url, NSString *bundleScheme, NSString *floorHost) {
+    return url.scheme && url.host && [url.scheme caseInsensitiveCompare:bundleScheme] == NSOrderedSame &&
+           [url.host caseInsensitiveCompare:floorHost] == NSOrderedSame;
+}
+
 @implementation WVBundleHandler
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    // The bundles' scheme is this handler's: the host tells the floor.
+    NSString *host = task.request.URL.host;
+    if (host && [host caseInsensitiveCompare:self.floorHost] == NSOrderedSame) {
+        [self serveFloor:task];
+        return;
+    }
     WVPage *page = self.page;
     if (page) {
         [page startTask:task];
@@ -70,14 +83,9 @@ static NSError *WVUnknownHost(void) {
     }
 }
 
-- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
-    [self.page stopTask:task];
-}
-@end
-
-@implementation WVFloorHandler
-- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
-    NSData *body = [self.html dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+/** The floor, answered at once: nothing is left for stopURLSchemeTask to stop. */
+- (void)serveFloor:(id<WKURLSchemeTask>)task {
+    NSData *body = [self.floorHtml dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     NSDictionary<NSString *, NSString *> *fields = @{
         @"Content-Type" : @"text/html; charset=utf-8",
         @"Content-Length" : [NSString stringWithFormat:@"%lu", (unsigned long)body.length],
@@ -90,7 +98,7 @@ static NSError *WVUnknownHost(void) {
 }
 
 - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
-    // Answered at once, in startURLSchemeTask: nothing is left to stop.
+    [self.page stopTask:task];
 }
 @end
 
@@ -152,7 +160,8 @@ static CGImageRef WVLargestImage(NSImage *image) {
     WKContentWorld *_world;
     WVRelayHandler *_relay;
     WVBundleHandler *_bundles;
-    NSString *_floorScheme;
+    NSString *_bundleScheme;
+    NSString *_floorHost;
     id _floorState;                        // the floor's interactionState, kept the first time it finishes loading
     int _epoch;                            // the last epoch the engine gave (D4)
     int _committedEpoch;                   // the epoch of the last committed navigation
@@ -167,11 +176,12 @@ static CGImageRef WVLargestImage(NSImage *image) {
 
 - (instancetype)initWithToken:(jlong)token profile:(int)profile store:(NSString *)storeUuid mediaNeedsGesture:(BOOL)gesture
                         world:(NSString *)worldName handler:(NSString *)handlerName bundleScheme:(NSString *)bundleScheme
-                  floorScheme:(NSString *)floorScheme floorHtml:(NSString *)floorHtml {
+                    floorHost:(NSString *)floorHost floorHtml:(NSString *)floorHtml {
     self = [super init];
     if (!self) return nil;
     _token = token;
-    _floorScheme = [floorScheme copy];
+    _bundleScheme = [bundleScheme copy];
+    _floorHost = [floorHost copy];
     _navigations = [NSMapTable weakToStrongObjectsMapTable];
     _questions = [NSMutableDictionary dictionary];
     _tasks = [NSMutableDictionary dictionary];
@@ -192,10 +202,9 @@ static CGImageRef WVLargestImage(NSImage *image) {
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = NO;
     _bundles = [[WVBundleHandler alloc] init];
     _bundles.page = self;
+    _bundles.floorHost = floorHost;
+    _bundles.floorHtml = floorHtml;
     [configuration setURLSchemeHandler:_bundles forURLScheme:bundleScheme];
-    WVFloorHandler *floor = [[WVFloorHandler alloc] init];
-    floor.html = floorHtml;
-    [configuration setURLSchemeHandler:floor forURLScheme:floorScheme];
     _world = [WKContentWorld worldWithName:worldName];
     _relay = [[WVRelayHandler alloc] init];
     _relay.page = self;
@@ -332,7 +341,7 @@ static CGImageRef WVLargestImage(NSImage *image) {
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     if (_released) return;
     int epoch = [self epochOf:navigation];
-    if (!_floorState && [webView.URL.scheme isEqualToString:_floorScheme]) {
+    if (!_floorState && WVIsFloor(webView.URL, _bundleScheme, _floorHost)) {
         id state = webView.interactionState;
         if (state) _floorState = state;
     }
@@ -647,7 +656,7 @@ static CGImageRef WVLargestImage(NSImage *image) {
     WKBackForwardListItem *before = _webView.backForwardList.currentItem;
     _webView.interactionState = state;
     WKBackForwardListItem *current = _webView.backForwardList.currentItem;
-    return current != before && ![current.URL.scheme isEqualToString:_floorScheme];
+    return current != before && !WVIsFloor(current.URL, _bundleScheme, _floorHost);
 }
 
 /** The floor's one-item history back (iOS D4); the engine waits for its FINISHED. */
@@ -803,15 +812,15 @@ static inline WVPage *WVPageOf(jlong handle) {
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_createPage(
     JNIEnv *env, jclass type, jlong token, jint profile, jstring storeUuid, jboolean mediaNeedsGesture, jstring worldName,
-    jstring handlerName, jstring bundleScheme, jstring floorScheme, jstring floorHtml) {
+    jstring handlerName, jstring bundleScheme, jstring floorHost, jstring floorHtml) {
     NSString *store = WVString(env, storeUuid), *world = WVString(env, worldName), *handler = WVString(env, handlerName);
-    NSString *bundle = WVString(env, bundleScheme), *floor = WVString(env, floorScheme), *html = WVString(env, floorHtml);
+    NSString *bundle = WVString(env, bundleScheme), *floor = WVString(env, floorHost), *html = WVString(env, floorHtml);
     BOOL gesture = mediaNeedsGesture == JNI_TRUE;
     WVOnMain(NO, ^{
         WVPage *page = nil;
         @try {
             page = [[WVPage alloc] initWithToken:token profile:profile store:store mediaNeedsGesture:gesture world:world
-                                         handler:handler bundleScheme:bundle floorScheme:floor floorHtml:html];
+                                         handler:handler bundleScheme:bundle floorHost:floor floorHtml:html];
         } @catch (NSException *exception) {
             (void)exception; // WebKit refused the configuration: the engine reports CreationFailed
             page = nil;
@@ -1100,6 +1109,21 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_focus(JNIEnv
     WVOnMain(NO, ^{
         [page focus];
     });
+}
+
+/** For the tests: the page's WebContent process, by WebKit's own key for it (not public API); -1 without one. */
+JNIEXPORT jint JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_testWebProcess(JNIEnv *env, jclass type, jlong handle) {
+    WVPage *page = WVPageOf(handle);
+    __block jint pid = -1;
+    WVOnMain(YES, ^{
+        @try {
+            id value = [page.webView valueForKey:@"_webProcessIdentifier"];
+            if ([value isKindOfClass:[NSNumber class]]) pid = [(NSNumber *)value intValue];
+        } @catch (NSException *exception) {
+            (void)exception; // a WebKit without the key
+        }
+    });
+    return pid > 0 ? pid : -1;
 }
 
 JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_release(JNIEnv *env, jclass type, jlong handle) {

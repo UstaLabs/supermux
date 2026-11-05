@@ -44,7 +44,10 @@ internal class RealGlue : AutoCloseable {
         runBlocking(dispatcher) { withTimeout(millis) { block() } }
 
     /** A warm engine, as the factory makes one, its upcalls on [thread]. On the engine's thread. */
-    suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): MacWebEngine {
+    suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): MacWebEngine = engineAndGlue(profile).first
+
+    /** [engine], and its glue, for a test that asks the glue itself. */
+    suspend fun engineAndGlue(profile: WebProfile = WebProfile.Ephemeral): Pair<MacWebEngine, NativePageGlue> {
         val config = EngineConfig(profile)
         val scripts = WebKitScripts.random()
         val glue = checkNotNull(NativePageGlue.create(config, scripts)) { "WebKit made no page" }
@@ -58,7 +61,7 @@ internal class RealGlue : AutoCloseable {
         )
         MacPages.register(glue.token, engine::onGlueEvent)
         check(engine.warmUp()) { "the engine's floor didn't load" }
-        return engine
+        return engine to glue
     }
 
     override fun close() {

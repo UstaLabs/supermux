@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.webkit
 import dev.supermux.webview.WebOrigin
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -63,6 +64,26 @@ class WebKitUrlsTest {
         assertFalse(WebKitUrls.canGoBack(emptyList()))
         assertFalse(WebKitUrls.canGoForward(listOf(floor)))
         assertTrue(WebKitUrls.canGoForward(listOf("https://b.example/")))
+    }
+
+    /**
+     * The macOS engine's floor shares the bundles' scheme, so a reset between two bundle pages keeps the page's WebContent
+     * process (WebKit swaps processes between schemes). Its host has two labels, a WebOrigin's one: no bundle is there.
+     */
+    @Test fun theBundleFloorIsOnTheBundleSchemeAtAHostNoBundleHas() {
+        val floor = WebKitUrls.BUNDLE_FLOOR_URL
+        assertEquals("webview-bundle://reset.floor.invalid/", floor)
+        assertTrue(WebKitUrls.isFloor(floor))
+        assertTrue(WebKitUrls.isFloor("WEBVIEW-BUNDLE://Reset.Floor.INVALID/"))
+        assertTrue(WebKitUrls.isPrivate(floor))
+        assertFalse(WebKitUrls.isFloor("webview-bundle://floor.invalid/"), "a bundle's own page is no floor")
+        assertFalse(WebKitUrls.isFloor("https://reset.floor.invalid/"))
+        assertFailsWith<IllegalArgumentException> { WebOrigin("reset.floor") }
+        assertFalse(WebKitUrls.isBundleUrl(floor, WebOrigin("reset")))
+        assertFalse(WebKitUrls.canGoBack(listOf(floor)))
+        assertTrue(WebKitUrls.canGoBack(listOf(floor, "webview-bundle://plugin-1.invalid/a.html", "webview-bundle://plugin-1.invalid/b.html")))
+        assertFalse(WebKitUrls.canGoBack(listOf("webview-bundle://plugin-1.invalid/a.html", floor)))
+        assertFalse(WebKitUrls.canGoForward(listOf(floor)))
     }
 
     @Test fun rawPathKeepsEscapesQueryAndFragment() {

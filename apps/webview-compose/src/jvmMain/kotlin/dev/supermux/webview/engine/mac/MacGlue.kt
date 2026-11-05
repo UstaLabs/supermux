@@ -10,9 +10,10 @@ package dev.supermux.webview.engine.mac
 internal object MacGlue {
     /**
      * The ABI this library speaks: `WV_ABI_VERSION` in `native/macos/WVGlue.h`. Change both together. 3: [setBackdrop]. 4:
-     * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync].
+     * [place]'s window, [syncFrames], [frameRecorded], [testFrameSync]. 5: [createPage]'s floor at a host of the bundles'
+     * scheme, [testWebProcess].
      */
-    const val ABI: Int = 4
+    const val ABI: Int = 5
 
     /** The loaded glue's ABI; -1 if it couldn't find [onEvent] when it loaded. */
     @JvmStatic external fun abiVersion(): Int
@@ -61,7 +62,10 @@ internal object MacGlue {
 
     // --- Pages (WVPage.m): `PageGlue`'s calls, by the page's handle. ---
 
-    /** Makes a page on AppKit's thread; its `CREATED` upcall, to [token], carries the handle, 0 if WebKit refused. */
+    /**
+     * Makes a page on AppKit's thread; its `CREATED` upcall, to [token], carries the handle, 0 if WebKit refused. The
+     * floor, [floorHtml], is served at [floorHost] on [bundleScheme], the bundles' scheme.
+     */
     @JvmStatic external fun createPage(
         token: Long,
         profile: Int,
@@ -70,7 +74,7 @@ internal object MacGlue {
         worldName: String,
         handlerName: String,
         bundleScheme: String,
-        floorScheme: String,
+        floorHost: String,
         floorHtml: String,
     )
 
@@ -215,6 +219,9 @@ internal object MacGlue {
 
     /** Waits: the window's frame sync ([syncFrames]): `"on …"`, `"arming …"`, `"off …"` with its counts, or `"none …"`. */
     @JvmStatic external fun testFrameSync(window: Long): String
+
+    /** Waits: the process id of [page]'s WebContent process (WebKit's own name for it), or -1 if WebKit names none. */
+    @JvmStatic external fun testWebProcess(page: Long): Int
 
     /** Waits: an upcall the library drops, from [count] threads of the glue's own, each ending after it (Minor 3). */
     @JvmStatic external fun testPostFromThreads(count: Int)

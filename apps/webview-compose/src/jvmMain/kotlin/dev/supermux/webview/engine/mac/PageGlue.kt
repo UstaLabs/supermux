@@ -185,6 +185,9 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
         MacGlue.release(page)
     }
 
+    /** For the tests: the page's WebContent process id, -1 if WebKit names none (or released). Waits. */
+    fun webProcess(): Int = live(-1) { MacGlue.testWebProcess(it) }
+
     companion object {
         /** The isolated world the relay runs in (iOS's name). */
         const val WORLD_NAME: String = "webview"
@@ -218,7 +221,7 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
             val (profile, store) = storeOf(config.profile)
             MacGlue.createPage(
                 token, profile, store, config.mediaPlaybackRequiresGesture, WORLD_NAME, scripts.handlerName,
-                WebKitUrls.BUNDLE_SCHEME, WebKitUrls.FLOOR_SCHEME, WebKitUrls.FLOOR_HTML,
+                WebKitUrls.BUNDLE_SCHEME, WebKitUrls.FLOOR_HOST, WebKitUrls.FLOOR_HTML,
             )
             val handle = try {
                 withTimeoutOrNull(CREATE_MILLIS) { created.await() }

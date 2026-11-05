@@ -14,12 +14,19 @@ import dev.supermux.webview.schemeOf
  * tuple origin and a secure context. The engine reports such documents in the library's terms (`https://<host>.invalid`)
  * and maps back to deliver. The page itself sees `webview-bundle://<host>.invalid` as its origin.
  *
- * The floor (`webview-floor://reset/`) is the one page an engine shows between leases; no lease ever reaches it.
+ * The floor (`webview-floor://reset/`) is the one page an engine shows between leases; no lease ever reaches it. The
+ * macOS engine's is on the bundles' scheme ([BUNDLE_FLOOR_URL]): WebKit keeps a page in its WebContent process across
+ * navigations within one scheme of an app's own, and starts a new one for a navigation to another, which can hold
+ * AppKit's thread for seconds (2026-11-05): so a reset between two bundle pages, and the load after it, start none.
  */
 internal object WebKitUrls {
     const val BUNDLE_SCHEME: String = "webview-bundle"
     const val FLOOR_SCHEME: String = "webview-floor"
     const val FLOOR_URL: String = "$FLOOR_SCHEME://reset/"
+
+    /** The macOS engine's floor, on the bundles' scheme, at a host of two labels: no bundle's (a [WebOrigin]'s has one). */
+    const val FLOOR_HOST: String = "reset.floor.invalid"
+    const val BUNDLE_FLOOR_URL: String = "$BUNDLE_SCHEME://$FLOOR_HOST/"
 
     /** The floor: blank, in the theme the web view is given. */
     const val FLOOR_HTML: String = "<!doctype html><html><head><meta name=\"color-scheme\" content=\"light dark\">" +
@@ -38,7 +45,8 @@ internal object WebKitUrls {
     /** Whether [url] is on one of the engine's own schemes, which the page never navigates to by itself. */
     fun isPrivate(url: String): Boolean = schemeOf(url).let { it == BUNDLE_SCHEME || it == FLOOR_SCHEME }
 
-    fun isFloor(url: String?): Boolean = url != null && schemeOf(url) == FLOOR_SCHEME
+    fun isFloor(url: String?): Boolean =
+        url != null && schemeOf(url).let { it == FLOOR_SCHEME || it == BUNDLE_SCHEME && hostOf(url) == FLOOR_HOST }
 
     /** [url] in the library's terms: a file of [bundle] becomes its `https://<host>.invalid/…` URL; anything else stays. */
     fun toLibraryUrl(url: String, bundle: WebOrigin?): String {

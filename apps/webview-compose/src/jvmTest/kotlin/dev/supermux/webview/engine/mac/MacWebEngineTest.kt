@@ -288,14 +288,15 @@ class MacWebEngineTest {
         )
     }
 
+    /** The floor is on the bundles' scheme: a reset between two bundle pages keeps the page's WebContent process. */
     @Test fun warmUpLoadsTheFloorAndLearnsTheUserAgent() = runTest {
         val rig = Rig(this)
         val warm = async { rig.engine.warmUp() }
         runCurrent()
-        assertEquals("loadUrl 0 ${WebKitUrls.FLOOR_URL}", rig.glue.calls.last())
-        rig.send(policy(1, WebKitUrls.FLOOR_URL))
+        assertEquals("loadUrl 0 ${WebKitUrls.BUNDLE_FLOOR_URL}", rig.glue.calls.last())
+        rig.send(policy(1, WebKitUrls.BUNDLE_FLOOR_URL))
         assertEquals("answerPolicy 1 true", rig.glue.last("answerPolicy"), "the engine's own navigation to the floor")
-        rig.send(GlueEvent.Finished(0, rig.page(WebKitUrls.FLOOR_URL), floorKept = true))
+        rig.send(GlueEvent.Finished(0, rig.page(WebKitUrls.BUNDLE_FLOOR_URL), floorKept = true))
         rig.answer("evaluate") { GlueEvent.Result(it, true, "\"Mozilla/5.0 Test\"", null) }
         assertTrue(warm.await())
         assertTrue(rig.glue.calls.any { it.startsWith("evaluate") && " client navigator.userAgent" in it })

@@ -89,6 +89,13 @@ import kotlin.coroutines.resume
  *   [shown] is false while the runtime covers the page itself, and once it has crashed.
  * - **The handoff (D6).** `FirstPaint` once the document has content, the surface is placed and still, and two display
  *   ticks have passed with the view in its window.
+ * - **The floor ([reset]).** On the bundles' scheme ([WebKitUrls.BUNDLE_FLOOR_URL]), not one of its own. WebKit starts a
+ *   new WebContent process for a navigation to another scheme, and starting one can hold AppKit's thread in the kernel
+ *   for seconds (it issues the process its sandbox extensions for the user's fonts; a user's report, 2026-11-05: "a kind
+ *   of freeze" scrolling the chat, two resets timing out at 4 s in one such stall). Within one scheme of the app's own it
+ *   keeps the page's process: a reset between two bundle pages, and the next lease's bundle, start none. So bundles,
+ *   whatever their origin, share the engine's process from lease to lease, as a lease's own navigations within its bundle
+ *   do; `Html` and `Url` content, on https, still starts in a process of its own. [reset]'s guarantees are the same.
  */
 internal class MacWebEngine(
     val config: EngineConfig,
@@ -244,12 +251,15 @@ internal class MacWebEngine(
     private val bundle: WebOrigin? get() = (content as? WebContent.Bundle)?.origin
     private val htmlUrl: String? get() = (content as? WebContent.Html)?.origin?.url
 
-    /** Loads the floor, which the glue keeps for [reset], and learns the default user agent. False if the engine can't. */
+    /**
+     * Loads the floor (on the bundles' scheme: the class's KDoc), which the glue keeps for [reset], and learns the default
+     * user agent. False if the engine can't.
+     */
     internal suspend fun warmUp(): Boolean {
         val done = CompletableDeferred<Boolean>()
         floorDone = done
         own = OwnNavigation.Floor
-        glue.loadUrl(queue.epoch, WebKitUrls.FLOOR_URL, emptyMap())
+        glue.loadUrl(queue.epoch, WebKitUrls.BUNDLE_FLOOR_URL, emptyMap())
         val loaded = withTimeoutOrNull(WARM_UP_MILLIS) { done.await() } ?: false
         floorDone = null
         if (!loaded || released || crashed) return false
