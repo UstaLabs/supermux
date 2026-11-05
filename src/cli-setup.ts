@@ -18,6 +18,7 @@ import { envText, readEnvText } from "./shared/env-file"
 import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
 import { home, username } from "./shared/home"
+import { proc } from "@supermux/platform"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -129,7 +130,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // 4. daemon-reload + enable --now, each guarded.
   const sc = (sub: string[]): boolean => {
     try {
-      const r = Bun.spawnSync(["systemctl", "--user", ...sub])
+      const r = Bun.spawnSync(["systemctl", "--user", ...sub], { ...proc.spawnDefaults() })
       return r.exitCode === 0
     } catch {
       return false
@@ -147,7 +148,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   Bun.sleepSync(2000)
   let active = false
   try {
-    active = Bun.spawnSync(["systemctl", "--user", "is-active", "--quiet", "supermux"]).exitCode === 0
+    active = Bun.spawnSync(["systemctl", "--user", "is-active", "--quiet", "supermux"], { ...proc.spawnDefaults() }).exitCode === 0
   } catch {
     active = false
   }
@@ -170,7 +171,7 @@ function enableLinger(println: (s: string) => void): void {
   const user = username()
   if (user) {
     try {
-      if (Bun.spawnSync(["loginctl", "enable-linger", user]).exitCode === 0) {
+      if (Bun.spawnSync(["loginctl", "enable-linger", user], { ...proc.spawnDefaults() }).exitCode === 0) {
         println("Enabled lingering so the broker survives logout ✔")
         return
       }
@@ -289,7 +290,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   const target = `${domain}/${LAUNCHD_LABEL}`
   const lc = (sub: string[]): boolean => {
     try {
-      return Bun.spawnSync(["launchctl", ...sub]).exitCode === 0
+      return Bun.spawnSync(["launchctl", ...sub], { ...proc.spawnDefaults() }).exitCode === 0
     } catch {
       return false
     }
@@ -309,7 +310,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   Bun.sleepSync(2000)
   let running = false
   try {
-    const r = Bun.spawnSync(["launchctl", "print", target])
+    const r = Bun.spawnSync(["launchctl", "print", target], { ...proc.spawnDefaults() })
     running =
       r.exitCode === 0 && new TextDecoder().decode(r.stdout).includes("state = running")
   } catch {

@@ -91,3 +91,15 @@ test("which finds a binary in a folder added to PATH after start", () => {
     expect(which("mux-late-tunnel-cli")).toBe(true)
   } finally { restore() }
 })
+
+// Bun.spawn without `env` passes the environment the process started with: a variable set since (main.ts loads .env
+// into process.env, and adds the agent bin folders to PATH) never reached the tunnel CLI.
+test("realRun gives the child the environment as it is now", async () => {
+  process.env.MUX_LATE_TUNNEL_VAR = "set-after-start"
+  try {
+    const r = await realRun([process.execPath, "-e", "console.log(process.env.MUX_LATE_TUNNEL_VAR ?? 'missing')"])
+    expect(r.stdout.trim()).toBe("set-after-start")
+  } finally {
+    delete process.env.MUX_LATE_TUNNEL_VAR
+  }
+})

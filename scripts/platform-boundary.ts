@@ -58,7 +58,7 @@ export const RULES: Rule[] = [
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
     allowed: ["packages/platform/", "src/core/process/launcher.ts"],
-    use: "start processes with proc.spawn from @supermux/platform (hidden window, live env); until it exists, spawnCommand in src/core/process/launcher.ts",
+    use: "start processes with spawnCommand (src/core/process/launcher.ts), or Bun.spawn with { ...proc.spawnDefaults() } spread first: without them the child gets the startup env and, on Windows, a console window",
   },
   {
     id: "which-path",

@@ -107,3 +107,13 @@ export function resolve(names: readonly string[], env: CommandEnvironment = proc
   }
   return null
 }
+
+/**
+ * The options every spawn starts from: the environment as it is at the call (Bun.spawn without `env` passes the one
+ * the process started with, so a PATH or a .env variable set since never reaches the child), and no console window on
+ * Windows (windowsHide is false by default in Bun and Node). Spread first, so a caller's own `env` or `windowsHide`
+ * wins: `Bun.spawn(argv, { ...proc.spawnDefaults(), stdout: "pipe" })`.
+ */
+export function spawnDefaults(): { env: Record<string, string | undefined>; windowsHide: boolean } {
+  return { env: { ...process.env }, windowsHide: true }
+}

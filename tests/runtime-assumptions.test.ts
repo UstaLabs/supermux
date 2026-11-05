@@ -99,3 +99,18 @@ test("lstat reads a socket file as a socket, except on Windows, where Bun refuse
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// Why proc.spawnDefaults passes `env` on every spawn: Bun.spawn without one gives the child the environment the process
+// STARTED with, so a PATH or a .env variable main.ts set since never reaches it (node:child_process passes the live one).
+// If a Bun upgrade passes the live environment, this goes red, and the default is only belt and braces.
+test("a variable set after start reaches a Bun.spawn child only through env", () => {
+  const key = "MUX_RUNTIME_LATE_VAR"
+  process.env[key] = "set-after-start"
+  try {
+    const probe = [process.execPath, "-e", `console.log(process.env.${key} ?? "missing")`]
+    expect(Bun.spawnSync(probe).stdout.toString().trim()).toBe("missing")
+    expect(Bun.spawnSync(probe, { env: { ...process.env } }).stdout.toString().trim()).toBe("set-after-start")
+  } finally {
+    delete process.env[key]
+  }
+})

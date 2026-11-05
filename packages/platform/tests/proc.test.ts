@@ -57,3 +57,18 @@ test("envValue reads a Windows variable in any letter case, and elsewhere by its
   expect(proc.envValue({ Path: "/x" }, "PATH", "linux")).toBeUndefined()
   expect(proc.envValue({ PATH: "/x" }, "PATH", "linux")).toBe("/x")
 })
+
+// Bun.spawn without `env` passes the environment the process started with (tests/runtime-assumptions.test.ts), and
+// windowsHide is false by default in Bun and Node: a console window flashes up for each child on a Windows desktop.
+test("spawnDefaults: the environment as it is at the call, and no console window", () => {
+  process.env.MUX_SPAWN_DEFAULTS_PROBE = "now"
+  try {
+    const defaults = proc.spawnDefaults()
+    expect(defaults.windowsHide).toBe(true)
+    expect(defaults.env.MUX_SPAWN_DEFAULTS_PROBE).toBe("now")
+    defaults.env.MUX_SPAWN_DEFAULTS_PROBE = "changed"
+    expect(process.env.MUX_SPAWN_DEFAULTS_PROBE).toBe("now")
+  } finally {
+    delete process.env.MUX_SPAWN_DEFAULTS_PROBE
+  }
+})

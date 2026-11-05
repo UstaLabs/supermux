@@ -118,6 +118,7 @@ export function spawnCommand(command: string, args: readonly string[], options: 
   const env = (spawnOptions.env ?? process.env) as CommandEnvironment
   const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
   return spawn(wrapped.command, wrapped.args, {
+    ...proc.spawnDefaults(),
     ...spawnOptions,
     ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   })
@@ -132,6 +133,7 @@ export function spawnCommandSync(
   const env = (spawnOptions.env ?? process.env) as CommandEnvironment
   const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
   return spawnSync(wrapped.command, wrapped.args, {
+    ...proc.spawnDefaults(),
     ...spawnOptions,
     ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
   })

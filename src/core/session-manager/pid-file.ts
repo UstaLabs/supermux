@@ -22,7 +22,7 @@ const defaultProbeDeps: BrokerProbeDeps = {
   readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
   run: (cmd) => {
     try {
-      const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" })
+      const r = Bun.spawnSync(cmd, { ...proc.spawnDefaults(), stdout: "pipe", stderr: "pipe" })
       return r.exitCode === 0 ? r.stdout.toString() : null
     } catch {
       return null

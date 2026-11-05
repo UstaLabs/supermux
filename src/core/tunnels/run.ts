@@ -1,6 +1,7 @@
 // Real process runner + small helpers. The `Run` type lives in types.ts; this is
 // the production implementation. Tests inject a fake Run instead of using realRun.
 
+import { proc as platformProc } from "@supermux/platform"
 import type { Run, RunResult } from "./types"
 
 /**
@@ -37,6 +38,7 @@ async function drain(
 export const realRun: Run = async (argv, opts) => {
   const stream = opts?.stream === true
   const proc = Bun.spawn(argv, {
+    ...platformProc.spawnDefaults(),
     // Interactive (streamed) calls inherit stdin so the user can answer prompts;
     // a piped input still wins. Otherwise stdin is closed.
     stdin: opts?.input !== undefined ? "pipe" : stream ? "inherit" : "ignore",

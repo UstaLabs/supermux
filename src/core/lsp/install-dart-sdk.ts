@@ -4,6 +4,7 @@ import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { muxLspHome } from "./paths"
+import { proc } from "@supermux/platform"
 
 export function dartArch(): "arm64" | "x64" {
   return process.arch === "arm64" ? "arm64" : "x64"
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
   console.log("Extracting…")
   await rm(sdkDir, { recursive: true, force: true })
   const unzip = Bun.spawn(["unzip", "-qo", zipPath, "-d", home], {
+    ...proc.spawnDefaults(),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
