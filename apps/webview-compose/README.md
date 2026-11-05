@@ -1006,6 +1006,14 @@ no cut-outs.
   store before the lease changed nothing; an `https` floor (the review's suggestion) could save at most those
   60–90 ms, and a reset would then restore an `https` page without the network: not tried. Measure on a device before
   deciding.
+- **Wrap-content views in the sample's chat** ([Sizing](#sizing)), its scripted reading run with its probe
+  (`-chat-run read -chat-probe`) on the iOS 26.5 simulator, Release builds (2026-11-05): an iPhone 15 Pro's 329 dp
+  cards, before 23 previews resized on screen, 8 of them under the reader's eyes, which moved 109 dp in 11 shifts (up
+  to 29); after 3 resized on screen, all above the eyes (one page, `weather-rain`, settles 14 dp taller on iOS than
+  on the Mac), and nothing moved. A 13-inch iPad's 680 dp cards: before 4, all under the eyes, 87 dp in 5 shifts (up to
+  81); after 0 and 0. Debug simulator builds of the sample stop a few seconds into that run with a
+  `NoWhenBranchMatchedException` in the chat's list item (on the tree before these changes too); Release builds
+  don't.
 - **Running it,** on a Mac, from `apps/`: `webview-sample/device-checks/ios-engine-checks.sh` (the conformance checks:
   the 31 shared with macOS and 19 of the iOS engine's own; `DEVICE="iPhone 14"` for iOS 16.4),
   `webview-sample/device-checks/ios-sim.sh` (the UI flows, and the user-gesture probe: drags over a page that tries to
