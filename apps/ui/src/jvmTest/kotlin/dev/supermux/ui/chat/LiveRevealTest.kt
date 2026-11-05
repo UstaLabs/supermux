@@ -1,10 +1,16 @@
 package dev.supermux.ui.chat
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.chat.TimelineItem
+import dev.supermux.proto.LogEntry
+import dev.supermux.state.LiveReply
 import dev.supermux.ui.parseMarkdownBlocks
 import dev.supermux.ui.theme.LocalReduceMotion
 import kotlin.test.Test
@@ -63,5 +69,28 @@ class LiveRevealTest {
         val n = reveal.laidOut
         assertTrue(n == 0 || text[n - 1].isWhitespace() || text[n].isWhitespace(), "a word boundary: '${text.take(n)}'")
         assertFalse(reveal.masking, "no ink edge under reduced motion")
+    }
+
+    @Test fun theStoredReplyFinishesAnUnfinishedReveal() = runComposeUiTest {
+        val reveals = LiveReveals()
+        var live by mutableStateOf(true)
+        mainClock.autoAdvance = false
+        setPlatformContent {
+            CompositionLocalProvider(LocalLiveReveals provides reveals) {
+                if (live) LiveReplyRow(LiveReply("k1", "reply", text), reveals.of("k1"), onOpenFile = {})
+                else TimelineItemRow(TimelineItem.Msg(LogEntry(id = "m1", ts = "2026-01-01T00:00:00Z", direction = "outbound", text = text, stream = "k1")))
+            }
+        }
+        repeat(5) { mainClock.advanceTimeByFrame() }
+        val before = reveals.of("k1").laidOut
+        assertTrue(before in 1 until text.length, "mid-reveal: $before")
+        live = false
+        mainClock.advanceTimeByFrame()
+        val after = reveals.of("k1").laidOut
+        assertTrue(after in before until text.length, "the stored row picks up where the live row was: $before -> $after")
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(reveals.of("k1").finished)
+        onNodeWithText("The end.", substring = true).assertExists()
     }
 }

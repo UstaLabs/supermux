@@ -572,6 +572,8 @@ fun ChatPanel(
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
     // Card #76: what is being written now. A live row whose stored row already arrived is not drawn twice
     // (two rows with one key would throw).
+    // Card #76: the reveals of this chat's live replies, by stream (the stored reply finishes an unfinished one).
+    val reveals = remember(session.id) { LiveReveals() }
     val liveRows = remember(live, timelineKeys) {
         if (live.isEmpty()) live else timelineKeys.toHashSet().let { taken -> live.filterNot { liveRowKey(it) in taken } }
     }
@@ -1049,6 +1051,7 @@ fun ChatPanel(
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
+                LocalLiveReveals provides reveals,
             ) {
             LazyColumn(
                 state = listState,
@@ -1093,7 +1096,7 @@ fun ChatPanel(
                 // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
                 items(liveRows, key = ::liveRowKey) { row ->
                     if (row.thinking) LiveThinkingRow(row, folded = liveRows.any { !it.thinking })
-                    else LiveReplyRow(row, onOpenFile)
+                    else LiveReplyRow(row, reveals.of(row.stream), onOpenFile)
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".

@@ -21,13 +21,21 @@ import dev.supermux.ui.theme.Space
 
 /**
  * Card #76: the reply while the agent writes it. Same look and padding as the stored reply that takes its place
- * (TimelineItemRow's message row), minus the time / copy row that only a finished message has.
+ * (TimelineItemRow's message row), minus the time / copy row that only a finished message has. It shows at the
+ * reveal's steady pace under the ink edge; the stored row finishes a reveal this one leaves unfinished.
  */
 @Composable
-internal fun LiveReplyRow(reply: LiveReply, onOpenFile: (FilePathRef) -> Unit) {
+internal fun LiveReplyRow(reply: LiveReply, reveal: LiveRevealState, onOpenFile: (FilePathRef) -> Unit) {
+    RevealDriver(reveal, reply.text, done = false)
     Column(Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("chat-live-reply")) {
         LinkSelectionContainer {
-            MarkdownBody(text = liveMarkdown(reply.text), modifier = Modifier.fillMaxWidth(), onOpenFile = onOpenFile, linkify = true)
+            MarkdownBody(
+                text = liveMarkdown(reply.text.take(reveal.laidOut)),
+                modifier = Modifier.fillMaxWidth(),
+                onOpenFile = onOpenFile,
+                linkify = true,
+                reveal = reveal,
+            )
         }
     }
 }
