@@ -190,6 +190,19 @@ test("a branch made at Send is checked out at wake with the includes copied and 
   await removeWorktree(repo, workdir, "mux/born")
 })
 
+test("onCheckedOut fires once git has checked the files out, before the includes and the setup hook", async () => {
+  const repo = repoWithIncludesAndHook()
+  await createSessionBranch(repo, "mux/told", "main")
+  const workdir = join(worktreesRoot(), repoSlug(repo), "told-uuid")
+  let seen: { file: boolean; include: boolean; hook: boolean } | undefined
+  await ensureWorktreeAt({
+    repoRoot: repo, workdir, sessionBranch: "mux/told", baseBranch: "main",
+    onCheckedOut: () => { seen = { file: existsSync(join(workdir, "f.txt")), include: existsSync(join(workdir, "notes")), hook: existsSync(join(workdir, "setup-ran")) } },
+  })
+  expect(seen).toEqual({ file: true, include: false, hook: false })
+  await removeWorktree(repo, workdir, "mux/told")
+})
+
 test("an empty folder left by a crash is removed and the worktree made in its place", async () => {
   const repo = tmpRepo()
   await createSessionBranch(repo, "mux/half", "main")

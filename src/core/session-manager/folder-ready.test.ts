@@ -5,15 +5,17 @@ import { folderReady, type FolderReadyDeps } from "./folder-ready"
 function box(opts: { sessions: Array<{ id: string; workdir: string }>; waking: string[] }) {
   const made = new Set<string>()
   const waking = new Set(opts.waking)
+  const checkingOut = new Set<string>()
   let slept = 0
   const deps: FolderReadyDeps = {
     sessions: () => opts.sessions,
     pending: (id) => waking.has(id),
     exists: (path) => made.has(path),
+    checkoutsInFlight: () => [...checkingOut],
     sleep: async () => { slept++ },
     now: () => slept * 50,
   }
-  return { deps, made, waking, slept: () => slept }
+  return { deps, made, waking, checkingOut, slept: () => slept }
 }
 
 test("a session's folder being made by its wake: waits until it exists", async () => {
@@ -44,4 +46,21 @@ test("stops waiting when the wake ends without the folder, or after the timeout"
   const c = box({ sessions: [{ id: "s", workdir: "/wt/s" }], waking: ["s"] })
   await folderReady(c.deps, "/wt/s", 1_000)
   expect(c.slept()).toBe(20)
+})
+
+test("a folder git is still checking files out into: waits until the checkout is done, though the folder exists", async () => {
+  const b = box({ sessions: [{ id: "s", workdir: "/wt/s" }], waking: ["s"] })
+  b.made.add("/wt/s")
+  b.checkingOut.add("/wt/s")
+  const ready = folderReady(b.deps, "/wt/s")
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(b.slept()).toBeGreaterThan(0)
+  b.checkingOut.delete("/wt/s")
+  await ready
+  // Another folder is not held up by it.
+  b.checkingOut.add("/wt/s")
+  const before = b.slept()
+  b.made.add("/home/x")
+  await folderReady(b.deps, "/home/x")
+  expect(b.slept()).toBe(before)
 })

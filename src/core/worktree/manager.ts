@@ -90,6 +90,8 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
  */
 export async function ensureWorktreeAt(opts: {
   repoRoot: string; workdir: string; sessionBranch: string; baseBranch: string
+  /** git has checked the files out (the includes and the setup hook come after). */
+  onCheckedOut?: () => void
 }): Promise<{ created: boolean }> {
   if (existsSync(opts.workdir)) {
     if (readdirSync(opts.workdir).length > 0) return { created: false }
@@ -106,6 +108,7 @@ export async function ensureWorktreeAt(opts: {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
     await gitAsync(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch])
   }
+  opts.onCheckedOut?.()
   await copyWorktreeIncludes(opts.repoRoot, opts.workdir)
   await runSetupHook(opts.repoRoot, opts.workdir, opts.sessionBranch, opts.baseBranch)
   return { created: true }

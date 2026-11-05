@@ -1147,6 +1147,8 @@ const liveness = {
 } satisfies LivenessDeps
 /** Sessions whose first wake a door (spawn_session, delegate, council, …) waits for: a failure is its caller's to report. */
 const doorStarts = new Set<string>()
+/** The folders git is checking a session's worktree out into right now (the files pane and terminals wait for them). */
+const checkoutsInFlight = new Set<string>()
 const sessionChain = new SessionChain({
   isLive: (id) => isLiveWith(liveness, id),
   ensureLive: (id) => ensureLiveWith(liveness, id),
@@ -3227,6 +3229,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       sessions: () => registry.list(),
       pending: (id) => sessionChain.pending(id),
       exists: (p) => existsSync(p),
+      checkoutsInFlight: () => [...checkoutsInFlight],
       sleep: (ms) => Bun.sleep(ms),
       now: () => Date.now(),
     }, path),
@@ -3597,12 +3600,14 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
   if (!session.repo_root || !session.session_branch) return
   if (existsSync(session.workdir) && readdirSync(session.workdir).length > 0) return
   const t = performance.now()
+  checkoutsInFlight.add(session.workdir)
   const { created } = await ensureWorktreeAt({
     repoRoot: session.repo_root,
     workdir: session.workdir,
     sessionBranch: session.session_branch,
     baseBranch: session.base_branch || "HEAD",
-  })
+    onCheckedOut: () => { checkoutsInFlight.delete(session.workdir) },
+  }).finally(() => { checkoutsInFlight.delete(session.workdir) })
   startTraces.markSession(session.id, "worktree", { ms: msSince(t), created })
   if (!created) return
   registry.sessions.setBaseCommits(session.id, captureBaseCommits(session.workdir))
