@@ -9,4 +9,7 @@ internal object TalkKeyStatus {
 
     /** Wayland: what its GlobalShortcuts portal made of the key (null until asked, and off Wayland). */
     val wayland = MutableStateFlow<WaylandHotKey.Outcome?>(null)
+
+    /** Counts the times the key in use was picked again in Settings: each time it is set up anew. */
+    val picks = MutableStateFlow(0)
 }

@@ -130,7 +130,9 @@ fun DesktopAssistantOverlay(
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
     // Read here, not in the effect: by the time the effect runs, the state may already hold the next key.
     val talkKey = remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it, desktopOs) } }.collectAsState(null).value
-    LaunchedEffect(overlay, talkKey) {
+    // The same key picked again in Settings sets it up anew, so a desktop that said no is asked again.
+    val picks = TalkKeyStatus.picks.collectAsState().value
+    LaunchedEffect(overlay, talkKey, picks) {
         val key = talkKey ?: return@LaunchedEffect
         try {
             overlay.useTalkKey(key)

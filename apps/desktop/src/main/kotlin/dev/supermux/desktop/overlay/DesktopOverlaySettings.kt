@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.prefs.LocalUiPrefs
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -65,26 +66,16 @@ internal fun DesktopOverlaySettings() {
                             text = { Text(if (k.needsInputMonitoring) "$name · asks for Input Monitoring" else name) },
                             onClick = {
                                 open = false
-                                scope.launch { prefs.putAssistantOverlayTalkKey(k.name) }
+                                // The same key again sets it up anew: a desktop that declined it, or failed to, is asked again.
+                                if (k == key) TalkKeyStatus.picks.update { it + 1 }
+                                else scope.launch { prefs.putAssistantOverlayTalkKey(k.name) }
                             },
                         )
                     }
                 }
             }
         }
-        when (portal) {
-            WaylandHotKey.Outcome.NO_PORTAL -> Text(
-                "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = cs.onSurfaceVariant,
-            )
-            WaylandHotKey.Outcome.DECLINED -> Text(
-                "The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = cs.onSurfaceVariant,
-            )
-            else -> Unit
-        }
+        waylandKeyNote(portal)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant) }
         refused?.let {
             Text(
                 "Another app already uses ${it.label}: pick another key here.",
@@ -98,4 +89,13 @@ internal fun DesktopOverlaySettings() {
             }
         }
     }
+}
+
+/** What Settings says about the Wayland key, as its portal answered: what the desktop can't do, and what instead. */
+internal fun waylandKeyNote(outcome: WaylandHotKey.Outcome?): String? = when (outcome) {
+    WaylandHotKey.Outcome.NO_PORTAL -> "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk."
+    WaylandHotKey.Outcome.DECLINED -> "The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again."
+    // It answered but couldn't hand the key over: its backend failed, or its dialog went unanswered.
+    WaylandHotKey.Outcome.FAILED -> "The desktop couldn't give supermux this key; hold your Agent to talk, or pick it again here to try again."
+    WaylandHotKey.Outcome.BOUND, null -> null
 }
