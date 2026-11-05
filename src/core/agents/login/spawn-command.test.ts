@@ -18,6 +18,8 @@ describe("antigravity loginSpawnCommand", () => {
       expect(spec.env?.DISPLAY).toBeUndefined()
       expect(spec.env?.WAYLAND_DISPLAY).toBeUndefined()
       expect(spec.env?.BROWSER).toBe("true")
+      // Off Windows agy's updater is silent and keeps agy current: left on (#70).
+      expect(spec.env?.AGY_CLI_DISABLE_AUTO_UPDATE).toBeUndefined()
       expect(process.env.DISPLAY).toBe(":0")
       expect(spec.cwd).toBeDefined()
       expect(spec.cwd!.startsWith(tmpdir())).toBe(true)
@@ -84,6 +86,8 @@ describe("antigravity loginSpawnCommand", () => {
       expect(spec.args).toEqual(["-p=Reply with the single word OK."])
       expect(spec.env?.BROWSER).toBe(process.env.BROWSER)
       expect(readdirSync(join(spec.cwd!, "..", ".bin"))).toEqual([])
+      // agy's updater would open a console window during the sign-in (#70).
+      expect(spec.env?.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true")
     } finally {
       spec.cleanup?.()
     }
