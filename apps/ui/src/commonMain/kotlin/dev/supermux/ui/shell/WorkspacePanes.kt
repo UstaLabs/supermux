@@ -1248,6 +1248,8 @@ private fun sheetToneOf(v: ViewDto?): Color {
     val cs = MaterialTheme.colorScheme
     return when {
         v == null -> cs.surfaceContainerLow
+        // A chat tab with no chat yet shows the launcher, in its own tone.
+        v.kind == "chat" && v.chatSessionId() == null -> cs.surfaceContainer
         v.kind == "terminal" -> terminalPalette().background
         v.filePathOrNull() != null -> Color(LocalPanes.current.code)
         v.kind == "editor" && v.stateString("mode") == "diff" -> cs.surface

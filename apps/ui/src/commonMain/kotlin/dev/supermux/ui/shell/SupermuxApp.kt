@@ -21,6 +21,8 @@
 // session-only chat for a session that belongs to no workspace ([chatFallback]).
 package dev.supermux.ui.shell
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -1648,6 +1650,11 @@ private fun ShellDetailForeground(
                 Modifier
                     .fillMaxSize()
                     .zIndex(2f)
+                    // A sheet in the frame, like the panes': it starts where theirs do, below the
+                    // strip row, and sits in the same 6 dp gutter.
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(start = 6.dp, end = 6.dp, top = TAB_STRIP_HEIGHT, bottom = 6.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .testTag("launcher_overlay")
                     .onPreviewKeyEvent { e ->
                         if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
