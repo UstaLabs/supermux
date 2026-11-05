@@ -52,6 +52,7 @@ import dev.supermux.ui.overlay.overlayChoiceToStore
 import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.rememberOverlayRig
 import dev.supermux.ui.prefs.UiPrefs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -127,10 +128,19 @@ fun DesktopAssistantOverlay(
     val screenAllowed by prefs.assistantOverlayScreen.collectAsState(true)
     SideEffect { overlay.allowScreen(screenAllowed && !waylandSession) }
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
-    val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it, desktopOs) } }.collectAsState(null)
+    // Read here, not in the effect: by the time the effect runs, the state may already hold the next key.
+    val talkKey = remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it, desktopOs) } }.collectAsState(null).value
     LaunchedEffect(overlay, talkKey) {
-        // A key that can't be had must not take the overlay down with it.
-        talkKey?.let { runCatching { overlay.useTalkKey(it) }.onFailure { e -> println("[OverlayKey] ${it.name} failed: $e") } }
+        val key = talkKey ?: return@LaunchedEffect
+        try {
+            overlay.useTalkKey(key)
+        } catch (e: CancellationException) {
+            // Another key was chosen, or the overlay closed, meanwhile: not a failure.
+            throw e
+        } catch (e: Throwable) {
+            // A key that can't be had must not take the overlay down with it.
+            println("[OverlayKey] ${key.name} failed: $e")
+        }
     }
     // Back where it rested last time, before it shows; and where it comes to rest, written down.
     LaunchedEffect(overlay) {
