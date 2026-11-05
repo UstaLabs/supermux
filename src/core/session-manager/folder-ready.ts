@@ -2,7 +2,7 @@
 // fraction of a second after Send; a large repo takes a few). The files pane and a terminal that ask
 // for it meanwhile wait until git has checked the files out, instead of failing or listing a folder
 // half full. The repo's setup hook is not waited for. Any other path answers at once.
-import { resolve, sep } from "path"
+import { paths } from "@supermux/platform"
 
 export type FolderReadyDeps = {
   /** The live sessions. */
@@ -21,8 +21,9 @@ const POLL_MS = 50
 /** Resolves once `path` is checked out, or at once when no session's wake is about to make it. */
 export async function folderReady(deps: FolderReadyDeps, path: string, timeoutMs = 30_000): Promise<void> {
   if (!path) return
-  const target = resolve(path)
-  const inside = (dir: string) => target === dir || target.startsWith(dir + sep)
+  // The host's rule (separators, letter case, drives), not a prefix: on Windows a folder spelled with `/` or another
+  // case never matched, so nothing waited.
+  const inside = (dir: string) => paths.isInside(path, dir)
   const until = deps.now() + timeoutMs
   let owner: { id: string; workdir: string } | undefined | null = null
   while (deps.now() < until) {
