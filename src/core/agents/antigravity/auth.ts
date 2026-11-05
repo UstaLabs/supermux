@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { resolveCommand } from "../../process/launcher"
 import { ptyLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
+import { antigravityUpdaterEnv } from "../../../../packages/supermux-core/src/antigravity/updater.js"
 
 /** No-op stand-ins for the browser openers agy calls directly (xdg-open on Linux, open on macOS);
  * BROWSER/DISPLAY do not stop it. The user opens the URL on their own device, never the broker host. */
@@ -21,6 +22,7 @@ export function loginSpawnCommand(platform = process.platform): LoginSpawnComman
   delete env.DISPLAY
   delete env.WAYLAND_DISPLAY
   if (platform !== "win32") env.BROWSER = "true"
+  Object.assign(env, antigravityUpdaterEnv(platform))
   const cmd = resolveCommand(["agy"], env, platform) ?? "agy"
   const root = mkdtempSync(join(tmpdir(), "supermux-agy-login-"))
   const cwd = join(root, "cwd")

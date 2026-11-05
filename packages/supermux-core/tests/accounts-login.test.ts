@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
 import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
-import { unlinkLink } from "../src/accounts/login.js"
+import { loginPlan, unlinkLink } from "../src/accounts/login.js"
 import type { AgentDriver, LoginConfig, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -293,6 +293,11 @@ test("parseAntigravityLoginUrl prefers the Google URL; a lone docs link is not a
   expect(parseAntigravityLoginUrl(`Please visit the URL to log in:\r\n  ${google}`)).toBeUndefined()
   expect(parseAntigravityLoginUrl(`Please visit the URL to log in:\r\n  ${google}\r\n`)).toBe(google)
   expect(parseAntigravityLoginUrl("Open https://example.com/auth?x=1 then paste the authorization code")).toBe("https://example.com/auth?x=1")
+})
+
+test("antigravity login: agy's self-update is off on Windows only (#70)", () => {
+  expect(loginPlan("antigravity", "/tmp/acct", "agy", undefined, "win32").spawn.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true")
+  expect(loginPlan("antigravity", "/tmp/acct", "agy", undefined, "linux").spawn.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBeUndefined()
 })
 
 test("parseAntigravityLoginUrl under a Windows ConPTY: a cursor move after the URL ends it", () => {

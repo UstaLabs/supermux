@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
 import { readAntigravityIdentity } from "./adapters/antigravity.js"
+import { antigravityUpdaterEnv } from "../antigravity/updater.js"
 import { readClaudeIdentity } from "./adapters/claude.js"
 import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
@@ -155,7 +156,7 @@ export function loginEnv(extra: Record<string, string>): Record<string, string> 
   return { ...env, ...extra }
 }
 
-export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string): Plan {
+export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string, platform: NodeJS.Platform = process.platform): Plan {
   switch (kind) {
     case "claude": return {
       spawn: { command, args: ["auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], env: loginEnv({ CLAUDE_CONFIG_DIR: directory }), cwd: directory, pty: true },
@@ -194,7 +195,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
       return {
         spawn: {
           command, args: ["-p=Reply with the single word OK."], cwd: directory, pty: true,
-          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }),
+          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(platform === "win32" ? { USERPROFILE: home } : {}), ...antigravityUpdaterEnv(platform) }),
         },
         parse: output => { const url = parseAntigravityLoginUrl(output); return url ? { url } : undefined },
         needsCode: true,
