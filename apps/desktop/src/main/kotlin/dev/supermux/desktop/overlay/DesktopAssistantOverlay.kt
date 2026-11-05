@@ -31,6 +31,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import dev.supermux.desktop.platform.DesktopOs
+import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
@@ -92,11 +94,10 @@ internal const val HEAD_TITLE = "supermux assistant"
 internal const val BUBBLE_TITLE = "supermux assistant bubble"
 internal const val CHAT_TITLE = "supermux assistant chat"
 
-private val os = System.getProperty("os.name").orEmpty()
-internal val isMac = os.startsWith("Mac")
+internal val isMac = isMacOs()
 
 /** Where the overlay can float ([overlaySupportedOn]). */
-val desktopOverlaySupported: Boolean = overlaySupportedOn(os)
+val desktopOverlaySupported: Boolean = overlaySupportedOn(DesktopOs.current)
 
 /**
  * The overlay, while the Appearance switch is on. [themed] wraps a window's content in the app's theme
