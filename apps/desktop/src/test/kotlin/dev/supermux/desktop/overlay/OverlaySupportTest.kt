@@ -10,8 +10,8 @@ class OverlaySupportTest {
     // Windows: its hot key (RegisterHotKey), a tool window on every virtual desktop, kept out of captures.
     @Test fun windowsHasTheOverlay() = assertTrue(overlaySupportedOn("Windows 11"))
 
-    // Linux: override-redirect windows above everything on X11 (and XWayland); the key on X11, Wayland's portal later.
-    @Test fun linuxHasTheOverlay() = assertTrue(overlaySupportedOn("Linux"))
+    // Linux waits for a check on a real desktop: under Xvfb its transparent windows can't be seen at all.
+    @Test fun linuxWaitsForARealDesktopCheck() = assertFalse(overlaySupportedOn("Linux"))
 
     // Only the desktops it was built and checked on.
     @Test fun anotherOsHasNone() = assertFalse(overlaySupportedOn("FreeBSD"))
