@@ -3,6 +3,7 @@
 // agent "starting" for as long as it needs, and logs each start's folder, so it can count wakes.
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
 import { execFileSync } from "child_process"
+import { createHmac } from "crypto"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -13,6 +14,26 @@ import { Registry } from "../src/core/session-manager/registry"
 const REPO = join(import.meta.dir, "..")
 const SEED_ID = "00000000-0000-4000-8000-000000000001"
 const DOZING_ID = "00000000-0000-4000-8000-0000000000d0"
+// Telegram and WhatsApp share the broker's chat inbound path (main.ts wireInbound); WhatsApp's GoWA
+// API is easy to stand in for, so a dozing session is reached through it.
+const CHAT_DOZING_ID = "00000000-0000-4000-8000-0000000000c0"
+const WA_JID = "905550001122@s.whatsapp.net"
+const WA_SECRET = "wa-secret"
+const sentToChat: Array<{ phone: string; message: string }> = []
+const gowa = Bun.serve({
+  port: 0,
+  hostname: "127.0.0.1",
+  async fetch(req) {
+    const path = new URL(req.url).pathname
+    if (path === "/app/status") return Response.json({ results: { is_connected: true, is_logged_in: true } })
+    if (path === "/send/message" && req.method === "POST") {
+      sentToChat.push((await req.json()) as { phone: string; message: string })
+      return Response.json({ results: { message_id: `wa-out-${sentToChat.length}` } })
+    }
+    return new Response("not found", { status: 404 })
+  },
+})
+let waPort = 0
 
 const dir = mkdtempSync(join(tmpdir(), "mux-born-asleep-"))
 const state = join(dir, "state")
@@ -90,7 +111,13 @@ beforeAll(async () => {
   mkdirSync(dozingDir)
   registry.register({ id: DOZING_ID, name: "dozing", agent: "claude", workdir: dozingDir, pid: 0, core: true, agent_home: join(state, "agents", "claude", "dozing") })
   registry.sessions.suspend(DOZING_ID)
+  const chatDozingDir = join(dir, "chat-dozing")
+  mkdirSync(chatDozingDir)
+  registry.register({ id: CHAT_DOZING_ID, name: "chat-dozing", agent: "claude", workdir: chatDozingDir, pid: 0, core: true, agent_home: join(state, "agents", "claude", "chat-dozing") })
+  registry.sessions.suspend(CHAT_DOZING_ID)
+  registry.setActive(`whatsapp:${WA_JID}`, CHAT_DOZING_ID)
   db.close()
+  writeFileSync(join(state, "access.json"), JSON.stringify({ whatsapp: { allowFrom: [WA_JID.split("@")[0]] } }))
   // The repo new sessions get worktrees of, and the seed session's own folder, a repo too (delegate's worktree child).
   mkdirSync(project)
   for (const repo of [project, join(dir, "workdir")]) {
@@ -103,6 +130,7 @@ beforeAll(async () => {
   }
 
   const port = freePort()
+  waPort = freePort()
   base = `http://127.0.0.1:${port}`
   broker = Bun.spawn(["bun", "src/main.ts"], {
     cwd: REPO,
@@ -118,6 +146,9 @@ beforeAll(async () => {
       MUX_UPDATE_CHECK: "0",
       MUX_CURATOR_ENABLED: "0",
       MUX_WORKTREES_ROOT: join(dir, "worktrees"),
+      MUX_WHATSAPP_GOWA_URL: `http://127.0.0.1:${gowa.port}`,
+      MUX_WHATSAPP_WEBHOOK_PORT: String(waPort),
+      MUX_WHATSAPP_WEBHOOK_SECRET: WA_SECRET,
     },
   })
   await waitFor("the broker", async () => (await fetch(`${base}/me`).then((r) => r.status).catch(() => 0)) === 401, 90_000)
@@ -134,6 +165,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   ws?.close()
+  gowa.stop(true)
   if (broker) { broker.kill("SIGTERM"); await broker.exited }
   if (process.env.MUX_TEST_KEEP_FIXTURE !== "1") rmSync(dir, { recursive: true, force: true })
   else console.log("fixture kept:", dir)
@@ -250,3 +282,14 @@ test("council members still start and each gets the question", async () => {
   expect(r.members).toHaveLength(2)
   for (const m of r.members) await waitFor(`member ${m.letter}'s answer`, () => answered(m.session, "which is faster?"), 60_000)
 }, 120_000)
+
+test("a chat message (Telegram's path) wakes a dozing session: the resume line, then the reply, in that chat", async () => {
+  const body = JSON.stringify({ event: "message", payload: { id: "wa-in-1", chat_id: WA_JID, from: WA_JID, from_name: "Ahmet", body: "hello from the chat", timestamp: new Date().toISOString() } })
+  const signature = `sha256=${createHmac("sha256", WA_SECRET).update(body).digest("hex")}`
+  const res = await fetch(`http://127.0.0.1:${waPort}/`, { method: "POST", headers: { "X-Hub-Signature-256": signature, "content-type": "application/json" }, body })
+  expect(res.status).toBe(200)
+  await waitFor("the reply in the chat", () => sentToChat.some((m) => m.message.includes("Fixture reply: hello from the chat")), 60_000)
+  expect(sentToChat[0]!.message).toBe(`Resuming session "chat-dozing"...`)
+  expect((await messages(CHAT_DOZING_ID)).filter((m) => m.direction === "inbound").map((m) => m.text)).toEqual(["hello from the chat"])
+  expect((await session(CHAT_DOZING_ID)).status).toBe("active")
+}, 90_000)
