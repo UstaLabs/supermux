@@ -18,12 +18,14 @@ describe("TypeScript rules", () => {
     expect(ids(ts("src/a.ts", 'const leaf = path.split("/").pop()'))).toEqual(["path-shape"])
     expect(ids(ts("src/a.ts", 'if (p.startsWith(root + "/")) {}'))).toEqual(["path-shape"])
     expect(ids(ts("src/a.ts", 'import { posix } from "path"'))).toEqual(["path-shape"])
+    expect(ids(ts("src/a.ts", "const found = Bun.which(name) !== null"))).toEqual(["which-path"])
   })
 
   test("the runtime's own answers pass", () => {
     expect(ts("src/a.ts", 'symlinkSync(dir, link, "junction")')).toEqual([])
     expect(ts("src/a.ts", "const leaf = basename(p); const rel = relative(root, p)")).toEqual([])
     expect(ts("src/a.ts", "const dir = mkdtempSync(join(tmpdir(), 'x-'))")).toEqual([])
+    expect(ts("src/a.ts", 'const dart = Bun.which("dart", { PATH: process.env.PATH })')).toEqual([])
   })
 
   test("allowed places pass", () => {

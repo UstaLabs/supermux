@@ -61,6 +61,13 @@ export const RULES: Rule[] = [
     use: "start processes with proc.spawn from @supermux/platform (hidden window, live env); until it exists, spawnCommand in src/core/process/launcher.ts",
   },
   {
+    id: "which-path",
+    lang: "ts",
+    patterns: [/\bBun\.which\(\s*[^,()]+\)/],
+    allowed: [],
+    use: "Bun.which(name, { PATH: process.env.PATH }): without PATH it searches the PATH the process started with (oven-sh/bun#40846); an agent CLI to launch: proc.resolve",
+  },
+  {
     id: "links-perms",
     lang: "ts",
     patterns: [/\bsymlink(?:Sync)?\((?![^\n]*["']junction["'])/, /\b[fl]?chmod(?:Sync)?\(/, /\bmode:\s*0o[0-7]+/],

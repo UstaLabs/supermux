@@ -75,9 +75,9 @@ export const realRun: Run = async (argv, opts) => {
   } satisfies RunResult
 }
 
-/** Is a binary on PATH? */
+/** Is a binary on PATH? The PATH of now: without one, Bun.which searches the PATH the process started with. */
 export function which(bin: string): boolean {
-  return Bun.which(bin) !== null
+  return Bun.which(bin, { PATH: process.env.PATH }) !== null
 }
 
 /**

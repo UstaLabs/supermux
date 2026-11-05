@@ -188,11 +188,11 @@ export function findDartBin(): string | null {
   const muxDart = join(muxLspHome(), "dart-sdk", "bin", "dart")
   if (existsSync(muxDart)) return muxDart
   try {
-    const onPath = Bun.which("dart")
+    const onPath = Bun.which("dart", { PATH: process.env.PATH })
     if (onPath) return onPath
   } catch { /* not on PATH */ }
   let flutter: string | null = null
-  try { flutter = Bun.which("flutter") } catch { /* */ }
+  try { flutter = Bun.which("flutter", { PATH: process.env.PATH }) } catch { /* */ }
   if (flutter) {
     const install = dirname(dirname(flutter))
     const sdkDart = join(install, "bin", "cache", "dart-sdk", "bin", "dart")
@@ -210,7 +210,7 @@ export function findGoplsBin(): string | null {
   const mux = join(muxLspBinDir(), "gopls")
   if (existsSync(mux)) return mux
   try {
-    return Bun.which("gopls")
+    return Bun.which("gopls", { PATH: process.env.PATH })
   } catch {
     return null
   }
@@ -220,7 +220,7 @@ export function findRustAnalyzerBin(): string | null {
   const cargo = join(home(), ".cargo", "bin", "rust-analyzer")
   if (existsSync(cargo)) return cargo
   try {
-    return Bun.which("rust-analyzer")
+    return Bun.which("rust-analyzer", { PATH: process.env.PATH })
   } catch {
     return null
   }

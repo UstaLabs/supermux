@@ -317,7 +317,7 @@ const defaultProbe: ZmxProbe = {
     } catch { return false }
   },
   which: name => {
-    try { return Bun.which(name) } catch { return null }
+    try { return Bun.which(name, { PATH: process.env.PATH }) } catch { return null }
   },
 }
 

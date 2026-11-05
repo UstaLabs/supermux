@@ -126,7 +126,7 @@ WantedBy=default.target
 function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // Detect a usable `systemctl --user`. (The shared source-mode guard lives in
   // the installService dispatcher, alongside the macOS LaunchAgent path.)
-  const hasSystemctl = Bun.which("systemctl") !== null
+  const hasSystemctl = Bun.which("systemctl", { PATH: process.env.PATH }) !== null
   const runtimeDir = process.env.XDG_RUNTIME_DIR
   if (!hasSystemctl || !runtimeDir) {
     println(`No systemd --user available; run the broker manually: ${process.execPath}`)
@@ -298,7 +298,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
 
   // 2. Need launchctl to load it. Absent (e.g. non-macOS) → plist is in place and
   //    will load on next login; nothing more we can do here.
-  if (Bun.which("launchctl") === null) {
+  if (Bun.which("launchctl", { PATH: process.env.PATH }) === null) {
     println("launchctl not found; the plist is installed and will load on next login.")
     return
   }
@@ -435,7 +435,7 @@ export async function runSetupCommand(
   println("Agent CLIs on PATH:")
   let anyAgent = false
   for (const cli of AGENT_CLIS) {
-    const found = Bun.which(cli) !== null
+    const found = Bun.which(cli, { PATH: process.env.PATH }) !== null
     if (found) anyAgent = true
     println(`  ${found ? "✔" : "–"} ${cli}`)
   }

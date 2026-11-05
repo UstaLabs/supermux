@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process"
-import { accessSync, constants } from "node:fs"
 import { access, lstat, mkdir, readdir, readFile, rm, rmdir, chmod, symlink, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
@@ -10,7 +9,7 @@ import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
-import { files } from "@supermux/platform"
+import { files, proc } from "@supermux/platform"
 
 export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
@@ -122,14 +121,12 @@ function quote(arg: string): string {
   return `'${arg.replace(/'/g, `'\\''`)}'`
 }
 
-/** First of `names` found executable on PATH (absolute names are taken as is). */
+/** First of `names` found as a command on PATH (on Windows a .exe, .cmd or .ps1 too); absolute names are taken as is. */
 export function findCommand(names: string[], env: Record<string, string | undefined> = process.env): string | undefined {
   for (const name of names) {
     if (isAbsolute(name)) return name
-    for (const dir of (env.PATH ?? "").split(delimiter)) {
-      if (!dir) continue
-      try { accessSync(join(dir, name), constants.X_OK); return join(dir, name) } catch { /* next */ }
-    }
+    const found = proc.resolve([name], env)
+    if (found) return found
   }
   return undefined
 }
