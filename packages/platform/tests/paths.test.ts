@@ -71,3 +71,9 @@ test("safeFolderName elsewhere changes only what would leave the folder: / and \
   expect(paths.safeFolderName(".", "linux")).toBe("_.")
   expect(paths.safeFolderName("..", "darwin")).toBe("_..")
 })
+
+test("foldsCase: macOS and Windows file systems ignore letter case, Linux's keep it", () => {
+  expect(paths.foldsCase("darwin")).toBe(true)
+  expect(paths.foldsCase("win32")).toBe(true)
+  expect(paths.foldsCase("linux")).toBe(false)
+})

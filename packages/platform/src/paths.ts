@@ -35,6 +35,14 @@ const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$
  * it, and "." / ".." never climb out. On Windows also no reserved character, no trailing dot or space (Windows would drop
  * them) and no device name (CON, NUL, COM1...). Elsewhere a name maps to itself otherwise, so no existing folder moves.
  */
+/**
+ * Whether [platform]'s file system ignores letter case, so "Test" and "test" name one folder: macOS (APFS's default)
+ * and Windows (NTFS). Linux's file systems keep it.
+ */
+export function foldsCase(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || platform === "win32"
+}
+
 export function safeFolderName(name: string, platform: NodeJS.Platform = process.platform): string {
   const flat = name.replace(/[/\\]/g, "-")
   if (platform !== "win32") return flat === "." || flat === ".." ? `_${flat}` : flat

@@ -43,7 +43,7 @@ export function validateAgentName(raw: string, taken: Set<string>, platform?: No
     return { ok: false, error: "name is not a folder name on this computer: Windows refuses : ? * < > | \" and names like CON, and a trailing dot or space", status: 400, code: "name_invalid" }
   }
   // macOS and Windows ignore letter case: "Atlas" and "atlas" would share one workspace folder.
-  if (folderTaken(name, taken)) return { ok: false, error: `name already in use: ${name}`, status: 409, code: "name_taken" }
+  if (folderTaken(name, taken, platform)) return { ok: false, error: `name already in use: ${name}`, status: 409, code: "name_taken" }
   return { ok: true, name }
 }
 
