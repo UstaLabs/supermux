@@ -151,6 +151,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.exp
 import kotlin.math.max
@@ -715,8 +716,15 @@ fun ChatPanel(
         // bottom, so scrolling back into a long last reply jumped the reader to its end.
         var prevSize by remember(session.id) { mutableIntStateOf(-1) }
         var autoFollow by remember(session.id) { mutableStateOf(true) }
-        // Our own follow scroll is moving the transcript: the positions it passes are not the reader's.
-        var followScroll by remember(session.id) { mutableStateOf(false) }
+        // Our own follow scrolls moving the transcript (a new row's, the glide): the positions they pass are not the
+        // reader's. A count, not a flag (card #76): the glide takes the scroll from a new row's follow, and the follow
+        // that stops must not unmark the glide still moving, or its positions read as the reader leaving the end.
+        var followScrolls by remember(session.id) { mutableIntStateOf(0) }
+        // The tail below can see a follow scroll's last step only after that scroll has ended: a new row restarting
+        // the follow mid-scroll left the transcript short of the end, and that step read as the reader leaving, so
+        // nothing followed again (card #76, a slow web page). A follow that finished, or that this panel stopped,
+        // keeps its last positions ours for one more look; one the reader's scroll took over does not.
+        var followScrollEnded by remember(session.id) { mutableStateOf(false) }
         // Medium folds a tool run into its first row and draws nothing for the rest, so "the last row"
         // is the last row that draws, not the last index.
         // Card #76: live rows come after the timeline, so the last one of them is the transcript's last row.
@@ -744,14 +752,17 @@ fun ChatPanel(
         val glides = remember(session.id) { Channel<Unit>(Channel.CONFLATED) }
         LaunchedEffect(session.id, listState) {
             for (request in glides) {
-                followScroll = true
+                followScrolls++
+                var settled = false
                 try {
                     glideToEnd(listState)
+                    settled = true
                 } catch (e: CancellationException) {
                     // The reader took the scroll: theirs wins. Only a real cancellation ends this loop.
                     currentCoroutineContext().ensureActive()
                 } finally {
-                    followScroll = false
+                    followScrolls--
+                    if (settled) followScrollEnded = true
                 }
             }
         }
@@ -764,11 +775,13 @@ fun ChatPanel(
                     atEnd = transcriptAtEnd(listState, followSlop),
                     lastRow = lastShown,
                     lastRowSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastShown }?.size ?: -1,
-                    ours = followScroll,
+                    ours = followScrolls > 0 || followScrollEnded,
                 )
             }.collect { now ->
                 val before = seen
                 seen = now
+                // That one look at a follow scroll that ended is used up.
+                if (followScrollEnded && followScrolls == 0) followScrollEnded = false
                 if (before == null) return@collect
                 // Following is decided by where the transcript is SCROLLED. Rows that grow or arrive
                 // under a still transcript leave it as it was: a new row below would otherwise read as
@@ -807,13 +820,17 @@ fun ChatPanel(
             val first = prevSize < 0
             // A find hit on screen holds the transcript where it is.
             if (first || (rowCount > prevSize && autoFollow && find.current < 0)) {
-                followScroll = true
+                followScrolls++
+                var settled = false
                 try {
                     if (first) listState.scrollToItem(target) else listState.animateScrollToItem(target)
                     // The last row may be taller than the screen: settle on its end, not its top.
                     pinToEnd()
+                    settled = true
                 } finally {
-                    followScroll = false
+                    followScrolls--
+                    // Stopped by this effect restarting (a newer row): its last step is ours too.
+                    if (settled || !currentCoroutineContext().isActive) followScrollEnded = true
                 }
             }
             prevSize = rowCount

@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.InputMode
@@ -299,6 +300,79 @@ class ChatAutoscrollTest {
         waitForIdle()
         assertEquals(before, topOf(anchor) ?: Float.NaN, 1f, "the glide pulled the reader back after their drag")
         assertFalse(onScreen("Live tail."), "the reader left the end")
+    }
+
+    /**
+     * A turn as the web client saw it: the prompt lands, the agent starts working (a "Thinking…" row), then the live
+     * reply takes that row's place and grows, each step [gap] frames after the last, while the follow before it is
+     * still moving. The transcript ends at the live reply's end and keeps following it.
+     */
+    private fun ComposeUiTest.turnLandingMidFollow(gap: Int) {
+        panel()
+        mainClock.autoAdvance = false
+        fun frames(n: Int) = repeat(n) { mainClock.advanceTimeByFrame() }
+        state = state.copy(messages = state.messages + entry(7, "Write a poem about ferries.", "inbound"))
+        frames(gap)
+        state = state.copy(agent = AgentStatus(phase = "thinking", state = "working", working = true))
+        frames(gap)
+        var text = "Live paragraph one."
+        state = state.copy(live = listOf(live(text)))
+        repeat(12) { i ->
+            frames(gap)
+            text += if (i % 3 == 2) "\n\nLive paragraph ${i + 2}: the poem goes on." else " Ferries cross at dusk."
+            state = state.copy(live = listOf(live(text)))
+        }
+        state = state.copy(live = listOf(live("$text\n\nLive tail.")))
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(onScreen("Live tail."), "the live reply's end is followed")
+        state = state.copy(live = listOf(live("$text\n\nLive tail.\n\nAfter the tail.")))
+        waitForIdle()
+        assertTrue(onScreen("After the tail."), "the transcript still follows")
+    }
+
+    @Test fun a_turn_landing_frame_by_frame_mid_follow_is_followed() = runComposeUiTest { turnLandingMidFollow(gap = 1) }
+
+    @Test fun a_turn_landing_mid_follow_is_followed() = runComposeUiTest { turnLandingMidFollow(gap = 6) }
+
+    /**
+     * The live row appears (followed as a new row) and starts growing the next frame, so the glide takes the scroll
+     * from that follow. Neither may leave the transcript thinking the reader scrolled away.
+     */
+    @Test fun a_live_row_that_grows_while_it_is_followed_in_stays_followed() = runComposeUiTest {
+        panel()
+        mainClock.autoAdvance = false
+        var text = "Live paragraph one."
+        state = state.copy(live = listOf(live(text)))
+        repeat(30) { i ->
+            mainClock.advanceTimeByFrame()
+            text += if (i % 4 == 3) "\n\nLive paragraph ${i + 2}: the poem goes on." else " Ferries cross at dusk."
+            state = state.copy(live = listOf(live(text)))
+        }
+        mainClock.autoAdvance = true
+        waitForIdle()
+        state = state.copy(live = listOf(live("$text\n\nLive tail.")))
+        waitForIdle()
+        assertTrue(onScreen("Live tail."), "the live reply's end is followed")
+    }
+
+    /**
+     * A reader's drag that stops a new row's follow is theirs. A follow that ended keeps its own last step for one
+     * more look; it must not take the reader's first move with it.
+     */
+    @Test fun a_readers_drag_during_a_new_rows_follow_wins() = runComposeUiTest {
+        panel()
+        state = state.copy(messages = state.messages + entry(7, paragraphs("Next", 8)))
+        mainClock.advanceTimeBy(50)
+        drag(+300f)
+        val anchor = ((1..8).map { "Next paragraph $it:" } + (1..40).map { "Reply paragraph $it:" }).firstOrNull { onScreen(it) }
+            ?: fail("nothing to read on screen")
+        val before = topOf(anchor) ?: fail("no anchor")
+        waitForIdle()
+        assertEquals(before, topOf(anchor) ?: Float.NaN, 1f, "the follow pulled the reader back after their drag")
+        state = state.copy(messages = state.messages + entry(8, "Another message."))
+        waitForIdle()
+        assertFalse(onScreen("Another message."), "a reader who left the end is not followed")
     }
 
     /** The first paragraph of [label] on screen now. */
