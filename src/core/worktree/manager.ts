@@ -81,6 +81,9 @@ export async function createSessionBranch(repoRoot: string, branch: string, base
   await gitAsync(repoRoot, ["branch", branch, base])
 }
 
+/** A large (or LFS) repo's checkout at a session's wake: as long as the setup hook may run. */
+const CHECKOUT_TIMEOUT_MS = 600_000
+
 /**
  * Makes sure the session's worktree is checked out at `workdir`: a session born asleep (branch made
  * at Send), or one whose folder was removed (merged, cleaned up). A fresh checkout gets what
@@ -103,10 +106,10 @@ export async function ensureWorktreeAt(opts: {
   await gitAsync(opts.repoRoot, ["worktree", "prune"])
   if ((await existingBranchNames(opts.repoRoot)).has(opts.sessionBranch)) {
     // The branch exists (made at Send, or only the dir was removed): check it out at the same path.
-    await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch])
+    await gitAsync(opts.repoRoot, ["worktree", "add", opts.workdir, opts.sessionBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
   } else {
     // Branch was deleted (e.g., after merge) — recreate it from the base so work can continue.
-    await gitAsync(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch])
+    await gitAsync(opts.repoRoot, ["worktree", "add", "-b", opts.sessionBranch, opts.workdir, opts.baseBranch], { timeoutMs: CHECKOUT_TIMEOUT_MS })
   }
   opts.onCheckedOut?.()
   await copyWorktreeIncludes(opts.repoRoot, opts.workdir)

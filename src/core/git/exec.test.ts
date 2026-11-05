@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync } from "fs"
+import { mkdtempSync, rmSync } from "fs"
+import { execFileSync } from "child_process"
 import { tmpdir } from "os"
 import { join } from "path"
 import { gitAsync, runAsync } from "./exec"
@@ -34,4 +35,13 @@ test("runAsync keeps only the tail when output exceeds maxOutput", async () => {
   const r = await runAsync("bash", ["-c", "for i in $(seq 1 2000); do echo line$i; done"], { cwd: tmpdir(), maxOutput: 100 })
   expect(r.output.length).toBeLessThanOrEqual(100)
   expect(r.output).toContain("line2000")
+})
+
+// Card #75: a git cut short says so; its stderr then holds only half-written progress
+// ("Preparing worktree (checking out …)"), which read as the reason in the chat.
+test("gitAsync: a git that runs past its timeout says it timed out", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "git-timeout-"))
+  execFileSync("git", ["init", "-q", dir])
+  await expect(gitAsync(dir, ["cat-file", "--batch"], { timeoutMs: 200 })).rejects.toThrow("git cat-file timed out after 200 ms")
+  rmSync(dir, { recursive: true, force: true })
 })
