@@ -1,7 +1,7 @@
 # Streaming replies — research and proposal (card #76)
 
-Status: **proposal, nothing built**. Branch `mux/streaming-replies` (from `dev` `2b27abebf`). Measured on this box
-2026-11-05 with throwaway sessions; the live broker was not touched.
+Status: **approved 2026-11-05 with Ahmet's answers (§8), being built.** Branch `mux/streaming-replies` (from `dev`
+`2b27abebf`). Measured on this box 2026-11-05 with throwaway sessions; the live broker was not touched.
 
 ## The short version
 
@@ -38,7 +38,7 @@ scratch directory, and each CLI's own login. The script is `~/streaming-probe/pr
 | Grok 1.0.46, grok-4.7-build-fast low | ACP `agent_message_chunk` (+ `agent_thought_chunk`) | ✅ | 190 for 760 chars, 72/s | 3 / 8 | 6 / 35 ms | **3.4 s** | subscription; Grok reports no tokens |
 | Antigravity `agy` 1.5.1, gemini-3.8-flash-low | stream-json `step_update` `text_delta` | ✅ | 49 for 1,094 chars, 20/s | 24 / 48 | 27 / 156 ms | **2.4 s** | 7.1k in / 287 out tokens |
 | Cursor 2026.09.18, ACP | `agent_message_chunk` | ⚠️ not provable | — | — | — | — | 0 tokens: the account is at its free-plan limit ("Upgrade your plan to continue" arrived as one chunk) |
-| OpenCode 1.18.34, ACP | `agent_message_chunk` | ⚠️ not provable | — | — | — | — | 0 tokens: **the OpenCode API key on this box has expired**. Every live OpenCode session's prompt fails the same way (keeper journals: "This API key has expired") |
+| OpenCode 1.18.34, ACP, Zen `deepseek-v4.1-flash-free` | `agent_message_chunk` (+ `agent_thought_chunk`) | ✅ after Ahmet's new key | 71 for 969 chars, bursts | 13 / 24 | 0.5 / 6 ms (bursts) | **2.0 s** | $0 (free model). Before the new key every OpenCode prompt failed with "This API key has expired". A retry on `opencode-go` timed out in setup at load ~226, so that provider is not re-verified |
 
 What held for every agent that answered:
 
@@ -258,15 +258,57 @@ Compatibility:
 Rough size: broker about 400 lines with tests; app about 350 lines with tests, plus a verification pass per
 platform.
 
-## 8. Decisions for Ahmet (recommended answer first)
+## 8. Decisions (Ahmet, 2026-11-05)
 
-1. **Sidebar preview: final message only (recommended)**, or live text in the session list too? Live text
-   there means deltas for every session to every app, which is approach 3's cost.
-2. **v1 streams the reply text only (recommended)**, or also the agent's thinking as it is written? Claude,
-   Codex and Grok stream it (`reasoning-delta`); today thinking appears as a row once it is complete.
-3. **50 ms everywhere (recommended)**, or 100 ms on phones from the start?
-4. **Subagent text stays out of v1 (recommended).** Subagent cards keep showing their messages when they
-   complete.
+1. **Preview: the last stored message only, never live text.** He notes it matters for Agents, because the
+   Agents zone shows a preview line. That line keeps reading stored messages only.
+2. **Stream the thinking too, where the agent exposes it**: shown as thinking, distinct from the reply, with a
+   clean fallback where an agent doesn't expose it. Designed in §9.
+3. **50 ms batches everywhere.**
+4. **Subagent text stays out of v1.**
+
+He also added a new OpenCode key. OpenCode is now verified live (§9).
+
+## 9. Thinking (added after decision 2)
+
+**What each agent exposes, verified on this box:**
+
+| Agent | Thinking stream | Out of the box | What it takes |
+|---|---|---|---|
+| Claude | `thinking_delta` | **No text.** The live Claude journals hold 101,370 thinking deltas, every one empty (`thinking_display: "updates"`) | The hidden CLI flag **`--thinking-display summarized`**. Haiku 5.5 then streamed 46 deltas, 557 chars of summarized thinking ($0.0025). Values the CLI accepts: `summarized`, `omitted`, `highlights` |
+| Codex | `item/reasoning/summaryTextDelta` | **No.** Zero reasoning deltas in the live journals | Config **`model_reasoning_summary = "auto"`**. gpt-5.6-luna (medium) then streamed short headings ("**Drafting six-line Python squares code**"), one per summary part |
+| Grok | ACP `agent_thought_chunk` | Yes, text (6 deltas in the probe) | nothing |
+| OpenCode | ACP `agent_thought_chunk` | Yes, text: 62 deltas (Zen `deepseek-v4.1-flash-free`, $0; the reply streamed 71 deltas, first words 2.0 s early) | nothing |
+| Cursor | ACP `agent_thought_chunk` | Seen in history replays; live not provable (plan limit) | nothing |
+| Antigravity | none in stream-json | No | fallback: the "working" row, as today |
+
+**Design.** Thinking is a second kind of live stream on the same machinery:
+- Frames: `reply_stream {…, kind: "thinking"}`; a reply stays the default kind.
+- One thinking stream per reasoning block. The broker opens it only on the first non-empty text, so a redacted
+  agent never opens one.
+- The stored thinking is today's `reasoning` activity row (`activity_append`), now carrying the same `stream`
+  id. It replaces the live thinking in place, just as a stored message replaces a live reply.
+- Claude streams thinking and then text inside ONE message, and stores both at the end of it. So a session can
+  have a thinking stream and a reply stream open at once, at most one of each.
+- In the app, live thinking is the existing "Thinking…" card, expanded, with the text arriving in the muted
+  thinking style. Only the last few lines show, so a long think doesn't push the chat around. It folds back to
+  the usual collapsed card when its text is stored, or as soon as the reply starts.
+- Agents with no thinking text keep today's behaviour: the "Thinking…" spinner for redacted thinking and the
+  working row.
+
+**Three things the probes turned up, fixed as part of this:**
+1. **Claude's `system/thinking_tokens` progress frames** come one per thinking delta. Core turns each into an
+   empty `reasoning` body, and the broker turns each into its own "Thinking" activity row, broadcast to every
+   app and kept in the 500-row ring. That is 3 rows a turn today and about 45 with summarized thinking. The
+   broker will keep one redacted row per stretch of thinking instead of one per update.
+2. **Codex summary parts run together** when streamed, because core drops `summaryPartAdded`. Core will emit
+   a paragraph break between parts, matching how the stored text joins them.
+3. Turning on Claude's summarized thinking and Codex's summaries is an **agent configuration change**:
+   - It applies when a session's CLI next starts. Keeper-held sessions keep running unchanged until then.
+   - Claude counts a changed thinking display as a prompt-cache break, so **each Claude session pays one cold
+     turn the first time it restarts with the flag**. That is often moot: a session idle for more than an hour
+     is cold anyway.
+   - Both get their own switch in the broker, so they can be turned off without touching streaming.
 
 Adjacent, not part of this card: today every text segment of a turn is its own stored message, and **each
 fires a push** unless you are present (`src/core/push/hook.ts` has no per-turn collapse), so "I'll read the
