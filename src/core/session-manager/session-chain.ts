@@ -35,6 +35,8 @@ export type SessionChainDeps = {
   onWaking?(id: string, waking: boolean): void
   /** A wake that finished after Stop: put the session back to sleep. */
   putToSleep?(id: string): Promise<void>
+  /** A wake failed (not cancelled): once per wake, whoever ran it, so the chat can say why. */
+  onWakeFailed?(id: string, err: unknown): void
 }
 
 export class SessionChain {
@@ -42,7 +44,8 @@ export class SessionChain {
   private readonly generations = new Map<string, number>()
   /** Why a generation ended (a cancel, or a failed wake), for the work still queued in it. */
   private readonly endings = new Map<string, Map<number, Error>>()
-  private readonly wakingNow = new Set<string>()
+  /** Sessions being woken now, and when that began. */
+  private readonly wakingNow = new Map<string, number>()
 
   constructor(private readonly deps: SessionChainDeps) {}
 
@@ -85,6 +88,7 @@ export class SessionChain {
     } catch (err) {
       if (token.cancelled) throw new CancelledError(id)
       this.end(id, new WakeFailedError(id, err))
+      try { this.deps.onWakeFailed?.(id, err) } catch (hookErr) { log.warn("chain_on_wake_failed_failed", { session: id, err: String(hookErr) }) }
       throw err
     } finally {
       this.setWaking(id, false)
@@ -112,6 +116,11 @@ export class SessionChain {
     return this.wakingNow.has(id)
   }
 
+  /** When the wake in flight for `id` began (epoch ms); undefined when none is. */
+  wakingSince(id: string): number | undefined {
+    return this.wakingNow.get(id)
+  }
+
   /** Resolves once nothing is queued for any session (tests, shutdown). */
   async idle(): Promise<void> {
     while (this.tails.size) await Promise.all([...this.tails.values()])
@@ -135,9 +144,36 @@ export class SessionChain {
 
   private setWaking(id: string, waking: boolean): void {
     if (waking === this.wakingNow.has(id)) return
-    if (waking) this.wakingNow.add(id)
+    if (waking) this.wakingNow.set(id, Date.now())
     else this.wakingNow.delete(id)
     try { this.deps.onWaking?.(id, waking) } catch (err) { log.warn("chain_on_waking_failed", { session: id, err: String(err) }) }
+  }
+}
+
+/** What became of a message given to deliverOnChain. */
+export type ChainDelivery<T> =
+  | { handed: true; turn: Promise<T> }
+  /** Not handed over: Stop, archive or kill cancelled it, or the wake failed (onWakeFailed said why). */
+  | { handed: false; why: "cancelled" | "wake_failed"; error: unknown }
+
+/**
+ * The one way a user's message reaches a session (card #75): on the session's chain, after what is
+ * already queued for it, waking the session first when its agent isn't up. The message is handed
+ * over and the chain moves on: `turn` resolves when the turn it started ends, and is the caller's to
+ * watch. A message that is not handed over stays in the chat; nothing re-sends it.
+ */
+export async function deliverOnChain<T>(chain: SessionChain, id: string, handOver: () => Promise<T>): Promise<ChainDelivery<T>> {
+  try {
+    return await chain.run(id, async (token) => {
+      await chain.wakeNow(id, token)
+      let turn: Promise<T>
+      try { turn = handOver() } catch (err) { turn = Promise.reject(err) }
+      // The caller watches it; this only keeps a fast failure from counting as unhandled first.
+      turn.catch(() => {})
+      return { handed: true as const, turn }
+    })
+  } catch (err) {
+    return { handed: false, why: err instanceof CancelledError ? "cancelled" : "wake_failed", error: err }
   }
 }
 
@@ -147,6 +183,8 @@ export type LivenessDeps = {
   session(id: string): { id: string; status?: string } | undefined
   resumeFromArchive(id: string): Promise<{ ok: boolean; error?: string }>
   resumeSuspended(session: any): Promise<boolean>
+  /** Why the last resumeSuspended of `id` failed, when it threw (SessionManager.resumeFailure). */
+  resumeFailure?(id: string): unknown
   /** "none": no adapter registered; "dead": its core session failed or closed. */
   adapterState(id: string): "none" | "alive" | "dead"
   resumeAdapter(id: string): Promise<void>
@@ -174,10 +212,12 @@ export async function ensureLiveWith(deps: LivenessDeps, id: string): Promise<vo
     const restored = await deps.resumeFromArchive(id)
     if (!restored.ok) throw new Error(`restore from archive failed: ${restored.error ?? "unknown"}`)
   } else if (row.status === "suspended" || deps.adapterState(id) === "none") {
-    if (!(await deps.resumeSuspended(row))) throw new Error("resuming the suspended session failed")
+    // The error that made it fail, so the chat can say why (an expired sign-in, a worktree git refused).
+    if (!(await deps.resumeSuspended(row))) throw deps.resumeFailure?.(id) ?? new Error("the agent did not start")
   }
   if (deps.adapterState(id) === "dead") await deps.resumeAdapter(id)
-  if (!(await deps.waitDeliverable(id, deps.deliverableTimeoutMs ?? 60_000))) {
-    throw new Error("session did not become deliverable")
+  const timeoutMs = deps.deliverableTimeoutMs ?? 60_000
+  if (!(await deps.waitDeliverable(id, timeoutMs))) {
+    throw new Error(`the agent was not ready to take messages after ${Math.round(timeoutMs / 1000)} s`)
   }
 }
