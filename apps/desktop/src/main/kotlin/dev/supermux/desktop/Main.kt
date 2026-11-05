@@ -862,7 +862,11 @@ fun main() {
             // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
             val trayIcon = when {
                 isMacOs() -> remember { TrayIcons.painter(mac = true) }
-                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
+                isWindowsOs() -> {
+                    // Off the UI thread, and read again every 30 s: a light/dark switch repaints the glyph.
+                    val light by remember { TrayIcons.taskbarIsLight() }.collectAsState(initial = false)
+                    remember(light) { TrayIcons.painter(mac = false, darkGlyph = light) }
+                }
                 else -> painterResource(TrayIcons.COLOUR)
             }
             Tray(

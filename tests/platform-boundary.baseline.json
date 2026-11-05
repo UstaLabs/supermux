@@ -380,7 +380,6 @@
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/BrokerVersion.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/ChildProcess.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/TrayIcons.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/DesktopUpdateSource.kt": 1,
     "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1
   }
