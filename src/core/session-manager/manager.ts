@@ -209,6 +209,11 @@ export type SessionManagerPorts = {
     wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void
     sessionBackend: SessionBackend
     tmuxSession: string
+    /** Boot: the session's agent still runs under its keeper (the broker died without stopping it, e.g. an
+     *  OOM kill; a reboot or a graceful restart stops every agent). */
+    agentRunning(session: Session): Promise<boolean>
+    /** Boot: its CLI keeps scheduled tasks on disk that run only while the session is open (Grok). */
+    hasScheduledTasks(session: Session): boolean
   }
 }
 
@@ -1741,7 +1746,8 @@ export class SessionManager {
     }
   }
 
-  /** Broker boot: re-attach or relaunch every ACTIVE session (suspended ones wake on demand).
+  /** Broker boot: re-attach or relaunch the ACTIVE Agents; every other active session is put to
+   *  sleep (suspended) and wakes on its next message, unless that would lose something (wakesAtBoot).
    *  (reconcileOnStartup runs first: a tmux-era Claude row with a surviving pane stays active and is
    *  moved to Core here; one with neither pid nor pane is suspended.) Failures log and continue.
    *
@@ -1757,6 +1763,13 @@ export class SessionManager {
       if (s.status === "suspended") continue
       // A draft has no conversation yet; its agent starts when it is first sent.
       if (s.user_status === "draft") continue
+      // Ahmet, 2026-11-05: "on boot we should only resume the agents, that's it." (A reboot brought
+      // back 132 sessions at ~230 MB each.) Asleep is the state every door wakes before it delivers.
+      if (!(await this.wakesAtBoot(s))) {
+        this.registry.sessions.suspend(s.id)
+        log.info("session_suspended", { id: s.id, name: s.name, reason: "boot_not_agent" })
+        continue
+      }
       const work = this.resumeOneAtBoot(s).finally(() => { this.bootResumes.delete(s.id) })
       this.bootResumes.set(s.id, work)
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -1766,6 +1779,28 @@ export class SessionManager {
       ])
       clearTimeout(timer)
       if (timedOut) log.warn("boot_resume_timeout", { name: s.name, agent: s.agent, timeout_ms: this.bootResumeTimeoutMs })
+    }
+  }
+
+  /** An Agent always. Any other session only when leaving it asleep would lose what runs without a
+   *  message: its agent still runs under its keeper (the broker crashed or was killed: re-attaching
+   *  starts no process, and its crons, /loop and background tasks go on), or its CLI keeps scheduled
+   *  tasks on disk that only fire while the session is open. A probe that fails resumes it, as before. */
+  private async wakesAtBoot(s: Session): Promise<boolean> {
+    if (s.role === "personal_assistant") return true
+    try {
+      if (await this.ports.resume.agentRunning(s)) {
+        log.info("boot_resume_worker", { name: s.name, reason: "agent_running" })
+        return true
+      }
+      if (this.ports.resume.hasScheduledTasks(s)) {
+        log.info("boot_resume_worker", { name: s.name, reason: "scheduled_tasks" })
+        return true
+      }
+      return false
+    } catch (err) {
+      log.warn("boot_resume_worker", { name: s.name, reason: "probe_failed", err: String(err) })
+      return true
     }
   }
 

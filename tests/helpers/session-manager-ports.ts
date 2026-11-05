@@ -104,6 +104,8 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
         create: async () => { throw new Error("unused in tests") },
       } as unknown as import("../../src/core/runtime/session-backend").SessionBackend,
       tmuxSession: "mux-test",
+      agentRunning: async () => false,
+      hasScheduledTasks: () => false,
     },
   }
 }
