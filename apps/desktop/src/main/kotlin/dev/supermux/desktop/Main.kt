@@ -209,8 +209,10 @@ private val desktopDeps: HostStoreDeps by lazy {
         clientInfo = dev.supermux.net.ClientInfo(
             surface = "desktop",
             version = dev.supermux.desktop.update.DESKTOP_APP_VERSION,
-            os = System.getProperty("os.name").orEmpty().lowercase().let {
-                when { "mac" in it -> "macos"; "win" in it -> "windows"; else -> "linux" }
+            os = when (dev.supermux.desktop.platform.DesktopOs.current) {
+                dev.supermux.desktop.platform.DesktopOs.MACOS -> "macos"
+                dev.supermux.desktop.platform.DesktopOs.WINDOWS -> "windows"
+                dev.supermux.desktop.platform.DesktopOs.LINUX -> "linux"
             },
         ),
     )
@@ -1055,7 +1057,7 @@ fun main() {
                   LocalMacWindowChrome provides chromeRegions,
                   LocalWindowDragChrome provides DesktopWindowDragChrome,
                   LocalWindowChromeInsets provides chromeInsets(
-                      ChromeOs.of(),
+                      ChromeOs.of(dev.supermux.desktop.platform.DesktopOs.current),
                       customChrome = linuxChrome != null || windowsChrome != null,
                       windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
                       macTrafficLights = macChrome?.trafficLightsInset ?: MacTrafficLightsWidth,

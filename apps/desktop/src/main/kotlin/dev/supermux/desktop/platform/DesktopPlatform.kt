@@ -194,7 +194,7 @@ internal fun pickDialogFor(kind: PickKind): FileDialog {
  * Null when cancelled.
  */
 internal fun awtPickDirectory(title: String): String? {
-    if (System.getProperty("os.name").orEmpty().lowercase().contains("mac")) {
+    if (isMacOs()) {
         val key = "apple.awt.fileDialogForDirectories"
         val previous = System.getProperty(key)
         System.setProperty(key, "true")

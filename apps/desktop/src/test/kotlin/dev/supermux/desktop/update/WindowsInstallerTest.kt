@@ -1,5 +1,6 @@
 package dev.supermux.desktop.update
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,19 +11,19 @@ class WindowsInstallerTest {
         val msi = File("C:\\Users\\t\\Downloads\\supermux-windows.msi")
         assertEquals(
             listOf("C:\\Windows\\System32\\msiexec.exe", "/i", msi.absolutePath),
-            DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = "C:\\Windows"),
+            DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Windows 11"), msi, systemRoot = "C:\\Windows"),
         )
     }
 
     @Test fun msiexecIsNamedByItsSystem32Path() {
         val msi = File("C:\\x\\supermux.msi")
-        assertEquals("D:\\WIN\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = "D:\\WIN\\")!!.first())
-        assertEquals("C:\\Windows\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv("Windows 11", msi, systemRoot = null)!!.first())
+        assertEquals("D:\\WIN\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Windows 11"), msi, systemRoot = "D:\\WIN\\")!!.first())
+        assertEquals("C:\\Windows\\System32\\msiexec.exe", DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Windows 11"), msi, systemRoot = null)!!.first())
     }
 
     @Test fun elsewhereTheOsOpensTheInstaller() {
-        assertNull(DesktopUpdateSource.windowsInstallerArgv("Linux", File("/tmp/supermux.deb")))
-        assertNull(DesktopUpdateSource.windowsInstallerArgv("Mac OS X", File("/tmp/supermux.dmg")))
-        assertNull(DesktopUpdateSource.windowsInstallerArgv("Windows 11", File("C:\\x\\notes.txt")))
+        assertNull(DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Linux"), File("/tmp/supermux.deb")))
+        assertNull(DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Mac OS X"), File("/tmp/supermux.dmg")))
+        assertNull(DesktopUpdateSource.windowsInstallerArgv(DesktopOs.of("Windows 11"), File("C:\\x\\notes.txt")))
     }
 }
