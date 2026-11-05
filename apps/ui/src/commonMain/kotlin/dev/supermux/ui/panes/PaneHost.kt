@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,13 +39,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.Layout
@@ -53,6 +61,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -164,8 +173,8 @@ fun PaneHost(
     /** Per-strip platform window chrome (drag regions, etc.); defaults to none. */
     chrome: PaneStripChrome = PaneStripChrome.None,
     /**
-     * Drag ended past threshold with no drop target (pointer missed every pane).
-     * Desktop uses this to tear the tab into a new window.
+     * A drag released OUTSIDE the window, over no drop target, where no [tearOff] took the drag
+     * over. A release inside the window that misses every target does nothing.
      */
     onDragEndMiss: (viewId: String) -> Unit = {},
     /**
@@ -173,6 +182,12 @@ fun PaneHost(
      * host claims so the tab docks into this window's extra/main slice.
      */
     onDocked: (viewId: String) -> Unit = {},
+    /**
+     * Live tear-off (desktop): this layer registers itself as a place a dragged tab can land, and
+     * hands a mouse drag over once it leaves the window (or, for a window's only tab, once it
+     * starts). Null keeps every drag inside this layer.
+     */
+    tearOff: TabTearOff? = null,
     content: @Composable (viewId: String) -> Unit,
 ) {
     val ownedDrag = remember { PaneDragController() }
@@ -208,61 +223,32 @@ fun PaneHost(
         if (next != tree) onLayoutChangeState.value(next)
     }
 
-    fun applyDrop(target: PaneDropTarget) {
-        when (target) {
-            is PaneDropTarget.MoveToWorkspace -> {
-                onMoveToWorkspaceState.value?.invoke(target.viewId, target.toWorkspaceId)
-                return
-            }
-            else -> Unit
-        }
-        // Minted once, outside the transform: a replay must land on the same group
-        // id, not invent a new one each time the edit is rebased onto a frame.
-        val newGroupId = newPaneKey()
-        applyEdit { tree ->
-            when (target) {
-                is PaneDropTarget.Reorder ->
-                    reorderWithinGroup(tree, target.groupId, target.viewId, target.index)
-                is PaneDropTarget.MoveToGroup ->
-                    moveViewToGroup(tree, target.viewId, target.toGroupId, target.index) ?: tree
-                is PaneDropTarget.Split -> {
-                    // splitGroup requires the view to already live in the target group
-                    // with ≥2 tabs. Cross-group edge drops move the tab in first — that
-                    // turns a 1-tab neighbour into 2, then splits cleanly. Same-group
-                    // sole-tab edge drops no-op inside splitGroup (UI hides those edges).
-                    val owner = groupIdOf(tree, target.viewId)
-                    val withView = if (owner == target.groupId) {
-                        tree
-                    } else {
-                        moveViewToGroup(tree, target.viewId, target.groupId, Int.MAX_VALUE) ?: tree
-                    }
-                    val split = splitGroup(
-                        withView,
-                        target.groupId,
-                        target.viewId,
-                        target.direction,
-                        newGroupId = newGroupId,
-                    )
-                    if (target.newFirst) reverseNewSplit(split, target.groupId) else split
-                }
-                is PaneDropTarget.MoveToWorkspace -> tree // handled above
-            }
-        }
-        if (target !is PaneDropTarget.MoveToWorkspace) {
-            val viewId = when (target) {
-                is PaneDropTarget.Reorder -> target.viewId
-                is PaneDropTarget.MoveToGroup -> target.viewId
-                is PaneDropTarget.Split -> target.viewId
-                is PaneDropTarget.MoveToWorkspace -> return
-            }
-            onDockedState.value(viewId)
+    fun applyDrop(target: PaneDropTarget) =
+        applyPaneDrop(target, ::applyEdit, onDockedState.value, onMoveToWorkspaceState.value)
+
+    // This layer as a place a tab dragged in another window can land (live tear-off). Built once:
+    // every callback reads the current state through the holders above.
+    val endpoint = remember(drag) {
+        TabDropEndpoint(
+            drag = drag,
+            onDrop = { applyDrop(it) },
+            onDocked = { onDockedState.value(it) },
+            onRestore = { viewId, groupId, index, activeViewId ->
+                applyEdit { tree -> restoreTab(tree, viewId, groupId, index, activeViewId) }
+                onDockedState.value(viewId)
+            },
+        )
+    }
+    if (tearOff != null) {
+        DisposableEffect(tearOff, endpoint) {
+            tearOff.register(endpoint)
+            onDispose { tearOff.unregister(endpoint) }
         }
     }
 
     // Root box owns the floating drag ghost (session-list style). Ghost coords are
     // root-space; subtract this box's origin so the chip tracks the pointer.
     var hostRoot by remember { mutableStateOf(Offset.Zero) }
-
     // Whole-area resizes (window edge, sidebar) keep every seam still on screen;
     // see PaneAreaFit. The fit is drawn at once and written to the tree once the
     // resize settles, so the broker sees one PATCH, not one per frame.
@@ -282,7 +268,11 @@ fun PaneHost(
         modifier
             .onGloballyPositioned { hostRoot = it.positionInRoot() },
     ) {
-        CompositionLocalProvider(LocalPaneAreaFit provides fit) {
+        CompositionLocalProvider(
+            LocalPaneAreaFit provides fit,
+            LocalTabTearOff provides tearOff,
+            LocalSoleView provides (layout as? LayoutNode.Group)?.viewIds?.singleOrNull(),
+        ) {
         PaneHostNode(
             layout = layout,
             path = emptyList(),
@@ -377,6 +367,81 @@ private fun PaneDragGhostChip(
 }
 
 /**
+ * What a drop does, wherever it was resolved: the tree edit through [applyEdit], then
+ * [onDocked] with the moved view so its window takes it — or, for a sidebar workspace row, the
+ * cross-workspace move through [onMoveToWorkspace].
+ */
+internal fun applyPaneDrop(
+    target: PaneDropTarget,
+    applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
+    onDocked: (viewId: String) -> Unit,
+    onMoveToWorkspace: ((viewId: String, toWorkspaceId: String) -> Unit)?,
+) {
+    val viewId = when (target) {
+        is PaneDropTarget.MoveToWorkspace -> {
+            onMoveToWorkspace?.invoke(target.viewId, target.toWorkspaceId)
+            return
+        }
+        is PaneDropTarget.Reorder -> target.viewId
+        is PaneDropTarget.MoveToGroup -> target.viewId
+        is PaneDropTarget.Split -> target.viewId
+    }
+    // Minted once, outside the transform: a replay must land on the same group
+    // id, not invent a new one each time the edit is rebased onto a frame.
+    val newGroupId = newPaneKey()
+    applyEdit { tree ->
+        when (target) {
+            is PaneDropTarget.Reorder ->
+                reorderWithinGroup(tree, target.groupId, target.viewId, target.index)
+            is PaneDropTarget.MoveToGroup ->
+                moveViewToGroup(tree, target.viewId, target.toGroupId, target.index) ?: tree
+            is PaneDropTarget.Split -> {
+                // splitGroup requires the view to already live in the target group
+                // with ≥2 tabs. Cross-group edge drops move the tab in first — that
+                // turns a 1-tab neighbour into 2, then splits cleanly. Same-group
+                // sole-tab edge drops no-op inside splitGroup (UI hides those edges).
+                val owner = groupIdOf(tree, target.viewId)
+                val withView = if (owner == target.groupId) {
+                    tree
+                } else {
+                    moveViewToGroup(tree, target.viewId, target.groupId, Int.MAX_VALUE) ?: tree
+                }
+                val split = splitGroup(
+                    withView,
+                    target.groupId,
+                    target.viewId,
+                    target.direction,
+                    newGroupId = newGroupId,
+                )
+                if (target.newFirst) reverseNewSplit(split, target.groupId) else split
+            }
+            is PaneDropTarget.MoveToWorkspace -> tree // handled above
+        }
+    }
+    onDocked(viewId)
+}
+
+/**
+ * [viewId] back at [index] of [groupId], with [activeViewId] (when it is still there) the group's
+ * active tab again — undoing a drag that moved the tab out. A group that is gone leaves the tree
+ * as it is.
+ */
+internal fun restoreTab(
+    tree: LayoutNode,
+    viewId: String,
+    groupId: String,
+    index: Int,
+    activeViewId: String?,
+): LayoutNode {
+    val moved = moveViewToGroup(tree, viewId, groupId, index) ?: return tree
+    return if (activeViewId != null && groupIdOf(moved, activeViewId) == groupId) {
+        setActiveViewInGroup(moved, groupId, activeViewId)
+    } else {
+        moved
+    }
+}
+
+/**
  * After [splitGroup] the new group is always the second child. For left/top
  * edges we want it first — reverse that split's children where the original
  * group id is still the first child's id.
@@ -461,16 +526,23 @@ private fun GroupHost(
         DisposableEffect(group.id) {
             onDispose { dragState.unregisterGroup(group.id) }
         }
+        val stripHeightPx = with(LocalDensity.current) { TAB_STRIP_HEIGHT.toPx() }
         Box(
             modifier
                 .fillMaxSize()
                 .testTag("layout-empty")
                 .onGloballyPositioned { coords ->
-                    dragState.registerPane(group.id, coords.boundsInRoot())
+                    val bounds = coords.boundsInRoot()
+                    dragState.registerPane(group.id, bounds)
+                    dragState.registerEmptyPane(group.id, bounds, stripHeightPx)
                 },
             contentAlignment = Alignment.Center,
         ) {
             emptyGroupSlot?.invoke()
+            // The whole canvas is one target: a tab dropped anywhere on it lands here.
+            if (dragState.hoverPaneId == group.id) {
+                PaneDropOverlay(activeZone = DropZone.Centre, edgesEnabled = false)
+            }
         }
         return
     }
@@ -714,12 +786,46 @@ fun PaneTabStrip(
     val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
         if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
 
+    val tearOffNow = rememberUpdatedState(LocalTabTearOff.current)
+    val windowSizeNow = rememberUpdatedState(LocalWindowInfo.current.containerSize)
+    // Read by the tab gestures at press time; they outlive the composition that built them.
+    val viewIdsNow = rememberUpdatedState(viewIds)
+    val activeNow = rememberUpdatedState(activeViewId)
+    val soleViewNow = rememberUpdatedState(LocalSoleView.current)
+    val scroll = rememberScrollState()
+    // The strip's on-screen viewport, for edge auto-scroll. Read only by the effect below, never
+    // by composition, so writing it on every placement recomposes nothing.
+    val viewport = remember { mutableStateOf<Rect?>(null) }
+    if (dragState != null && groupId.isNotEmpty()) {
+        val edgePx = with(density) { StripAutoScrollEdge.toPx() }
+        val maxStepPx = with(density) { StripAutoScrollMaxStep.toPx() }
+        // A drag held near either end of an overflowing strip scrolls it, so a tab can be dropped
+        // on a slot that is off screen. Frames are asked for only while the pointer is in an end
+        // zone and the strip still moves — not for the whole of every drag.
+        LaunchedEffect(dragState, groupId, edgePx, maxStepPx) {
+            snapshotFlow { viewport.value?.let { dragState.stripAutoScrollStep(it, edgePx, maxStepPx) } ?: 0f }
+                .collectLatest { first ->
+                    if (first == 0f) return@collectLatest
+                    while (true) {
+                        withFrameNanos { }
+                        val r = viewport.value ?: break
+                        val step = dragState.stripAutoScrollStep(r, edgePx, maxStepPx)
+                        if (step == 0f) break
+                        val used = scroll.scrollBy(step)
+                        if (used == 0f) break
+                        if (dragState.originGroupId == groupId) dragState.originStripScrolled(used)
+                    }
+                }
+        }
+    }
+
     Box(
         modifier
             .fillMaxWidth()
             .height(TAB_STRIP_HEIGHT)
             .background(cs.surfaceContainerLow)
             .onGloballyPositioned { coords ->
+                viewport.value = coords.boundsInRoot()
                 if (groupId.isNotEmpty()) {
                     dragState?.registerStrip(groupId, coords.boundsInRoot())
                 }
@@ -740,7 +846,7 @@ fun PaneTabStrip(
         Box(
             Modifier
                 .fillMaxHeight()
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(scroll),
         ) {
             Box(
                 Modifier
@@ -801,12 +907,16 @@ fun PaneTabStrip(
                                         Modifier.tabDragGestures(
                                             viewId = id,
                                             groupId = groupId,
-                                            stripOrderProvider = { viewIds },
+                                            stripOrderProvider = { viewIdsNow.value },
+                                            activeProvider = { activeNow.value },
                                             labelProvider = { titleFor(id) },
                                             dragState = dragState,
                                             onSelect = onSelect,
                                             onDrop = onDrop,
                                             onDragEndMiss = onDragEndMiss,
+                                            tearOff = { tearOffNow.value },
+                                            windowSize = { windowSizeNow.value },
+                                            soleView = { soleViewNow.value },
                                         )
                                     } else {
                                         Modifier.clickable { onSelect(id) }
@@ -886,16 +996,35 @@ private fun TabInsertCaret(modifier: Modifier = Modifier) {
  * mouse-friendly grab after a small move, click when movement stays under the
  * threshold. Drop resolution is delegated to [PaneDragController] so cross-strip and
  * edge targets share one pointer.
+ *
+ * A mouse drags and selects with its PRIMARY button only: a secondary press belongs to the tab's
+ * context menu and a middle press to nothing here, so neither moves nor selects the tab.
+ *
+ * A finger (any non-mouse pointer) must HOLD the tab first. A finger that moves before the
+ * long-press timeout is swiping, and the gesture is left untouched so the strip's
+ * horizontalScroll takes it — otherwise an overflowing strip could not be scrolled by touch at
+ * all, since every swipe began on some tab. A finger that lets go before it is a tap.
+ *
+ * With a [tearOff] host (desktop), a mouse drag can leave this layer: the host takes over the
+ * window's only tab as soon as it moves (a window that can, follows the pointer), and otherwise a
+ * tab once the pointer is [TearOffMargin] past the window's edge — or, for the window's only tab,
+ * [TearOffMargin] above or below its strip, since nowhere else in the window can take it — and
+ * opens it in a window of its own. Taken over, the drag ends here — no drop, no click — and the
+ * host carries the press. A pull sideways out of the strip (toward a sidebar) stays here.
  */
 private fun Modifier.tabDragGestures(
     viewId: String,
     groupId: String,
     stripOrderProvider: () -> List<String>,
+    activeProvider: () -> String,
     labelProvider: () -> String,
     dragState: PaneDragController,
     onSelect: (String) -> Unit,
     onDrop: (PaneDropTarget) -> Unit,
     onDragEndMiss: (String) -> Unit = {},
+    tearOff: () -> TabTearOff? = { null },
+    windowSize: () -> IntSize = { IntSize.Zero },
+    soleView: () -> String? = { null },
 ): Modifier = this
     // performClick() uses the semantics onClick action, not a real pointer stream.
     .semantics {
@@ -909,18 +1038,46 @@ private fun Modifier.tabDragGestures(
     .pointerInput(viewId, groupId) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            val downLocal = down.position
+            val mouse = down.type == PointerType.Mouse
+            if (mouse && !currentEvent.buttons.isPrimaryPressed) return@awaitEachGesture
+            val touch = !mouse
+            val slop = viewConfiguration.touchSlop
+            var downLocal = down.position
+            if (touch) {
+                // `withTimeoutOrNull` is AwaitPointerEventScope's own: null means the finger was
+                // HELD in place for the whole timeout. Nothing is consumed while waiting.
+                val endedEarly = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    var end: TouchEnd? = null
+                    while (end == null) {
+                        val change = awaitPointerEvent(PointerEventPass.Main).changes
+                            .firstOrNull { it.id == down.id }
+                        end = when {
+                            change == null -> TouchEnd.Swipe
+                            change.changedToUpIgnoreConsumed() -> TouchEnd.Tap
+                            (change.position - down.position).getDistance() > slop -> TouchEnd.Swipe
+                            else -> { downLocal = change.position; null }
+                        }
+                    }
+                    end
+                }
+                when (endedEarly) {
+                    TouchEnd.Tap -> { onSelect(viewId); return@awaitEachGesture }
+                    TouchEnd.Swipe -> return@awaitEachGesture
+                    null -> Unit
+                }
+            }
             val boundsAtDown = dragState.tabBoundsFor(groupId, viewId)
             val startRoot = if (boundsAtDown != null) {
                 Offset(boundsAtDown.left + downLocal.x, boundsAtDown.top + downLocal.y)
             } else {
                 Offset(downLocal.x, downLocal.y)
             }
+            val stripOrder = stripOrderProvider()
             dragState.begin(
                 viewId = viewId,
                 groupId = groupId,
                 rootPos = startRoot,
-                stripOrder = stripOrderProvider(),
+                stripOrder = stripOrder,
                 label = labelProvider(),
                 bounds = boundsAtDown,
             )
@@ -929,35 +1086,110 @@ private fun Modifier.tabDragGestures(
             // local position on a translating tab — that re-fed the live order
             // and looped the strip.
             var pointerRoot = startRoot
+            // A finger past its hold uses the platform slop: a raw 8 px is under 3 dp on a phone.
+            val threshold = if (touch) slop else PANE_DRAG_THRESHOLD_PX
+            val marginPx = TearOffMargin.toPx()
+            // A host that would not take the drag out of the window is not asked again this press.
+            var outsideRefused = false
+            fun handoff() = TabHandoff(
+                viewId = viewId,
+                label = dragState.label,
+                groupId = groupId,
+                index = stripOrder.indexOf(viewId).coerceAtLeast(0),
+                activeViewId = activeProvider(),
+                grab = dragState.grab,
+                tabSize = boundsAtDown?.size ?: Size(56.dp.toPx(), 32.dp.toPx()),
+                groupSize = dragState.groupAreaOf(groupId)?.size ?: Size.Zero,
+                pointer = pointerRoot,
+            )
 
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Main)
-                val change = event.changes.firstOrNull() ?: break
-                if (change.changedToUpIgnoreConsumed()) {
-                    if (!passed) {
-                        dragState.cancel()
-                        onSelect(viewId)
-                    } else {
-                        val target = dragState.finish()
-                        if (target != null) onDrop(target)
-                        else onDragEndMiss(viewId)
+            // `finally`: a tab that leaves composition mid-drag cancels this coroutine, and the
+            // shared controller must not keep a ghost for a drag nobody is finishing.
+            try {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Main)
+                    // Esc ended the drag: the rest of this press is nobody's.
+                    if (dragState.aborted) break
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (change.changedToUpIgnoreConsumed()) {
+                        if (!passed) {
+                            dragState.cancel()
+                            onSelect(viewId)
+                        } else {
+                            val target = dragState.finish()
+                            when {
+                                target != null -> onDrop(target)
+                                // Only a host without live tear-off still gets the old verb, and
+                                // only for a release past the window's edge.
+                                tearOff() == null && outsideWindow(pointerRoot, windowSize(), 0f) ->
+                                    onDragEndMiss(viewId)
+                            }
+                        }
+                        break
                     }
-                    break
-                }
-                if (change.pressed) {
-                    pointerRoot += change.positionChange()
-                    dragState.updatePointer(pointerRoot, startRoot, PANE_DRAG_THRESHOLD_PX)
-                    if (dragState.pastThreshold) {
-                        passed = true
-                        change.consume()
+                    if (change.pressed) {
+                        pointerRoot += change.positionChange()
+                        dragState.updatePointer(pointerRoot, startRoot, threshold)
+                        val starting = !passed && dragState.pastThreshold
+                        if (dragState.pastThreshold) passed = true
+                        // A held finger owns the gesture: the strip must not start scrolling under it.
+                        if (passed || touch) change.consume()
+                        val host = if (mouse && passed) tearOff() else null
+                        if (host != null) {
+                            val takenOver = when {
+                                starting && host.takeOverOnStart(handoff()) -> true
+                                !outsideRefused && (
+                                    outsideWindow(pointerRoot, windowSize(), marginPx) ||
+                                        (soleView() == viewId && pulledOutOfStrip(pointerRoot, dragState.stripBoundsOf(groupId), marginPx))
+                                    ) ->
+                                    host.takeOverOutside(handoff()).also { outsideRefused = !it }
+                                else -> false
+                            }
+                            if (takenOver) {
+                                dragState.cancel()
+                                break
+                            }
+                        }
                     }
                 }
-            }
-            if (dragState.draggingViewId == viewId) {
-                dragState.cancel()
+            } finally {
+                if (dragState.draggingViewId == viewId) {
+                    dragState.cancel()
+                }
             }
         }
     }
+
+/** Whether [p] (root px) is more than [margin] px above or below [strip], within its width. */
+private fun pulledOutOfStrip(p: Offset, strip: Rect?, margin: Float): Boolean =
+    strip != null && p.x >= strip.left && p.x <= strip.right &&
+        (p.y < strip.top - margin || p.y > strip.bottom + margin)
+
+/** Whether [p] (root px) is more than [margin] px outside a window of [size]. False while the size is unknown. */
+private fun outsideWindow(p: Offset, size: IntSize, margin: Float): Boolean =
+    size.width > 0 && size.height > 0 &&
+        (p.x < -margin || p.y < -margin || p.x >= size.width + margin || p.y >= size.height + margin)
+
+/**
+ * How far past the window's edge a mouse drag has to go before the tab is torn off into a window
+ * of its own. Some distance, not the edge itself: a drop on an edge pane's outer zone often
+ * overshoots the window by a few points, and a strip at the window's edge must not open and close
+ * a window as the pointer wobbles across the line.
+ */
+private val TearOffMargin = 16.dp
+
+/** How close to a strip's end a held drag starts scrolling it, and its fastest step per frame. */
+private val StripAutoScrollEdge = 40.dp
+private val StripAutoScrollMaxStep = 12.dp
+
+/** The tear-off seam [PaneHost] hands its strips; null outside a PaneHost that has one. */
+private val LocalTabTearOff = staticCompositionLocalOf<TabTearOff?> { null }
+
+/** The one view a [PaneHost] shows, when it shows exactly one; null otherwise. */
+private val LocalSoleView = compositionLocalOf<String?> { null }
+
+/** How a finger's press on a tab ended before it was held long enough to drag. */
+private enum class TouchEnd { Tap, Swipe }
 
 /**
  * N-pane generalisation of [ResizableSplit]. [n] children means [n]-1 splitters,

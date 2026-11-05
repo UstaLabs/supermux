@@ -260,8 +260,10 @@ fun WorkspacePanes(
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
         bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
+    val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
     PaneHost(
         layout = layout,
+        tearOff = tearOff,
         titleFor = { vid -> viewsById[vid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
@@ -310,13 +312,14 @@ fun WorkspacePanes(
                 ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
                 ?.stateString("path")
             // Touch has no right-click, so a device that CAN open a second window offers "Move to
-            // New Window" on a long press instead. A held finger never reaches the strip's drag
-            // threshold, so this does not fight the tab drag.
+            // New Window" on a long press instead. The same hold is what arms a touch tab drag, so
+            // the menu waits for the finger to lift: hold-and-move drags, hold-and-lift is the menu.
             TabLongPressMenu(
                 enabled = !LocalContextMenuAvailable.current,
                 itemId = itemId,
                 onMoveToNewWindow = if (windowsSeam != null) ({ onTearOutTab(itemId) }) else null,
                 bulkEntries = { bulkEntries(itemId) },
+                openOnRelease = true,
             ) {
                 if (filePath == null) {
                     RowContextMenu(
@@ -1105,11 +1108,21 @@ private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
  * short press, or one that moves past the touch slop (a tab drag, a strip scroll), is left
  * entirely alone. Only once the press has been held does it claim the gesture — it consumes the
  * rest of it, so the tab's own click does not also fire on release.
+ *
+ * With [onRelease] it claims nothing instead, and fires on LIFT: a held finger that then moves past
+ * the slop is the start of a drag (a tab strip's tab is dragged by hold-then-move on touch), so it
+ * is left to the drag and [onLongPress] never runs; one that lifts in place gets it. Firing at the
+ * hold would open a popup in the middle of the drag, and a focusable popup takes the rest of the
+ * gesture on Compose Multiplatform hosts.
  */
-internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = composed {
+internal fun Modifier.longPress(
+    key: Any?,
+    onRelease: Boolean = false,
+    onLongPress: () -> Unit,
+): Modifier = composed {
     val haptics = LocalHapticFeedback.current
     val latest by rememberUpdatedState(onLongPress)
-    pointerInput(key) {
+    pointerInput(key, onRelease) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val slop = viewConfiguration.touchSlop
@@ -1127,6 +1140,18 @@ internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = 
             }
             if (endedEarly != null) return@awaitEachGesture
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (onRelease) {
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                        .firstOrNull { it.id == down.id } ?: break
+                    if ((change.position - down.position).getDistance() > slop) break
+                    if (!change.pressed) {
+                        latest()
+                        break
+                    }
+                }
+                return@awaitEachGesture
+            }
             latest()
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -1148,6 +1173,11 @@ internal fun TabLongPressMenu(
     itemId: String,
     onMoveToNewWindow: (() -> Unit)?,
     bulkEntries: () -> List<RowContextMenuEntry>,
+    /**
+     * True on a drag-reorderable strip, where the hold also arms a touch drag: the menu opens when
+     * the held finger LIFTS in place, and a held finger that moves drags the tab instead.
+     */
+    openOnRelease: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     if (!enabled) {
@@ -1155,7 +1185,7 @@ internal fun TabLongPressMenu(
         return
     }
     var open by remember(itemId) { mutableStateOf(false) }
-    Box(Modifier.longPress(itemId) { open = true }) {
+    Box(Modifier.longPress(itemId, onRelease = openOnRelease) { open = true }) {
         content()
         DropdownMenu(
             expanded = open,

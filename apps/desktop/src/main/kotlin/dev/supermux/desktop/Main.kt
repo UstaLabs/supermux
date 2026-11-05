@@ -146,6 +146,7 @@ import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
+import dev.supermux.desktop.shell.DesktopTearOff
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.ui.shell.windows.extraWindowTitle
@@ -679,8 +680,12 @@ fun main() {
             }
         }
         val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
-        // The extra OS windows, and the shared shell's view of them (cluster G8).
-        val desktopWindows = remember { RegistryShellWindows() }
+        // The extra OS windows, and the shared shell's view of them (cluster G8). Live tear-off is
+        // bound to the registry here, while composing, so that every window's panes — composed
+        // further down this same pass — already find it.
+        val desktopWindows = remember {
+            RegistryShellWindows().also { DesktopWindowHostController.bindRegistry(it.registry) }
+        }
         // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
         // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
         // file is drained ONCE here and then only carries the window bounds. Synchronous for the
@@ -779,8 +784,8 @@ fun main() {
                     val layoutSync = bind.ws.layoutSync
                     tearOutTabLive(
                         desktopWindows.registry, layoutSync.tree, viewId, bind.current.id,
-                    ) { next ->
-                        layoutSync.edit { next }
+                    ) { transform ->
+                        layoutSync.edit(transform)
                         layoutSync.tree
                     }
                     Unit
@@ -935,6 +940,12 @@ fun main() {
             // Every chrome's registry (macOS's too): the whole window's top band drags with it.
             val chromeRegions = macChrome?.regions ?: bandRegions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
+            // Live tear-off: a tab dragged out of another window can land in this one.
+            DisposableEffect(window) {
+                val mainHostId = desktopWindows.registry.main().id
+                DesktopTearOff.register(mainHostId, window, extra = false)
+                onDispose { DesktopTearOff.unregister(mainHostId, window) }
+            }
             if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
                     window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
@@ -2196,7 +2207,8 @@ fun main() {
                     snapshotFlow {
                         extraState.position to extraState.size
                     }.collect { (pos, size) ->
-                        if (pos is WindowPosition.Absolute) {
+                        // A window following a tab drag settles its bounds once, when it ends.
+                        if (pos is WindowPosition.Absolute && !DesktopTearOff.isFollowing(host.id)) {
                             desktopWindows.registry.updateBounds(
                                 host.id,
                                 WindowBounds(
@@ -2211,6 +2223,8 @@ fun main() {
                 }
                 Window(
                     onCloseRequest = { DesktopWindowHostController.release(host.id) },
+                    // Hidden while a tab it carries is dragged over another window (live tear-off).
+                    visible = host.id !in DesktopTearOff.hidden,
                     title = extraBind?.let {
                         extraWindowTitle(
                             it.current.name,
@@ -2222,6 +2236,11 @@ fun main() {
                     icon = painterResource("supermux-icon.png"),
                     state = extraState,
                 ) {
+                        // Live tear-off finds, moves and hides this window by its host id.
+                        DisposableEffect(host.id, window) {
+                            DesktopTearOff.register(host.id, window, extra = true)
+                            onDispose { DesktopTearOff.unregister(host.id, window) }
+                        }
                         ProvideDesktopAdaptiveLocals {
                             DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
                                 if (extraBind != null) {

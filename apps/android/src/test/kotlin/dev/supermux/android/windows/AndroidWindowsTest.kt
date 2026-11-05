@@ -51,7 +51,7 @@ class AndroidWindowsTest {
         val host = assertNotNull(
             tearOutTab(
                 windows.registry, tree, "v2", "ws", "g-new", WindowBounds(0f, 0f, 0f, 0f), "w1",
-            ) { next -> tree = next; tree },
+            ) { transform -> tree = transform(tree); tree },
         )
         assertEquals(setOf("v2"), host.claimedViewIds)
         assertEquals(listOf("v1"), collectViewIds(windows.layoutFor(windows.mainHostId, tree)))
