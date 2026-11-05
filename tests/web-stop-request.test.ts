@@ -13,10 +13,14 @@ const TOKEN = "s3cret-stop-token"
 let ch: WebChannel
 let base = ""
 let stops = 0
+let restarts = 0
+let restartable = true
 
 beforeEach(async () => {
   __resetAuthFailures()
   stops = 0
+  restarts = 0
+  restartable = true
   ch = new WebChannel({
     port: 0,
     devicesFile: DEV_PATH,
@@ -28,6 +32,7 @@ beforeEach(async () => {
     onSendFromWeb: () => {},
     stopToken: TOKEN,
     onStopRequest: () => { stops++ },
+    onRestartRequest: () => { restarts++; return restartable },
   } as any)
   await ch.start()
   base = `http://127.0.0.1:${ch.boundPort}`
@@ -69,4 +74,20 @@ test("each boot writes a new token, readable only by its user", () => {
   expect(second).toMatch(/^[0-9a-f]{48}$/)
   expect(readFileSync(join(state, STOP_TOKEN_FILE), "utf8")).toBe(second)
   if (process.platform !== "win32") expect(statSync(join(state, STOP_TOKEN_FILE)).mode & 0o777).toBe(0o600)
+})
+
+// `supermux connect --restart`: the broker restarts under whatever runs it (update/apply.ts restartService), which only
+// it knows; a broker nothing would bring back says so instead of stopping for good.
+test("the stop token asks the broker to restart under what runs it", async () => {
+  const res = await fetch(`${base}/internal/restart`, { method: "POST", headers: { "x-supermux-stop-token": TOKEN } })
+  expect(res.status).toBe(202)
+  expect(restarts).toBe(1)
+})
+
+test("a broker nothing would bring back refuses to restart (409), and a missing token restarts nothing", async () => {
+  restartable = false
+  expect((await fetch(`${base}/internal/restart`, { method: "POST", headers: { "x-supermux-stop-token": TOKEN } })).status).toBe(409)
+  restartable = true
+  expect((await fetch(`${base}/internal/restart`, { method: "POST" })).status).toBe(403)
+  expect(restarts).toBe(1)
 })

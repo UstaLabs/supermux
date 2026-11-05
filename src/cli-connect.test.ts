@@ -27,32 +27,53 @@ function fake(overrides: Partial<TunnelProvider> = {}): TunnelProvider {
   }
 }
 
-test("happy path: writes .env, restarts the broker, prints a pair link", async () => {
-  const dir = tmp()
-  const out: string[] = []
-  const calls: string[][] = []
-  const run: Run = async (argv) => { calls.push(argv); return { code: 0, stdout: "", stderr: "" } }
-  const code = await runConnectCommand(["cloudflared", "--yes"], {
-    providers: [fake()], stateDir: dir, tty: false, run, println: (s) => out.push(s),
+/** A stand-in broker: answers /internal/restart, recording the path and the token it was given. */
+function fakeBroker(): { port: number; requests: string[]; stop(): void } {
+  const requests: string[] = []
+  const server = Bun.serve({
+    port: 0,
+    fetch: (req) => {
+      requests.push(`${new URL(req.url).pathname} ${req.headers.get("x-supermux-stop-token")}`)
+      return new Response(null, { status: 202 })
+    },
   })
-  expect(code).toBe(0)
-  expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_WEB_PUBLIC_URL=https://fake.example.com")
-  // restart uses systemctl on Linux, launchctl on macOS — accept either
-  expect(calls.some((c) => /systemctl|launchctl/.test(c.join(" ")))).toBe(true)
-  expect(existsSync(join(dir, "devices.json"))).toBe(true)
-  expect(out.join("\n")).toContain("https://fake.example.com/pair?t=")
+  return { port: server.port!, requests, stop: () => server.stop(true) }
+}
+
+test("happy path: writes .env, asks the running broker to restart, prints a pair link", async () => {
+  const dir = tmp()
+  writeFileSync(join(dir, "stop-token"), "tok")
+  const broker = fakeBroker()
+  const out: string[] = []
+  try {
+    const code = await runConnectCommand(["cloudflared", "--yes", "--port", String(broker.port)], {
+      providers: [fake()], stateDir: dir, tty: false, run: okRun, println: (s) => out.push(s),
+    })
+    expect(code).toBe(0)
+    expect(readFileSync(join(dir, ".env"), "utf8")).toContain("MUX_WEB_PUBLIC_URL=https://fake.example.com")
+    // The broker restarts itself under whatever runs it (systemd, launchd, the desktop app's service).
+    expect(broker.requests).toEqual(["/internal/restart tok"])
+    expect(existsSync(join(dir, "devices.json"))).toBe(true)
+    expect(out.join("\n")).toContain("https://fake.example.com/pair?t=")
+  } finally {
+    broker.stop()
+  }
 })
 
 test("--no-restart and --no-pair skip those steps", async () => {
   const dir = tmp()
-  const calls: string[][] = []
-  const run: Run = async (a) => { calls.push(a); return { code: 0, stdout: "", stderr: "" } }
-  const code = await runConnectCommand(["cloudflared", "--yes", "--no-restart", "--no-pair"], {
-    providers: [fake()], stateDir: dir, tty: false, run, println() {},
-  })
-  expect(code).toBe(0)
-  expect(calls.some((c) => /systemctl|launchctl/.test(c.join(" ")))).toBe(false)
-  expect(existsSync(join(dir, "devices.json"))).toBe(false)
+  writeFileSync(join(dir, "stop-token"), "tok")
+  const broker = fakeBroker()
+  try {
+    const code = await runConnectCommand(["cloudflared", "--yes", "--no-restart", "--no-pair", "--port", String(broker.port)], {
+      providers: [fake()], stateDir: dir, tty: false, run: okRun, println() {},
+    })
+    expect(code).toBe(0)
+    expect(broker.requests).toEqual([])
+    expect(existsSync(join(dir, "devices.json"))).toBe(false)
+  } finally {
+    broker.stop()
+  }
 })
 
 test("ephemeral result prints the NOT-stable warning + caveat note", async () => {

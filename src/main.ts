@@ -124,7 +124,7 @@ import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
-import { captureWindowsTaskFlag } from "./core/update/apply"
+import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -2593,6 +2593,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     internalSecret: INTERNAL_SECRET,
     stopToken: STOP_TOKEN,
     onStopRequest: () => { void gracefulShutdown("stop-request") },
+    // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
+    onRestartRequest: () => restartService(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())

@@ -231,7 +231,6 @@
     "src/core/tunnels/cloudflared.ts": 1,
     "src/core/tunnels/netbird.ts": 1,
     "src/core/tunnels/ngrok.ts": 1,
-    "src/core/tunnels/public-url.ts": 1,
     "src/core/tunnels/tailscale.ts": 2,
     "src/core/update/apply.ts": 4,
     "src/core/usage/index.ts": 1,

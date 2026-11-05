@@ -486,6 +486,11 @@ export interface WebChannelOpts {
    */
   stopToken?: string
   onStopRequest?: () => void
+  /**
+   * With [stopToken]: POST /internal/restart restarts the broker under whatever runs it (update/apply.ts
+   * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
+   */
+  onRestartRequest?: () => boolean
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -2456,20 +2461,30 @@ export class WebChannel implements Channel {
       return Response.json(this.lastClientFrames)
     }
 
-    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
-      // Machine-to-machine: the desktop app (same user) read the token from the state directory. Nothing else knows it.
-      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+    // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    const stopTokenGiven = (kind: string): boolean => {
       const given = req.headers.get("x-supermux-stop-token") ?? ""
-      const expected = this.opts.stopToken
-      const ok = given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
-      if (!ok) {
-        log.warn("stop_request_rejected", { hasToken: given !== "" })
-        return new Response("forbidden", { status: 403 })
-      }
+      const expected = this.opts.stopToken ?? ""
+      const ok = expected !== "" && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+      if (!ok) log.warn(`${kind}_request_rejected`, { hasToken: given !== "" })
+      return ok
+    }
+    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("stop")) return new Response("forbidden", { status: 403 })
       log.info("stop_request_accepted")
       const stop = this.opts.onStopRequest
       setTimeout(() => stop(), 0) // after this response has gone out
       return new Response("stopping", { status: 202 })
+    }
+    if (path === "/internal/restart" && this.opts.stopToken && this.opts.onRestartRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("restart")) return new Response("forbidden", { status: 403 })
+      // restartService schedules the restart a moment later, so this answer still goes out.
+      if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
+      log.info("restart_request_accepted")
+      return new Response("restarting", { status: 202 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {

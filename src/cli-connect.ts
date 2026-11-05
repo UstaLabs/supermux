@@ -215,7 +215,7 @@ async function connectProvider(
   for (const n of result.notes ?? []) ctx.println(n)
 
   // 5. restart the broker so the new origin binds (CSRF + cookie scoping)
-  if (flags.restart) await restartBroker(ctx.run, ctx.println)
+  if (flags.restart) await restartBroker(ctx.stateDir, ctx.port, ctx.println)
   else ctx.println("Skipped broker restart (--no-restart) — restart it for the new URL to take effect.")
 
   // 6. re-pair (origin changed ⇒ old pairings are dead)
@@ -245,7 +245,7 @@ async function disconnect(ctx: ConnectCtx, flags: Flags): Promise<number> {
     tunnel: { provider: "", mode: "", publicUrl: "" },
   })
   ctx.println(`✔ Reverted to ${local}.`)
-  if (flags.restart) await restartBroker(ctx.run, ctx.println)
+  if (flags.restart) await restartBroker(ctx.stateDir, ctx.port, ctx.println)
   ctx.println("Devices now pair on the local origin again.")
   return 0
 }
