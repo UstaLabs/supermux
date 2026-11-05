@@ -74,7 +74,7 @@ internal fun DesktopOverlaySettings() {
         }
         when (portal) {
             WaylandHotKey.Outcome.NO_PORTAL -> Text(
-                "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold Anya to talk.",
+                "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurfaceVariant,
             )
