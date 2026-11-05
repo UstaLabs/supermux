@@ -1099,3 +1099,31 @@ Ask #62 (45bdb259) for a slot in `~/work/supermux-hotreload` (theirs until 21:00
 - [ ] **Step 4: Note it on #76 and take the demo down**
 
 `issues comment 76 "…"` with the commits and test counts; `systemctl --user stop flow-demo` and unexpose `streaming-flow` once Ahmet has seen the app.
+
+---
+
+## Addendum (2026-11-05 evening): live replies on every surface
+
+Ahmet tried B3 on his Mac ("ok its good, can be merged to dev") and then asked for it everywhere ("i think it can
+be switched on everywhere"), each platform checked before the merge.
+
+- **Gate:** `LIVE_REPLY_SURFACES` = desktop, android, ios, web (`HostStoreLogTailTest` pins the set).
+- **Reduced motion:** the shared `HostTheme` takes `reduceMotion` and provides `LocalReduceMotion`
+  (`HostThemeReduceMotionTest`). Each platform theme passes its OS answer, kept current while it changes:
+  - Android `AndroidTheme`: `Settings.Global.ANIMATOR_DURATION_SCALE == 0` ("Remove animations"), watched by a
+    `ContentObserver`; `ReduceMotionTest` covers the rule.
+  - iOS `IosTheme`: `UIAccessibilityIsReduceMotionEnabled()`, updated on `UIAccessibilityReduceMotionStatusDidChangeNotification`.
+  - Web `WebTheme`: `matchMedia("(prefers-reduced-motion: reduce)")` plus its `change` event.
+  - Desktop already asks the OS (Task 2).
+- **Checks before the merge:** all run against the isolated scratch broker on :9976, from this branch, with its
+  own state, using a Codex chat (the default Claude login was rate-limited). Each records a streamed reply, then
+  repeats it with reduced motion on, which must show whole words and no edge:
+  - web: headless Chrome, `reducedMotion: "reduce"`;
+  - Android: the box emulator (pixel_api35) with the debug APK, paired by `supermux://pair`, then animator scale 0;
+  - iOS: the Mac simulator in `~/work/supermux-hotreload` under the lease, paired by `SIMCTL_CHILD_SM_PAIR_*`
+    over an SSH reverse tunnel, then Reduce Motion on.
+- **Suites:** the broker suite (`bun test --isolate`, typecheck, core), `:shared:jvmTest :ui:jvmTest :desktop:test
+  :android:testDebugUnitTest`, the web compile, and iOS on the Mac.
+- **Trap:** in this worktree `src/channels/web/static` is a symlink to the main checkout's live client, and
+  `:web:stageForBroker` deletes its output wholesale. Replace the link with a real folder before staging, and only
+  once the live preview broker no longer serves this worktree.
