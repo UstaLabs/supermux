@@ -74,6 +74,18 @@ export class GitStatusService {
     }
   }
 
+  /**
+   * Card #75: the session's folder was just made (a session born asleep has its worktree checked out
+   * at its first wake), so its git dirs are resolved again and watched. sync() can't tell: the row's
+   * fields did not change, and resolving them on every sync would run git for every session.
+   */
+  retrack(id: string): void {
+    const t = this.tracked.get(id)
+    if (!t) return
+    this.untrack(id)
+    this.track(t.s)
+  }
+
   scheduleRecompute(id: string): void {
     if (!this.tracked.has(id)) return
     const prev = this.timers.get(id)
