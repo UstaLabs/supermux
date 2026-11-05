@@ -221,12 +221,13 @@ export async function resumeCodexSession(
     onThreadId?: (name: string, sid: string) => void
     codexHost?: CodexCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; fast?: boolean; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; fast?: boolean; agent_session_id?: string; permissionMode?: string; account?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     command: resolveCodexCommand({}),
@@ -245,6 +246,7 @@ export async function resumeCodexSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         command: resolveCodexCommand({}),
@@ -317,6 +319,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

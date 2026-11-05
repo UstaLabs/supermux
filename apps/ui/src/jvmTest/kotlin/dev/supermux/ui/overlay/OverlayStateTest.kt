@@ -121,8 +121,66 @@ class OverlayStateTest {
         assertEquals(0f, s.room)
     }
 
-    @Test fun theLinesThatFitAreWholeLinesAndAtLeastThree() {
-        assertEquals(10, linesThatFit(roomPx = 520f, linePx = 50f))
-        assertEquals(3, linesThatFit(roomPx = 40f, linePx = 50f))
+    // A reply read in full scrolls; as more of it arrives it follows the end only while you're at the end.
+    @Test fun aLongReplyOpensAtItsTop() = assertEquals(null, ReplyFollow().onScroll(value = 0, max = 500))
+
+    @Test fun moreTextWhileYouAreAtTheEndIsFollowed() {
+        val f = ReplyFollow()
+        assertEquals(null, f.onScroll(value = 0, max = 0)) // it all fits: you are at the end
+        assertEquals(120, f.onScroll(value = 0, max = 120))
+    }
+
+    @Test fun moreTextWhileYouReadHigherUpLeavesYouThere() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 500)
+        assertEquals(null, f.onScroll(value = 0, max = 700))
+    }
+
+    @Test fun scrollingBackToTheEndFollowsAgain() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 500)
+        assertEquals(null, f.onScroll(value = 500, max = 500))
+        assertEquals(800, f.onScroll(value = 500, max = 800))
+    }
+
+    @Test fun scrollingUpStopsFollowing() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 0)
+        assertEquals(200, f.onScroll(value = 0, max = 200))
+        f.onScroll(value = 200, max = 200)
+        assertEquals(null, f.onScroll(value = 50, max = 200))
+        assertEquals(null, f.onScroll(value = 50, max = 400))
+    }
+
+    // ── one talk after another: a talk started while the last still waits for its words waits too ──
+
+    @Test fun aTalkWithNothingBeforeItListensAtOnce() = assertTrue(TalkTurns().start(finishing = false))
+
+    @Test fun aTalkWhileTheLastIsStillFinishingWaits() = assertFalse(TalkTurns().start(finishing = true))
+
+    @Test fun theWaitingTalkListensOnceTheLastHasItsWords() {
+        val turns = TalkTurns()
+        turns.start(finishing = true)
+        assertTrue(turns.lastFinished())
+    }
+
+    @Test fun aWaitingTalkLetGoOfEarlyHadNothingOfItsOwn() {
+        val turns = TalkTurns()
+        turns.start(finishing = true)
+        assertTrue(turns.end(), "it never had the mic: nothing of its own to stop or send")
+        assertFalse(turns.lastFinished(), "let go of already: it mustn't start listening")
+    }
+
+    @Test fun aTalkThatHadTheMicEndsAsUsual() {
+        val turns = TalkTurns()
+        turns.start(finishing = false)
+        assertFalse(turns.end())
+    }
+
+    @Test fun theLastFinishingWithNobodyWaitingStartsNothing() {
+        val turns = TalkTurns()
+        turns.start(finishing = false)
+        turns.end()
+        assertFalse(turns.lastFinished())
     }
 }

@@ -18,6 +18,13 @@ export class RecentInboundIds {
     if (ids.length > this.max) ids.splice(0, ids.length - this.max)
   }
 
+  /** A hand-over that failed: the id may be delivered again. */
+  unmark(sessionId: string, messageId: string): void {
+    const ids = this.bySession.get(sessionId)
+    const at = ids?.indexOf(messageId) ?? -1
+    if (at >= 0) ids!.splice(at, 1)
+  }
+
   clear(sessionId: string): void {
     this.bySession.delete(sessionId)
   }

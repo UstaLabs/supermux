@@ -233,6 +233,12 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putAssistantOverlayScreen(value: Boolean) =
         settings.putString(SettingsKeys.ASSISTANT_OVERLAY_SCREEN, value.toString())
 
+    /** The desktop overlay's hold-to-talk key (#62), as stored; null = its default. */
+    val assistantOverlayTalkKey: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_TALK_KEY)
+
+    suspend fun putAssistantOverlayTalkKey(value: String) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_TALK_KEY, value)
+
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =
         settings.string(SettingsKeys.TEXT_SCALE).map { raw ->

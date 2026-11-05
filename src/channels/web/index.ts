@@ -131,6 +131,11 @@ function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
 }
 
+/** An app-minted message id (`web-<uuid>`): the broker logs and dedupes the message under it. Anything else is ignored. */
+function clientMessageIdOf(value: unknown): string | undefined {
+  return typeof value === "string" && /^web-[A-Za-z0-9._:-]{1,120}$/.test(value) ? value : undefined
+}
+
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
 // `authFailures` field on the class), so there is no process-global bucket to
 // clear. Kept as an exported no-op for tests that build a fresh channel per
@@ -356,7 +361,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -494,6 +499,12 @@ export interface WebChannelOpts {
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   getSessionWorkdir?: (name: string) => string | undefined
+  /**
+   * Card #75: resolves once a folder the broker is making exists (a session born asleep has its
+   * worktree checked out on its first wake), at once for any other path. The files routes, folder
+   * subscriptions and terminals wait on it instead of failing with a missing folder.
+   */
+  folderReady?: (path: string) => Promise<void>
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
@@ -1366,6 +1377,8 @@ export class WebChannel implements Channel {
     if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
 
     await lane.ready()
+    // A session born asleep gets its folder on its first wake: its terminal waits for it (card #75).
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1426,6 +1439,7 @@ export class WebChannel implements Channel {
       try { ws.close(1011, "terminal reset failed") } catch {}
       return
     }
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1929,10 +1943,7 @@ export class WebChannel implements Channel {
         return
       }
 
-      const clientMessageId = typeof frame.client_message_id === "string"
-        && /^web-[A-Za-z0-9._:-]{1,120}$/.test(frame.client_message_id)
-        ? frame.client_message_id
-        : undefined
+      const clientMessageId = clientMessageIdOf(frame.client_message_id)
 
       const msg: InboundMessage = {
         channel: "web",
@@ -1982,7 +1993,9 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "fs_sub" && typeof frame.path === "string") {
-      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      const path = frame.path
+      const since = typeof frame.since === "string" ? frame.since : undefined
+      void (this.opts.folderReady?.(path) ?? Promise.resolve()).then(() => this.fss.subscribe(ws, path, since))
       return
     }
     if (frame.type === "fs_unsub" && typeof frame.path === "string") {
@@ -3535,6 +3548,7 @@ export class WebChannel implements Channel {
     if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
+        await this.opts.folderReady?.(p)
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
@@ -4082,7 +4096,9 @@ export class WebChannel implements Channel {
           viewId,
           firstMessage,
           firstAttachments,
+          firstMessageId: clientMessageIdOf(body.client_message_id),
           device: auth.device.name,
+          perfTrace: (req.headers.get("x-mux-trace") ?? "").split("/")[0] || undefined,
         })
         return this.json(result)
       } catch (err: any) {

@@ -348,3 +348,12 @@ test("a release attaches its iOS build to the internal TestFlight group only; ex
   expect(job).toContain("TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}")
   expect(job).not.toMatch(/TESTFLIGHT_GROUP: "[^"]*Developer Beta/)
 })
+
+test("every CI run tests the Windows desktop host and broker seams, with the release job's own commands", () => {
+  const job = ci.slice(ci.indexOf("  windows-desktop:"), ci.indexOf("  kotlin:\n"))
+  expect(job).toContain("runs-on: windows-latest")
+  const hostTests = "./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest'"
+  expect(job).toContain(hostTests)
+  expect(workflow).toContain(hostTests)
+  for (const f of ["tests/windows-staging.test.ts", "src/core/sessiond/session-store.test.ts", "src/core/process/launcher.test.ts"]) expect(job).toContain(f)
+})

@@ -146,7 +146,10 @@ sealed interface TrayItem {
 
 enum class TrayAction { OPEN, SHOW_LOG, RESTART, QUIT }
 
-enum class TrayToggle { BACKGROUND, KEEP_AWAKE, LID_CLOSED }
+enum class TrayToggle { BACKGROUND, KEEP_AWAKE, LID_CLOSED, ASSISTANT }
+
+/** The tray's checkbox for the assistant overlay (#62). */
+const val ASSISTANT_OVERLAY = "Assistant overlay"
 
 /**
  * The tray's keep-awake checkmarks ("Also on battery" stays in Settings, so the tray isn't crowded).
@@ -180,10 +183,20 @@ data class TrayPower(
     }
 }
 
-/** The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. [dot]: see [trayHeaderLine]. */
-fun trayMenuItems(model: TrayModel, background: Boolean, power: TrayPower = TrayPower.NONE, dot: Boolean = true): List<TrayItem> = buildList {
+/**
+ * The tray menu (spec §States, "Tray menu"). Hosting off: header, Open, Quit. [dot]: see [trayHeaderLine].
+ * [assistant]: the assistant overlay's switch (#62), under Open; null leaves it out (not offered, not paired).
+ */
+fun trayMenuItems(
+    model: TrayModel,
+    background: Boolean,
+    power: TrayPower = TrayPower.NONE,
+    dot: Boolean = true,
+    assistant: Boolean? = null,
+): List<TrayItem> = buildList {
     add(TrayItem.Header(trayHeaderLine(model, dot)))
     add(TrayItem.Action(TrayAction.OPEN, "Open supermux"))
+    assistant?.let { add(TrayItem.Checkbox(ASSISTANT_OVERLAY, it, true, TrayToggle.ASSISTANT)) }
     if (model.showLog) add(TrayItem.Action(TrayAction.SHOW_LOG, "Show log"))
     if (model.restartLabel != null || model.showKeepRunning) {
         add(TrayItem.Separator)
@@ -210,8 +223,9 @@ fun MenuScope.HostingTrayMenu(
     power: TrayPower,
     dispatcher: TrayDispatcher,
     dot: Boolean = true,
+    assistant: Boolean? = null,
 ) {
-    for (item in trayMenuItems(model, background, power, dot)) {
+    for (item in trayMenuItems(model, background, power, dot, assistant)) {
         when (item) {
             is TrayItem.Header -> Item(item.text, enabled = false, onClick = {})
             is TrayItem.Action -> Item(item.label, enabled = item.enabled, onClick = { dispatcher.onAction(item.id) })

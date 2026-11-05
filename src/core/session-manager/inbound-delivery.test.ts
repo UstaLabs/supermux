@@ -109,3 +109,31 @@ test("a throwing onAccepted never loses the message", async () => {
   expect(r).toEqual({ ok: true })
   expect(sends).toEqual(["hi"])
 })
+
+// Card #75: a core adapter's send() resolves when its TURN ends, so an id marked only after it
+// left a whole turn in which the same message, re-sent, was delivered again.
+test("a re-send while the first hand-over's turn is still running is deduped (marked at hand-over)", async () => {
+  const sends: string[] = []
+  let endTurn!: () => void
+  const turn = new Promise<void>((resolve) => { endTurn = resolve })
+  const seen = new RecentInboundIds(50)
+  const deps = { getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text); await turn } }), seen }
+  const first = deliverInbound(deps, "s1", "hi", { message_id: "web-1" })
+  await Bun.sleep(0)
+  expect(await deliverInbound(deps, "s1", "hi", { message_id: "web-1" })).toEqual({ ok: true, deduped: true })
+  endTurn()
+  expect(await first).toEqual({ ok: true })
+  expect(sends).toEqual(["hi"])
+})
+
+test("a hand-over that throws leaves the id unmarked, so the sender's retry goes through", async () => {
+  let fail = true
+  const sends: string[] = []
+  const seen = new RecentInboundIds(50)
+  const deps = { getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text); if (fail) throw new Error("agent gone") } }), seen }
+  await expect(deliverInbound(deps, "s1", "hi", { message_id: "web-2" })).rejects.toThrow("agent gone")
+  expect(seen.has("s1", "web-2")).toBe(false)
+  fail = false
+  expect(await deliverInbound(deps, "s1", "hi", { message_id: "web-2" })).toEqual({ ok: true })
+  expect(sends).toEqual(["hi", "hi"])
+})

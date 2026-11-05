@@ -111,6 +111,8 @@ export type SessionManagerPorts = {
     terminals: Pick<TerminalManager, "killAllForSession">
     stopClaudeTailer(sessionUuid: string): void
     releaseDraftAttachments(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined): void
+    /** Card #75: drop the session's wake in flight and the deliveries queued behind it (SessionChain.cancel). */
+    cancelWake?(sessionId: string): void
 
     /** gitStatusService.sync over the current visible-session set. */
     syncGitStatus(): void
@@ -263,6 +265,11 @@ export class SessionManager {
     return this.bootResumes.has(sessionId)
   }
 
+  /** That resume, while it has not settled (card #75: a wake waits for it instead of starting a second runtime). */
+  bootResume(sessionId: string): Promise<void> | undefined {
+    return this.bootResumes.get(sessionId)
+  }
+
   adapterFor(sessionId: string): AgentAdapter | undefined {
     return this.runtimes.get(sessionId)?.adapter
   }
@@ -378,6 +385,9 @@ export class SessionManager {
     // A parent link is set once, at creation, to a session that already exists, so the tree has
     // no cycles; `seen` keeps a hand-edited database from looping forever anyway.
     seen.add(id)
+    // A start in flight ends here: its arm stops what it started (abandonIfGone), and the messages
+    // waiting for it are dropped (they stay in the chat).
+    this.ports.cleanup.cancelWake?.(id)
     const s = this.registry.get(id)
     if (!s) return
 
@@ -1592,7 +1602,7 @@ export class SessionManager {
   }
 
   /** Suspended → live (lazy, triggered by the next inbound message). */
-  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean }): Promise<boolean> {
+  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean; account?: string | null }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     let resumedRuntimePid: number | null = null
     this.resumeFailures.delete(session.id)
@@ -1611,7 +1621,7 @@ export class SessionManager {
         await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, session.name)
         this.registry.sessions.setCore(session.id, true)
         this.registry.sessions.setAgentHome(session.id, agentHome)
-      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+      } else if (session.agent === "codex" && session.agent_home) {
         await this.ports.resume.bind(session.id)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, session.name)
       } else if (session.agent === "cursor" && session.agent_home) {
@@ -1629,12 +1639,43 @@ export class SessionManager {
         log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
         return false
       }
+      if (await this.abandonIfGone(session.id, session.name)) return false
       this.registry.sessions.activate(session.id, resumedSessionPid(resumedRuntimePid, session.pid))
       return true
     } catch (err: any) {
       log.error("resume_suspended_failed", { name: session.name, err: String(err) })
       this.resumeFailures.set(session.id, err)
       return false
+    }
+  }
+
+  /**
+   * Card #75: the session was archived, killed or deleted while its agent was starting. The arm
+   * registered the agent anyway; stop it and drop it, so no live agent is left on a session that is
+   * gone. True when it did.
+   */
+  private async abandonIfGone(id: string, name: string): Promise<boolean> {
+    if (this.registry.get(id)) return false
+    log.info("resume_abandoned_session_gone", { name, id })
+    try { await this.runtimes.get(id)?.adapter.stop() } catch (err) { log.warn("resume_abandon_stop_failed", { name, id, err: String(err) }) }
+    this.deleteRuntime(id)
+    return true
+  }
+
+  /**
+   * Card #75: Stop came while the session was starting. What started goes back to sleep: its agent
+   * stopped, its runtime dropped, the row suspended, so it wakes on its next message like any dozing session.
+   */
+  async putToSleep(id: string): Promise<void> {
+    if (!this.registry.get(id)) return   // archived or deleted: abandonIfGone already stopped it
+    try {
+      await this.runtimes.get(id)?.adapter.stop()
+    } finally {
+      this.deleteRuntime(id)
+      this.ports.cleanup.stopClaudeTailer(id)
+      this.ports.agentState.clear(id)
+      this.registry.sessions.suspend(id)
+      log.info("session_put_back_to_sleep", { id })
     }
   }
 
@@ -1688,7 +1729,7 @@ export class SessionManager {
         await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, name)
         this.registry.sessions.setCore(sessionId, true)
         this.registry.sessions.setAgentHome(sessionId, agentHome)
-      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+      } else if (session.agent === "codex" && session.agent_home) {
         await this.ports.resume.bind(sessionId)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, name)
       } else if (session.agent === "cursor" && session.agent_home) {
@@ -1822,14 +1863,15 @@ export class SessionManager {
         log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
       }
     } else if (s.agent === "codex") {
-      if (!s.agent_session_id || !s.agent_home) {
-        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
+      // No thread yet (born asleep, card #75) is a fresh start, as for the other kinds.
+      if (!s.agent_home) {
+        log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_home" })
         return
       }
       try {
         await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
         if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
-        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
+        log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id ?? "(fresh)" })
       } catch (err: any) {
         log.warn("codex_resume_failed", { name: s.name, err: String(err) })
       }

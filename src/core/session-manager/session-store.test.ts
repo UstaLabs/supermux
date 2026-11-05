@@ -62,3 +62,13 @@ test("activate never reactivates an archived row (archived in the DB while still
   expect(dbStatus()).toBe("archived")
   expect(store.getById(s.id)?.status).toBe("archived")
 })
+
+test("setBaseCommits records a born-asleep session's base commits once its worktree exists (card #75)", () => {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new SessionStore(db)
+  const s = store.register({ name: "asleep", agent: "claude", workdir: "/w/new", pid: 0 })
+  store.setBaseCommits(s.id, { "": "abc123" })
+  expect(store.getById(s.id)!.base_commits).toEqual({ "": "abc123" })
+  expect(new SessionStore(db).getById(s.id)!.base_commits).toEqual({ "": "abc123" })
+})

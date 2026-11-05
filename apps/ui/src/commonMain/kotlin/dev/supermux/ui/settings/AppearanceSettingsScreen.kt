@@ -372,8 +372,7 @@ private fun AssistantOverlayRow() {
                 Column(Modifier.weight(1f)) {
                     Text("Let it see your screen", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
                     Text(
-                        "Double-tap it to put its glasses on: while it wears them, your screen goes with hold-to-talk. " +
-                            "Android asks each time, and they come off when you lock the phone or after 5 quiet minutes.",
+                        host.screenNote,
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onSurfaceVariant,
                     )
@@ -385,6 +384,7 @@ private fun AssistantOverlayRow() {
                     modifier = Modifier.testTag("appearance_overlay_screen_switch"),
                 )
             }
+            host.moreSettings?.invoke()
         }
     }
 }

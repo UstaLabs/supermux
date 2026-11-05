@@ -10,6 +10,7 @@ import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 import { detachedKeeperHooks } from '../keeper/client.js'
+import { msSince, perfMark } from '../perf-marks.js'
 import type { ContextChange, ResolvedMcpServer, RuntimeContextControl } from '../context/types.js'
 
 /** Keeper meta `context`: what the running process can change live (see the runtime's context control). */
@@ -439,6 +440,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
     const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, resume), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
+    // Startup marks (perf-marks.ts): the first frames of each kind after the process came up.
+    const firstSeen = new Set<string>()
+    const firstFrame = (kind: string, fields?: Record<string, unknown>) => {
+      if (firstSeen.has(kind)) return
+      firstSeen.add(kind)
+      perfMark(context.sessionId, `claude.${kind}`, fields)
+    }
+    const transportStarted = performance.now()
     const rpc = await transport({
       command: options.command, args,
       fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT,
@@ -457,6 +466,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
         return
       }
       if (plumbing.has(message?.type)) return
+      // Four kinds in all (with prompt_written): once each was seen, no frame is looked at again.
+      if (firstSeen.size < 4 && !message?.parent_tool_use_id) {
+        if (message?.type === 'system' && message.subtype === 'init') {
+          if (!firstSeen.has('system_init')) firstFrame('system_init', { mcpServers: Array.isArray(message.mcp_servers) ? message.mcp_servers.map((m: any) => `${m?.name}:${m?.status}`).join(' ') : undefined })
+        } else if (message?.type === 'stream_event') firstFrame('first_stream')
+        else if (message?.type === 'assistant') firstFrame('first_assistant')
+      }
       const sessionId = message?.session_id
       // Only Claude's own main-thread frames name its conversation (a subagent's frames carry a parent_tool_use_id).
       const ownFrame = !message?.parent_tool_use_id
@@ -577,8 +593,12 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (active) commandsAfterTurn = true
         else askCommands()
       } else {
+        perfMark(context.sessionId, 'claude.transport', { ms: msSince(transportStarted) })
+        const initializeStarted = performance.now()
         rpc.start()
-        forwardCommands(await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise]))
+        const initialized = await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
+        perfMark(context.sessionId, 'claude.initialized', { ms: msSince(initializeStarted), commands: Array.isArray(initialized?.response?.commands) ? initialized.response.commands.length : undefined })
+        forwardCommands(initialized)
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
         // A created but never-prompted session may have no durable history.
@@ -695,6 +715,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
         try {
           rpc.setMeta({ ownedTurn: { uuid: a.uuid } })
           rpc.write({ type: 'user', uuid: a.uuid, session_id: agentSessionId, message: { role: 'user', content: converted } })
+          firstFrame('prompt_written')
           return await a.completion.promise
         } catch (error) { a.completion.reject(error instanceof Error ? error : new Error(String(error))); throw error }
         finally {

@@ -82,6 +82,8 @@ object SettingsKeys {
     /** "true"/"false": your screen goes with what you say when you hold the overlay to talk (Android asks
      *  once per session). Per device, never synced; unset = on. */
     const val ASSISTANT_OVERLAY_SCREEN = "appearance:assistantOverlayScreen"
+    /** The desktop overlay's hold-to-talk key (#62): a `TalkKey` name; none = the default combo. */
+    const val ASSISTANT_OVERLAY_TALK_KEY = "appearance:assistantOverlayTalkKey"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping

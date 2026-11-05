@@ -16,6 +16,7 @@ import dev.supermux.host.HostView
 import dev.supermux.ui.host.HostSwitcher
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -415,6 +416,30 @@ class SessionListScreenTest {
             )
         }
         onNodeWithText("suspended").assertIsDisplayed()
+    }
+
+    // Card #75: a suspended session whose agent is working is being woken: its badge says so.
+    @Test
+    fun row_saysStartingWhileASuspendedSessionIsBeingWoken() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                workspaces = listOf(
+                    ws(
+                        "w1", "waking", "/home/u/projects/app",
+                        views = listOf(chatView("v1", "s1", "w1")),
+                    ).copy(primarySessionId = "s1"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = listOf(
+                    SessionInfo(id = "s1", name = "waking", workdir = "/home/u/projects/app", agent = "claude", status = "suspended"),
+                ),
+                agentState = mapOf("s1" to AgentStatus(phase = "thinking", state = "working", working = true, detail = "starting")),
+            )
+        }
+        onNodeWithText("starting").assertIsDisplayed()
+        onNodeWithText("suspended").assertDoesNotExist()
     }
 
     @Test

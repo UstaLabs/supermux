@@ -545,7 +545,9 @@ fun main() {
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId, supervisor.prefs.map { it.port }) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
-        var windowVisible by remember { mutableStateOf(true) }
+        // Dev: SM_START_HIDDEN=1 starts in the tray with the main window closed, as the assistant
+        // overlay is used (and measured: what it costs with nothing else drawing).
+        var windowVisible by remember { mutableStateOf(System.getenv("SM_START_HIDDEN") != "1") }
         var confirmQuit by remember { mutableStateOf<String?>(null) }
         var quitting by remember { mutableStateOf(false) }
         val trayModel = if (quitting) {
@@ -818,11 +820,15 @@ fun main() {
                         TrayToggle.BACKGROUND -> supervisor.setBackground(on)
                         TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
                         TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
+                        TrayToggle.ASSISTANT -> desktopUiPrefs.putAssistantOverlay(on)
                     }
                 }
             },
         )
         val trayPowerShown = if (quitting) TrayPower.NONE else trayPower
+        // #62: the assistant overlay's switch, in the menu bar too (where the overlay can float, once paired).
+        val overlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
+        val trayAssistant = if (dev.supermux.desktop.overlay.desktopOverlaySupported && pairedFleet != null && !quitting) overlayOn else null
         fun onTrayIconClick() {
             windowVisible = true
             // Best-effort "bring the app forward": un-minimizing is portable; actually
@@ -870,6 +876,7 @@ fun main() {
                         power = trayPowerShown,
                         dispatcher = trayDispatcher,
                         dot = !isWindowsOs(),
+                        assistant = trayAssistant,
                     )
                 },
             )
@@ -2139,6 +2146,25 @@ fun main() {
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
+
+        // #62: the assistant overlay, the Agent floating over every app, while its switch is on.
+        val assistantOverlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
+        val overlayFleet = pairedFleet
+        if (assistantOverlayOn && overlayFleet != null && dev.supermux.desktop.overlay.desktopOverlaySupported) {
+            dev.supermux.desktop.overlay.DesktopAssistantOverlay(
+                overlayFleet,
+                desktopUiPrefs,
+                themed = { content ->
+                    ProvideDesktopAdaptiveLocals {
+                        DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
+                    }
+                },
+                onOpenInApp = { id ->
+                    ui.selectedId = id
+                    showWindow()
+                },
+            )
+        }
 
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not

@@ -39,4 +39,14 @@ class ChatDetailTest {
             formatLowWorkingStatus("Working…", "running", "Bash", 1, "4 seconds"),
         )
     }
+
+    // Card #75: a session that was not up is being woken (agent_state detail "starting").
+    @Test
+    fun working_label_says_starting_while_the_session_wakes() {
+        assertEquals("starting", workingBaseLabel("starting"))
+        assertEquals("working", workingBaseLabel("running"))
+        assertEquals("thinking", workingBaseLabel("thinking"))
+        assertEquals("thinking", workingBaseLabel(null))
+        assertEquals("starting · 3 seconds", formatLowWorkingStatus(workingBaseLabel("starting"), "starting", null, 0, "3 seconds"))
+    }
 }

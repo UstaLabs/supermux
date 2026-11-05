@@ -46,8 +46,6 @@ export function isSystemAccount(id: string | undefined | null): boolean {
 
 /** A new session's account choice that means "the one with the most room left" (decision #18); so does no account at all. */
 export const AUTO_ACCOUNT = "auto"
-/** Auto waits at most this long for stale usage before it picks with what it has. */
-export const AUTO_USAGE_WAIT_MS = 3000
 
 type Shared = { registry: AccountRegistry; usage: UsageStore }
 let shared: Shared | undefined
@@ -225,7 +223,7 @@ export type BrokerAccountsDeps = {
   broadcast(frame: Record<string, unknown>): void
   /** An account was added, removed or relabeled (e.g. to retry model discovery with it). */
   onChanged?(): void
-  /** Fetches the agent's usage where stale (Auto picks by it); bounded by the caller. */
+  /** Fetches the agent's usage where stale; Auto starts it in the background, for the next pick. */
   refreshUsage?(agent: AccountAgent): Promise<void>
   now?: () => number
 }
@@ -237,7 +235,6 @@ export class BrokerAccounts {
   private readonly labels = new Map<string, string>()
   private readonly logins = new Map<string, LoginEntry>()
   private refreshUsage?: (agent: AccountAgent) => Promise<void>
-  private usageWaitMs = AUTO_USAGE_WAIT_MS
 
   constructor(private readonly deps: BrokerAccountsDeps) {
     this.refreshUsage = deps.refreshUsage
@@ -393,33 +390,29 @@ export class BrokerAccounts {
     return id
   }
 
-  /** Tests (and late wiring): how Auto fetches stale usage, and how long it waits for it. */
-  setUsageRefresher(refresh: (agent: AccountAgent) => Promise<void>, waitMs: number = AUTO_USAGE_WAIT_MS): void {
+  /** Tests (and late wiring): how Auto fetches stale usage. */
+  setUsageRefresher(refresh: (agent: AccountAgent) => Promise<void>): void {
     this.refreshUsage = refresh
-    this.usageWaitMs = waitMs
   }
 
   /**
    * "Auto" (decision #18): the account a new session of `agent` starts on, the one with the most room
    * left by the auto-switch's own policy (full or unavailable accounts skipped; accounts without usage
-   * data after those with it, the system login first). When there is a choice, stale usage is fetched
-   * first, for at most AUTO_USAGE_WAIT_MS. Undefined: the system account.
+   * data after those with it, the system login first). It picks from the usage already known and never
+   * waits for a fetch (card #75: a start used to wait up to 3 s for it); when there is a choice, stale
+   * usage is fetched in the background, for the next pick. Undefined: the system account.
    */
   async autoAccount(agent: AccountAgent): Promise<string | undefined> {
     try {
       await this.deps.usage.load()
       const accounts = await this.deps.registry.list(agent)
-      // The system login is the only account Auto could pick (it never picks isolated or Cursor ones): no wait.
+      // The system login is the only account Auto could pick (it never picks isolated or Cursor ones): nothing to fetch.
       if (accounts.filter((a) => switchable(a) && sessionAccountSupported(agent, a)).length < 2) return undefined
-      if (this.refreshUsage) {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        await Promise.race([
-          this.refreshUsage(agent).catch((err) => log.warn("auto_account_usage_failed", { agent, err: String(err) })),
-          new Promise<void>((resolve) => { timer = setTimeout(resolve, this.usageWaitMs) }),
-        ])
-        clearTimeout(timer)
-      }
       const picked = this.choose(agent, accounts)
+      const refresh = this.refreshUsage
+      if (refresh) void (async () => {
+        try { await refresh(agent) } catch (err) { log.warn("auto_account_usage_failed", { agent, err: String(err) }) }
+      })()
       return picked && !isSystemAccount(picked.id) ? picked.id : undefined
     } catch (err) {
       // Auto never blocks a new session: without a pick it starts on the system login, as before Auto.
