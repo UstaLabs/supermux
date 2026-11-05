@@ -3598,8 +3598,6 @@ async function ensureSessionWorktree(session: { id: string; name: string; workdi
   log.info("worktree_checked_out", { id: session.id, name: session.name, workdir: session.workdir, branch: session.session_branch })
 }
 
-const resumeSuspendedSession = (session: Parameters<SessionManager["resumeSuspended"]>[0]) => sessionManager.resumeSuspended(session)
-
 const resumeFromArchive = (sessionId: string) => sessionManager.resumeFromArchive(sessionId)
 
 /**

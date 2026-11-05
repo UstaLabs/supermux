@@ -311,7 +311,8 @@ function describeStartEvent(e: PerfEvent): string {
     case "worktree.add": return `${label}${took} · git worktree add -b ${e.branch ?? ""}`
     case "worktree.includes": return `${label}${took} · .worktreeinclude: ${e.copied ?? 0} entr${e.copied === 1 ? "y" : "ies"} copied`
     case "worktree.hook": return `${label}${took} · .mux/worktree-setup.sh ${e.present ? `ran (exit ${e.code})` : "absent"}`
-    case "worktree": return `${label}${took} · worktree ready${e.failed ? ` · FAILED: ${e.failed}` : ""}`
+    case "worktree": return `${label}${took} · ${e.created === true ? "worktree checked out at its first wake" : e.created === false ? "worktree already there" : "worktree ready"}${e.failed ? ` · FAILED: ${e.failed}` : ""}`
+    case "row": return `${label}${took} · session row made asleep (${e.worktree ? "branch made" : "no worktree"})`
     case "host.prepared": return `${label}${took} · plugins, instructions, agent environment`
     case "host.prepare.laps": return `${label}prepare split: ${lapsText(e.laps)} (${e.plugins ?? "?"} plugins, ${e.instructionsChars ?? "?"} chars of instructions)`
     case "claude.transport": return `${label}${took} · keeper started and connected`
@@ -336,6 +337,7 @@ function describeStartEvent(e: PerfEvent): string {
     case "chat.shown": return `${label}the new chat is on screen`
     case "message.echoed": return `${label}the first message is back in the chat`
     case "agent.working": return `${label}agent shows as working${e.detail ? ` (${e.detail})` : ""}`
+    case "agent.starting": return `${label}the app shows it starting`
     case "activity": return `${label}first activity card in`
     case "reply.arrived": return `${label}reply frame in`
     case "reply.drawn": return `${label}reply on screen`

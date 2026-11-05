@@ -156,3 +156,19 @@ test("several starts: each step's median, fastest and slowest, largest median fi
   expect(lines.find((l) => l.trim().startsWith("created (request"))).toContain("(2)")
   expect(lines.find((l) => l.trim().startsWith("Telegram menu refresh ×2"))).toBeDefined()
 })
+
+// Card #75: a start now makes the session's row asleep at once and wakes it after the answer.
+test("a start born asleep reads: the row, the answer, the app showing it starting, then the wake's worktree", () => {
+  const T = "SCCCCCCC"
+  const asleep: PerfEvent[] = [
+    { ts: BASE + 1_000, src: "broker", event: "start.request", trace: T, via: "launcher", agent: "claude", worktree: true, firstMessage: true },
+    { ts: BASE + 1_030, src: "broker", event: "start.row", trace: T, ms: 25, session: "s9", worktree: true },
+    { ts: BASE + 1_040, src: "broker", event: "start.created", trace: T, ms: 40, session: "s9" },
+    { ts: BASE + 1_100, src: "client", event: "start.agent.starting", trace: T, t: 1_100, detail: "starting" },
+    { ts: BASE + 1_900, src: "broker", event: "start.worktree", trace: T, ms: 800, created: true, session: "s9" },
+  ]
+  const out = renderStart(asleep, T)
+  expect(out).toContain("session row made asleep (branch made)")
+  expect(out).toContain("the app shows it starting")
+  expect(out).toContain("worktree checked out at its first wake")
+})
