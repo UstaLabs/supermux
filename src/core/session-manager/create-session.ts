@@ -68,7 +68,6 @@ export type CreateSessionDeps = {
   workspaceDto(workspaceId: string): WorkspaceDto | undefined
   broadcast(frame: object): void
   broadcastProjects(): void
-  refreshTelegramMenu(): Promise<void>
   /** The session object of a session_added frame. */
   sessionFrame(session: Session): object
   /** The session's resolved reasoning level. */
@@ -82,7 +81,7 @@ export type CreateSessionDeps = {
  * Agent made by create_agent).
  */
 export function announceCreated(
-  deps: Omit<CreateSessionDeps, "spawn" | "getSession" | "refreshTelegramMenu" | "sessionEffort">,
+  deps: Omit<CreateSessionDeps, "spawn" | "getSession" | "sessionEffort">,
   entry: Session,
   opts: { workspaceId?: string; viewId?: string; inheritFrom?: string } = {},
 ): void {
@@ -120,12 +119,10 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     perfTrace: args.perfTrace,
   })
   const entry = deps.getSession(r.session_id)
-  let t = performance.now()
+  const t = performance.now()
   if (entry) announceCreated(deps, entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
   startTraces.mark(args.perfTrace, "announced", { ms: msSince(t) })
-  t = performance.now()
-  await deps.refreshTelegramMenu()
-  startTraces.mark(args.perfTrace, "telegram", { ms: msSince(t), where: "create" })
+  // No Telegram menu refresh here: the spawn already started the start's one, in the background (card #75).
   return {
     id: entry?.id ?? r.session_id,
     name: entry?.name ?? r.name,

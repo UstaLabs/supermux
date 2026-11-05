@@ -9,6 +9,12 @@ Prior work: a one-off hand profile on 2026-10-21 (session "Profile Session Start
 so the same breakdown can be printed for any start, and re-measures. Since 10-21: the fixed 2.5 s inject
 grace is gone (the first message goes straight to the agent), and the rest of that list still stands.
 
+**Changed since the map (fix 1, Ahmet's pick, 2026-11-05):** the Telegram menu refresh is off the start
+path. A start triggers ONE refresh (steps 18 and 20 below were two), in the background and never awaited
+(`telegramMenu.inBackground()` in `spawnSession`; `createSession` no longer refreshes), and a failure is
+logged once until a refresh succeeds (`menuRefresher`, `src/channels/telegram/menu.ts`). Nothing else
+about the menu changed (it still overflows Telegram's 100-command limit).
+
 ## The path at a glance
 
 ```mermaid

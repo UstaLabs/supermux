@@ -117,7 +117,7 @@ import type { InboundDeliveryResult } from "./core/session-manager/inbound-deliv
 import { isPersistentRuntimeSession, type Session } from "./core/session-manager/types"
 import { agentGreetingPrompt, checkSessionRename, createAgent, CreateAgentError, updateAgent, type CreateAgentDeps } from "./core/session-manager/create-agent"
 import { runAgentMemoryMigrationOnce } from "./core/session-manager/agent-memory-migration"
-import { buildMenuEntries } from "./channels/telegram/menu"
+import { buildMenuEntries, menuRefresher } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
@@ -1093,6 +1093,12 @@ let agentRpc: ReturnType<typeof createAgentRpc>
 const telegram: TelegramChannel | undefined = hasTelegram
   ? new TelegramChannel({ token: TG_TOKEN!, fileStore })
   : undefined
+// The Telegram /command menu (one entry per session). A session start refreshes it in the background
+// (card #75); a failure is logged once until a refresh succeeds.
+const telegramMenu = menuRefresher(
+  async () => { if (telegram) await telegram.refreshMenu(buildMenuEntries(registry)) },
+  (err) => log.warn("refresh_telegram_menu_failed", { err }),
+)
 const WA_GOWA_URL = appConfig.whatsappGowaUrl || undefined
 const hasWhatsApp = !!WA_GOWA_URL
 const whatsapp: WhatsAppChannel | undefined = hasWhatsApp
@@ -2209,7 +2215,6 @@ function sessionCreateDeps(): CreateSessionDeps {
     workspaceDto: (id) => wsDto(id),
     broadcast: (frame) => webChannel?.broadcastToAll(frame),
     broadcastProjects,
-    refreshTelegramMenu,
     sessionFrame: (entry) => sessionAddedPayload(entry),
     sessionEffort: (entry) => sessionEffort(entry),
   }
@@ -3493,12 +3498,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
 void getUsageStore().seedFromLocal()
 
 async function refreshTelegramMenu() {
-  if (!telegram) return
-  try {
-    await telegram.refreshMenu(buildMenuEntries(registry))
-  } catch (err: any) {
-    log.warn("refresh_telegram_menu_failed", { err: err?.message ?? String(err) })
-  }
+  await telegramMenu.refresh()
 }
 
 
@@ -3861,16 +3861,16 @@ async function spawnSession(args: {
         type: "session_added",
         session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
-      await refreshTelegramMenu()
+      // The one menu refresh of a start, never waited for (card #75).
+      telegramMenu.inBackground()
     }
   } else if (registered?.core && !registered.internal && !registered.parent_session_id) {
     webChannel?.broadcastToAll({
       type: "session_added",
       session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload, ...sessionAccountFields(registered) },
     })
-    t = performance.now()
-    await refreshTelegramMenu()
-    startTraces.mark(trace, "telegram", { ms: msSince(t), where: "spawn", on: !!telegram })
+    // The one menu refresh of a start, never waited for (card #75).
+    telegramMenu.inBackground()
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
