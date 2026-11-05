@@ -75,6 +75,10 @@ class HostSupervisor(
     /** Stderr, plus `<stateDir>/desktop-host.log`: an app launched from Finder has no stdout. */
     internal val log: (String) -> Unit = defaultLog(stateDir),
     internal val carriedStore: CarriedEnvStore = CarriedEnvStore(stateDir.resolve("desktop-carried-env.json"), log),
+    /** Which copy of the app this is: it acts only on service definitions that carry its id (#77). */
+    private val identity: InstallIdentity,
+    /** True when this app's data was written by a version from before install ids (its hosts.json exists): see [me]. */
+    private val appDataPredatesIds: () -> Boolean = { false },
 ) {
     data class Timing(
         val waitProbeMs: Long = 2_000,
@@ -184,6 +188,49 @@ class HostSupervisor(
      * and orphan modes, which keep running after the app.
      */
     val quitStopsBroker: Boolean get() = mode == Mode.CHILD && child != null && !childDetached
+    @Volatile private var owner: BrokerService.Owner? = null
+
+    /**
+     * This copy of the app ([InstallIdentity]), created on first use. Call it before changing the
+     * prefs: the first one reads them. An id that can't be read or saved is never replaced by a new
+     * one: this run then sets up, changes and removes no background service ([BrokerService.Owner.persisted]).
+     */
+    internal suspend fun me(): BrokerService.Owner = owner ?: withContext(io) {
+        when (val r = identity.read()) {
+            is InstallIdentity.Read.Found -> r.owner
+            is InstallIdentity.Read.Unreadable -> {
+                log("can't read this install's id (${r.why}); no background service is set up, changed or removed until it can")
+                BrokerService.Owner(InstallIdentity.newId(), persisted = false)
+            }
+            InstallIdentity.Read.Missing -> firstOwner()
+        }
+    }.also { owner = it }
+
+    /**
+     * The first id-aware launch. A definition an earlier version of THIS app wrote carries no id yet,
+     * and it is adopted only when all says it is ours: this app's data predates install ids (an update,
+     * not fresh app data), the saved prefs host in the background, it runs this state dir's broker, and
+     * this is the packaged app (a dev build has no broker of its own to have run as a service). It is
+     * stamped with the id at once, so no other copy can adopt it too.
+     */
+    private fun firstOwner(): BrokerService.Owner {
+        val p = _prefs.value
+        val adopt = p.hosting && p.background && runCatching(packaged).getOrDefault(false) &&
+            runCatching(appDataPredatesIds).getOrDefault(false) && BrokerService.unstampedRuns(osEnv, stateDir)
+        val created = try {
+            identity.create(BrokerService.Owner(InstallIdentity.newId(), ownsUnstamped = adopt))
+        } catch (e: Exception) {
+            log("couldn't save this install's id (${e.message}); no background service is set up this run")
+            return BrokerService.Owner(InstallIdentity.newId(), persisted = false)
+        }
+        if (!created.ownsUnstamped) return created
+        log("this app's background service predates install ids; it is ours")
+        if (!BrokerService.stampInPlace(osEnv, created)) return created
+        val stamped = created.copy(ownsUnstamped = false)
+        runCatching { identity.save(stamped) }.onFailure { log("couldn't update this install's id: ${it.message}") }
+        return stamped
+    }
+
     @Volatile private var watchJob: Job? = null
     @Volatile internal var watchGen = 0L
     internal val retries = Retries(timing)
@@ -256,6 +303,7 @@ class HostSupervisor(
     suspend fun setBackground(on: Boolean) = guarded("setBackground") {
         log("background ${if (on) "on" else "off"} (asked)")
         lock.withLock {
+            val me = me()
             val p = _prefs.value.copy(background = on)
             savePrefsNow(p)
             // Read-only: not ours to move.
@@ -279,6 +327,12 @@ class HostSupervisor(
             if (mode == Mode.ORPHAN || mode == null) return@withLock
             if (on) {
                 if (mode == Mode.SERVICE) return@withLock
+                // Another copy's service holds our name: ours can't go there, and the broker runs on.
+                if (withContext(io) { BrokerService.anotherCopysInstalled(osEnv, me) && !BrokerService.isOursInstalled(osEnv, me) }) {
+                    _backgroundError.value = "Couldn't keep supermux running in the background: $ANOTHER_COPY"
+                    log(_backgroundError.value!!)
+                    return@withLock
+                }
                 val bins = binaries()
                 if (bins.brokerPath == null) {
                     _backgroundError.value = DEV_BACKGROUND
@@ -319,11 +373,12 @@ class HostSupervisor(
     suspend fun setHosting(on: Boolean) = guarded("setHosting") {
         log("hosting ${if (on) "on" else "off"} (asked)")
         if (on) {
-            lock.withLock { savePrefsNow(_prefs.value.copy(hosting = true)) }
+            lock.withLock { me(); savePrefsNow(_prefs.value.copy(hosting = true)) }
             ensure()
             return@guarded
         }
         lock.withLock {
+            me()
             val p = _prefs.value.copy(hosting = false)
             savePrefsNow(p)
             abandonQuestion()
@@ -339,8 +394,9 @@ class HostSupervisor(
                     return@withLock
                 }
                 stopChildLocked()
-                // A broker of ours we could neither re-parent nor stop is still hosting.
-                if (probe(p.port).isOurs()) {
+                // A broker of ours we could neither re-parent nor stop is still hosting. Not another
+                // copy's (a question about it was open): that one was never ours to stop.
+                if (probe(p.port).isOurs() && (was != null || ownsRunningBroker())) {
                     _status.value = HostingStatus.CantStart(STILL_RUNNING)
                     return@withLock
                 }
@@ -375,7 +431,8 @@ class HostSupervisor(
                     stopWatch()
                     retries.reset()
                     _status.value = HostingStatus.Starting
-                    withContext(io) { BrokerService.restart(osEnv) }
+                    val me = me()
+                    withContext(io) { BrokerService.restart(osEnv, me) }
                     afterLaunch(p, awaitHealthy(p.port, null, timing.healthTimeoutMs))
                     false
                 }
@@ -437,6 +494,7 @@ class HostSupervisor(
         retries.reset()
         var prefs = runCatching(loadPrefs).getOrElse { log("prefs: ${it.message}"); _prefs.value }
         _prefs.value = prefs
+        val me = me()
         if (!prefs.hosting) {
             mode = null
             _status.value = HostingStatus.NotHosting
@@ -447,8 +505,8 @@ class HostSupervisor(
         var found = probe(prefs.port)
         log("probe :${prefs.port}: ${found.describe()}")
         // Finish or undo a takeover a crash interrupted (journal in <stateDir>/takeover-backup).
-        val healthy = found.isOurs()
-        val recovered = withContext(io) { Takeover.recoverPending(stateDir, osEnv, ourServiceHealthy = healthy) }
+        val healthy = found.isOurs() && ownsRunningBroker()
+        val recovered = withContext(io) { Takeover.recoverPending(stateDir, osEnv, ourServiceHealthy = healthy, me = me) }
         if (recovered) {
             log("an interrupted takeover was ${if (healthy) "finished" else "rolled back"}")
             runCatching { if (healthy) carriedStore.promotePending() else carriedStore.deletePending() }
@@ -458,7 +516,7 @@ class HostSupervisor(
         // Background is off, yet a service (or XDG autostart) of ours is installed — a removal that
         // didn't finish. It would start a broker at every login next to our child: remove it now.
         // Not while this app runs as the 1.0.0 job: that definition is for the next login.
-        if (!prefs.background && withContext(io) { BrokerService.isOursInstalled(osEnv) && !BrokerService.appRunsAsService(osEnv) }) {
+        if (!prefs.background && withContext(io) { BrokerService.isOursInstalled(osEnv, me) && !BrokerService.appRunsAsService(osEnv) }) {
             log("background is off but our service is installed; removing it")
             removeOurDefinitionsLocked(prefs.port)?.let { why -> _backgroundError.value = why; log(why) }
             found = probe(prefs.port)
@@ -466,20 +524,27 @@ class HostSupervisor(
 
         bundled = runCatching { bundledBuild() }.getOrNull()
         val appState = stateDir.toString()
-        var plan = decideHost(found, prefs, bundled, appState)
+        var own = ownsRunningBroker()
+        var plan = decideHost(found, prefs, bundled, appState, own)
         // Busy = maybe a broker still booting; after a rollback the restored service needs a moment too.
-        fun waiting(p: HostPlan) = p == HostPlan.Wait || (rolledBack && p == HostPlan.Start)
+        // Another copy's service is installed and none of ours: its broker may be restarting. Never
+        // copy our broker over the binary it runs, nor start one beside it (#77): wait, then decide.
+        val theirsOnly = withContext(io) { BrokerService.anotherCopysInstalled(osEnv, me) && !BrokerService.isOursInstalled(osEnv, me) }
+        fun startsOurs(p: HostPlan) = p == HostPlan.Start || p == HostPlan.MovePort
+        fun waiting(p: HostPlan) = p == HostPlan.Wait || (rolledBack && p == HostPlan.Start) || (theirsOnly && startsOurs(p))
         if (waiting(plan)) {
             val deadline = now() + timing.waitMaxMs
-            log("port ${prefs.port} is busy; waiting up to ${timing.waitMaxMs / 1000} s")
+            log(if (theirsOnly && startsOurs(plan)) "another copy of the app has its service here and its broker isn't answering; waiting up to ${timing.waitMaxMs / 1000} s"
+                else "port ${prefs.port} is busy; waiting up to ${timing.waitMaxMs / 1000} s")
             while (waiting(plan) && now() < deadline) {
                 delay(timing.waitProbeMs)
                 found = probe(prefs.port)
-                plan = decideHost(found, prefs, bundled, appState)
+                plan = decideHost(found, prefs, bundled, appState, own)
             }
             log("after waiting: ${found.describe()}")
         }
         if (rolledBack && plan == HostPlan.Start) return cantStart(RESTORED_SILENT) // never start ours next to it
+        if (theirsOnly && startsOurs(plan)) return cantStart(anotherCopyNotAnswering(prefs.port))
         if (plan == HostPlan.Wait) plan = HostPlan.MovePort
         if (plan == HostPlan.UpdateOwn && updateTried) {
             log("already restarted for an update on this launch; keeping the running build")
@@ -500,7 +565,8 @@ class HostSupervisor(
                 is SecondBroker.Answering -> {
                     // It was still starting: decide again on what answers now (ours, or a takeover question).
                     found = sb.found
-                    plan = decideHost(found, prefs, bundled, appState)
+                    own = ownsRunningBroker()
+                    plan = decideHost(found, prefs, bundled, appState, own)
                     if (plan == HostPlan.UpdateOwn && updateTried) plan = HostPlan.UseOwn
                     log("a broker that was still starting answers now: ${found.describe()}; plan: $plan")
                 }
@@ -539,7 +605,7 @@ class HostSupervisor(
             is HostPlan.AskTakeover -> {
                 // Windows has no takeover (no old service is ever found there): "yes" could only fail,
                 // so don't ask; use it read-only.
-                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv) }.isEmpty()) {
+                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
                     log("supermux on port ${prefs.port} wasn't set up by this app and can't be taken over here; using it read-only")
                     _build.value = (found as HostProbeResult.Supermux).build
                     readOnlyLocked(prefs, plan.hostId)
@@ -547,7 +613,16 @@ class HostSupervisor(
                 }
                 return ask(Question.Takeover(plan.hostId, prefs.port))
             }
-            is HostPlan.AskDowngrade -> return ask(Question.Downgrade(plan.hostId, prefs.port))
+            is HostPlan.AskDowngrade -> {
+                // As for AskTakeover: "use this app's version" could only fail where nothing can be taken over.
+                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
+                    log("a newer supermux on port ${prefs.port} wasn't set up by this app and can't be taken over here; using it read-only")
+                    _build.value = (found as HostProbeResult.Supermux).build
+                    readOnlyLocked(prefs, plan.hostId)
+                    return null
+                }
+                return ask(Question.Downgrade(plan.hostId, prefs.port))
+            }
             HostPlan.Wait -> Unit // unreachable: turned into MovePort above
         }
         return null
@@ -591,7 +666,7 @@ class HostSupervisor(
                         return@withLock
                     }
                     val found = probe(prefs.port)
-                    val plan = decideHost(found, prefs, b, stateDir.toString())
+                    val plan = decideHost(found, prefs, b, stateDir.toString(), ownsRunningBroker())
                     if (plan != HostPlan.UpdateOwn) {
                         log("background read: plan $plan; nothing to update")
                         return@withLock
@@ -663,7 +738,8 @@ class HostSupervisor(
     private suspend fun claimChildLocked(): Boolean {
         if (child?.isAlive == true) return true
         if (!adoptOrphanLocked()) return false
-        if (withContext(io) { BrokerService.isOursXdgAutostart(osEnv) }) {
+        val me = me()
+        if (withContext(io) { BrokerService.isOursXdgAutostart(osEnv, me) }) {
             childDetached = true // the XDG autostart's stand-in: still background mode
         } else if (_prefs.value.background) {
             savePrefsNow(_prefs.value.copy(background = false))
@@ -741,13 +817,16 @@ class HostSupervisor(
     private suspend fun takeoverLocked(q: Question) {
         stopWatch()
         _status.value = HostingStatus.Starting
-        val olds = withContext(io) { Takeover.findOldServices(osEnv) }
+        val me = me()
+        // Its service would carry an id nobody knows at the next launch: stop nothing for it.
+        if (!me.persisted) { cantStart("Couldn't take over: ${BrokerService.UNSAVED_ID}."); return }
+        val olds = withContext(io) { Takeover.findOldServices(osEnv, me) }
         log("takeover: found ${olds.size} old service(s)${if (olds.isEmpty()) "" else ": " + olds.joinToString { it.name }}")
         if (olds.isEmpty()) {
             cantStart("supermux is already running on port ${q.port} but wasn't started by a service. Quit it, then try again.")
             return
         }
-        val prepared = when (val r = withContext(io) { Takeover.prepare(olds, stateDir, osEnv) }) {
+        val prepared = when (val r = withContext(io) { Takeover.prepare(olds, stateDir, osEnv, me) }) {
             is Takeover.PrepareResult.Failed -> { cantStart("Couldn't take over: ${r.reason}"); return }
             is Takeover.PrepareResult.Ok -> r.prepared
         }
@@ -758,7 +837,7 @@ class HostSupervisor(
             val p = prefsBefore.copy(relay = prepared.oldRelay ?: prefsBefore.relay)
             savePrefsNow(p)
             val bins = binaries()
-            launchLocked(p, bins, prepared.carriedEnv, allowChildFallback = false, healthTimeoutMs = timing.takeoverHealthTimeoutMs)
+            launchLocked(p, bins, prepared.carriedEnv, allowChildFallback = false, healthTimeoutMs = timing.takeoverHealthTimeoutMs, takingOver = true)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -773,7 +852,7 @@ class HostSupervisor(
         }
         log("takeover: our broker didn't start; rolling back")
         stopChildLocked()
-        val restored = withContext(io) { Takeover.rollback(prepared, osEnv) }
+        val restored = withContext(io) { Takeover.rollback(prepared, osEnv, me) }
         log("takeover: rollback ${if (restored) "restored the old service" else "couldn't restore the old service"}")
         runCatching { carriedStore.deletePending() }
         savePrefsNow(_prefs.value.copy(relay = prefsBefore.relay))
@@ -879,7 +958,7 @@ class HostSupervisor(
         val p = _prefs.value
         val r = withTimeoutOrNull(5_000) { runCatching { probe(p.port) }.getOrNull() }
         val readOnly = mode == Mode.READ_ONLY
-        if (r is HostProbeResult.Supermux && (readOnly || r.managedBy == "desktop")) {
+        if (r is HostProbeResult.Supermux && (readOnly || (r.managedBy == "desktop" && ownsRunningBroker()))) {
             _hostId.value = r.hostId
             if (mode == null) {
                 mode = when {
@@ -927,6 +1006,14 @@ class HostSupervisor(
         const val PREVIOUS_CHILD =
             "supermux was already running with the app from a previous session, so it isn't running in the background. Turn background mode on again to switch."
         const val STILL_RUNNING = "supermux is still running from a previous session. Quit it to stop hosting."
+        // Another copy of the app set up the background service here (#77): this app leaves it alone.
+        /** Not "it isn't running": that copy's host may run on another port. Nothing answers on ours. */
+        fun anotherCopyNotAnswering(port: Int) =
+            "A supermux host is set up on this computer by another copy of the supermux app, and it doesn't answer on port $port. Start it from that copy, or remove it there, then try again."
+        const val ANOTHER_COPY_RUNNING =
+            "A supermux host already runs on this computer, set up by another copy of the supermux app, and this app leaves it as it is."
+        const val ANOTHER_COPY =
+            "a supermux host is already set up on this computer by another copy of the supermux app, and this app leaves it alone"
         const val RESTORED_SILENT = "The previous supermux service was restored but isn't answering. Check it, then try again."
         const val NEXT_LOGIN =
             "An older version set supermux up to open the app at login. From your next login supermux runs in the background on its own; until then it runs with the app."
