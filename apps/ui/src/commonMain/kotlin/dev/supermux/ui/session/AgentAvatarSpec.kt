@@ -64,6 +64,10 @@ data class AgentAvatarSpec(
         val working: State = State(speed = 1400, wobble = 0.075f, eyes = "glance", mouth = "o"),
         val waiting: State = State(motion = "hop", eyes = "up", mouth = "grin"),
         val asleep: State = State(eyes = "closed", mouth = "none", badge = "z", desaturate = true),
+        /** Voice chat, you talking to it: it perks up and leans in, and swells with your voice. */
+        val listening: State = State(speed = 2600, breathe = 0.02f, motion = "listen", eyes = "up"),
+        /** Voice chat, it talking back: its mouth opens with its voice. */
+        val speaking: State = State(speed = 2600, motion = "talk", mouth = "talk"),
     )
 
     /** Overrides for one state; null fields keep the base look. */
@@ -73,11 +77,11 @@ data class AgentAvatarSpec(
         val speed: Int? = null,
         val breathe: Float? = null,
         val wobble: Float? = null,
-        /** hop | shake | spin | none */
+        /** hop | shake | spin | listen | talk | none (listen and talk move with the voice level) */
         val motion: String? = null,
         /** glance | up | closed | (any eyes.style) */
         val eyes: String? = null,
-        /** o | grin | none | (any mouth.style) */
+        /** o | grin | talk | none | (any mouth.style); talk opens with the voice level */
         val mouth: String? = null,
         /** A small mark beside the head: z | ! | ? | … */
         val badge: String? = null,

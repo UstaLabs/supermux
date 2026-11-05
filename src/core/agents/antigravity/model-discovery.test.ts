@@ -53,6 +53,14 @@ test("system discovery runs under a shadow HOME linked to the user's cli dir", a
   expect(readdirSync(userCli)).toEqual(["antigravity-oauth-token"])
 })
 
+test("agy's self-update is off for the model list on Windows only (#70)", async () => {
+  let seen: Record<string, string> | undefined
+  await discoverAntigravityModels({ stateDir, userHome: fakeUser, platform: "win32", run: async (env) => { seen = env; return RAW } })
+  expect(seen?.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true")
+  await discoverAntigravityModels({ stateDir, userHome: fakeUser, platform: "linux", run: async (env) => { seen = env; return RAW } })
+  expect(seen?.AGY_CLI_DISABLE_AUTO_UPDATE).toBeUndefined()
+})
+
 test("account discovery links the account cli dir under a per-account key", async () => {
   const acct = join(tmp, "accounts", "a1", "antigravity-cli")
   mkdirSync(acct, { recursive: true })

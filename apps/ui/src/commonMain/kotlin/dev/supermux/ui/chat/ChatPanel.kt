@@ -442,6 +442,8 @@ fun ChatPanel(
     onExternalDictateConsumed: () -> Unit = {},
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
+    /** The host's own attach chips above the composer's field (see [Composer]'s `leadingChips`). */
+    composerChips: (@Composable RowScope.() -> Unit)? = null,
     // ── Header slots ────────────────────────────────────────────────────────────────
     /** This session's proxies, loaded on open and only when [showHeader]. */
     forceLinksMenu: Boolean = false,
@@ -992,6 +994,7 @@ fun ChatPanel(
                 placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                leadingChips = composerChips,
                 dropState = dropState,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,

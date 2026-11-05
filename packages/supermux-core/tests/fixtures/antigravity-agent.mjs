@@ -1,6 +1,6 @@
 // Fake `agy` for the antigravity driver tests. Speaks agy 1.3.4's stream-json (see
 // tests/fixtures/real/antigravity): init up front, then per stdin line user_input → agent_response → result.
-// argv: agy flags. env FAKE_AGY_LOG: NDJSON log of {type:"spawn",argv,home,pid} and {type:"input",content}.
+// argv: agy flags. env FAKE_AGY_LOG: NDJSON log of {type:"spawn",argv,home,pid,updater} and {type:"input",content}.
 // env FAKE_AGY_MODE=ineligible: one result error with conversation_id "" and no init, exit 1.
 // Prompts ending in SLEEP hang in a tool until SIGINT; STUBBORN hangs and ignores SIGINT; TOOLEXIT opens
 // a tool then dies without a result; LEAK prints tokens on stderr and dies; EXIT dies without a result;
@@ -14,7 +14,7 @@ const argv = process.argv.slice(2)
 const flag = name => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
 const log = entry => { if (process.env.FAKE_AGY_LOG) appendFileSync(process.env.FAKE_AGY_LOG, JSON.stringify(entry) + "\n") }
 const emit = frame => process.stdout.write(JSON.stringify(frame) + "\n")
-log({ type: "spawn", argv, home: process.env.HOME, pid: process.pid })
+log({ type: "spawn", argv, home: process.env.HOME, pid: process.pid, updater: process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? null })
 
 if (process.env.FAKE_AGY_MODE === "ineligible") {
   emit({ event: "result", result: { conversation_id: "", status: "ERROR", response: "", error: "Eligibility check failed: Your current account is not eligible. Verify at https://antigravity.google/verify" } })

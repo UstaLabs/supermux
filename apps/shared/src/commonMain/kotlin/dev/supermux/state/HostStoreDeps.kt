@@ -70,6 +70,15 @@ object SettingsKeys {
     const val DYNAMIC_COLOR = "appearance:dynamicColor"
     /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
     const val TEXT_SCALE = "appearance:textScale"
+    /** "true"/"false": the assistant overlay (#62, experimental), the default Agent floating over
+     *  other apps. Per device, never synced; unset = off. */
+    const val ASSISTANT_OVERLAY = "appearance:assistantOverlay"
+    /** The Agent the assistant overlay shows on this device (a session id), picked in its chat's
+     *  header. Per device, never synced; unset = the default Agent. */
+    const val ASSISTANT_OVERLAY_AGENT = "appearance:assistantOverlayAgent"
+    /** "true"/"false": your screen goes with what you say when you hold the overlay to talk (Android asks
+     *  once per session). Per device, never synced; unset = on. */
+    const val ASSISTANT_OVERLAY_SCREEN = "appearance:assistantOverlayScreen"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping

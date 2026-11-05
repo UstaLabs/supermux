@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import * as entry from "../src/antigravity/index.js"
-import { antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import { antigravity, antigravityArgs, antigravityUpdaterEnv, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
 import { agyPromptBlocks } from "../src/antigravity/files.js"
 import { redactSecrets } from "../src/antigravity/transport.js"
 import { sessionPreamble } from "../src/context/agents.js"
@@ -83,6 +83,19 @@ test("new conversation: init names the session; one agy process carries every tu
     expect(statSync(statePath).mode & 0o777).toBe(0o600)
     const echoed = updates.find(u => (u.value as any)?.step_update?.text_delta === "ECHO:one")!
     expect(rt.normalize!(echoed)).toEqual([{ kind: "assistant-delta", messageId: expect.stringMatching(/:1$/), text: "ECHO:one" }])
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
+// #70: agy's background updater runs `agy --version` from a process without a console, which on Windows opens a
+// console window of its own. Ahmet: switch it off there only; elsewhere it is silent and keeps agy current.
+test("agy's self-update is switched off only on Windows (AGY_CLI_DISABLE_AUTO_UPDATE=true; \"1\" is not enough)", async () => {
+  expect(antigravityUpdaterEnv("win32")).toEqual({ AGY_CLI_DISABLE_AUTO_UPDATE: "true" })
+  expect(antigravityUpdaterEnv("linux")).toEqual({})
+  expect(antigravityUpdaterEnv("darwin")).toEqual({})
+  const r = await rig()
+  const rt = await r.driver().open(ctx())
+  try {
+    expect((r.spawns()[0] as { updater?: string | null }).updater).toBe(process.platform === "win32" ? "true" : null)
   } finally { await rt.close({ mode: "shutdown" }) }
 })
 
