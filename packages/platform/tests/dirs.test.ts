@@ -24,3 +24,12 @@ test("posixShellHome is a $HOME on Windows other than %USERPROFILE%; there is no
   expect(dirs.posixShellHome({ platform: "win32", env: { USERPROFILE: "C:\\Users\\ada" } })).toBeUndefined()
   expect(dirs.posixShellHome({ platform: "linux", env: { HOME: "/home/ada" } })).toBeUndefined()
 })
+
+// On Windows an EMPTY %USERPROFILE% makes the runtime's own os.homedir() throw (ENOENT, uv_os_homedir; seen on the lane,
+// run 41950063909), while an unset one does not. The home must still be answered: Windows' other home variables.
+test("home on Windows falls back to %HOMEDRIVE%%HOMEPATH% when the runtime has no answer either", () => {
+  const none = () => { throw Object.assign(new Error("ENOENT: no such file or directory, uv_os_homedir"), { code: "ENOENT" }) }
+  const env = { USERPROFILE: "", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\ada" }
+  expect(dirs.home({ platform: "win32", env, homedir: none })).toBe("C:\\Users\\ada")
+  expect(() => dirs.home({ platform: "linux", env: { HOME: "" }, homedir: none })).toThrow("uv_os_homedir")
+})

@@ -27,10 +27,14 @@ test("falls back to os.homedir() when the variable is unset (never returns '')",
   })
 })
 
-test("falls back to os.homedir() when the variable is the empty string (locks in || over ??)", () => {
+// An empty variable counts as unset (locks in || over ??). Not compared with os.homedir(): on Windows an empty
+// %USERPROFILE% makes the runtime's own answer throw, and home() falls back to %HOMEDRIVE%%HOMEPATH% there.
+test("an empty variable counts as unset, and still gives a home (never '')", () => {
+  let unset = ""
+  withHome(undefined, () => { unset = home() })
   withHome("", () => {
     const h = home()
-    expect(h).toBe(homedir())
     expect(h.length).toBeGreaterThan(0)
+    if (process.platform !== "win32") expect(h).toBe(unset)
   })
 })

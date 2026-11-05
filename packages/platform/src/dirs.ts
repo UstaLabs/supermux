@@ -10,13 +10,27 @@ export interface HomeOptions {
   platform?: NodeJS.Platform
   /** Where the variables are read; process.env by default. */
   env?: CommandEnvironment
+  /** The runtime's own answer (tests); os.homedir by default. */
+  homedir?: () => string
 }
 
-/** The user's home folder: %USERPROFILE% on Windows, $HOME elsewhere; the runtime's own answer when that is unset. */
+/**
+ * The user's home folder: %USERPROFILE% on Windows, $HOME elsewhere; the runtime's own answer when that is unset. On
+ * Windows an empty %USERPROFILE% makes the runtime throw (uv_os_homedir), so its other home variables answer then.
+ */
 export function home(options: HomeOptions = {}): string {
   const platform = options.platform ?? process.platform
   const env = options.env ?? process.env
-  return envValue(env, platform === "win32" ? "USERPROFILE" : "HOME", platform) || homedir()
+  const own = envValue(env, platform === "win32" ? "USERPROFILE" : "HOME", platform)
+  if (own) return own
+  try {
+    return (options.homedir ?? homedir)()
+  } catch (error) {
+    const drive = envValue(env, "HOMEDRIVE", platform)
+    const path = envValue(env, "HOMEPATH", platform)
+    if (platform === "win32" && drive && path) return drive + path
+    throw error
+  }
 }
 
 /**
