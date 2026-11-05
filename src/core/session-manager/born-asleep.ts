@@ -12,6 +12,9 @@ import { deriveSessionBranch, repoSlug, type WorktreeHandle } from "../worktree/
 import { deriveName, ensureUnique } from "./naming"
 import type { Registry } from "./registry"
 import type { Session } from "./types"
+import { makeLogger } from "../../shared/log"
+
+const log = makeLogger("born-asleep")
 
 export type CreateAsleepArgs = {
   workdir: string
@@ -74,9 +77,21 @@ export async function createAsleep(deps: CreateAsleepDeps, args: CreateAsleepArg
         inFlight.add(branch)
         branchInFlight = { repoRoot, branch }
         const baseBranch = args.baseBranch || info.currentBranch || "HEAD"
-        await deps.createBranch(repoRoot, branch, baseBranch)
-        workdir = join(deps.worktreesRoot(), repoSlug(repoRoot), deps.newId())
-        worktree = { repo_root: repoRoot, base_branch: baseBranch, session_branch: branch }
+        let made = true
+        try {
+          await deps.createBranch(repoRoot, branch, baseBranch)
+        } catch (err) {
+          // No branch can be made (a repo with no commits yet, a base that doesn't resolve): the
+          // session runs in the folder itself, as a start that couldn't make its worktree always did.
+          // A worktree that must be made (delegate) fails instead.
+          if (args.requireWorktree) throw new Error(`could not create a worktree: ${err instanceof Error ? err.message : String(err)}`)
+          log.warn("session_branch_failed_running_in_folder", { workdir: args.workdir, branch, err: err instanceof Error ? err.message : String(err) })
+          made = false
+        }
+        if (made) {
+          workdir = join(deps.worktreesRoot(), repoSlug(repoRoot), deps.newId())
+          worktree = { repo_root: repoRoot, base_branch: baseBranch, session_branch: branch }
+        }
       } else if (args.requireWorktree) {
         throw new Error(`${args.workdir} is not a single git repository, so no worktree can be made`)
       }

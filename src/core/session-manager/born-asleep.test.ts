@@ -112,3 +112,17 @@ test("a worktree that must be made in a folder that is not a repo fails, and not
   await expect(createAsleep(deps, { workdir: tmp("born-plain-"), agent: AgentKind.Claude, requireWorktree: true })).rejects.toThrow(/not a single git repository/)
   expect(registry.list().length).toBe(before)
 })
+
+test("a repo with no commits yet: no branch can be made, so the session runs in the folder, as before", async () => {
+  const { registry, deps } = setup()
+  const fresh = tmp("born-fresh-")
+  execFileSync("git", ["init", "-q", "-b", "main", fresh])
+  const s = await createAsleep(deps, { workdir: fresh, requestedName: "Fresh repo", agent: AgentKind.Claude })
+  expect(s.workdir).toBe(fresh)
+  expect(s.session_branch ?? undefined).toBeUndefined()
+  expect(s.status).toBe("suspended")
+  // A worktree that must be made (delegate) still fails, and nothing is registered.
+  const before = registry.list().length
+  await expect(createAsleep(deps, { workdir: fresh, agent: AgentKind.Claude, requireWorktree: true })).rejects.toThrow()
+  expect(registry.list().length).toBe(before)
+})
