@@ -38,6 +38,7 @@ import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.compose.foundation.layout.Box
@@ -85,11 +86,9 @@ import dev.supermux.android.platform.AndroidNotices
 import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.PickerHost
 import dev.supermux.android.platform.QrScanHost
-import dev.supermux.android.platform.pickedFileFromUri
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.widthClassFor
-import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
 import dev.supermux.ui.overlay.Edge
@@ -100,7 +99,7 @@ import dev.supermux.ui.overlay.OverlayChat
 import dev.supermux.ui.overlay.OverlayDropTarget
 import dev.supermux.ui.overlay.OverlayHead
 import dev.supermux.ui.overlay.OverlayFlash
-import dev.supermux.ui.overlay.OverlayScreenChips
+import dev.supermux.ui.overlay.OverlayGlassesChip
 import dev.supermux.ui.overlay.OverlayShot
 import dev.supermux.ui.overlay.OverlayShotThumb
 import dev.supermux.ui.overlay.OverlayReplies
@@ -110,11 +109,11 @@ import dev.supermux.ui.overlay.OverlayUndo
 import dev.supermux.ui.overlay.OverlayUiState
 import dev.supermux.ui.overlay.OverlayVoice
 import dev.supermux.ui.overlay.Spot
+import dev.supermux.ui.overlay.doubleTapWanted
 import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.overlayChoiceToStore
 import dev.supermux.ui.overlay.rememberOverlayRig
 import dev.supermux.ui.overlay.shareImageSize
-import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
 import kotlinx.coroutines.Dispatchers
@@ -144,9 +143,10 @@ import java.lang.ref.WeakReference
  * - the **undo**: "hidden · Undo" for a few seconds after that;
  * - the **chat**: a sheet with a scrim on a phone, a card beside the head on a wide screen.
  *
- * The screen with what you say: holding it to talk takes the whole screen (once Android has allowed
- * sharing for this session), shows it as a thumbnail below the head, and letting go sends your words with
- * it ([snap], [ScreenShare]).
+ * Its glasses: a double-tap (or the chip in its chat) puts them on, once Android has allowed sharing the
+ * screen; while it wears them, holding it to talk takes the whole screen, shows it below the head, and
+ * letting go sends your words with it ([toggleGlasses], [snap], [ScreenShare]). They come off, and the
+ * share ends, on a double-tap, when the screen goes off, or after [GLASSES_IDLE_MS] without a talk.
  *
  * What only an activity may ask for (the screen-sharing consent, the pickers behind the
  * chat's attach button) goes through the invisible [OverlayBridgeActivity]. The
@@ -173,6 +173,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         private const val KEYBOARD_DP = 290
         private const val MARGIN_DP = 12
         private const val UNDO_MS = 4_000L
+        /** How long it keeps its glasses on with nobody talking to it. */
+        private const val GLASSES_IDLE_MS = 5 * 60_000L
         private const val SHARE_MAX_EDGE = 1600
         /** How long the bridge may take to come up before the overlay stops waiting for it. */
         private const val BRIDGE_WAIT_MS = 2_500L
@@ -257,6 +259,13 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     }
     private var dragFrom = 0 to 0
     private val hold = Runnable { handle(gesture.hold(SystemClock.uptimeMillis())) }
+    /** A tap that waited for a second one: none came, so it's a tap. */
+    private val tapWait = Runnable {
+        ui.pressed = false
+        handle(gesture.tapTimeout(SystemClock.uptimeMillis()))
+    }
+    private val doubleTapMs by lazy { ViewConfiguration.getDoubleTapTimeout().toLong() }
+    private val glassesIdle = Runnable { screenShare?.let { endScreen(it, "${GLASSES_IDLE_MS / 60_000} minutes without a talk") } }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -309,6 +318,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         if (running === this) running = null
         picker.onLaunch = null
         main.removeCallbacks(hold)
+        main.removeCallbacks(tapWait)
+        main.removeCallbacks(glassesIdle)
         main.removeCallbacks(bridgeLost)
         runCatching { unregisterReceiver(screenOnOff) }
         dropThumb()
@@ -362,13 +373,15 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val name = currentAgent?.name ?: "Your assistant"
+        val short = currentAgent?.name ?: "it"
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(if (ui.hidden) "$name is resting" else "$name is in your corner")
             .setContentText(
                 when {
-                    ui.screenSharing -> "Screen sharing is on: your screen goes with hold-to-talk."
+                    ui.screenSharing -> "$short sees your screen: it goes with what you say. Double-tap $short to stop."
                     ui.hidden -> "It comes back with its next reply."
+                    ui.screenWithVoice -> "Tap it to chat, hold it to talk, double-tap it to show your screen."
                     else -> "Tap it to chat, hold it to talk."
                 },
             )
@@ -567,6 +580,8 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             snapshotFlow { ui.hidden }.distinctUntilChanged().collect { hidden ->
                 syncHead()
                 if (!hidden) dropUndo()
+                // Out of sight, its glasses can't be seen: they come off, and the share ends with them.
+                if (hidden) screenShare?.let { endScreen(it, "it was hidden") }
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
             }
         }
@@ -612,19 +627,21 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     private fun onHeadTouch(v: View, e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                main.removeCallbacks(tapWait)
                 ui.pressed = true
                 gesture.towardMiddle = if (ui.edge == Edge.Left) 1 else -1
+                // A tap waits for a second one only when a double-tap could put its glasses on.
+                gesture.doubleTapMs = if (doubleTapWanted(ui.screenWithVoice, ui.chatOpen, away || sharing, ui.listening)) doubleTapMs else 0
                 handle(gesture.down(e.rawX, e.rawY, e.eventTime))
                 main.postDelayed(hold, HOLD_MS)
             }
-            MotionEvent.ACTION_MOVE -> {
-                handle(gesture.move(e.rawX, e.rawY, e.eventTime))
-                if (ui.listening) slideOntoShot(e.rawX, e.rawY)
-            }
+            MotionEvent.ACTION_MOVE -> handle(gesture.move(e.rawX, e.rawY, e.eventTime))
             MotionEvent.ACTION_UP -> {
                 main.removeCallbacks(hold)
-                ui.pressed = false
                 handle(gesture.up(e.eventTime))
+                // While a tap waits for a second one, it stays perked up from the touch: one response, not a lag.
+                ui.pressed = gesture.tapWaiting
+                if (gesture.tapWaiting) main.postDelayed(tapWait, doubleTapMs)
             }
             MotionEvent.ACTION_CANCEL -> {
                 main.removeCallbacks(hold)
@@ -643,6 +660,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 ui.chatOpen -> closeChat()
                 else -> openChat()
             }
+            CompanionGesture.Intent.DoubleTap -> toggleGlasses()
             CompanionGesture.Intent.ListenStart -> {
                 cancelBridge()
                 haptic(HapticFeedbackConstants.LONG_PRESS)
@@ -653,7 +671,11 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 ui.cancelArmed = false
                 ui.lockArmed = false
                 ui.voice?.start()
-                if (ui.screenWithVoice) startScreen()
+                // Wearing its glasses, it takes the screen as you start: without them, only your words go.
+                screenShare?.let {
+                    main.removeCallbacks(glassesIdle)
+                    snap(it, settleMs = 40)
+                }
             }
             is CompanionGesture.Intent.ListenSlide -> {
                 if (i.cancelArmed && !ui.cancelArmed) haptic(HapticFeedbackConstants.CLOCK_TICK)
@@ -721,6 +743,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         ui.lockArmed = false
         if (!send) ui.shot = null
         if (send) ui.voice?.send() else ui.voice?.cancel()
+        restartGlassesIdle()
     }
 
     private fun snapTo(s: Spot?) {
@@ -822,7 +845,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                     onClose = { closeChat() },
                     onOpenInApp = { openInApp(agent.id) },
                     modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = (screenH * 0.66f).dp).fillMaxHeight(),
-                    composerChips = { ScreenChips() },
+                    composerChips = { GlassesChip() },
                     onPickAgent = { pickAgent(it) },
                 )
             }
@@ -832,7 +855,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 onClose = { closeChat() },
                 onOpenInApp = { openInApp(agent.id) },
                 modifier = Modifier.size(380.dp, 560.dp),
-                composerChips = { ScreenChips() },
+                composerChips = { GlassesChip() },
                 onPickAgent = { pickAgent(it) },
             )
         }
@@ -908,7 +931,6 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         when {
             sharing -> {
                 sharing = false
-                ui.screenAsking = false
                 goAway(false)
                 if (failed) AndroidNotices(applicationContext).show("Couldn't ask to share the screen.")
             }
@@ -1034,15 +1056,12 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     }
 
     private var screenShare: ScreenShare? = null
-    /** Android was asked since the screen last came on: after a "no", it isn't asked again until then. */
-    private var askedSinceOn = false
     private var thumb: OverlayWindow? = null
     private var flashWindow: OverlayWindow? = null
     private val screenOnOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             ui.screenOn = intent.action == Intent.ACTION_SCREEN_ON
             if (ui.screenOn) return
-            askedSinceOn = false
             // Android 15 QPR1+ ends a share on lock by itself; give it the chance, so the log shows who did.
             val session = screenShare ?: return
             main.postDelayed({ if (screenShare === session) endScreen(session, "screen off (ended by the overlay; Android hadn't)") }, SCREEN_OFF_GRACE_MS)
@@ -1050,25 +1069,30 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
     }
 
     /**
-     * Held to talk with the screen switch on: the screen goes along. The first time since the screen came
-     * on, Android asks first; its dialog needs your finger, so this talk goes hands-free (Send ends it).
+     * Its glasses on or off: a double-tap on it, or the chip in its chat. On asks Android first (its dialog
+     * comes now, never in the middle of a talk) and a "no" leaves them off; off ends the share, so Android's
+     * sharing chip and its glasses always go together.
      */
-    private fun startScreen() {
+    private fun toggleGlasses() {
         val session = screenShare
         when {
-            session != null -> snap(session, settleMs = 40)
-            askedSinceOn -> Unit
+            session != null -> {
+                haptic(HapticFeedbackConstants.CLOCK_TICK)
+                endScreen(session, "glasses off")
+            }
+            sharing -> Unit
+            !ui.screenWithVoice -> AndroidNotices(applicationContext).show("Showing your screen is off in Settings › Appearance.")
             else -> {
-                askedSinceOn = true
-                handle(gesture.lock())
-                ui.screenAsking = true
                 sharing = true
-                if (!runBridge(OverlayBridgeActivity.share(this))) {
-                    sharing = false
-                    ui.screenAsking = false
-                }
+                if (!runBridge(OverlayBridgeActivity.share(this))) sharing = false
             }
         }
+    }
+
+    /** It keeps its glasses on for [GLASSES_IDLE_MS] after the last talk (or after putting them on). */
+    private fun restartGlassesIdle() {
+        main.removeCallbacks(glassesIdle)
+        if (screenShare != null) main.postDelayed(glassesIdle, GLASSES_IDLE_MS)
     }
 
     /**
@@ -1085,6 +1109,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             ui.snapping = false
             if (shot == null || !ui.listening) return@launch
             flash()
+            ui.shots++
             val small = withContext(Dispatchers.Default) { Bitmap.createScaledBitmap(shot, shot.width / 6, shot.height / 6, true) }
             // Ready by the time you let go; it only goes up if you send.
             val png = lifecycleScope.async(Dispatchers.Default) { runCatching { encodeScreen(shot) }.getOrNull() }
@@ -1123,7 +1148,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }, 300)
     }
 
-    /** The thumbnail just below the head: a tap (another finger, or after a lock) drops or keeps it. */
+    /** The thumbnail just below the head: a tap (another finger, or after a lock) leaves it out or puts it back. */
     private fun showThumb(shot: OverlayShot) {
         dropThumb()
         val box = (headPx() + px(8)).toInt()
@@ -1150,22 +1175,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         thumb = null
     }
 
-    /** Sliding the holding finger down onto the thumbnail drops the screen from this message. */
-    private fun slideOntoShot(x: Float, y: Float) {
-        val shot = ui.shot ?: return
-        val window = thumb ?: return
-        if (shot.dropped) return
-        val v = window.view
-        if (x >= window.params.x && x <= window.params.x + v.width && y >= window.params.y && y <= window.params.y + v.height) {
-            shot.dropped = true
-            haptic(HapticFeedbackConstants.CLOCK_TICK)
-        }
-    }
-
     /**
-     * Android said yes. Called while the bridge is still on screen: Android 14+ lets a service take the
-     * screen-capture type only then, and wants it before the projection starts. The session stays for the
-     * talks to come; the talk that asked takes the screen now.
+     * Android said yes: its glasses go on. Called while the bridge is still on screen: Android 14+ lets a
+     * service take the screen-capture type only then, and wants it before the projection starts. The share
+     * stays, paused, for the talks to come.
      */
     private fun onShareAllowed(resultCode: Int, data: Intent) {
         if (!sharing) return
@@ -1185,7 +1198,6 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
             }
             ScreenShare(getSystemService(MediaProjectionManager::class.java).getMediaProjection(resultCode, data)!!)
         }.getOrNull()
-        ui.screenAsking = false
         goAway(false)
         if (session == null) {
             AndroidNotices(applicationContext).show("Couldn't share the screen.")
@@ -1193,20 +1205,18 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         }
         screenShare = session
         ui.screenSharing = true
-        ui.screenDeclined = false
-        // Still talking: the screen is taken once Android's dialog has left it.
-        if (ui.listening) snap(session, settleMs = 500)
+        haptic(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
+        restartGlassesIdle()
     }
 
-    /** Android said no: this talk goes on with words only; the chat offers a screenshot of your own. */
+    /** Android said no: no glasses. */
     private fun screenRefused() {
         sharing = false
-        ui.screenAsking = false
-        ui.screenDeclined = true
         goAway(false)
     }
 
     private fun endScreen(session: ScreenShare, reason: String) {
+        main.removeCallbacks(glassesIdle)
         if (screenShare === session) {
             screenShare = null
             ui.screenSharing = false
@@ -1214,24 +1224,10 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
         if (!session.ending) session.stop(reason)
     }
 
+    /** In its chat, the same switch as a double-tap: its glasses on or off (not while Settings says no). */
     @Composable
-    private fun ScreenChips() {
-        OverlayScreenChips(
-            ui,
-            onToggle = { on -> lifecycleScope.launch { shared.uiPrefs.putAssistantOverlayScreen(on) } },
-            onStopSharing = { screenShare?.let { endScreen(it, "Stop in the chat") } },
-            onAttachScreenshot = { pickScreenshot() },
-        )
-    }
-
-    /** The way round a "no" to sharing: a screenshot of their own, from the photo picker, into the composer. */
-    private fun pickScreenshot() {
-        lifecycleScope.launch {
-            val uris = picker.pick(PickKind.Images, "overlay-screen") ?: return@launch
-            val file = uris.firstOrNull()?.let { pickedFileFromUri(windowContext, it) } ?: return@launch
-            ui.screenDeclined = false
-            ui.shareAttach = ComposerExternalAttach(file, text = "", send = false)
-        }
+    private fun GlassesChip() {
+        if (ui.screenWithVoice) OverlayGlassesChip(ui, currentAgent?.name ?: "it", onToggle = { toggleGlasses() })
     }
 
     // ── the screen it lives on ──

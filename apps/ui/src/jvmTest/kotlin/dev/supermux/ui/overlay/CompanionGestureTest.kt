@@ -3,6 +3,8 @@ package dev.supermux.ui.overlay
 import dev.supermux.ui.overlay.CompanionGesture.Intent
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CompanionGestureTest {
     private fun gesture(lock: Float = 70f) = CompanionGesture(holdMs = 320, slop = 8f, cancelDistance = 70f, lockDistance = lock)
@@ -133,21 +135,72 @@ class CompanionGestureTest {
         assertEquals(listOf<Intent>(Intent.Tap), g.up(at = 5080))
     }
 
+    // A double-tap puts the Agent's glasses on; while one can come, a single tap waits to be sure.
+    private fun doubleTapping() = gesture().apply { doubleTapMs = 300 }
+
     @Test
-    fun aListeningPressCanBeLockedFromOutside() {
-        val g = gesture()
+    fun aTapWaitsForASecondOneThenIsATap() {
+        val g = doubleTapping()
         g.down(100f, 500f, at = 0)
-        g.hold(at = 320)
-        assertEquals(listOf<Intent>(Intent.ListenLock), g.lock())
-        // Letting go afterwards neither sends nor cancels: it's hands-free now.
-        assertEquals(emptyList(), g.up(at = 900))
+        assertEquals(emptyList(), g.up(at = 80))
+        assertTrue(g.tapWaiting)
+        assertEquals(emptyList(), g.tapTimeout(at = 300)) // a timer that fires early does nothing
+        assertEquals(listOf<Intent>(Intent.Tap), g.tapTimeout(at = 380))
+        assertFalse(g.tapWaiting)
+        assertEquals(emptyList(), g.tapTimeout(at = 400)) // and only once
     }
 
     @Test
-    fun onlyListeningCanBeLocked() {
+    fun aSecondTapInTimeIsADoubleTap() {
+        val g = doubleTapping()
+        g.down(100f, 500f, at = 0)
+        g.up(at = 80)
+        // Pressed again within 300 ms of letting go, as Android counts it.
+        assertEquals(emptyList(), g.down(102f, 498f, at = 300))
+        assertEquals(listOf<Intent>(Intent.DoubleTap), g.up(at = 360))
+        assertEquals(emptyList(), g.tapTimeout(at = 380))
+    }
+
+    @Test
+    fun aSecondPressTooLateLetsTheFirstTapGoFirst() {
+        val g = doubleTapping()
+        g.down(100f, 500f, at = 0)
+        g.up(at = 80)
+        // Its timer was late: the next press brings the tap out before it starts.
+        assertEquals(listOf<Intent>(Intent.Tap), g.down(100f, 500f, at = 600))
+        assertEquals(emptyList(), g.up(at = 660))
+        assertEquals(listOf<Intent>(Intent.Tap), g.tapTimeout(at = 960))
+    }
+
+    @Test
+    fun aTapThenAHoldTalksAndForgetsTheTap() {
+        val g = doubleTapping()
+        g.down(100f, 500f, at = 0)
+        g.up(at = 80)
+        g.down(100f, 500f, at = 200)
+        assertEquals(listOf<Intent>(Intent.ListenStart), g.hold(at = 520))
+        assertEquals(listOf<Intent>(Intent.ListenSend), g.up(at = 1500))
+        assertEquals(emptyList(), g.tapTimeout(at = 1600))
+    }
+
+    @Test
+    fun aTapThenADragMovesAndForgetsTheTap() {
+        val g = doubleTapping()
+        g.down(100f, 500f, at = 0)
+        g.up(at = 80)
+        g.down(100f, 500f, at = 200)
+        assertEquals(listOf(Intent.DragStart, Intent.DragTo(30f, 0f)), g.move(130f, 500f, at = 240))
+        assertEquals(listOf<Intent>(Intent.DragEnd), g.up(at = 400))
+        assertEquals(emptyList(), g.tapTimeout(at = 700))
+    }
+
+    @Test
+    fun withoutDoubleTapsATapIsATapAtOnce() {
         val g = gesture()
         g.down(100f, 500f, at = 0)
-        assertEquals(emptyList(), g.lock())
-        assertEquals(listOf<Intent>(Intent.Tap), g.up(at = 100))
+        assertEquals(listOf<Intent>(Intent.Tap), g.up(at = 80))
+        // Two quick taps are just two taps.
+        assertEquals(emptyList(), g.down(100f, 500f, at = 150))
+        assertEquals(listOf<Intent>(Intent.Tap), g.up(at = 200))
     }
 }

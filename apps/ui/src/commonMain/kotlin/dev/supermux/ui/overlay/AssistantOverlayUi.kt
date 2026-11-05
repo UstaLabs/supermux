@@ -5,12 +5,14 @@
 package dev.supermux.ui.overlay
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,16 +42,15 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDefaults
@@ -76,13 +77,22 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -95,7 +105,6 @@ import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.chat.ChatPanel
-import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
@@ -105,6 +114,7 @@ import dev.supermux.ui.session.AgentAvatar
 import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
+import dev.supermux.ui.session.wearingGlasses
 import dev.supermux.ui.sessionPreviewPlainText
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
@@ -204,20 +214,19 @@ class OverlayUiState {
     var edge by mutableStateOf(Edge.Left)
     /** Dropped on the ✕: out of sight until its next reply. */
     var hidden by mutableStateOf(false)
-    /** What the user just shared from the screen, on its way into the chat's composer. */
-    var shareAttach by mutableStateOf<ComposerExternalAttach?>(null)
     /** A picture of the screen is being taken: nothing of the overlay may be in it. */
     var capturing by mutableStateOf(false)
-    /** This device's switch: your screen goes with what you say when you hold it to talk. */
+    /** This device's switch in Settings: the Agent may see your screen at all (a double-tap puts its glasses on). */
     var screenWithVoice by mutableStateOf(true)
-    /** Android's screen-sharing session is on (asked once; ends when stopped or the screen goes off). */
+    /**
+     * Its glasses are on: Android's screen share is open (paused between talks), and your screen goes with
+     * every hold-to-talk. They come off with the share: a double-tap, the screen going off, idle minutes.
+     */
     var screenSharing by mutableStateOf(false)
-    /** Android is asking to share the screen (the first hold after unlocking), so this talk went hands-free. */
-    var screenAsking by mutableStateOf(false)
-    /** The last ask got a "no": nothing of the screen goes, and the chat offers a screenshot of your own. */
-    var screenDeclined by mutableStateOf(false)
     /** The screen taken when you held it to talk, going with your words unless you drop it. */
     var shot by mutableStateOf<OverlayShot?>(null)
+    /** Pictures of the screen taken so far: each one glints across the head. */
+    var shots by mutableIntStateOf(0)
     /** The screen is being taken this moment: the bubble waits, so it isn't in the picture. */
     var snapping by mutableStateOf(false)
     /** The phone's screen is on; while it's off nobody sees the head, so it doesn't draw. */
@@ -398,7 +407,7 @@ private fun rememberOverlayClock(fps: Int): Long {
     return now
 }
 
-/** The living avatar on its glass circle, with its count and the ring that shows it listening. */
+/** The living avatar on its glass circle, with its count, the ring that shows it listening, and its glasses. */
 @Composable
 fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size: Dp, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
@@ -410,6 +419,8 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         now = Clock.System.now().toEpochMilliseconds()
     }
     val dozing = dozeAt == null || now >= dozeAt
+    // Its glasses are on while it can see your screen; it doesn't doze off in them.
+    val glasses = ui.screenSharing
     val state = overlayAvatarState(
         listening = ui.listening,
         speaking = ui.speaking,
@@ -418,7 +429,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         working = agent?.working ?: false,
         unread = agent?.unread ?: false,
         dozing = dozing,
-        awake = ui.pressed || ui.chatOpen,
+        awake = ui.pressed || ui.chatOpen || glasses,
     )
     // Its own clock, only as fast as it needs: smooth while you touch it, talk to it or it speaks,
     // slower while idle, slowest asleep, still while hidden. The avatar draws at this rate instead of
@@ -431,11 +442,23 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
     }
     val clock = rememberOverlayClock(fps)
     val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
+    val worn = remember(rig) { rig?.wearingGlasses() }
+    // Just after a picture of the screen is taken, a glint sweeps across it.
+    val glint = remember { Animatable(1f) }
+    LaunchedEffect(ui.shots) {
+        if (ui.shots == 0) return@LaunchedEffect
+        glint.snapTo(0f)
+        glint.animateTo(1f, tween(560, easing = FastOutSlowInEasing))
+    }
     Box(modifier.size(size + 8.dp).testTag("overlay_head"), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(size).scale(lift).shadow(10.dp, CircleShape).clip(CircleShape)
                 .background(cs.surfaceContainerHigh.copy(alpha = 0.78f))
-                .border(1.dp, cs.outlineVariant.copy(alpha = 0.5f), CircleShape),
+                .border(
+                    if (glasses) 2.dp else 1.dp,
+                    if (glasses) cs.primary.copy(alpha = 0.7f) else cs.outlineVariant.copy(alpha = 0.5f),
+                    CircleShape,
+                ),
         )
         if (ui.listening) {
             val pulse = rememberInfiniteTransition(label = "overlay-listen")
@@ -448,8 +471,19 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         val inner = (size.value * 0.82f).toInt()
         // A press perks it up, but not while you hold it to talk: then it is listening, not hovered.
         val hovered = (ui.pressed && !ui.listening) || ui.chatOpen
+        // In its glasses, its eyes read your screen, toward the middle of it.
+        val gaze = if (glasses && (state == "idle" || state == "waiting")) readingGaze(clock, if (ui.edge == Edge.Left) 1 else -1) else null
         if (rig != null) {
-            AvatarRigView(rig, state = state, hovered = hovered, level = ui.level, seed = agent?.id ?: "", size = inner, fixedTime = clock)
+            AvatarRigView(
+                if (glasses) worn ?: rig else rig,
+                state = state,
+                hovered = hovered,
+                pointer = gaze?.let { Offset(it.first, it.second) },
+                level = ui.level,
+                seed = agent?.id ?: "",
+                size = inner,
+                fixedTime = clock,
+            )
         } else if (agent != null) {
             // No avatar of its own: its name-derived one, with the same states.
             AgentAvatar(
@@ -464,7 +498,20 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 level = ui.level,
                 timeMs = clock,
                 blinking = fps > 0,
+                glasses = glasses,
+                gaze = gaze,
             )
+        }
+        // An avatar its glasses can't be fitted to wears a badge for them instead.
+        if (glasses && rig != null && worn == null) {
+            Box(
+                Modifier.align(Alignment.BottomEnd).offset(x = (-2).dp, y = (-2).dp).size(18.dp).clip(CircleShape)
+                    .background(cs.primary).border(2.dp, cs.surface, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { GlassesGlyph(cs.onPrimary, Modifier.size(12.dp)) }
+        }
+        if (glint.value < 1f) {
+            Box(Modifier.size(size).scale(lift).clip(CircleShape).drawBehind { drawGlint(glint.value) })
         }
         if (agent?.unread == true && !ui.chatOpen && !ui.listening && !ui.speaking) {
             Box(
@@ -473,6 +520,39 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
                 contentAlignment = Alignment.Center,
             ) { Text("1", color = cs.onPrimary, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold) }
         }
+    }
+}
+
+/** A white band sweeping across the head at [p] (0 to 1): the cue that a picture of the screen was taken. */
+private fun DrawScope.drawGlint(p: Float) {
+    val w = size.width
+    val x = -0.4f * w + p * 1.8f * w
+    rotate(20f) {
+        drawRect(
+            Brush.horizontalGradient(
+                listOf(Color.Transparent, Color.White.copy(alpha = 0.8f), Color.Transparent),
+                startX = x - w * 0.2f,
+                endX = x + w * 0.2f,
+            ),
+            topLeft = Offset(x - w * 0.2f, -w * 0.5f),
+            size = Size(w * 0.4f, w * 2f),
+        )
+    }
+}
+
+/** A small pair of round glasses: what the overlay's Agent wears while it can see your screen. */
+@Composable
+fun GlassesGlyph(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val stroke = Stroke(width = w * 0.11f, cap = StrokeCap.Round)
+        val r = w * 0.19f
+        val y = size.height * 0.6f
+        drawCircle(color, r, Offset(w * 0.28f, y), style = stroke)
+        drawCircle(color, r, Offset(w * 0.72f, y), style = stroke)
+        drawPath(Path().apply { moveTo(w * 0.47f, y - r * 0.15f); quadraticTo(w * 0.5f, y - r * 0.55f, w * 0.53f, y - r * 0.15f) }, color, style = stroke)
+        drawLine(color, Offset(w * 0.09f, y - r * 0.2f), Offset(w * 0.15f, y - r * 1.4f), stroke.width, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.91f, y - r * 0.2f), Offset(w * 0.85f, y - r * 1.4f), stroke.width, StrokeCap.Round)
     }
 }
 
@@ -516,7 +596,6 @@ fun OverlayBubble(
                     )
                     val shot = ui.shot
                     val note = when {
-                        ui.screenAsking -> "Android asks before your screen can go. Tap Send when you're done."
                         shot != null && !shot.dropped -> "Your screen goes with this."
                         shot != null -> "Screen dropped: only your words go."
                         else -> null
@@ -632,8 +711,8 @@ fun OverlayUndo(name: String, onUndo: () -> Unit, modifier: Modifier = Modifier)
 }
 
 /**
- * The screen taken as you hold it to talk, just below the head: tap it, or slide down onto it while you
- * hold, to drop it from this message.
+ * The screen taken as you hold it to talk (its glasses on), just below the head: tap it to leave it out of
+ * this message, or to put it back.
  */
 @Composable
 fun OverlayShotThumb(shot: OverlayShot, onToggle: () -> Unit, modifier: Modifier = Modifier) {
@@ -683,32 +762,18 @@ fun OverlayFlash(modifier: Modifier = Modifier) {
 }
 
 /**
- * The chat's say about the screen, above its field: this device's switch for sending the screen when you
- * hold it to talk, Stop while Android's sharing is on, and the way round a "no" (a screenshot of your own).
+ * In its chat, what a double-tap on it does: its glasses on (it sees your screen whenever you hold it to
+ * talk; Android asks first) or off.
  */
 @Composable
-fun OverlayScreenChips(ui: OverlayUiState, onToggle: (Boolean) -> Unit, onStopSharing: () -> Unit, onAttachScreenshot: () -> Unit) {
-    val iconSize = Modifier.size(AssistChipDefaults.IconSize)
+fun OverlayGlassesChip(ui: OverlayUiState, name: String, onToggle: () -> Unit) {
     FilterChip(
-        selected = ui.screenWithVoice,
-        onClick = { onToggle(!ui.screenWithVoice) },
-        label = { Text(if (ui.screenWithVoice) "Screen goes with hold-to-talk" else "Screen stays private") },
-        leadingIcon = {
-            Icon(if (ui.screenWithVoice) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff, contentDescription = null, modifier = iconSize)
-        },
-        modifier = Modifier.testTag("overlay_screen_toggle"),
+        selected = ui.screenSharing,
+        onClick = onToggle,
+        label = { Text(if (ui.screenSharing) "$name sees your screen" else "Let $name see your screen") },
+        leadingIcon = { GlassesGlyph(LocalContentColor.current, Modifier.size(AssistChipDefaults.IconSize)) },
+        modifier = Modifier.testTag("overlay_glasses"),
     )
-    if (ui.screenSharing) {
-        AssistChip(onClick = onStopSharing, label = { Text("Sharing · Stop") }, modifier = Modifier.testTag("overlay_screen_stop"))
-    }
-    if (ui.screenDeclined) {
-        AssistChip(
-            onClick = onAttachScreenshot,
-            label = { Text("Attach a screenshot") },
-            leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null, modifier = iconSize) },
-            modifier = Modifier.testTag("overlay_screen_fallback"),
-        )
-    }
 }
 
 /**
@@ -817,9 +882,6 @@ fun OverlayChat(
                     onDraftChange = { draft = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     showHeader = false,
-                    // A shared screenshot is staged like a picked photo; the user sends it with their words.
-                    externalAttach = ui.shareAttach,
-                    onExternalAttachConsumed = { ui.shareAttach = null },
                     composerChips = composerChips,
                 )
             }

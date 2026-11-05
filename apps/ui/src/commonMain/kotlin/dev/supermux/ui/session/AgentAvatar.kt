@@ -67,6 +67,10 @@ internal fun AgentAvatar(
     timeMs: Long? = null,
     /** Whether it blinks now and then; a host that has stopped its [timeMs] clock stops this too. */
     blinking: Boolean = true,
+    /** Round glasses over its eyes: the assistant overlay's sign that it can see your screen. */
+    glasses: Boolean = false,
+    /** Where its eyes look while idle (each axis −1..1) instead of ahead: the overlay's reading in its glasses. */
+    gaze: Pair<Float, Float>? = null,
 ) {
     val look = spec ?: remember(name) { defaultAgentAvatar(name) }
     val state = when {
@@ -169,10 +173,43 @@ internal fun AgentAvatar(
                     )
                 }
                 look.accessory?.let { drawAccessory(it.type, c(it.color, Color.White), cx, cy, r, clock, behind = false) }
-                drawFace(look, state, cx, cy, r, clock, perk, blink.value, voice, ::c)
+                drawFace(look, state, cx, cy, r, clock, perk, blink.value, voice, ::c, gaze)
+                if (glasses) drawGlasses(cx, cy - r * 0.05f, r * look.eyes.spacing, r)
                 state.badge?.let { drawBadge(it, cx + r * 0.85f, cy - r * 1.05f + sin(clock) * r * 0.06f, r * 0.28f) }
             }
         }
+    }
+}
+
+/**
+ * Round glasses over its eyes (at [cx] ± [gap], height [ey]): a light edge under a dark frame, so they read
+ * on any colour of body, a faint tint in the lenses and a glint in each.
+ */
+private fun DrawScope.drawGlasses(cx: Float, ey: Float, gap: Float, r: Float) {
+    val lens = minOf(gap * 0.86f, r * 0.3f)
+    val width = r * 0.075f
+    val bridge = Path().apply {
+        moveTo(cx - gap + lens, ey - lens * 0.15f)
+        quadraticTo(cx, ey - lens * 0.55f, cx + gap - lens, ey - lens * 0.15f)
+        moveTo(cx - gap - lens, ey - lens * 0.1f)
+        lineTo(cx - gap - lens * 1.45f, ey - lens * 0.35f)
+        moveTo(cx + gap + lens, ey - lens * 0.1f)
+        lineTo(cx + gap + lens * 1.45f, ey - lens * 0.35f)
+    }
+    for (dx in listOf(-gap, gap)) drawCircle(Color(0x33CFEAFF), lens, Offset(cx + dx, ey))
+    for ((color, w) in listOf(Color.White.copy(alpha = 0.55f) to width * 1.9f, Color(0xFF2B2F3A) to width)) {
+        val stroke = Stroke(width = w, cap = StrokeCap.Round)
+        for (dx in listOf(-gap, gap)) drawCircle(color, lens, Offset(cx + dx, ey), style = stroke)
+        drawPath(bridge, color, style = stroke)
+    }
+    for (dx in listOf(-gap, gap)) {
+        drawLine(
+            Color.White.copy(alpha = 0.85f),
+            Offset(cx + dx - lens * 0.45f, ey + lens * 0.05f),
+            Offset(cx + dx - lens * 0.1f, ey - lens * 0.45f),
+            width * 0.75f,
+            StrokeCap.Round,
+        )
     }
 }
 
@@ -229,13 +266,23 @@ private fun DrawScope.drawFace(
     look: AgentAvatarSpec, state: AgentAvatarSpec.State,
     cx: Float, cy: Float, r: Float, clock: Float, perk: Float, blink: Float, voice: Float,
     c: (String?, Color) -> Color,
+    gaze: Pair<Float, Float>? = null,
 ) {
     val ink = c(look.eyes.color, Color(0xFF1B1530))
     val mouthInk = c(look.mouth.color ?: look.eyes.color, Color(0xFF1B1530))
     val gap = r * look.eyes.spacing
     val eyeMode = state.eyes
-    val lookX = if (eyeMode == "glance") sin(clock) * r * 0.12f else 0f
-    val lookY = if (eyeMode == "up") -r * 0.10f else -r * 0.06f * perk
+    val reading = gaze?.takeIf { eyeMode == null }
+    val lookX = when {
+        eyeMode == "glance" -> sin(clock) * r * 0.12f
+        reading != null -> reading.first * r * 0.12f
+        else -> 0f
+    }
+    val lookY = when {
+        eyeMode == "up" -> -r * 0.10f
+        reading != null -> reading.second * r * 0.07f
+        else -> -r * 0.06f * perk
+    }
     val ey = cy - r * 0.05f + lookY
     val s = look.eyes.size
     val style = when (eyeMode) {

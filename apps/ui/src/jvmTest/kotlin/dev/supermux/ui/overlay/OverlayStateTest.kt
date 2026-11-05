@@ -2,6 +2,8 @@ package dev.supermux.ui.overlay
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class OverlayStateTest {
     private fun state(
@@ -66,5 +68,32 @@ class OverlayStateTest {
         assertEquals(0.35f, speechLevel("str"), 0.001f)          // consonants: nearly shut
         assertEquals(0.95f, speechLevel("aei"), 0.001f)          // all vowels: wide open
         assertEquals(0.55f, speechLevel("Gün"), 0.001f)          // Turkish vowels count too: ü
+    }
+
+    // Glasses on, its eyes read your screen: toward the middle, along a line, then the next line down.
+    @Test fun readingLooksTowardTheMiddleOfTheScreen() {
+        for (t in 0L until 7_000L step 100) {
+            val (x, y) = readingGaze(t, towardMiddle = 1)
+            assertTrue(x in 0f..1f && y in -1f..1f, "at $t ms: $x, $y")
+            assertTrue(readingGaze(t, towardMiddle = -1).first <= 0f, "at $t ms, from the right edge")
+        }
+    }
+
+    @Test fun readingMovesAlongALineThenDownALine() {
+        val start = readingGaze(0, 1)
+        val later = readingGaze(1_500, 1)
+        val nextLine = readingGaze(1_750, 1)
+        assertTrue(later.first > start.first)
+        assertEquals(start.second, later.second)
+        assertTrue(nextLine.second > later.second)
+    }
+
+    // A tap only waits for a second one when a double-tap could put the glasses on.
+    @Test fun aDoubleTapIsWaitedForOnlyWhenItCanPutGlassesOn() {
+        assertTrue(doubleTapWanted(screenAllowed = true, chatOpen = false, asking = false, talking = false))
+        assertFalse(doubleTapWanted(screenAllowed = false, chatOpen = false, asking = false, talking = false))
+        assertFalse(doubleTapWanted(screenAllowed = true, chatOpen = true, asking = false, talking = false))
+        assertFalse(doubleTapWanted(screenAllowed = true, chatOpen = false, asking = true, talking = false))
+        assertFalse(doubleTapWanted(screenAllowed = true, chatOpen = false, asking = false, talking = true))
     }
 }

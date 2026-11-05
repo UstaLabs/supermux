@@ -345,9 +345,10 @@ private fun AssistantOverlayRow() {
             val screen by prefs.assistantOverlayScreen.collectAsState(true)
             Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Show your screen when you hold it to talk", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
+                    Text("Let it see your screen", style = MaterialTheme.typography.bodyLarge, color = cs.onBackground)
                     Text(
-                        "Android asks once each time you unlock, and shows its sharing chip meanwhile.",
+                        "Double-tap it to put its glasses on: while it wears them, your screen goes with hold-to-talk. " +
+                            "Android asks each time, and they come off when you lock the phone or after 5 quiet minutes.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onSurfaceVariant,
                     )

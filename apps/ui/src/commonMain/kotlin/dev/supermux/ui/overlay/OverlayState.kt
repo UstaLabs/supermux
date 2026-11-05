@@ -82,3 +82,24 @@ fun shareImageSize(width: Int, height: Int, maxEdge: Int): Pair<Int, Int> {
     val k = maxEdge.toFloat() / long
     return maxOf(1, (width * k).roundToInt()) to maxOf(1, (height * k).roundToInt())
 }
+
+/**
+ * Where the avatar's eyes are while it wears its glasses (each axis −1..1, for its lookAt): reading your
+ * screen, four stops along a line toward the middle of the screen, then the next line down.
+ * [towardMiddle] is +1 when the middle is to its right (it sits on the left edge).
+ */
+fun readingGaze(timeMs: Long, towardMiddle: Int): Pair<Float, Float> {
+    val line = ((timeMs / READ_LINE_MS) % 4).toInt()
+    val stop = minOf(3, ((timeMs % READ_LINE_MS) * 4.4f / READ_LINE_MS).toInt())
+    return Pair(towardMiddle * (0.05f + 0.3f * stop), -0.55f + 0.36f * line)
+}
+
+private const val READ_LINE_MS = 1_700L
+
+/**
+ * Whether a tap waits to see if a second one comes (a double-tap puts the glasses on): only when that
+ * could do something, so a tap is never kept waiting otherwise. Not while the screen may not be shown,
+ * its chat is open (a tap closes it), Android is already asking, or you are talking to it.
+ */
+fun doubleTapWanted(screenAllowed: Boolean, chatOpen: Boolean, asking: Boolean, talking: Boolean): Boolean =
+    screenAllowed && !chatOpen && !asking && !talking
