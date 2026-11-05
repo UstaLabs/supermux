@@ -42,7 +42,7 @@ fun windowsLabMain(out: File?) {
     val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
     val size = DpSize(minOf(1100, screen.width).dp, minOf(1000, screen.height).dp)
     application {
-        var shown by remember { mutableStateOf(Screen.PerfLab) }
+        var shown by remember { mutableStateOf(windowsFirstScreen(out, System.getProperty("webview.sample.screen"))) }
         Window(
             onCloseRequest = ::exitApplication,
             title = "webview-sample · $WINDOWS_ENGINE_LABEL",
@@ -60,4 +60,13 @@ fun windowsLabMain(out: File?) {
             key(shown) { SampleApp(lab, engineLabel = WINDOWS_ENGINE_LABEL, initialScreen = shown) }
         }
     }
+}
+
+/**
+ * The screen the Windows sample opens on: the perf lab for an unattended lab run (an [out] folder), else the screen
+ * `-Dwebview.sample.screen=<name>` names, else the chat, as on the other platforms.
+ */
+internal fun windowsFirstScreen(out: File?, screenProperty: String?): Screen = when {
+    out != null -> Screen.PerfLab
+    else -> screenProperty?.let { name -> Screen.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } } ?: Screen.Chat
 }
