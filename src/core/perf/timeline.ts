@@ -344,6 +344,7 @@ function describeStartEvent(e: PerfEvent): string {
     case "claude.system_init": return `${label}Claude's system/init${e.mcpServers ? ` · MCP: ${e.mcpServers}` : ""}`
     case "claude.first_stream": return `${label}Claude's first stream event (the model is answering)`
     case "codex.first_notify": return `${label}Codex's first notification (${e.method ?? "?"})`
+    case "codex.first_text": return `${label}Codex's first text (the model is answering)`
     case "activity.first": return `${label}first activity card (${e.kind ?? "?"}${e.tool ? ` ${e.tool}` : ""})`
     case "reply.first": return `${label}first reply (${e.chars ?? "?"} chars)`
     case "turn.completed": return `${label}first turn over${e.error ? ` · ERROR ${e.error}` : ""}`
@@ -404,14 +405,18 @@ function startFacts(events: PerfEvent[], trace: string): StartFacts {
   }
   const telegram = mine.filter((e) => e.event === "start.telegram")
   if (telegram.length) phases.push([`Telegram menu refresh ×${telegram.length}`, telegram.reduce((n, e) => n + (num(e.ms) ?? 0), 0)])
-  // The first turn, split where the marks allow: hand-over → prompt written → model starts → reply.
+  // The first turn, split where the marks allow: hand-over → prompt written → (Claude: system/init,
+  // its MCP servers and repo snapshot) → the model's first output → the whole reply.
   const delivering = at("start.message.delivering")
   const written = at("start.claude.prompt_written") ?? at("start.codex.prompt_written")
-  const firstStream = at("start.claude.first_stream") ?? at("start.codex.first_notify")
+  const init = at("start.claude.system_init")
+  const firstOutput = at("start.claude.first_stream") ?? at("start.codex.first_text") ?? at("start.codex.first_notify")
   const reply = at("start.reply.first")
   if (delivering !== undefined && written !== undefined) phases.push(["first message → written to the agent", written - delivering])
-  if (written !== undefined && firstStream !== undefined) phases.push(["prompt → model's first stream event", firstStream - written])
-  if (firstStream !== undefined && reply !== undefined) phases.push(["first stream → whole reply", reply - firstStream])
+  if (written !== undefined && init !== undefined) phases.push(["prompt → Claude's system/init", init - written])
+  const modelFrom = init ?? written
+  if (modelFrom !== undefined && firstOutput !== undefined) phases.push([init !== undefined ? "system/init → model's first output" : "prompt → model's first output", firstOutput - modelFrom])
+  if (firstOutput !== undefined && reply !== undefined) phases.push(["first output → whole reply", reply - firstOutput])
   const failed = mine.find((e) => e.event === "start.failed" || e.event === "start.spawn_failed")
   return {
     mine, origin, request, phases,

@@ -132,7 +132,7 @@ test("a session start: app and broker on one clock, the broker's HTTP time neste
   expect(out).toContain("Telegram menu refresh (create)")
   // Ranked: Claude's boot first, then the model's first token, then git worktree add.
   const ranked = out.split("steps under 10 ms left out):\n")[1]!.split("\n\n")[0]!.split("\n").map((l) => l.trim().split(/\s{2,}/))
-  expect(ranked.slice(0, 3)).toEqual([["prompt → model's first stream event", "3.0 s"], ["Claude boot → initialize", "2.1 s"], ["git worktree add", "1.2 s"]])
+  expect(ranked.slice(0, 3)).toEqual([["prompt → model's first output", "3.0 s"], ["Claude boot → initialize", "2.1 s"], ["git worktree add", "1.2 s"]])
   expect(ranked).toContainEqual(["Telegram menu refresh ×2", "295 ms"])
   expect(ranked.map((r) => r[0])).not.toContain("setup hook")
   expect(out).toContain("Summary: created in 4.4 s · app had the answer at 4.4 s · chat on screen at 4.6 s · first reply at 8.0 s · drawn at 8.1 s")

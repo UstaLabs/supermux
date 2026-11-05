@@ -157,3 +157,68 @@ App marks (`start.*`, shipped while the broker traces): `send` · `validated` ·
 
 `scripts/perf-start-probe.ts` starts sessions the way the launcher does and ships the same app-side marks,
 for repeatable runs against a throwaway or shadow broker.
+
+## Measured (step 2), 2026-11-05
+
+**Setup.** A shadow broker from this branch on the same box (port 9975, fresh state, tracing on,
+`MUX_SHIM=host` so nothing writes `~/.claude.json`; the live broker on :9898 untouched), driven by
+`scripts/perf-start-probe.ts`: `POST /sessions` with a first message ("Reply with just the word: ok"), the
+default model, `worktree: true`, then the first reply; every session killed and its worktree and branch
+removed afterwards. Repos: **supermux** (5,915 files + the 42 MB `docs/` include) and **supermux-website**
+(125 files, 30 MB). Runs interleaved L S S L L S per agent; "cold" = the first start after the broker
+restarted. Box load 4–10 during the matrix (calm for this box). 12 runs, all succeeded.
+
+### Send → first reply (median of 3, fastest–slowest)
+
+| | created (agent up) | first reply |
+|---|---|---|
+| Claude, supermux | **6.4 s** (5.7–6.8) | **10.1 s** (9.9–11.7) |
+| Claude, supermux-website | 3.6 s (3.4–4.1) | 6.1 s (5.4–7.6) |
+| Codex, supermux | 4.2 s (3.9–6.5) | 7.5 s (6.8–9.6) |
+| Codex, supermux-website | 1.7 s (1.6–1.7) | 4.8 s (4.5–6.3) |
+
+The probe (a client on localhost, no UI) had the HTTP answer within ~50 ms of the broker finishing, so on
+this box the app's wait is the broker's.
+
+### Where the time goes, Claude on supermux (median)
+
+| Step | Time | Notes |
+|---|---|---|
+| Claude CLI boot → answers `initialize` | **3.5 s** | 2.9 s on the small repo: mostly Claude itself (settings, plugins, skills, slash commands, rewriting a 1.3 MB `~/.claude.json` with 5,121 project entries, 4,966 of them for folders that no longer exist) |
+| prompt written → Claude's `system/init` | **1.7 s** | 0.6 s on the small repo: its MCP servers (mux-shim, mux-channel, his claude.ai connectors) and its snapshot of the repo |
+| `system/init` → model's first output | **1.9 s** | 0.8 s on the small repo: the API's first token on a fresh, uncached prompt, larger in supermux (CLAUDE.md, project settings) |
+| `git worktree add` | **1.6 s** | 1.2–2.4 s; 0.24 s on the small repo |
+| first output → whole reply | **1.2 s** | for a two-letter reply; it grows with the reply, and the app sees nothing of it until it is whole |
+| keeper up | 0.1–0.9 s | `bun keeper.ts` from TypeScript source |
+| `.worktreeinclude` copy of `docs/` | 0.3–1.0 s | 0.5–1.8 s in the Codex runs |
+| everything else on the broker | < 0.15 s | Auto (no added accounts on the shadow), repo probe, branch list, prepare, context, frames, hand-over |
+
+Codex boots much faster (`codex debug models` 0.7 s + keeper 0.1 s + `initialize` 0.3 s + `thread/start`
+0.1 s ≈ 1.2 s against Claude's 3.5 s + 1.7 s), but its model takes longer to its first text (2.9–3.0 s
+against Claude's 1.9 s on supermux).
+
+**Cold vs warm** (first start after a broker restart): Claude +0.4 s to created, +1.6 s to the reply; Codex
++2.4 s to created (the checkout, the `docs/` copy, keeper, `initialize` and `thread/start` all 1.5–3× slower
+once).
+
+### What the shadow cannot show, and how big it is on the live broker
+
+- **Telegram menu refresh ×2**: 0 on the shadow (no Telegram). Live log: 207 failed refreshes since 11-01, all
+  `BOT_COMMANDS_TOO_MUCH`; the gap between a start's two calls is 0.10–1.65 s (median 0.46 s), so **≈0.9 s per
+  start**.
+- **Auto account's usage wait**: 0 on the shadow (no added accounts). Live: up to 3 s per start. The activity
+  refresh only covers the system logins (`usage/store.ts:418-425`); his three added Claude accounts are only
+  refreshed by the Usage page or by Auto itself, so Auto may wait often. Not measurable without the trace on
+  the live broker.
+- **Box load is the multiplier.** One run at load 28 (my own Gradle build was running): the small repo took
+  22.2 s to created and 31.1 s to the reply instead of 3.6 s / 6.1 s, with Claude's boot at 13.7 s,
+  `git worktree add` 3.3 s and the broker's prepare 1.6 s (40 ms when calm). The live log's median of
+  9.0 s (no first message) and its 15-of-47 starts over 15 s are this effect plus Telegram and Auto.
+
+### Side checks
+
+- **#29's `files.copyTree`** costs the same as today's `cp`: on the real `docs/` (42 MB, 524 files), plain
+  `cp` 232–279 ms warm (458 ms cold), `cp` with #29's per-entry `lstat` filter 213–360 ms.
+- Leftovers from the runs: none in the repos (no `mux/perf75*` branches or worktrees), no processes. Each
+  Claude run added one project entry to `~/.claude.json` and a small transcript under `~/.claude/projects/`,
+  as every session does.
