@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.InputMode
@@ -23,6 +24,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.math.abs
+import kotlin.math.max
 
 /**
  * The transcript follows the end only while the reader is AT the end. A reply taller than the
@@ -261,4 +264,44 @@ class ChatAutoscrollTest {
     private companion object {
         const val END = "The very end of the reply."
     }
+
+    // Card #76: a revealing reply grows a word at a time; while following, the transcript eases after it.
+    @Test fun a_revealing_reply_is_followed_by_a_glide_not_a_jump() = runComposeUiTest {
+        panel()
+        state = state.copy(live = listOf(live("Live paragraph one.")))
+        waitForIdle()
+        val line = with(density) { 20.sp.toPx() }
+        mainClock.autoAdvance = false
+        state = state.copy(live = listOf(live("Live paragraph one.\n\n" + paragraphs("Live", 3) + "\n\nLive tail.")))
+        var prev = topOf("Live paragraph one.") ?: fail("the live reply is not laid out")
+        var biggest = 0f
+        repeat(150) {
+            mainClock.advanceTimeByFrame()
+            val now = topOf("Live paragraph one.") ?: return@repeat
+            biggest = max(biggest, abs(now - prev))
+            prev = now
+        }
+        mainClock.autoAdvance = true
+        waitForIdle()
+        assertTrue(onScreen("Live tail."), "the growing end is followed")
+        assertTrue(biggest < line * 0.6f, "moved $biggest px in one frame (a line is $line): a jump, not a glide")
+    }
+
+    @Test fun a_readers_drag_during_a_glide_wins() = runComposeUiTest {
+        panel()
+        state = state.copy(live = listOf(live("Live paragraph one.")))
+        waitForIdle()
+        state = state.copy(live = listOf(live("Live paragraph one.\n\n" + paragraphs("Live", 12) + "\n\nLive tail.")))
+        mainClock.advanceTimeBy(200)
+        drag(+300f)
+        val anchor = readingAnchorIn("Live", 12)
+        val before = topOf(anchor) ?: fail("no anchor")
+        waitForIdle()
+        assertEquals(before, topOf(anchor) ?: Float.NaN, 1f, "the glide pulled the reader back after their drag")
+        assertFalse(onScreen("Live tail."), "the reader left the end")
+    }
+
+    /** The first paragraph of [label] on screen now. */
+    private fun ComposeUiTest.readingAnchorIn(label: String, count: Int): String =
+        (1..count).map { "$label paragraph $it:" }.firstOrNull { onScreen(it) } ?: "Live paragraph one."
 }

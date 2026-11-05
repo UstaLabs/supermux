@@ -91,6 +91,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -144,8 +145,14 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
 import dev.supermux.util.formatDuration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlin.math.exp
+import kotlin.math.max
 import kotlin.time.Clock
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
@@ -181,6 +188,36 @@ private fun transcriptAtEnd(state: LazyListState, slopPx: Float): Boolean {
     val last = info.visibleItemsInfo.lastOrNull() ?: return true
     if (last.index != info.totalItemsCount - 1) return false
     return last.offset + last.size + info.afterContentPadding - info.viewportEndOffset <= slopPx
+}
+
+/** How far the transcript's end is below the viewport's end, in px: 0 at the end, MAX_VALUE when the last row is off screen. */
+private fun distanceToEnd(state: LazyListState): Float {
+    if (!state.canScrollForward) return 0f
+    val info = state.layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return Float.MAX_VALUE
+    if (last.index != info.totalItemsCount - 1) return Float.MAX_VALUE
+    return (last.offset + last.size + info.afterContentPadding - info.viewportEndOffset).toFloat()
+}
+
+/** Card #76: how fast the transcript eases toward a revealing reply's end; past [GLIDE_MAX_PX] it jumps as before. */
+private const val GLIDE_TAU_MS = 90.0
+private const val GLIDE_MAX_PX = 400f
+
+/**
+ * Eases [state] to the transcript's end: each frame covers `1 - exp(-dt / GLIDE_TAU_MS)` of what is left, then it
+ * settles exactly there. A reader's drag outranks it (their scroll cancels ours).
+ */
+private suspend fun glideToEnd(state: LazyListState) {
+    var last = withFrameMillis { it }
+    while (true) {
+        val left = distanceToEnd(state)
+        if (left <= 0.5f || left > GLIDE_MAX_PX) break
+        val now = withFrameMillis { it }
+        val dt = (now - last).coerceIn(1L, 64L).toDouble()
+        last = now
+        state.scrollBy(max(1f, left * (1 - exp(-dt / GLIDE_TAU_MS)).toFloat()))
+    }
+    if (state.canScrollForward) state.scrollBy(100_000f)
 }
 
 /** Fade, not a rule: a short scrim of the panel's own background. Non-interactive. */
@@ -684,6 +721,26 @@ fun ChatPanel(
             withFrameNanos { }
             if (find.current < 0) listState.scrollBy(100_000f)
         }
+        // Card #76: a revealing reply (the live row, or the stored row finishing its reveal) grows a word at a time;
+        // while following, the transcript eases after it instead of jumping a line at a time. Reduced motion jumps.
+        val reduceMotion = dev.supermux.ui.theme.LocalReduceMotion.current
+        val revealingTail = liveRows.lastOrNull()?.let { !it.thinking } == true ||
+            (liveRows.isEmpty() && (timelineItems.lastOrNull() as? TimelineItem.Msg)?.entry?.stream?.let { reveals.unfinished(it) } != null)
+        val glideTail by rememberUpdatedState(!reduceMotion && revealingTail)
+        val glides = remember(session.id) { Channel<Unit>(Channel.CONFLATED) }
+        LaunchedEffect(session.id, listState) {
+            for (request in glides) {
+                followScroll = true
+                try {
+                    glideToEnd(listState)
+                } catch (e: CancellationException) {
+                    // The reader took the scroll: theirs wins. Only a real cancellation ends this loop.
+                    currentCoroutineContext().ensureActive()
+                } finally {
+                    followScroll = false
+                }
+            }
+        }
         LaunchedEffect(session.id, listState) {
             var seen: TranscriptTail? = null
             snapshotFlow {
@@ -710,7 +767,11 @@ fun ChatPanel(
                 // last row grows. A row scrolling back into view has not grown.
                 val grew = now.lastRow == before.lastRow && before.lastRowSize >= 0 && now.lastRowSize > before.lastRowSize
                 if (grew && panelActive && autoFollow && find.current < 0 && listState.canScrollForward) {
-                    if (listState.isScrollInProgress) pendingPin = true else launch { pinToEnd() }
+                    when {
+                        glideTail -> glides.trySend(Unit)
+                        listState.isScrollInProgress -> pendingPin = true
+                        else -> launch { pinToEnd() }
+                    }
                 }
             }
         }
