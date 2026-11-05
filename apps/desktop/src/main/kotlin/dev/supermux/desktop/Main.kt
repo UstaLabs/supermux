@@ -556,7 +556,9 @@ fun main() {
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId, supervisor.prefs.map { it.port }) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
-        var windowVisible by remember { mutableStateOf(true) }
+        // Dev: SM_START_HIDDEN=1 starts in the tray with the main window closed, as the assistant
+        // overlay is used (and measured: what it costs with nothing else drawing).
+        var windowVisible by remember { mutableStateOf(System.getenv("SM_START_HIDDEN") != "1") }
         var confirmQuit by remember { mutableStateOf<String?>(null) }
         var quitting by remember { mutableStateOf(false) }
         val trayModel = if (quitting) {
