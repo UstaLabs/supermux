@@ -3,13 +3,10 @@ import { basename, join } from "path"
 import type { Db } from "../storage/db"
 import { splitSections } from "./sections"
 import { home } from "../../shared/home"
-
-function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/\/$/, "").replace(/[/.]/g, "-")
-}
+import { claudeProjectDirName } from "../agents/claude/project-dir"
 
 function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
-  return join(home(), ".claude", "projects", encodeProjectDir(cwd), `${claudeSessionId}.jsonl`)
+  return join(home(), ".claude", "projects", claudeProjectDirName(cwd), `${claudeSessionId}.jsonl`)
 }
 
 export interface KnowledgeHit {
