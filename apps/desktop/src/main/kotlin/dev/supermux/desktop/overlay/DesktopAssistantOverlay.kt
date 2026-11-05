@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
@@ -120,6 +121,16 @@ fun DesktopAssistantOverlay(
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
     val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it) } }.collectAsState(null)
     LaunchedEffect(overlay, talkKey) { talkKey?.let { overlay.useTalkKey(it) } }
+    // Diagnostics: when the bubble comes and goes, and what decided it.
+    LaunchedEffect(ui) {
+        snapshotFlow { ui.bubbleVisible }.collect { shown ->
+            println(
+                "[OverlayBubble] ${if (shown) "up" else "down"}: listening=${ui.listening} finishing=${ui.finishing} " +
+                    "reply=${ui.reply != null} folded=${ui.replyFolded} chatOpen=${ui.chatOpen} hidden=${ui.hidden} " +
+                    "capturing=${ui.capturing} snapping=${ui.snapping} dragging=${ui.dragging} head=(${overlay.headX},${overlay.headY})",
+            )
+        }
+    }
     DisposableEffect(overlay) { onDispose { overlay.stopTalkKey() } }
 
     OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
@@ -234,7 +245,15 @@ private fun OverlayWindow(
                 onCreated(this)
                 if (isMac) {
                     addWindowListener(object : WindowAdapter() {
-                        override fun windowOpened(e: WindowEvent) = MacOverlayNative.floatEverywhere(title)
+                        override fun windowOpened(e: WindowEvent) {
+                            MacOverlayNative.floatEverywhere(title)
+                            if (title == BUBBLE_TITLE) {
+                                println("[OverlayWindow] $title opened at ${e.window.x},${e.window.y} ${e.window.width}x${e.window.height}")
+                                MacOverlayNative.describe(title)
+                                // And once it has settled.
+                                javax.swing.Timer(600) { MacOverlayNative.describe(title) }.apply { isRepeats = false }.start()
+                            }
+                        }
                     })
                 }
             }
@@ -347,6 +366,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
     private var hotKey: MacHotKey? = null
     /** The combo started the talk going on, at this time. */
     private var comboFrom: Long? = null
+    private var comboLabel = ""
 
     /**
      * Listens for [key] from any app, in place of the one before. A combo is macOS's to hand over, no
@@ -356,6 +376,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
         stopTalkKey()
         if (!isMac) return
         if (key.combo) {
+            comboLabel = key.label
             val combo = hotKey ?: MacHotKey(
                 // AppKit's thread: everything goes on to the overlay's.
                 onPress = { scope.launch { comboDown() } },
@@ -382,16 +403,24 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     // The combo talks from the moment it's down: nothing to tell apart from typing, so no wait.
     private fun comboDown() {
+        println("[OverlayKey] $comboLabel down")
         if (ui.listening) return
         comboFrom = System.currentTimeMillis()
         handle(listOf(CompanionGesture.Intent.ListenStart))
     }
 
     private fun comboUp() {
-        val from = comboFrom ?: return
+        val from = comboFrom
+        if (from == null) {
+            println("[OverlayKey] $comboLabel up")
+            return
+        }
         comboFrom = null
+        val held = System.currentTimeMillis() - from
         // Let go of at once, it was a slip, not a talk.
-        endTalk(send = System.currentTimeMillis() - from >= HOLD_MS)
+        val send = held >= HOLD_MS
+        println("[OverlayKey] $comboLabel up after $held ms: ${if (send) "sending" else "a slip, dropped"}")
+        endTalk(send = send)
     }
 
     private fun onTalkKey(down: Boolean) {

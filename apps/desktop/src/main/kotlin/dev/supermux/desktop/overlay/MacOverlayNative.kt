@@ -81,6 +81,22 @@ internal object MacOverlayNative {
         call(w, "setHidesOnDeactivate:", false)
     }
 
+    /** Logs how macOS sees the window titled [title] (diagnostics: is it showing, on this Space, at which level). */
+    fun describe(title: String) = onMain {
+        val w = windowTitled(title)
+        if (w == null) {
+            println("[OverlayWindow] $title: macOS has no such window")
+            return@onMain
+        }
+        val visible = long(w, "isVisible") != 0L
+        val onThisSpace = long(w, "isOnActiveSpace") != 0L
+        val seen = long(w, "occlusionState") and OCCLUSION_VISIBLE != 0L
+        println("[OverlayWindow] $title: visible=$visible onThisSpace=$onThisSpace notCovered=$seen level=${long(w, "level")}")
+    }
+
+    /** NSWindowOcclusionStateVisible: some of the window can be seen. */
+    private const val OCCLUSION_VISIBLE = 1L shl 1
+
     /** Screen Recording is allowed for supermux (its glasses). */
     fun canRecordScreen(): Boolean = runCatching { graphics.getFunction("CGPreflightScreenCaptureAccess").invokeInt(emptyArray()) != 0 }.getOrDefault(false)
 
