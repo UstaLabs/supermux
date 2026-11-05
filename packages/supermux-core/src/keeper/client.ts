@@ -229,12 +229,55 @@ function readFingerprint(path: string): string | undefined {
 export type StopKeeperLimits = Pick<KeeperLimits, 'shutdownTimeoutMs' | 'connectTimeoutMs'>
 
 /**
- * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one):
- * SIGTERM makes the keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
+ * Asks the keeper of `dir` to stop its agent and exit, over its own socket: `hello` with its token, then `shutdown`, as an
+ * attached connection's shutdown() does. A SIGTERM did that on POSIX, but on Windows a signal is TerminateProcess: the
+ * keeper never stopped its agent, wrote its last status or removed its socket. True once the request went out.
  */
-async function retireKeeper(status: KeeperStatus, limits: StopKeeperLimits) {
-  try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
-  await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+function askKeeperToStop(dir: string, status: KeeperStatus, connectTimeoutMs: number): Promise<boolean> {
+  const token = readPrivateFile(join(dir, 'token'))?.trim()
+  if (!token) return Promise.resolve(false)
+  return new Promise(settle => {
+    const sock = createConnection(socketOf(dir, status))
+    let settled = false
+    const done = (sent: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!sent) sock.destroy()
+      settle(sent)
+    }
+    const timer = setTimeout(() => done(false), connectTimeoutMs)
+    let buffer = ''
+    sock.once('connect', () => sock.write(JSON.stringify({ type: 'hello', token, cursor: 'acked' }) + '\n'))
+    sock.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8')
+      for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        let msg: { type?: unknown }
+        try { msg = JSON.parse(line) } catch { continue }
+        if (msg.type === 'welcome') { sock.end(JSON.stringify({ type: 'shutdown' }) + '\n'); done(true); return }
+        if (msg.type === 'error') { done(false); return }
+      }
+    })
+    sock.once('error', () => done(false))
+    sock.once('close', () => done(false))
+  })
+}
+
+/**
+ * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one): asked over its own
+ * socket first (askKeeperToStop), it shuts its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exits. A
+ * keeper that does not is sent SIGTERM, then SIGKILL, and its agent after it.
+ */
+async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeeperLimits) {
+  if (await askKeeperToStop(dir, status, limits.connectTimeoutMs)) {
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
+  if (alive(status.keeperPid)) {
+    try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
   if (alive(status.keeperPid)) {
     try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
     await waitPidDead(status.keeperPid, 2000)
@@ -306,7 +349,7 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
     const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
     if (state === 'down') return false
     if (state === 'unknown') throw new KeeperUnconfirmed(sessionId, status.keeperPid, socketOf(dir, status))
-    await retireKeeper(status, limits)
+    await retireKeeper(dir, status, limits)
     // A keeper killed outright leaves its socket behind.
     await removeSocket(socketOf(dir, status))
     return true
@@ -424,7 +467,7 @@ async function connectLocked(options: {
         throw new KeeperUnconfirmed(options.sessionId, status.keeperPid, sockPath,
           `The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
       }
-      if (state === 'up') await retireKeeper(status, options.limits)
+      if (state === 'up') await retireKeeper(dir, status, options.limits)
       status = await readStatus(statusPath)
     }
   }
