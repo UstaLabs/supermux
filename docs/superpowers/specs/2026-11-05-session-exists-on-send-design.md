@@ -221,3 +221,18 @@ Where the implementation differs from the design above, and why:
 - **Kill and archive** cancel a start in flight through the SessionManager's kill funnel
   (`cleanup.cancelWake`); **Stop** cancels it and the wake that finishes anyway is put back to sleep
   (`SessionManager.putToSleep`).
+
+**After an independent review (2026-11-05), also:**
+
+- **A failed door start removes only the branch it made.** A shared-checkout child (delegate or council
+  "shared") gets its parent's worktree fields copied into its row; the cleanup used to read them and force-
+  removed the PARENT's worktree and branch (reproduced on a real broker, now an e2e test).
+- **A branch that can't be made at Send** (a repo with no commits yet) runs the session in the folder, as a
+  start that couldn't make its worktree always did; a worktree that must be made (delegate) still fails.
+- **The checkout at wake gets 10 minutes** (gitAsync's 30 s default would fail large or LFS repos on every
+  wake), and a git cut short by its timeout or a signal says so instead of its half-written progress.
+- **The chain never starts a draft** (its first message in the app does), and **waits for a boot resume
+  still in flight** instead of starting a second agent beside it.
+- **A wake that hangs fails after 25 minutes**; a later message waits on the start still running rather than
+  begin a second one.
+- **Cursor's resume passes the row's permission mode** (it fell back to "force" for every new Cursor session).
