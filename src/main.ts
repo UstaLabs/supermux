@@ -4054,6 +4054,11 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
   // The start's own marks from here on (the worktree at wake, the keeper, initialize) find it by the session's id.
   startTraces.bind(row.id, trace)
   startTraces.mark(trace, "row", { ms: msSince(t), session: row.id, worktree: !!row.session_branch })
+  // What this start made, read now: the copy below writes a peer's worktree fields into the same row
+  // object, and a failed start must remove only its own branch, never the peer's checkout.
+  const made = row.session_branch && row.repo_root && !args.worktreeHandle
+    ? { repoRoot: row.repo_root, workdir: row.workdir, branch: row.session_branch }
+    : undefined
   if (!row.session_branch) {
     // Same-workdir continue (worktree: false): copy project/worktree metadata so the new session
     // groups under the real project and Finish stays available. Prefer explicit inheritFrom, else any
@@ -4067,7 +4072,7 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
       registry.sessions.setWorktree(row.id, { repo_root: peer.repo_root, base_branch: peer.base_branch || "HEAD", session_branch: peer.session_branch })
     }
   }
-  if (!args.asleep) await wakeForDoor(row, { madeHere: !args.worktreeHandle })
+  if (!args.asleep) await wakeForDoor(row, made)
   const s = registry.get(row.id) ?? row
   if (!s.internal && !s.parent_session_id) {
     // A door's session is announced once it is up, as before (the create path's full frame replaces
@@ -4088,10 +4093,11 @@ async function spawnSession(args: SpawnSessionArgs): Promise<{ name: string; ses
 /**
  * A door waits for its session's first wake. One that fails is removed again and its caller hears
  * why, as when a spawn failed before: the row archived, and the branch made for it at Send (with its
- * worktree, if the wake got that far) deleted, since nothing was done in them. A worktree made
- * beforehand (a council's) is its maker's to remove.
+ * worktree, if the wake got that far) deleted, since nothing was done in them. Only what this start
+ * made (`made`): a shared checkout is its owner's, and a worktree made beforehand (a council's) is its
+ * maker's to remove.
  */
-async function wakeForDoor(row: Session, opts: { madeHere: boolean }): Promise<void> {
+async function wakeForDoor(row: Session, made: { repoRoot: string; workdir: string; branch: string } | undefined): Promise<void> {
   doorStarts.add(row.id)
   try {
     await sessionChain.wake(row.id)
@@ -4099,8 +4105,8 @@ async function wakeForDoor(row: Session, opts: { madeHere: boolean }): Promise<v
     log.warn("session_start_failed", { id: row.id, name: row.name, err: err instanceof Error ? err.message : String(err) })
     try { await sessionManager.kill(row.id) } catch (killErr) { log.warn("session_start_cleanup_failed", { id: row.id, err: String(killErr) }) }
     registry.unregister(row.id)
-    if (opts.madeHere && row.repo_root && row.session_branch) {
-      await removeWorktree(row.repo_root, row.workdir, row.session_branch, { force: true }).catch((rmErr) => log.warn("session_start_branch_cleanup_failed", { id: row.id, err: String(rmErr) }))
+    if (made) {
+      await removeWorktree(made.repoRoot, made.workdir, made.branch, { force: true }).catch((rmErr) => log.warn("session_start_branch_cleanup_failed", { id: row.id, err: String(rmErr) }))
     }
     throw err
   } finally {

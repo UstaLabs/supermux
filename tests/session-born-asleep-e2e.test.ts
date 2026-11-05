@@ -38,6 +38,8 @@ let waPort = 0
 const dir = mkdtempSync(join(tmpdir(), "mux-born-asleep-"))
 const state = join(dir, "state")
 const HOLD = join(dir, "hold")
+// While this file exists, a starting agent exits at once (a start that fails).
+const FAIL = join(dir, "fail-start")
 const STARTS = join(dir, "starts.log")
 const project = join(dir, "project")
 let broker: ReturnType<typeof Bun.spawn> | undefined
@@ -95,6 +97,7 @@ beforeAll(async () => {
     "#!/bin/sh",
     `echo "$PWD" >> "${STARTS}"`,
     `while [ -f "${HOLD}" ]; do sleep 0.05; done`,
+    `if [ -f "${FAIL}" ]; then echo "failing on purpose" >&2; exit 1; fi`,
     `MODE=echo EXPECT_DEFAULT_DENY=0 FIXTURE_MCP=1 exec bun "${REPO}/packages/supermux-core/tests/fixtures/claude-agent.mjs" "$@"`,
     "",
   ].join("\n"))
@@ -173,7 +176,7 @@ afterAll(async () => {
 })
 
 // A test that fails while an agent is held must not hold the next test's agents.
-afterEach(() => rmSync(HOLD, { force: true }))
+afterEach(() => { rmSync(HOLD, { force: true }); rmSync(FAIL, { force: true }) })
 
 async function launch(body: Record<string, unknown>): Promise<{ res: Response; created: any; ms: number }> {
   const t0 = performance.now()
@@ -297,3 +300,21 @@ test("a chat message (Telegram's path) wakes a dozing session: the resume line, 
   expect((await messages(CHAT_DOZING_ID)).filter((m) => m.direction === "inbound").map((m) => m.text)).toEqual(["hello from the chat"])
   expect((await session(CHAT_DOZING_ID)).status).toBe("active")
 }, 90_000)
+
+test("a shared-checkout child whose start fails leaves its parent's worktree and branch alone", async () => {
+  // A parent with a worktree of its own, up and answering.
+  const { created: parent } = await launch({ name: "Parent with work", firstMessage: "hi parent", client_message_id: "web-parent-1" })
+  await waitFor("the parent's reply", () => replies(parent.id).includes("Fixture reply: hi parent"))
+  writeFileSync(join(parent.workdir, "uncommitted.txt"), "the parent's work")
+  // It delegates in its own folder ("shared"), and the child's agent fails to start.
+  writeFileSync(FAIL, "")
+  const before = replies(parent.id).length
+  send(parent.id, `mcp-call mux-shim delegate ${JSON.stringify({ task: "child task", agent: "claude", access: "bypass", checkout: "shared" })}`, "web-parent-2")
+  const answer = await waitFor("the tool's answer", () => replies(parent.id).slice(before).find((t) => t.startsWith("MCP")), 60_000)
+  expect(answer).toContain("isError")
+  rmSync(FAIL, { force: true })
+  // The parent's checkout, its work and its branch are all still there.
+  expect(readFileSync(join(parent.workdir, "uncommitted.txt"), "utf8")).toBe("the parent's work")
+  expect(execFileSync("git", ["-C", project, "branch", "--list", parent.session_branch], { encoding: "utf8" })).toContain(parent.session_branch)
+  expect(execFileSync("git", ["-C", parent.workdir, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe(parent.session_branch)
+}, 120_000)
