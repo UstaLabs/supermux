@@ -72,3 +72,30 @@ test("deleted while its agent is starting: the same", async () => {
   expect(manager.adapterFor("cl-del")).toBeUndefined()
   expect(fake.closes).toBe(1)
 })
+
+// Stop while the session was starting: the wake finishes, and what started goes back to sleep.
+test("put back to sleep: the agent is stopped, its runtime dropped, and the row is asleep again", async () => {
+  const { registry, manager } = build()
+  const row = asleep(registry, "cl-stop")
+  release()
+  expect(await manager.resumeSuspended(row as never)).toBe(true)
+  expect(manager.adapterFor("cl-stop")).toBeDefined()
+  await manager.putToSleep("cl-stop")
+  expect(manager.adapterFor("cl-stop")).toBeUndefined()
+  expect(fake.closes).toBe(1)
+  expect(registry.sessions.getById("cl-stop")?.status).toBe("suspended")
+})
+
+test("kill cancels the wake in flight of the session and of each of its children", async () => {
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+  const registry = new Registry(db)
+  const ports = fakePorts(db)
+  const cancelled: string[] = []
+  ports.cleanup.cancelWake = (id) => { cancelled.push(id) }
+  const manager = new SessionManager(registry, ports)
+  registry.register({ id: "parent", name: "parent", workdir: tmpDir, pid: 0, agent: "claude", core: true } as never)
+  registry.register({ id: "child", name: "child", workdir: tmpDir, pid: 0, agent: "claude", core: true, parent_session_id: "parent" } as never)
+  await manager.kill("parent")
+  expect(cancelled.sort()).toEqual(["child", "parent"])
+})

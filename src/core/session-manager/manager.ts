@@ -111,6 +111,8 @@ export type SessionManagerPorts = {
     terminals: Pick<TerminalManager, "killAllForSession">
     stopClaudeTailer(sessionUuid: string): void
     releaseDraftAttachments(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined): void
+    /** Card #75: drop the session's wake in flight and the deliveries queued behind it (SessionChain.cancel). */
+    cancelWake?(sessionId: string): void
 
     /** gitStatusService.sync over the current visible-session set. */
     syncGitStatus(): void
@@ -378,6 +380,9 @@ export class SessionManager {
     // A parent link is set once, at creation, to a session that already exists, so the tree has
     // no cycles; `seen` keeps a hand-edited database from looping forever anyway.
     seen.add(id)
+    // A start in flight ends here: its arm stops what it started (abandonIfGone), and the messages
+    // waiting for it are dropped (they stay in the chat).
+    this.ports.cleanup.cancelWake?.(id)
     const s = this.registry.get(id)
     if (!s) return
 
@@ -1650,6 +1655,23 @@ export class SessionManager {
     try { await this.runtimes.get(id)?.adapter.stop() } catch (err) { log.warn("resume_abandon_stop_failed", { name, id, err: String(err) }) }
     this.deleteRuntime(id)
     return true
+  }
+
+  /**
+   * Card #75: Stop came while the session was starting. What started goes back to sleep: its agent
+   * stopped, its runtime dropped, the row suspended, so it wakes on its next message like any dozing session.
+   */
+  async putToSleep(id: string): Promise<void> {
+    if (!this.registry.get(id)) return   // archived or deleted: abandonIfGone already stopped it
+    try {
+      await this.runtimes.get(id)?.adapter.stop()
+    } finally {
+      this.deleteRuntime(id)
+      this.ports.cleanup.stopClaudeTailer(id)
+      this.ports.agentState.clear(id)
+      this.registry.sessions.suspend(id)
+      log.info("session_put_back_to_sleep", { id })
+    }
   }
 
   /** Why the last resumeSuspended of `id` failed, when it threw (the chat notice says it, e.g. an expired sign-in). */
