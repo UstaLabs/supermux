@@ -25,19 +25,39 @@ class WaylandHotKeyTest {
     private val ctrlAltSpace = KeyCombo("Ctrl+Alt+Space", 0x4 or 0x8, 0x20)
     private var daemon: Process? = null
     private var socket: File? = null
+    private var config: File? = null
     private lateinit var env: Map<String, String>
 
     @BeforeTest fun bus() {
         val dbusDaemon = System.getenv("PATH").orEmpty().split(File.pathSeparator).map { File(it, "dbus-daemon") }.firstOrNull { it.canExecute() }
         assumeTrue("needs dbus-daemon", dbusDaemon != null)
         socket = File.createTempFile("overlay-bus", ".sock").also { it.delete() }
-        daemon = ProcessBuilder(dbusDaemon!!.path, "--session", "--nofork", "--address=unix:path=${socket!!.path}", "--print-address=1").start()
+        // A bare bus with no service directories: with the stock session config, asking for the portal
+        // starts this machine's own xdg-desktop-portal, and the test meets a real desktop's answers.
+        config = File.createTempFile("overlay-bus", ".conf").apply {
+            writeText(
+                """
+                <busconfig>
+                  <type>session</type>
+                  <listen>unix:path=${socket!!.path}</listen>
+                  <auth>EXTERNAL</auth>
+                  <policy context="default">
+                    <allow send_destination="*" eavesdrop="true"/>
+                    <allow eavesdrop="true"/>
+                    <allow own="*"/>
+                  </policy>
+                </busconfig>
+                """.trimIndent(),
+            )
+        }
+        daemon = ProcessBuilder(dbusDaemon!!.path, "--config-file=${config!!.path}", "--nofork", "--print-address=1").start()
         env = mapOf("DBUS_SESSION_BUS_ADDRESS" to daemon!!.inputStream.bufferedReader().readLine())
     }
 
     @AfterTest fun stop() {
         daemon?.destroy()
         socket?.delete()
+        config?.delete()
     }
 
     @Test fun aTriggerReadsAsTheShortcutsSpecWritesIt() {
