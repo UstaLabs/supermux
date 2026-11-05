@@ -144,3 +144,14 @@ test("lstatEntry: on Windows an entry lstat is refused is an AF_UNIX socket; els
   expect(files.lstatEntry("C:\\state\\mcp\\mcp.sock", { platform: "win32", lstat: eacces })).toBe("socket")
   expect(() => files.lstatEntry("/state/mcp/mcp.sock", { platform: "linux", lstat: eacces })).toThrow("EACCES")
 })
+
+// Windows keeps a removed file's name until the last handle to it closes; creating that name meanwhile fails with EPERM
+// (ERROR_ACCESS_DENIED). The accounts' refresh lock took a stale lock over that way and failed on the lane (run
+// 41945381313): such a name is free again in a moment, like a lock someone else holds.
+test("nameStillHeld: EPERM or EACCES on Windows; never elsewhere", () => {
+  const err = (code: string) => Object.assign(new Error(code), { code })
+  expect(files.nameStillHeld(err("EPERM"), "win32")).toBe(true)
+  expect(files.nameStillHeld(err("EACCES"), "win32")).toBe(true)
+  expect(files.nameStillHeld(err("EEXIST"), "win32")).toBe(false)
+  expect(files.nameStillHeld(err("EPERM"), "linux")).toBe(false)
+})

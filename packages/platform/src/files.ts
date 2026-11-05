@@ -143,3 +143,13 @@ export function lstatEntry(path: string, options: EntryOptions = {}): Stats | "s
     throw error
   }
 }
+
+/**
+ * Whether [error], from creating or opening a file, means its name is still held by a file being removed: Windows keeps
+ * a removed file's name until the last handle to it closes, and creating that name meanwhile fails with EPERM
+ * (ERROR_ACCESS_DENIED; EACCES on some paths). The name is free again in a moment: retry, as for a lock someone holds.
+ */
+export function nameStillHeld(error: unknown, platform: NodeJS.Platform = process.platform): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return platform === "win32" && (code === "EPERM" || code === "EACCES")
+}
