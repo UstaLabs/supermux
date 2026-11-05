@@ -21,6 +21,15 @@ test("a credential store this layer cannot read answers Unsupported, never a sil
   expect(() => credentials.hasGenericCredential("gemini", "antigravity", { platform: "win32", windowsRead: null })).toThrow(Unsupported)
 })
 
+// #29's review: "not found" (ERROR_NOT_FOUND, 1168) is the only failure that means no. Any other (an SSH key logon has
+// no credential vault: ERROR_NO_SUCH_LOGON_SESSION, 1312) means this process could not look.
+test("CredReadW failing with ERROR_NOT_FOUND is a no; any other Windows error throws", () => {
+  const failing = (lastError: number) => ({ credRead: () => false, lastError: () => lastError })
+  expect(credentials.readGenericCredential(failing(1168), "gemini:antigravity")).toBe(false)
+  expect(() => credentials.readGenericCredential(failing(1312), "gemini:antigravity")).toThrow("Windows error 1312")
+  expect(credentials.readGenericCredential({ credRead: () => true, lastError: () => { throw new Error("not asked") } }, "gemini:antigravity")).toBe(true)
+})
+
 test.skipIf(process.platform !== "win32")("Credential Manager: a generic credential is seen only while it exists", () => {
   const account = randomUUID()
   const target = `supermux-test:${account}`
