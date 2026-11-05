@@ -7,6 +7,7 @@ import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { antigravityKeyringLogin } from "./antigravity/keyring"
 import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 
 export interface AgentStatus {
@@ -28,6 +29,8 @@ export interface DetectProbes {
   hasCredential?: (kind: AgentKind) => boolean
   /** Injected `claude auth status` runner; claude's module owns the default. */
   claudeAuthStatus?: AuthStatusRunner
+  /** Injected keyring probe for agy's login; antigravity's module owns the default. */
+  antigravityKeyring?: () => boolean
 }
 
 export interface DetectPaths {
@@ -99,7 +102,9 @@ const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) =
   cursor: credFileOrStored(AgentKind.Cursor),
   opencode: credFileOrStored(AgentKind.OpenCode),
   grok: credFileOrStored(AgentKind.Grok),
-  antigravity: credFileOrStored(AgentKind.Antigravity),
+  // agy writes its token file only when the keyring fails; on Windows the login is in Credential Manager.
+  antigravity: (probes, paths) => credFileOrStored(AgentKind.Antigravity)(probes, paths)
+    || (probes.antigravityKeyring ?? (() => antigravityKeyringLogin(paths.platform)))(),
 }
 
 function credFileOrStored(kind: AgentKind) {

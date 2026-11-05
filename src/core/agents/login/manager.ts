@@ -1,5 +1,6 @@
 import type { AgentKind } from "../types"
 import { AgentKind as Agent } from "../../../shared/agents"
+import { typeLoginCode } from "../../../../packages/supermux-core/src/accounts/index.js"
 import { authCredPath, type DetectPaths } from "../detect"
 import { LoginSession, type LoginState, type LoginProc } from "./session"
 import { parseAntigravityLoginUrl, parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "./parse"
@@ -57,6 +58,7 @@ export class LoginManager {
   }
 
   sendCode(kind: AgentKind, code: string): void {
-    this.sessions.get(kind)?.sendInput(code.trim() + "\n")
+    const session = this.sessions.get(kind)
+    if (session) typeLoginCode(data => session.sendInput(data), code)
   }
 }

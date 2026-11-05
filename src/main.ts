@@ -220,6 +220,7 @@ import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
+import { antigravityKeyringLogin } from "./core/agents/antigravity/keyring"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
 import { createWorktree, ensureWorktreeAt, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
@@ -3431,8 +3432,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // codex/cursor API key short-circuits the login flow the same way a CLI
     // cred file does. Claude adds the darwin Keychain probe: `claude login`
     // can finish without ever writing the credential file this manager polls.
+    // Antigravity adds Windows' Credential Manager: agy keeps its login there
+    // and writes no token file at all.
     hasCredential: (kind) =>
-      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated()),
+      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated())
+        || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })

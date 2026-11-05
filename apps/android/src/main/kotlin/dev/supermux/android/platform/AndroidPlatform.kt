@@ -87,9 +87,9 @@ class AndroidPlatform(
     private val captureHost: CaptureHost = CaptureHost(),
     saveHost: SaveHost = SaveHost(),
     permissionHost: PermissionHost = PermissionHost(),
+    /** What this window can do; the assistant overlay's windows have no camera or save dialog. */
+    override val caps: Caps = ANDROID_CAPS,
 ) : Platform {
-
-    override val caps: Caps get() = ANDROID_CAPS
 
     /** The process's attachment cache, shared with `HostStoreDeps` (Settings ▸ Storage). */
     override val mediaCache: dev.supermux.media.MediaCache get() = AndroidMedia.cache(context)
@@ -195,6 +195,24 @@ class AndroidPlatform(
         },
     )
 
+    /** "Display over other apps" for the assistant overlay (#62), and the mic for hold-to-talk. */
+    override val assistantOverlay: dev.supermux.ui.platform.AssistantOverlayHost = object : dev.supermux.ui.platform.AssistantOverlayHost {
+        override fun canDrawOverOtherApps(): Boolean = android.provider.Settings.canDrawOverlays(context)
+
+        override fun openPermissionPage() {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + context.packageName),
+                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+
+        override suspend fun requestMic(): Boolean = mic.requestPermission()
+    }
+
     /**
      * Process-wide, not per-activity — see [AndroidTts]. A rotation rebuilds this platform, and a
      * per-instance engine would leave the OLD `TextToSpeech` reading aloud with nothing able to
@@ -271,7 +289,7 @@ val ANDROID_CAPS = Caps(
     fileSystem = false,
     clipboardImages = true,
     saveAs = true,
-    // The walkthrough seam is installed in AppViewModel's HostStore factory (AndroidWalkthroughSeam).
+    // The walkthrough seam is installed in AppFleet's HostStore factory (AndroidWalkthroughSeam).
     walkthrough = true,
     // Theme / Material You / text scale live in the app, and the APK updates itself.
     appearanceControls = true,
@@ -284,6 +302,8 @@ val ANDROID_CAPS = Caps(
     terminal = true,
     // MediaCodec decodes an h264 display transport; without this the panel falls back to VNC.
     scrcpy = true,
+    // A chat head over other apps (overlay/AssistantOverlayService.kt), behind its Appearance switch.
+    assistantOverlay = true,
 )
 
 /** A pick that completed with nobody awaiting it, tagged with what asked for it. */

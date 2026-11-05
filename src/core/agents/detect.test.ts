@@ -51,6 +51,13 @@ test("antigravity counts a stored Gemini API key as authed", () => {
   expect(hasStoredCredential("antigravity", { geminiApiKey: "" })).toBe(false)
 })
 
+test("antigravity on Windows: agy's login in Credential Manager counts as authed with no token file", () => {
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  const probes = { hasBinary: (b: string) => b === "agy", fileExists: () => false, antigravityKeyring: () => true }
+  expect(detectAgent("antigravity", probes, win).authed).toBe(true)
+  expect(detectAgent("antigravity", { ...probes, antigravityKeyring: () => false }, win).authed).toBe(false)
+})
+
 test("detectAgent always carries kind-derived auth capabilities", () => {
   const probes = { hasBinary: () => false, fileExists: () => false }
   expect(detectAgent("opencode", probes, paths).capabilities).toEqual({
