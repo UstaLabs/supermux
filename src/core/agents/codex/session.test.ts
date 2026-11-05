@@ -231,7 +231,7 @@ describe("codex core spawn/resume dialect", () => {
     expect(launched.instructions).toBeTruthy()
   })
 
-  test("command/args reach the driver factory: app-server only (policy per process by the core, plugins as context), without -c model", async () => {
+  test("command/args reach the driver factory: app-server plus the reasoning-summary switch (policy per process by the core, plugins as context), without -c model", async () => {
     process.env.OPENAI_API_KEY = "test-key"
     const child = fakeChildFactory({ nativeId: "n1" })
     const host = await makeHost(child.factory)
@@ -251,7 +251,8 @@ describe("codex core spawn/resume dialect", () => {
       effort: "high",
     })
     const args = child.codexCalls[0]?.options.args ?? []
-    expect(args).toEqual(["app-server"])
+    // Card #76: reasoning summaries are a process flag (MUX_CODEX_REASONING_SUMMARY, default "auto").
+    expect(args).toEqual(["app-server", "-c", 'model_reasoning_summary="auto"'])
     expect(child.codexCalls[0]?.options.approvalPolicy).toBe("never")
     expect(child.codexCalls[0]?.options.sandbox).toBe("danger-full-access")
     expect(args.join(" ")).not.toContain("model=")

@@ -12,6 +12,7 @@ import { shellReadsFor } from "../shell-reads"
 import { makeLogger } from "../../../shared/log"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { claudeAccountArgs } from "../account-env"
+import { claudeThinkingArgs } from "../thinking-args"
 import { claudeCommand } from "./command"
 import { ensureBrokerShimEntries } from "../../session-manager/trust"
 import { MUX_HOST_SERVERS, muxRpcHostServer, muxShimHostServer } from "../../mux-tools/server"
@@ -173,10 +174,11 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const opts: ClaudeOptions = {
         id: "claude",
         command: claudeCommand(process.env),
-        args: await claudeAccountArgs(registration.args ? [...registration.args] : [], {
+        // Card #76: plus --thinking-display, so the stream carries thinking text to show while it is written.
+        args: [...(await claudeAccountArgs(registration.args ? [...registration.args] : [], {
           sessionHome: typeof registration.extra?.sessionHome === "string" ? registration.extra.sessionHome : claudeSessionHome(String(registration.extra?.sessionName ?? registration.id)),
           account: ctx.account,
-        }),
+        })), ...claudeThinkingArgs()],
         env: registration.env,
         inheritEnv: true,
         model: extraModel,
