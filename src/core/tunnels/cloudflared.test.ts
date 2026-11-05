@@ -232,10 +232,12 @@ test("install: short-circuits to true when cloudflared is already on PATH", asyn
 
 // Force the linux install paths deterministically (this host may have cloudflared
 // and/or a package manager). We stub `which` via mock.module for THESE tests, then
-// restore the real module so nothing leaks into other tests.
+// restore the real module so nothing leaks into other tests. The backup is a copy of
+// the exports: mock.module rewrites the loaded module's namespace in place, so the
+// namespace itself would hold the stub by the time it is put back.
 test("install: on linux with no package manager, prints working install links and returns false", async () => {
   if (process.platform === "darwin") return // brew path is the darwin branch
-  const real = await import("./run")
+  const real = { ...(await import("./run")) }
   mock.module("./run", () => ({ ...real, which: () => false })) // nothing on PATH
   try {
     const { ctx, out } = makeCtx() // yes:true ⇒ consent assumed, no prompt
@@ -251,7 +253,7 @@ test("install: on linux with no package manager, prints working install links an
 
 test("install: on linux with apt + no cloudflared, runs the official apt install script", async () => {
   if (process.platform === "darwin") return
-  const real = await import("./run")
+  const real = { ...(await import("./run")) }
   // cloudflared absent; apt-get present ⇒ the apt branch runs.
   mock.module("./run", () => ({ ...real, which: (b: string) => b === "apt-get" }))
   try {

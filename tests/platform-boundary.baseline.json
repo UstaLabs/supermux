@@ -35,8 +35,7 @@
     "scripts/migration-dry-run/03-continuation.ts": 7,
     "scripts/platform-boundary.ts": 1,
     "scripts/seal-test-push.ts": 1,
-    "src/cli-connect.ts": 1,
-    "src/cli-setup.ts": 4,
+    "src/cli-setup.ts": 1,
     "src/core/agent-api/adapters/claude.ts": 1,
     "src/core/agent-api/adapters/codex.ts": 1,
     "src/core/agent-api/adapters/cursor.ts": 2,
@@ -55,7 +54,6 @@
     "src/core/transcription/engines/whisper.ts": 2,
     "src/core/transcription/whisper.ts": 2,
     "src/core/tts/engines/codex-pronunciation.ts": 1,
-    "src/core/tunnels/cloudflared.ts": 1,
     "src/core/usage/index.ts": 9,
     "src/core/usage/local.ts": 2,
     "src/main.ts": 7

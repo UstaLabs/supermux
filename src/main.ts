@@ -150,7 +150,7 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
 import { readEnvText } from "./shared/env-file"
@@ -384,6 +384,8 @@ await claimBroker(STATE_DIR, PID_FILE).catch((error: unknown) => {
   process.exit(1)
 })
 process.on("exit", () => releasePidFile(PID_FILE))
+// Windows, Q2: a .mux kept under a POSIX shell's $HOME (shared/paths.ts defaultMuxHome) is said, never moved silently.
+if (MUX_HOME_NOTE) log.warn("mux_home_under_shell_home", { muxHome: MUX_HOME, note: MUX_HOME_NOTE })
 // The per-boot token of the desktop app's graceful stop request (POST /internal/stop): on Windows, where every
 // external stop is otherwise TerminateProcess, it is how the broker gets to run gracefulShutdown.
 const STOP_TOKEN = writeStopToken(STATE_DIR)

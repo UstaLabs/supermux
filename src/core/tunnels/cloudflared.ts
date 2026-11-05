@@ -10,7 +10,7 @@
 // provider is unit-testable with a faked Run — NO Bun.spawn, NO network here.
 // URLs are scraped from CLI output with `extractFirstUrl`.
 
-import { homedir } from "os"
+import { home } from "../../shared/home"
 import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
 
@@ -264,8 +264,7 @@ export const cloudflaredProvider: TunnelProvider = {
 
       // 4. Write the ingress config (the rule the old flow omitted → the 404). Back
       //    up a pre-existing NON-supermux config.yml before overwriting it.
-      const home = process.env.HOME || homedir()
-      const cfgDir = `${home}/.cloudflared`
+      const cfgDir = `${home()}/.cloudflared`
       const cfgPath = `${cfgDir}/config.yml`
       const yaml = buildTunnelConfig({
         tunnelId,

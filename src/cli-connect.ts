@@ -9,7 +9,6 @@
 // restart broker → re-pair. The tunnel runs as an OS-level service; the broker
 // only ever learns its public face through MUX_WEB_PUBLIC_URL.
 
-import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { createInterface } from "readline"
@@ -30,6 +29,7 @@ import { SettingsStore } from "./core/settings/store"
 import type { TunnelRecord } from "./core/settings/app-config"
 import { validateWebEnv } from "./shared/web-env"
 import { readEnvText } from "./shared/env-file"
+import { muxHomeNow } from "./shared/paths"
 import { loadOrCreateHostKey } from "./core/host-identity"
 
 interface Flags {
@@ -74,11 +74,9 @@ function parseFlags(args: string[]): Flags {
   return f
 }
 
-/** Resolve the state dir from the CURRENT env (mirrors shared/paths.ts + cli-setup.ts). */
+/** Resolve the state dir from the CURRENT env (shared/paths.ts's rule, per call). */
 function resolveStateDir(): string {
-  const home = process.env.HOME || homedir()
-  const muxHome = process.env.MUX_HOME ?? join(home, ".mux")
-  return process.env.MUX_STATE_DIR ?? join(muxHome, "state")
+  return process.env.MUX_STATE_DIR ?? join(muxHomeNow().path, "state")
 }
 
 /** Port from --port, else MUX_WEB_PORT in .env, else 8787. */

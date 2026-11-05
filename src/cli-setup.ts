@@ -7,18 +7,17 @@
 //   - is idempotent: a re-run adds only MISSING .env keys and never clobbers an
 //     existing key's value (a user's custom MUX_WEB_PORT survives a re-run).
 //
-// State-dir resolution is done by re-reading the environment HERE rather than
-// importing the STATE_DIR constant from shared/paths.ts. paths.ts resolves
-// MUX_HOME/MUX_STATE_DIR at import time, which a test process can't change after
-// the fact; re-deriving per-call lets a test point MUX_STATE_DIR at a tmpdir and
-// see the .env land there. The derivation below mirrors shared/paths.ts +
-// shared/home.ts exactly.
+// State-dir resolution is done by re-reading the environment per call (muxHomeNow)
+// rather than importing the STATE_DIR constant from shared/paths.ts. paths.ts
+// resolves MUX_HOME/MUX_STATE_DIR at import time, which a test process can't change
+// after the fact; re-deriving per-call lets a test point MUX_STATE_DIR at a tmpdir
+// and see the .env land there.
 import { existsSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { envText, readEnvText } from "./shared/env-file"
+import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
-import { username } from "./shared/home"
+import { home, username } from "./shared/home"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -79,11 +78,9 @@ function parseFlags(args: string[]): Flags {
   return flags
 }
 
-/** Resolve the state dir from the CURRENT env (mirrors shared/paths.ts). */
+/** Resolve the state dir from the CURRENT env (shared/paths.ts's rule, per call). */
 function resolveStateDir(): string {
-  const home = process.env.HOME || homedir()
-  const muxHome = process.env.MUX_HOME ?? join(home, ".mux")
-  return process.env.MUX_STATE_DIR ?? join(muxHome, "state")
+  return process.env.MUX_STATE_DIR ?? join(muxHomeNow().path, "state")
 }
 
 const UNIT_TEMPLATE = (execPath: string): string =>
@@ -118,8 +115,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   }
 
   // 3. Write the unit.
-  const home = process.env.HOME || homedir()
-  const unitDir = join(home, ".config", "systemd", "user")
+  const unitDir = join(home(), ".config", "systemd", "user")
   const unitFile = join(unitDir, UNIT_NAME)
   try {
     mkdirSync(unitDir, { recursive: true })
@@ -245,8 +241,7 @@ const PLIST_TEMPLATE = (
  * over installSystemdUnit only on darwin.
  */
 export function installLaunchdAgent(_flags: Flags, println: (s: string) => void): void {
-  const home = process.env.HOME || homedir()
-  const agentsDir = join(home, "Library", "LaunchAgents")
+  const agentsDir = join(home(), "Library", "LaunchAgents")
   const plistFile = join(agentsDir, `${LAUNCHD_LABEL}.plist`)
   const stateDir = resolveStateDir()
   const outLog = join(stateDir, "supermux.out.log")
@@ -256,7 +251,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
     process.env.PATH,
     "/opt/homebrew/bin",
     "/usr/local/bin",
-    join(home, ".local", "bin"),
+    join(home(), ".local", "bin"),
   ]
     .filter(Boolean)
     .join(":")
