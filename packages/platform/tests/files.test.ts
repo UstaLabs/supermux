@@ -155,3 +155,20 @@ test("nameStillHeld: EPERM or EACCES on Windows; never elsewhere", () => {
   expect(files.nameStillHeld(err("EEXIST"), "win32")).toBe(false)
   expect(files.nameStillHeld(err("EPERM"), "linux")).toBe(false)
 })
+
+// A cloned repo's size came from `du`, which Windows does not have: every repo read 0 bytes there.
+test("folderSize: the bytes of the files under a folder, by a walk on Windows and du elsewhere; links are not followed", () => {
+  const dir = scratch()
+  mkdirSync(join(dir, "repo", "sub"), { recursive: true })
+  writeFileSync(join(dir, "repo", "a.bin"), Buffer.alloc(3000))
+  writeFileSync(join(dir, "repo", "sub", "b.bin"), Buffer.alloc(5000))
+  writeFileSync(join(dir, "outside.bin"), Buffer.alloc(100_000))
+  symlinkSync(join(dir, "outside.bin"), join(dir, "repo", "link.bin"), "file")
+  expect(files.folderSize(join(dir, "repo"), { platform: "win32" })).toBe(8000)
+  const du = files.folderSize(join(dir, "repo"))
+  if (process.platform !== "win32") {
+    expect(du).toBeGreaterThanOrEqual(8000)
+    expect(du).toBeLessThan(100_000)
+  }
+  expect(files.folderSize(join(dir, "missing"), { platform: "win32" })).toBe(0)
+})

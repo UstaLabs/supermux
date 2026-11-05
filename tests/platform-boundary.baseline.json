@@ -346,7 +346,6 @@
     "src/core/editor/changes.ts": 1,
     "src/core/editor/repo-scanner.ts": 1,
     "src/core/forge/cli-import.ts": 1,
-    "src/core/forge/cloned.ts": 1,
     "src/core/forge/credential-helper.ts": 1,
     "src/core/forge/service.ts": 1,
     "src/core/forge/ssh-keys.ts": 1,

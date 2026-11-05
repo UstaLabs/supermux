@@ -2,7 +2,8 @@
 // type is ignored elsewhere). A file link is a symlink, which Windows lets a standard user create only with Developer
 // Mode: without it the answer is Unsupported, and the caller falls back on purpose (Q5: copy a small file, or keep an
 // account's files to itself) instead of failing halfway, or swallowing EPERM and losing the file.
-import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { copyFileSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync, type Stats } from "node:fs"
 import { cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
@@ -152,4 +153,30 @@ export function lstatEntry(path: string, options: EntryOptions = {}): Stats | "s
 export function nameStillHeld(error: unknown, platform: NodeJS.Platform = process.platform): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   return platform === "win32" && (code === "EPERM" || code === "EACCES")
+}
+
+/**
+ * The bytes the files under [dir] take: `du` where the OS has one (fast, and what the disk holds), else a walk that sums
+ * the files' lengths and never follows a link. Windows has no du (a repo's size read 0 there). 0 for no folder.
+ */
+export function folderSize(dir: string, options: { platform?: NodeJS.Platform } = {}): number {
+  if ((options.platform ?? process.platform) !== "win32") {
+    try {
+      const kib = parseInt(execFileSync("du", ["-sk", dir], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).split(/\s+/)[0] ?? "", 10)
+      if (Number.isFinite(kib)) return kib * 1024
+    } catch { /* no du, or no folder: the walk answers */ }
+  }
+  return walkedSize(dir)
+}
+
+function walkedSize(path: string): number {
+  let info: Stats
+  try { info = lstatSync(path) } catch { return 0 }
+  if (info.isSymbolicLink()) return 0
+  if (!info.isDirectory()) return info.isFile() ? info.size : 0
+  let total = 0
+  let names: string[]
+  try { names = readdirSync(path) } catch { return 0 }
+  for (const name of names) total += walkedSize(join(path, name))
+  return total
 }
