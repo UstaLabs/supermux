@@ -530,8 +530,12 @@ class HostSupervisor(
         // Another copy's service is installed and none of ours: its broker may be restarting. Never
         // copy our broker over the binary it runs, nor start one beside it (#77): wait, then decide.
         val theirsOnly = withContext(io) { BrokerService.anotherCopysInstalled(osEnv, me) && !BrokerService.isOursInstalled(osEnv, me) }
+        // Its definition names the port its broker runs on: one on another port never answers on ours.
+        val theirPort = if (theirsOnly) withContext(io) { BrokerService.anotherCopysPort(osEnv, me) } else null
+        val theirsElsewhere = theirPort != null && theirPort != prefs.port
         fun startsOurs(p: HostPlan) = p == HostPlan.Start || p == HostPlan.MovePort
-        fun waiting(p: HostPlan) = p == HostPlan.Wait || (rolledBack && p == HostPlan.Start) || (theirsOnly && startsOurs(p))
+        fun waiting(p: HostPlan) =
+            p == HostPlan.Wait || (rolledBack && p == HostPlan.Start) || (theirsOnly && !theirsElsewhere && startsOurs(p))
         if (waiting(plan)) {
             val deadline = now() + timing.waitMaxMs
             log(if (theirsOnly && startsOurs(plan)) "another copy of the app has its service here and its broker isn't answering; waiting up to ${timing.waitMaxMs / 1000} s"
@@ -544,7 +548,7 @@ class HostSupervisor(
             log("after waiting: ${found.describe()}")
         }
         if (rolledBack && plan == HostPlan.Start) return cantStart(RESTORED_SILENT) // never start ours next to it
-        if (theirsOnly && startsOurs(plan)) return cantStart(anotherCopyNotAnswering(prefs.port))
+        if (theirsOnly && startsOurs(plan)) return cantStart(anotherCopyNotAnswering(prefs.port, theirPort))
         if (plan == HostPlan.Wait) plan = HostPlan.MovePort
         if (plan == HostPlan.UpdateOwn && updateTried) {
             log("already restarted for an update on this launch; keeping the running build")
@@ -1007,9 +1011,12 @@ class HostSupervisor(
             "supermux was already running with the app from a previous session, so it isn't running in the background. Turn background mode on again to switch."
         const val STILL_RUNNING = "supermux is still running from a previous session. Quit it to stop hosting."
         // Another copy of the app set up the background service here (#77): this app leaves it alone.
-        /** Not "it isn't running": that copy's host may run on another port. Nothing answers on ours. */
-        fun anotherCopyNotAnswering(port: Int) =
+        /** Nothing answers on [port]; [theirPort]: the port that copy's definition names, when it says. */
+        fun anotherCopyNotAnswering(port: Int, theirPort: Int? = null) = if (theirPort != null && theirPort != port) {
+            "A supermux host is set up on this computer by another copy of the supermux app, on port $theirPort (this app uses port $port). To use it here, connect to it instead; to host from this app, remove it in that copy first."
+        } else {
             "A supermux host is set up on this computer by another copy of the supermux app, and it doesn't answer on port $port. Start it from that copy, or remove it there, then try again."
+        }
         const val ANOTHER_COPY_RUNNING =
             "A supermux host already runs on this computer, set up by another copy of the supermux app, and this app leaves it as it is."
         const val ANOTHER_COPY =

@@ -818,6 +818,37 @@ class BrokerServiceTest {
         assertEquals(emptyList(), env.ran)
     }
 
+    @Test fun anotherCopysPortIsReadFromItsDefinitionOnEveryOs() {
+        // Where its broker runs, as each format writes MUX_WEB_PORT. A definition of ours is not another copy's.
+        fun on9899(s: BrokerService.Spec) = stamped(s, theirs).let { it.copy(env = it.env + ("MUX_WEB_PORT" to "9899")) }
+        val macHome = createTempDirectory()
+        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = macHome, uid = 501)
+        val plist = macHome.resolve("Library/LaunchAgents/dev.supermux.host.plist")
+        Files.createDirectories(plist.parent)
+        Files.writeString(plist, BrokerService.launchdPlist(on9899(spec)))
+        assertEquals(9899, BrokerService.anotherCopysPort(mac, mine))
+        assertEquals(null, BrokerService.anotherCopysPort(mac, theirs))
+
+        val unitHome = createTempDirectory()
+        val linux = FakeOsEnv(os = OsEnv.Os.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val unit = unitHome.resolve(".config/systemd/user/supermux-host.service")
+        Files.createDirectories(unit.parent)
+        Files.writeString(unit, BrokerService.systemdUnit(on9899(spec)))
+        assertEquals(9899, BrokerService.anotherCopysPort(linux, mine))
+
+        val xdgHome = createTempDirectory()
+        val xdg = FakeOsEnv(os = OsEnv.Os.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val envFile = xdgHome.resolve(".config/supermux/broker.env")
+        BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(on9899(spec)))
+        BrokerService.writePrivate(xdgHome.resolve(".config/autostart/supermux-host.desktop"), BrokerService.xdgAutostart(on9899(spec), envFile))
+        assertEquals(9899, BrokerService.anotherCopysPort(xdg, mine))
+
+        val winHome = createTempDirectory()
+        val win = winEnv(winHome, registered = winXml(winHome))
+        BrokerService.writePrivate(win.localAppData.resolve("Supermux/broker-env.ps1"), "\uFEFF" + BrokerService.windowsEnvFile(on9899(winSpec)))
+        assertEquals(9899, BrokerService.anotherCopysPort(win, mine))
+    }
+
     @Test fun windowsAnotherCopysTaskIsNeitherReregisteredEndedDeletedNorRestarted() {
         val home = createTempDirectory()
         val env = winEnv(home, registered = winXml(home))

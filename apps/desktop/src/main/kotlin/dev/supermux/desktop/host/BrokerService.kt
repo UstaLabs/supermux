@@ -570,6 +570,18 @@ Terminal=false
         slots(env).any { it.marked && it.ownership(me) == Ownership.OTHER }
     }.getOrDefault(false)
 
+    /**
+     * The port another copy's installed definition runs its broker on: its MUX_WEB_PORT, as each format
+     * writes it. Null when no other copy's definition is installed or it names none (#77).
+     */
+    fun anotherCopysPort(env: OsEnv = SystemOsEnv, me: Owner): Int? = runCatching {
+        slots(env).firstOrNull { it.marked && it.ownership(me) == Ownership.OTHER }?.env
+            ?.let { PORT_IN_ENV.find(it) }?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 1..65535 }
+    }.getOrNull()
+
+    /** MUX_WEB_PORT's value in a plist (`</key><string>`), a unit (`=`), the XDG env file (`='`) or the Windows one (` = '`). */
+    private val PORT_IN_ENV = Regex("""MUX_WEB_PORT(?:</key>\s*<string>|\s*=\s*'?)(\d{1,5})(?!\d)""")
+
     /** True iff OUR "service" is the Linux XDG autostart fallback (no systemd unit of ours): it only starts at login. */
     fun isOursXdgAutostart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
         xdgSlot(env)?.ownership(me) == Ownership.OURS && unitSlot(env)?.ownership(me) != Ownership.OURS

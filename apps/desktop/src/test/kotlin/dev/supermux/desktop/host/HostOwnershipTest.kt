@@ -117,6 +117,21 @@ class HostOwnershipTest {
         assertEquals(theirs, Files.readString(h.ourPlist))
     }
 
+    @Test fun macAnotherCopysServiceOnAnotherPortIsNamedWithoutWaiting() = runTest {
+        // Its definition says where its broker runs: nothing will ever answer on ours, so say where it is.
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        Files.createDirectories(h.ourPlist.parent)
+        val spec = otherSpec(h).let { it.copy(env = it.env + ("MUX_WEB_PORT" to "9899")) }
+        val theirs = BrokerService.launchdPlist(spec).also { Files.writeString(h.ourPlist, it) }
+        h.probeFn = { HostProbeResult.PortFree }
+        h.sup.ensure()
+        val s = h.sup.status.value
+        assertTrue(s is HostingStatus.CantStart && "another copy" in s.reason && "port 9899" in s.reason, s.toString())
+        assertTrue(h.events.none { "waiting up to" in it }, h.events.toString())
+        assertEquals(theirs, Files.readString(h.ourPlist))
+        assertTrue(h.launches.isEmpty() && "materialize" !in h.events)
+    }
+
     @Test fun macTheirBrokerComingBackWhileWaitingIsAskedAbout() = runTest {
         val h = Harness(this, prefs = HostingPrefs(background = true))
         Files.createDirectories(h.ourPlist.parent)
