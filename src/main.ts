@@ -42,7 +42,7 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, reconcileOnStartup } from "./core/session-manager/supervisor"
-import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
+import { acquirePidFile, isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
@@ -175,6 +175,8 @@ import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEve
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
+import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
+import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
@@ -879,6 +881,7 @@ const childSettle = new ChildSettle({
     const core = adapter instanceof CoreAdapter ? adapter : undefined
     return {
       alive: !!adapter && agentStateStore.get(id).phase !== "dead" && (adapter.isAlive?.() ?? true),
+      asleep: registry.get(id)?.status === "suspended",
       running: turnRunning(id),
       queuedInput: !!inboxDelivery?.pending(id) || (core?.pendingInput() ?? 0) > 0,
       backgroundWork: waitsOnOthers(id),
@@ -1228,6 +1231,12 @@ const sessionManager = new SessionManager(registry, {
     wireAdapterEvents: (adapter, sid) => wireAdapterEvents(adapter, sid),
     sessionBackend,
     tmuxSession: TMUX_SESSION,
+    // A tmux-era Claude pane that survived (reconcileOnStartup adopted its pid), else the session's keeper:
+    // every core host keeps its keepers under STATE_DIR/core/<kind>, one directory per broker session id.
+    agentRunning: (s) => isPersistentRuntimeSession(s) ? Promise.resolve(isProcessAlive(s.pid)) : keeperAgentRunning(join(STATE_DIR, "core", s.agent), s.id),
+    // Claude's crons, /loop and ScheduleWakeup live only in its process ("nothing is written to disk"), so
+    // none outlive it; grok saves its scheduled tasks with the session and runs them only while it is open.
+    hasScheduledTasks: (s) => s.agent === AgentKind.Grok && !!s.agent_home && !!s.agent_session_id && grokHasScheduledTasks(s.agent_home, s.agent_session_id),
   },
 })
 inboxDelivery = new InboxDelivery({

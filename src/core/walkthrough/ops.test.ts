@@ -87,6 +87,8 @@ function ports(db: ReturnType<typeof openDb>, frames: object[], cards: string[])
       wireAdapterEvents: () => {},
       sessionBackend: { list: async () => [], create: async () => { throw new Error("unused") } } as never,
       tmuxSession: "mux-test",
+      agentRunning: async () => false,
+      hasScheduledTasks: () => false,
     },
   }
 }
