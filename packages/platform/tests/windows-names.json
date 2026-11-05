@@ -1,0 +1,16 @@
+{
+  "about": "One Windows rule set for a file or folder name, as [input, name Windows can store]: the broker's paths.safeFolderName (packages/platform/src/paths.ts) and the desktop app's safeFileName (apps/desktop/.../platform/DesktopChatSeams.kt). Both tests read this file. No separators or dot names here: there the two differ (a folder name flattens a path, a file name keeps its last part).",
+  "windows": [
+    ["Fix: login? <now>", "Fix- login- -now-"],
+    ["say \"hi\" | x*", "say -hi- - x-"],
+    ["photo.png:secret", "photo.png-secret"],
+    ["con", "_con"],
+    ["NUL.txt", "_NUL.txt"],
+    ["Com1", "_Com1"],
+    ["lpt9.log", "_lpt9.log"],
+    ["console", "console"],
+    ["trailing. ", "trailing"],
+    ["tab\there", "tab-here"],
+    ["plain name.txt", "plain name.txt"]
+  ]
+}

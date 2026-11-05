@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { posix, win32 } from "node:path"
 import { paths } from "@supermux/platform"
+import windowsNames from "./windows-names.json"
 
 // One containment rule for the broker's 19 hand-written copies (`startsWith(root + "/")`): the runtime's relative(),
 // which knows the host's separators, letter case and drives. A path on another drive is NOT inside: win32.relative
@@ -55,14 +56,8 @@ test("the flavour of a platform: win32's rules for win32, posix's for the rest",
 // with < > : " | ? * or a control character, a device name (CON, NUL, COM1...) or a trailing dot or space cannot be a
 // folder, so the session never started there. Elsewhere only / and \\ and . / .. are changed, so no home moves.
 test("safeFolderName on Windows makes any name a folder Windows can create", () => {
-  expect(paths.safeFolderName("Fix: login? <now>", "win32")).toBe("Fix- login- -now-")
-  expect(paths.safeFolderName('say "hi" | x*', "win32")).toBe("say -hi- - x-")
-  expect(paths.safeFolderName("con", "win32")).toBe("_con")
-  expect(paths.safeFolderName("NUL.txt", "win32")).toBe("_NUL.txt")
-  expect(paths.safeFolderName("Com1", "win32")).toBe("_Com1")
-  expect(paths.safeFolderName("console", "win32")).toBe("console")
-  expect(paths.safeFolderName("trailing. ", "win32")).toBe("trailing")
-  expect(paths.safeFolderName("tab\there", "win32")).toBe("tab-here")
+  // The vectors the desktop app's safeFileName is held to as well (its DesktopPlatformTest reads the same file).
+  for (const [name, folder] of windowsNames.windows) expect(paths.safeFolderName(name, "win32")).toBe(folder)
   expect(paths.safeFolderName("a/b\\c", "win32")).toBe("a-b-c")
   // Windows drops a trailing dot: "_.." would be the folder "_".
   expect(paths.safeFolderName("..", "win32")).toBe("_")

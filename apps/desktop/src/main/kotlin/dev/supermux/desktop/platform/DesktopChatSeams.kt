@@ -108,9 +108,24 @@ internal class DesktopFileAccess : FileAccess {
         }
 }
 
-/** Strip any directory part and refuse an empty name — the attachment name is broker-supplied. */
-internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+/**
+ * The attachment's name (broker-supplied) as one file this OS can store: no directory part, never empty, `.` or `..`.
+ * On Windows also the broker's own rules (`paths.safeFolderName`, the shared vectors in
+ * packages/platform/tests/windows-names.json): no reserved character (`:` would write an NTFS alternate stream), no
+ * trailing dot or space (Windows drops them), no device name (`CON`, `NUL`, `COM1`...).
+ */
+internal fun safeFileName(name: String, windows: Boolean = isWindowsOs()): String {
+    val last = name.substringAfterLast('/').substringAfterLast('\\')
+    val clean = if (windows) last.replace(WINDOWS_RESERVED, "-").trimEnd('.', ' ') else last
+    return when {
+        clean.isBlank() || clean == "." || clean == ".." -> "file"
+        windows && WINDOWS_DEVICE.matches(clean) -> "_$clean"
+        else -> clean
+    }
+}
+
+private val WINDOWS_RESERVED = Regex("[<>:\"|?*\\u0000-\\u001f]")
+private val WINDOWS_DEVICE = Regex("(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\\..*)?")
 
 /**
  * Stage [bytes] in this process's private folder under the JVM temp dir, so the OS handler has a real path to open.

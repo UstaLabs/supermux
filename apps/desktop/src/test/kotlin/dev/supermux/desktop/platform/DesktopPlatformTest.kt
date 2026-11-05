@@ -20,6 +20,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class DesktopPlatformTest {
 
@@ -157,6 +161,37 @@ class DesktopPlatformTest {
         assertEquals("hello", staged.readText())
         assertEquals(File(System.getProperty("java.io.tmpdir")).canonicalFile, staged.parentFile.parentFile.canonicalFile)
         staged.delete()
+    }
+
+    /**
+     * The attachment's name comes from the broker. It kept `:` (on Windows an NTFS alternate stream of another file),
+     * `CON`/`NUL` (a device, not a file) and a trailing dot or space (dropped by Windows). Held to the broker's own
+     * Windows rules: the vectors of `paths.safeFolderName`, which its TS test reads too.
+     */
+    @Test
+    fun `an attachment's name is a file Windows can store, by the broker's rules`() {
+        val vectors = Json.parseToJsonElement(File("../../packages/platform/tests/windows-names.json").readText())
+            .jsonObject.getValue("windows").jsonArray
+        assertTrue(vectors.size >= 10)
+        for (vector in vectors) {
+            val (name, stored) = vector.jsonArray.map { it.jsonPrimitive.content }
+            assertEquals(stored, safeFileName(name, windows = true), "for \"$name\"")
+        }
+    }
+
+    @Test
+    fun `an attachment's name loses its directory part and is never a dot name, elsewhere nothing more`() {
+        for (windows in listOf(true, false)) {
+            assertEquals("c.png", safeFileName("a/b\\c.png", windows))
+            assertEquals("file", safeFileName("dir/", windows))
+            assertEquals("file", safeFileName("", windows))
+            assertEquals("file", safeFileName(".", windows))
+            assertEquals("file", safeFileName("..", windows))
+        }
+        // macOS and Linux store these as they are.
+        assertEquals("Fix: login? <now>", safeFileName("Fix: login? <now>", windows = false))
+        assertEquals("con", safeFileName("con", windows = false))
+        assertEquals("trailing. ", safeFileName("trailing. ", windows = false))
     }
 
     /**
