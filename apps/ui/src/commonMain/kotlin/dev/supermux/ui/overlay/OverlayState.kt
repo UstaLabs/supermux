@@ -119,5 +119,33 @@ fun bubbleSpace(
     return BubbleSpace(below, room.coerceAtLeast(0f))
 }
 
-/** Whole lines of [linePx] that fit in [roomPx]; never fewer than three. */
-fun linesThatFit(roomPx: Float, linePx: Float): Int = maxOf(3, (roomPx / linePx).toInt())
+/**
+ * Where a reply read in full scrolls as more of it arrives: it opens at its top, and follows the end only
+ * while you are at the end; scroll up and it leaves you where you are, scroll back down and it follows
+ * again. Told every change of the scroll position and its range (px).
+ */
+class ReplyFollow {
+    private var seen = false
+    private var following = true
+    private var lastMax = 0
+
+    /** The position [value] in 0..[max] just changed: where to scroll to now, or null to stay. */
+    fun onScroll(value: Int, max: Int): Int? {
+        if (!seen) {
+            seen = true
+            following = value >= max - SLACK
+            lastMax = max
+            return null
+        }
+        val grew = max > lastMax
+        lastMax = max
+        if (grew && following) return max
+        following = value >= max - SLACK
+        return null
+    }
+
+    private companion object {
+        /** Within this of the end counts as at it (px). */
+        const val SLACK = 2
+    }
+}

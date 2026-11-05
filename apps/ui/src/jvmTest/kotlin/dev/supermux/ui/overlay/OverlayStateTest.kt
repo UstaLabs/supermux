@@ -121,8 +121,34 @@ class OverlayStateTest {
         assertEquals(0f, s.room)
     }
 
-    @Test fun theLinesThatFitAreWholeLinesAndAtLeastThree() {
-        assertEquals(10, linesThatFit(roomPx = 520f, linePx = 50f))
-        assertEquals(3, linesThatFit(roomPx = 40f, linePx = 50f))
+    // A reply read in full scrolls; as more of it arrives it follows the end only while you're at the end.
+    @Test fun aLongReplyOpensAtItsTop() = assertEquals(null, ReplyFollow().onScroll(value = 0, max = 500))
+
+    @Test fun moreTextWhileYouAreAtTheEndIsFollowed() {
+        val f = ReplyFollow()
+        assertEquals(null, f.onScroll(value = 0, max = 0)) // it all fits: you are at the end
+        assertEquals(120, f.onScroll(value = 0, max = 120))
+    }
+
+    @Test fun moreTextWhileYouReadHigherUpLeavesYouThere() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 500)
+        assertEquals(null, f.onScroll(value = 0, max = 700))
+    }
+
+    @Test fun scrollingBackToTheEndFollowsAgain() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 500)
+        assertEquals(null, f.onScroll(value = 500, max = 500))
+        assertEquals(800, f.onScroll(value = 500, max = 800))
+    }
+
+    @Test fun scrollingUpStopsFollowing() {
+        val f = ReplyFollow()
+        f.onScroll(value = 0, max = 0)
+        assertEquals(200, f.onScroll(value = 0, max = 200))
+        f.onScroll(value = 200, max = 200)
+        assertEquals(null, f.onScroll(value = 50, max = 200))
+        assertEquals(null, f.onScroll(value = 50, max = 400))
     }
 }

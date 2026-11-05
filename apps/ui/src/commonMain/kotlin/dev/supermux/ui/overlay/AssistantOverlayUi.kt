@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -75,6 +76,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -704,37 +706,53 @@ fun OverlayBubble(
 /** What the bubble keeps for itself around a reply read in full: its padding, the name row, "Open in chat". */
 private val REPLY_CHROME = 100.dp
 
+/** A reply read in full stops growing here, however much room there is; past it, it scrolls. */
+private val REPLY_MAX = 460.dp
+
 /**
- * A reply read in full, in the [room] the bubble has: whole if it fits; otherwise as much as fits, and
- * "Open in chat" for the rest.
+ * A reply read in full: as tall as the [room] the bubble has (up to [REPLY_MAX]), and scrollable past that
+ * by finger, trackpad or mouse wheel. While more of it arrives it stays where you are reading, and follows
+ * the end only while you are at the end ([ReplyFollow]). Fades at its edges say there is more that way;
+ * "Open in chat" carries on in the chat.
  */
 @Composable
 private fun ReplyInFull(text: String, room: Dp, onOpen: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val style = MaterialTheme.typography.bodyMedium
-    val density = LocalDensity.current
-    val lines = with(density) {
-        val line = if (style.lineHeight.isSp) style.lineHeight.toPx() else style.fontSize.toPx() * 1.4f
-        linesThatFit((room - REPLY_CHROME).toPx(), line)
+    val scroll = rememberScrollState()
+    LaunchedEffect(scroll) {
+        val follow = ReplyFollow()
+        snapshotFlow { scroll.value to scroll.maxValue }.collect { (value, max) ->
+            follow.onScroll(value, max)?.let { scroll.scrollTo(it) }
+        }
     }
-    var cutShort by remember(text, lines) { mutableStateOf(false) }
-    Text(
-        text,
-        color = cs.onSurface,
-        style = style,
-        maxLines = lines,
-        overflow = TextOverflow.Ellipsis,
-        onTextLayout = { cutShort = it.hasVisualOverflow },
-        modifier = Modifier.testTag("overlay_reply_full"),
-    )
-    if (cutShort) {
+    // The bubble's own colour, so the fades read as the text running on under its edge.
+    val bubble = cs.surfaceContainerHigh
+    Box(Modifier.heightIn(max = (minOf(room, REPLY_MAX) - REPLY_CHROME).coerceAtLeast(80.dp))) {
         Text(
-            "Open in chat",
-            color = cs.primary,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
+            text,
+            color = cs.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.verticalScroll(scroll).testTag("overlay_reply_full"),
         )
+        if (scroll.value > 0) {
+            Box(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().height(18.dp)
+                    .background(Brush.verticalGradient(listOf(bubble, bubble.copy(alpha = 0f)))),
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(18.dp)
+                    .background(Brush.verticalGradient(listOf(bubble.copy(alpha = 0f), bubble))),
+            )
+        }
     }
+    Text(
+        "Open in chat",
+        color = cs.primary,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpen).testTag("overlay_reply_open"),
+    )
 }
 
 @Composable
