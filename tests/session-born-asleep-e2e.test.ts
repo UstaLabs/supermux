@@ -91,14 +91,16 @@ beforeAll(async () => {
   registry.register({ id: DOZING_ID, name: "dozing", agent: "claude", workdir: dozingDir, pid: 0, core: true, agent_home: join(state, "agents", "claude", "dozing") })
   registry.sessions.suspend(DOZING_ID)
   db.close()
-  // The repo new sessions get worktrees of.
+  // The repo new sessions get worktrees of, and the seed session's own folder, a repo too (delegate's worktree child).
   mkdirSync(project)
-  execFileSync("git", ["init", "-q", "-b", "main", project])
-  execFileSync("git", ["-C", project, "config", "user.email", "t@t.t"])
-  execFileSync("git", ["-C", project, "config", "user.name", "t"])
-  writeFileSync(join(project, "README.md"), "hi\n")
-  execFileSync("git", ["-C", project, "add", "."])
-  execFileSync("git", ["-C", project, "commit", "-q", "-m", "init"])
+  for (const repo of [project, join(dir, "workdir")]) {
+    execFileSync("git", ["init", "-q", "-b", "main", repo])
+    execFileSync("git", ["-C", repo, "config", "user.email", "t@t.t"])
+    execFileSync("git", ["-C", repo, "config", "user.name", "t"])
+    writeFileSync(join(repo, "README.md"), "hi\n")
+    execFileSync("git", ["-C", repo, "add", "."])
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "init"])
+  }
 
   const port = freePort()
   base = `http://127.0.0.1:${port}`
@@ -221,3 +223,30 @@ test("spawn_session (an agent's door) still answers only once the new session is
   send(id!, "hi child", "web-door-2")
   await waitFor("the child's reply", () => replies(id!).includes("Fixture reply: hi child"))
 }, 90_000)
+
+/** The JSON the seed session's tool call answered with ("MCP <json>"). */
+async function callTool(tool: string, args: object, clientId: string): Promise<any> {
+  const before = replies(SEED_ID).length
+  send(SEED_ID, `mcp-call mux-shim ${tool} ${JSON.stringify(args)}`, clientId)
+  const reply = await waitFor(`${tool}'s answer`, () => replies(SEED_ID).slice(before).find((t) => t.startsWith("MCP")), 60_000)
+  expect(reply).not.toContain("isError")
+  return JSON.parse(reply.slice("MCP ".length))
+}
+
+const answered = async (id: string, text: string) =>
+  (await messages(id)).some((m) => m.direction === "outbound" && typeof m.text === "string" && m.text.includes(text))
+
+test("delegate still answers once its worktree child is up, and the child gets its task through the inbox", async () => {
+  const r = await callTool("delegate", { task: "child task one", agent: "claude", access: "bypass", checkout: "worktree", title: "Delegated child" }, "web-delegate-1")
+  expect(r.session).toBeTruthy()
+  // Started before the tool answered: its worktree is there and its agent was launched once in it.
+  const starts = readFileSync(STARTS, "utf8").split("\n").filter((l) => l.includes("/worktrees/"))
+  expect(starts.some((l) => existsSync(l) && execFileSync("git", ["-C", l, "branch", "--show-current"], { encoding: "utf8" }).trim() === "mux/delegated-child")).toBe(true)
+  await waitFor("the child's answer to its task", () => answered(r.session, "child task one"))
+}, 90_000)
+
+test("council members still start and each gets the question", async () => {
+  const r = await callTool("council", { question: "which is faster?", members: [{ agent: "claude", access: "bypass" }, { agent: "claude", access: "bypass" }], checkout: "shared" }, "web-council-1")
+  expect(r.members).toHaveLength(2)
+  for (const m of r.members) await waitFor(`member ${m.letter}'s answer`, () => answered(m.session, "which is faster?"), 60_000)
+}, 120_000)
