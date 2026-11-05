@@ -233,6 +233,11 @@ class HostStore(
     // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
     private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
     private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
+    // Session starts (card #75): POST /sessions answers once the worktree is made and the agent is up,
+    // and CIO's 15 s default cut that short on desktop and Android. Its own client where the platform's
+    // deadline is too short ([SESSION_START_TIMEOUT_MS]); elsewhere [api].
+    private val httpStart = lazy { SESSION_START_TIMEOUT_MS?.let { deps.httpFactory(it) } }
+    private val apiStart by lazy { apiOverride ?: httpStart.value?.let { BrokerApi(baseUrl, token, it) } ?: api }
 
     /** This host's record id in the fleet, set by [FleetStore] when it dials; null = no media cache. */
     @Volatile private var mediaHost: String? = null
@@ -927,7 +932,7 @@ class HostStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         stateScope.launch {
             runApi("spawn") {
-                api.spawn(
+                apiStart.spawn(
                     SpawnRequest(
                         workdir = workdir.trim(),
                         name = name?.trim()?.ifBlank { null },
@@ -1778,7 +1783,7 @@ class HostStore(
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
-        api.spawn(
+        apiStart.spawn(
             dev.supermux.net.SpawnRequest(
                 workdir = workdir,
                 name = name?.ifBlank { null },
@@ -2670,7 +2675,7 @@ class HostStore(
         if (startTrace != null && staged.isNotEmpty()) PerfTrace.event("start.uploaded", "ms" to PerfTrace.elapsedMs() - t, "files" to attachmentIds.size, trace = startTrace)
         t = PerfTrace.elapsedMs()
         val resp = try {
-            api.spawn(
+            apiStart.spawn(
                 SpawnRequest(
                     workdir = resolvedPath,
                     name = name?.ifBlank { null },
@@ -2754,7 +2759,7 @@ class HostStore(
      *  name match when the broker returns a blank id). Throws on a broker refusal so the caller can
      *  surface it via [remapSpawnFailure] — unlike the fire-and-forget [spawn]. */
     suspend fun spawnRequest(request: SpawnRequest): String? =
-        resolveSpawnId(api.spawn(request), _state.value.sessions)
+        resolveSpawnId(apiStart.spawn(request), _state.value.sessions)
 
     /** On-device-STT path: JSON draft → cleaned text (long-timeout dictation client). */
     suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse? =
@@ -2794,6 +2799,7 @@ class HostStore(
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
         if (httpSpeak.isInitialized()) httpSpeak.value.close()
         if (httpMedia.isInitialized()) httpMedia.value.close()
+        if (httpStart.isInitialized()) httpStart.value?.close()
     }
 
     private companion object {
