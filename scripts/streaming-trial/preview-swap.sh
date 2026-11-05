@@ -29,13 +29,26 @@ dropin_env(){
   done
 }
 
+# "2h", "90m", "1h30m", "45s" -> seconds.
+dur_seconds(){ local d=$1 n=0 total=0
+  [[ $d =~ ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$ && -n $d ]] || return 1
+  [[ $d =~ ([0-9]+)h ]] && total=$(( total + ${BASH_REMATCH[1]} * 3600 ))
+  [[ $d =~ ([0-9]+)m ]] && total=$(( total + ${BASH_REMATCH[1]} * 60 ))
+  [[ $d =~ ([0-9]+)s ]] && total=$(( total + ${BASH_REMATCH[1]} ))
+  echo "$total"
+}
+
 swap(){ local wt=$1 dur=$2
   log "=== SWAP: $wt -> :$PORT for $dur ==="
   [ -f "$wt/src/main.ts" ] || { log "no $wt/src/main.ts — abort"; return 1; }
   [ -e "$wt/src/channels/web/static/index.html" ] || { log "no built web client in the worktree — abort"; return 1; }
   systemctl --user stop "${REVERT_UNIT}.timer" "${REVERT_UNIT}.service" 2>/dev/null
-  log "arming deadman revert in $dur (fires even if this runner dies)…"
-  systemd-run --user --on-active="$dur" --unit="$REVERT_UNIT" --collect \
+  # A wall-clock time, not --on-active: a `systemctl --user daemon-reload` (any session may run one) re-arms a
+  # monotonic timer from the reload, which pushed this afternoon's revert from 17:17 to 17:35.
+  local secs at; secs=$(dur_seconds "$dur") || { log "bad duration '$dur' (use 2h, 90m, 1h30m) — abort"; return 1; }
+  at=$(date -d "@$(( $(date +%s) + secs ))" '+%Y-%m-%d %H:%M:%S')
+  log "arming deadman revert at $at (fires even if this runner dies)…"
+  systemd-run --user --on-calendar="$at" --unit="$REVERT_UNIT" --collect \
     /bin/bash -c "systemctl --user stop $PREVIEW_UNIT 2>/dev/null; systemctl --user start $SERVICE" \
     || { log "could not arm the revert timer — ABORT (default broker untouched)"; return 1; }
   log "stopping default $SERVICE (KillMode=process: keepers stay)…"
@@ -59,7 +72,7 @@ swap(){ local wt=$1 dur=$2
     log "SWAP_FAILED_REVERTED (journalctl --user -u $PREVIEW_UNIT)"
     return 1
   fi
-  log "PREVIEW_READY: worktree broker live on :$PORT (/me -> $code), auto-reverts in $dur"
+  log "PREVIEW_READY: worktree broker live on :$PORT (/me -> $code), auto-reverts at $(systemctl --user list-timers --all 2>/dev/null | awk -v u="$REVERT_UNIT.timer" '$0 ~ u {print $1, $2, $3}')"
 }
 
 revert(){
