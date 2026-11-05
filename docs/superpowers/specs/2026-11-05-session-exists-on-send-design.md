@@ -1,7 +1,9 @@
 # A session exists on Send: Design (2026-11-05, card #75)
 
-**Status:** proposal. Reviewed by council-17 (Codex, Antigravity, Claude Fable): *approve with changes*, all
-folded in below. **No code until Ahmet approves.** One open choice is left for him at the end.
+**Status:** implemented on `mux/worktree-session-startup` (Ahmet's go, 2026-11-05). Reviewed by council-17
+(Codex, Antigravity, Claude Fable): *approve with changes*, all folded in below. What the build changed
+from this text is listed in **As built**, at the end. The open choice went with the recommendation (no new
+storage).
 
 ## Goal
 
@@ -190,3 +192,32 @@ in practice.
 
 Live check: `scripts/perf-start-probe.ts` against a shadow broker (card #75). Send → answer should drop
 from ~4–26 s to well under a second; Send → first reply should be unchanged.
+
+## As built (2026-11-05)
+
+Where the implementation differs from the design above, and why:
+
+- **"Starting" is `agent_state` with `detail: "starting"`** (`state: "working"`, `working: true`, legacy
+  `phase: "thinking"`), computed from the chain (`SessionChain.wakingSince`), never stored. Not a new
+  `phase`: an older app shows the start as working, with its Stop, instead of idle. The app shows
+  "starting…" in the header and working row, and "starting" instead of "suspended" in the session row.
+- **`session_state` carries `status`** when a wake ends (active) or a start stopped by Stop goes back to
+  sleep (suspended). Before, a client kept a woken session's "suspended" badge until its next snapshot;
+  this also covers the workers #78 leaves asleep at boot.
+- **A half-made folder is removed only when it is empty.** A folder with anything in it may hold work, so
+  it is used as it is; and the check needs no git call, so a repo that moved no longer fails a start.
+- **A launcher session with no first message is woken at once, in the background**, as every launched
+  session always started; the launcher still answers at once.
+- **The files pane, folder subscriptions and terminals wait** (up to 30 s) for a session folder a wake is
+  checking out, until git has checked the files out (not for the setup hook), instead of failing.
+- **Doors** (spawn_session, delegate, council, the curator, /spawn, a draft's first message) wait for the
+  wake and answer once the agent is up. A door's start that fails is archived and its Send-time branch
+  deleted, as a failed spawn left nothing; its caller gets the reason. **agent-rpc workers** keep the
+  direct start: their MCP config is not a row field, so a resume could not rebuild them.
+- **Telegram keeps its "Resuming session …" line** (it can't show "starting"); a failed wake is said in
+  the chat the message came from (the reply target is noted when the message is logged).
+- **A start cut short by a broker restart** says "supermux restarted while it was starting" rather than
+  whatever failed under it (seen live: git's half-written progress).
+- **Kill and archive** cancel a start in flight through the SessionManager's kill funnel
+  (`cleanup.cancelWake`); **Stop** cancels it and the wake that finishes anyway is put back to sleep
+  (`SessionManager.putToSleep`).
