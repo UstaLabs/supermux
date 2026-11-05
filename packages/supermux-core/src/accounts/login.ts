@@ -256,15 +256,13 @@ const CONPTY_COLS = 600
 const CONPTY_ROWS = 50
 
 /**
- * The argv that starts `command` on Windows: an .exe directly, a .cmd/.bat shim (npm installs)
- * through cmd.exe. Each cmd.exe argument is double-quoted, which keeps & | < > ^ literal; the
- * characters double quotes cannot protect (" % !) are refused.
+ * The argv that starts the resolved `command` on Windows, by the broker launcher's one rule (proc.windowsLaunch): an
+ * .exe directly, a .cmd/.bat shim (npm installs) through cmd.exe with every word escaped and delayed expansion off, a
+ * .ps1 through PowerShell. Any character passes, so a user named "Ana!" (the .cmd path holds the "!") can sign in.
  */
-export function windowsLoginArgv(resolved: string, args: string[]): string[] {
-  if (!/\.(cmd|bat)$/i.test(resolved)) return [resolved, ...args]
-  const words = [resolved, ...args]
-  if (words.some(word => /["%!\r\n]/.test(word))) throw new CoreError("invalid_input", "A login argument contains a character cmd.exe cannot pass on (\" % !)")
-  return [process.env.ComSpec || "cmd.exe", "/d", "/s", "/c", `"${words.map(word => `"${word}"`).join(" ")}"`]
+export function windowsLoginArgv(resolved: string, args: string[], env: Record<string, string | undefined> = process.env): string[] {
+  const launch = proc.windowsLaunch(resolved, args, { env })
+  return [launch.command, ...launch.args]
 }
 
 /**
@@ -289,10 +287,10 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
   const emit = (chunk: string) => { for (const listener of output) listener(chunk) }
   let child: ReturnType<BunTerminalSpawn>
   try {
-    const argv = windowsLoginArgv(resolved, input.args)
-    child = bun.spawn(argv, {
-      // cmd.exe's /s /c line is already quoted: Bun must not quote it again.
-      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: argv[0] !== resolved,
+    const launch = proc.windowsLaunch(resolved, input.args, { env: input.env })
+    child = bun.spawn([launch.command, ...launch.args], {
+      // cmd.exe's /s /c line is already escaped: Bun must not quote it again. PowerShell's arguments it quotes.
+      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments === true,
       terminal: { cols: CONPTY_COLS, rows: CONPTY_ROWS, data: (_terminal, data) => emit(decoder.decode(data, { stream: true })) },
     })
   } catch (error) {

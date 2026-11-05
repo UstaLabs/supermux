@@ -109,6 +109,64 @@ export function resolve(names: readonly string[], env: CommandEnvironment = proc
   return null
 }
 
+// Starting a Windows shim without a shell reading its arguments (BatBadBut): the strategy of mature Windows Node
+// launchers (cross-spawn). Quotes and the backslashes before them are escaped for CommandLineToArgvW, then every cmd.exe
+// metacharacter is caret-escaped, with delayed expansion off. One rule for the broker's launcher and core's login.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g
+
+// Linear: double every backslash before a quote or the closing wrapper quote, then add the one that escapes the quote.
+function escapeWindowsQuoteSlashes(value: string): string {
+  const escaped: string[] = []
+  let slashes = 0
+  for (const char of value) {
+    if (char === "\\") {
+      slashes++
+      continue
+    }
+    escaped.push(char === '"' ? "\\".repeat(slashes * 2 + 1) : "\\".repeat(slashes), char)
+    slashes = 0
+  }
+  escaped.push("\\".repeat(slashes * 2))
+  return escaped.join("")
+}
+
+function escapeCmdArgument(value: string): string {
+  // The first caret pass protects the value in the inner command; the second keeps those carets through cmd /s /c's
+  // outer parse of the quoted command line.
+  return `"${escapeWindowsQuoteSlashes(value)}"`.replace(CMD_META, "^$1").replace(CMD_META, "^$1")
+}
+
+/** The command line `cmd.exe /d /v:off /s /c` runs for [command] with [args], each passed on exactly as given. */
+export function windowsCmdCommandLine(command: string, args: readonly string[]): string {
+  return `"${[command.replace(CMD_META, "^$1"), ...args.map(escapeCmdArgument)].join(" ")}"`
+}
+
+/** How Windows starts a resolved command: what to spawn, and whether its line goes on verbatim (no runtime quoting). */
+export interface WindowsLaunch { command: string; args: string[]; windowsVerbatimArguments?: boolean }
+
+/**
+ * How to start the resolved [command] with [args] on Windows, no argument ever read by a shell: a .cmd or .bat shim
+ * through cmd.exe ([windowsCmdCommandLine], verbatim), a .ps1 through PowerShell's -File (pwsh, else Windows
+ * PowerShell, found on [options]' PATH), anything else as it is. Throws when a .ps1 has no PowerShell to run it.
+ */
+export function windowsLaunch(command: string, args: readonly string[], options: { env?: CommandEnvironment; fileExists?: (path: string) => boolean } = {}): WindowsLaunch {
+  const env = options.env ?? process.env
+  const extension = win32.extname(command).toLowerCase()
+  if (extension === ".cmd" || extension === ".bat") {
+    return {
+      command: envValue(env, "ComSpec", "win32") || "cmd.exe",
+      args: ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(command, args)],
+      windowsVerbatimArguments: true,
+    }
+  }
+  if (extension === ".ps1") {
+    const powerShell = resolve(["pwsh", "powershell"], env, { platform: "win32", ...(options.fileExists ? { fileExists: options.fileExists } : {}) })
+    if (!powerShell) throw new Error("PowerShell was not found on PATH (tried pwsh.exe and powershell.exe)")
+    return { command: powerShell, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command, ...args] }
+  }
+  return { command, args: [...args] }
+}
+
 /**
  * The options every spawn starts from: the environment as it is at the call (Bun.spawn without `env` passes the one
  * the process started with, so a PATH or a .env variable set since never reaches the child), and no console window on

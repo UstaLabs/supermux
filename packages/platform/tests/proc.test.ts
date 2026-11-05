@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { proc } from "@supermux/platform"
@@ -119,4 +120,46 @@ test("posixShell on Windows is Git for Windows' bash, beside its git or where Gi
   const installed = windowsFiles("C:\\Windows\\System32\\bash.exe", "C:\\Program Files\\Git\\bin\\bash.exe")
   expect(proc.posixShell({ ...env, Path: "C:\\Windows\\System32" }, installed)).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
   expect(proc.posixShell({ ...env, Path: "C:\\Windows\\System32" }, windowsFiles("C:\\Windows\\System32\\bash.exe"))).toBeNull()
+})
+
+// One rule for starting a Windows shim without a shell reading its arguments (BatBadBut), for the launcher and core's
+// login alike. Core's own rule refused " % ! anywhere, the resolved .cmd path included: a user named "Ana!" could not
+// sign in. The launcher's (cross-spawn's) escapes them, with delayed expansion off.
+test("windowsLaunch: a .cmd or .bat shim runs through cmd.exe, delayed expansion off, its line passed verbatim", () => {
+  const env = { ComSpec: "C:\\Windows\\system32\\cmd.exe" }
+  const shim = "C:\\Users\\Ana!\\AppData\\Roaming\\npm\\claude.cmd"
+  const args = ["--email", 'a!b%PATH%"c&d']
+  expect(proc.windowsLaunch(shim, args, { env })).toEqual({
+    command: "C:\\Windows\\system32\\cmd.exe",
+    args: ["/d", "/v:off", "/s", "/c", proc.windowsCmdCommandLine(shim, args)],
+    windowsVerbatimArguments: true,
+  })
+  expect(proc.windowsCmdCommandLine(shim, args).startsWith('"C:\\Users\\Ana^!\\')).toBe(true)
+  expect(proc.windowsLaunch("tool.BAT", [], { env: {} }).command).toBe("cmd.exe")
+})
+
+test("windowsLaunch: a .ps1 runs through PowerShell -File with its arguments quoted by the runtime; an .exe as it is", () => {
+  const env = { PATH: "C:\\PS" }
+  const fileExists = (path: string) => path.toLowerCase() === "c:\\ps\\pwsh.exe"
+  expect(proc.windowsLaunch("C:\\npm\\tool.ps1", ["a b"], { env, fileExists })).toEqual({
+    command: "C:\\PS\\pwsh.exe",
+    args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\npm\\tool.ps1", "a b"],
+  })
+  expect(() => proc.windowsLaunch("C:\\npm\\tool.ps1", [], { env: { PATH: "" }, fileExists: () => false })).toThrow("PowerShell")
+  expect(proc.windowsLaunch("C:\\bin\\claude.exe", ["x y"], { env })).toEqual({ command: "C:\\bin\\claude.exe", args: ["x y"] })
+})
+
+test.skipIf(process.platform !== "win32")("windowsLaunch: a .cmd shim in a folder named Ana! gets every argument intact", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "launch-")), "Ana!")
+  mkdirSync(dir)
+  const script = join(dir, "argv.js")
+  writeFileSync(script, "require('fs').writeFileSync(process.argv[2], JSON.stringify(process.argv.slice(3)))")
+  const shim = join(dir, "tool.cmd")
+  writeFileSync(shim, `@"${process.execPath}" "${script}" %*\r\n`)
+  const out = join(dir, "out.json")
+  const args = ["plain", "a b", 'q"uote', "bang!", "%PATH%", "amp&er", "car^et", "pipe|x", "lt<gt>", "trail\\", ""]
+  const plan = proc.windowsLaunch(shim, [out, ...args], { env: process.env })
+  const result = spawnSync(plan.command, plan.args, { windowsVerbatimArguments: plan.windowsVerbatimArguments, windowsHide: true })
+  expect(result.status).toBe(0)
+  expect(JSON.parse(readFileSync(out, "utf8"))).toEqual(args)
 })

@@ -286,7 +286,6 @@
     "src/core/lsp/detect.ts": 1,
     "src/core/models/discovery.ts": 1,
     "src/core/perf/perf-log.ts": 1,
-    "src/core/process/launcher.ts": 1,
     "src/core/project/paths.ts": 3,
     "src/core/session-manager/download.ts": 1,
     "src/core/settings/editor-config.ts": 1,

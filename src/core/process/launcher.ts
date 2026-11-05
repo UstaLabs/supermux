@@ -2,7 +2,6 @@ import {
   spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions,
   type SpawnSyncOptions, type SpawnSyncReturns,
 } from "child_process"
-import { win32 } from "path"
 import { proc } from "@supermux/platform"
 
 export type CommandEnvironment = proc.CommandEnvironment
@@ -40,83 +39,15 @@ export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
   fileExists?: FileExists
 }
 
-// This is the quoting strategy used by mature Windows Node launchers. Quotes
-// and trailing slashes are escaped for CommandLineToArgvW, then cmd.exe
-// metacharacters are caret-escaped. Delayed expansion is explicitly disabled.
-const CMD_META = /([()\][%!^"`<>&|;, *?])/g
-
-function escapeCmdCommand(value: string): string {
-  return value.replace(CMD_META, "^$1")
-}
-
-// Linear equivalent of the hardened cross-spawn lookahead forms. A small
-// state machine makes the complexity obvious and preserves the established
-// behavior: double every slash before a quote or the closing wrapper quote,
-// then add the slash that escapes an embedded quote.
-function escapeWindowsQuoteSlashes(value: string): string {
-  const escaped: string[] = []
-  let slashes = 0
-  for (const char of value) {
-    if (char === "\\") {
-      slashes++
-      continue
-    }
-    if (char === '"') {
-      escaped.push("\\".repeat(slashes * 2 + 1), char)
-    } else {
-      escaped.push("\\".repeat(slashes), char)
-    }
-    slashes = 0
-  }
-  escaped.push("\\".repeat(slashes * 2))
-  return escaped.join("")
-}
-
-function escapeCmdArgument(value: string): string {
-  let escaped = escapeWindowsQuoteSlashes(value)
-  escaped = `"${escaped}"`
-  // The first pass protects the value in the inner command; the second keeps
-  // those carets intact through cmd /s /c's outer quoted-command parse.
-  escaped = escaped.replace(CMD_META, "^$1").replace(CMD_META, "^$1")
-  return escaped
-}
-
-export function windowsCmdCommandLine(command: string, args: readonly string[]): string {
-  const inner = [escapeCmdCommand(command), ...args.map(escapeCmdArgument)].join(" ")
-  return `"${inner}"`
-}
-
-function wrappedWindowsCommand(
-  command: string,
-  args: readonly string[],
-  env: CommandEnvironment,
-  fileExists?: FileExists,
-): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
-  const extension = win32.extname(command).toLowerCase()
-  if (extension === ".cmd" || extension === ".bat") {
-    return {
-      command: proc.envValue(env, "ComSpec", "win32") || "cmd.exe",
-      args: ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(command, args)],
-      windowsVerbatimArguments: true,
-    }
-  }
-  if (extension === ".ps1") {
-    const powerShell = resolveCommand(["pwsh", "powershell"], env, "win32", { fileExists })
-    if (!powerShell) throw new Error("PowerShell was not found on PATH (tried pwsh.exe and powershell.exe)")
-    return {
-      command: powerShell,
-      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
-    }
-  }
-  return { command, args: [...args] }
-}
+/** The command line a .cmd/.bat shim runs with: @supermux/platform's one rule (BatBadBut-safe), shared with core's login. */
+export const windowsCmdCommandLine = proc.windowsCmdCommandLine
 
 /** Spawn an already-resolved command without ever passing user argv through a
  * general-purpose shell. Only Windows shim file formats receive fixed wrappers. */
 export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
   const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
   const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
+  const wrapped: proc.WindowsLaunch = platform === "win32" ? proc.windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
   return spawn(wrapped.command, wrapped.args, {
     ...proc.spawnDefaults(),
     ...spawnOptions,
@@ -131,7 +62,7 @@ export function spawnCommandSync(
 ): SpawnSyncReturns<Buffer> {
   const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
   const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped = platform === "win32" ? wrappedWindowsCommand(command, args, env, fileExists) : { command, args: [...args] }
+  const wrapped: proc.WindowsLaunch = platform === "win32" ? proc.windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
   return spawnSync(wrapped.command, wrapped.args, {
     ...proc.spawnDefaults(),
     ...spawnOptions,
