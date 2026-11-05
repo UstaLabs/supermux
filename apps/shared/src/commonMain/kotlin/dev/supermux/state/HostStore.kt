@@ -566,6 +566,7 @@ class HostStore(
         _state.update { reduceHostFrame(it, frame) }
         val micros = PerfTrace.elapsedMicros() - start
         PerfTrace.countReduce(frame::class.simpleName ?: "?", micros)
+        if (PerfTrace.startActive) markStartFrame(frame)
         if (frame is ServerFrame.Snapshot) {
             PerfTrace.milestone(
                 "state.snapshot.reduced",
@@ -577,6 +578,27 @@ class HostStore(
             )
         }
         onFrameEffects(frame)
+    }
+
+    /** Card #75: the first frames of the session a launcher Send is creating, under its start trace. */
+    private fun markStartFrame(frame: ServerFrame) {
+        when (frame) {
+            is ServerFrame.SessionAdded -> PerfTrace.startTraceFor(frame.session.id, frame.session.workdir, frame.session.repo_root)
+                ?.let { PerfTrace.once("start.session_added", "session" to frame.session.id, trace = it) }
+            is ServerFrame.MessageAppend -> PerfTrace.startTraceFor(frame.session)?.let { trace ->
+                when {
+                    frame.entry.direction.startsWith("in") -> PerfTrace.once("start.message.echoed", trace = trace)
+                    frame.entry.direction == "outbound" && frame.entry.op == "reply" ->
+                        PerfTrace.once("start.reply.arrived", "chars" to frame.entry.text?.length, trace = trace)
+                }
+            }
+            is ServerFrame.AgentState -> if (frame.working) {
+                PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.agent.working", "detail" to frame.detail, trace = it) }
+            }
+            is ServerFrame.ActivityAppend -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.activity", trace = it) }
+            is ServerFrame.CommandsChanged -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.commands", "count" to frame.commands.size, trace = it) }
+            else -> {}
+        }
     }
 
     // ── Load-time trace shipping (card #54) ─────────────────────────────────────────────────────
@@ -2624,19 +2646,29 @@ class HostStore(
         /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String {
+        // Card #75: the launcher's Send began a start trace; its requests and frames join it.
+        val startTrace = PerfTrace.pendingStart()
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
+        var t = PerfTrace.elapsedMs()
         val validation = runCatching { api.validatePath(workdir) }.getOrNull()
             ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
+        if (startTrace != null) {
+            PerfTrace.event("start.validated", "ms" to PerfTrace.elapsedMs() - t, trace = startTrace)
+            if (!resolvedPath.isNullOrBlank()) PerfTrace.startResolved(startTrace, resolvedPath)
+        }
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
         }
         // Before the spawn: the broker delivers them with the first turn (see the KDoc).
+        t = PerfTrace.elapsedMs()
         val attachmentIds = staged.mapNotNull { s ->
             uploadResumable(LAUNCHER_UPLOAD_SESSION, s.source, s.name, s.mime, s.kind) { _, _ -> }
         }
+        if (startTrace != null && staged.isNotEmpty()) PerfTrace.event("start.uploaded", "ms" to PerfTrace.elapsedMs() - t, "files" to attachmentIds.size, trace = startTrace)
+        t = PerfTrace.elapsedMs()
         val resp = try {
             api.spawn(
                 SpawnRequest(
@@ -2656,12 +2688,21 @@ class HostStore(
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
                 ),
+                trace = startTrace,
             )
-        } catch (t: Throwable) {
-            remapSpawnFailure(t)
+        } catch (e: Throwable) {
+            if (startTrace != null) {
+                PerfTrace.event("start.failed", "ms" to PerfTrace.elapsedMs() - t, "error" to e.message?.take(200), trace = startTrace)
+                PerfTrace.endStart(startTrace)
+            }
+            remapSpawnFailure(e)
         }
-        return resolveSpawnId(resp, _state.value.sessions)
-            ?: throw IllegalStateException("Session created but id not available yet")
+        val id = resolveSpawnId(resp, _state.value.sessions)
+        if (startTrace != null) {
+            PerfTrace.event("start.response", "ms" to PerfTrace.elapsedMs() - t, "session" to id, trace = startTrace)
+            if (id != null) PerfTrace.bindStart(startTrace, id)
+        }
+        return id ?: throw IllegalStateException("Session created but id not available yet")
     }
 
     /**

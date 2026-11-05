@@ -2291,10 +2291,11 @@ class BrokerApi(
         })
     }
 
-    /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
+    /** POST /sessions; [trace] files it under a session start (card #75) rather than the launch. */
+    suspend fun spawn(req: SpawnRequest, trace: String? = null): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
             authHeader()
+            if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
