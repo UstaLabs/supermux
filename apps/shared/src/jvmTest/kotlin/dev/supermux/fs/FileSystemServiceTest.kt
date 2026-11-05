@@ -87,6 +87,40 @@ class FileSystemServiceTest {
         assertEquals(DirState.Failed("EACCES", "denied", null), fs.dir("/b").value)
     }
 
+    /**
+     * A folder whose `fs_sub` never gets an answer (a reply the client could not match, a broker that dropped it) spun
+     * on Loading forever, with no error and nothing to retry. It now says so, and Retry asks again.
+     */
+    @Test fun aFolderTheHostNeverAnswersFailsWithRetryInsteadOfLoadingForever() = runTest(StandardTestDispatcher()) {
+        val (fs, sent) = service()
+        val sub = fs.subscribe("C:\\Users\\Tester"); runCurrent()
+        advanceTimeBy(19_000); runCurrent()
+        assertEquals(DirState.Loading(null), fs.dir("C:\\Users\\Tester").value)
+        advanceTimeBy(1_001); runCurrent()
+        val failed = assertIs<DirState.Failed>(fs.dir("C:\\Users\\Tester").value)
+        assertEquals("NO_ANSWER", failed.code)
+        assertTrue(failed.message.isNotBlank())
+        // The tree's Retry: a fresh handle before closing the old one. It asks the host again.
+        sent.clear()
+        val again = fs.subscribe("C:\\Users\\Tester"); sub.close(); runCurrent()
+        assertEquals(listOf<ClientFrame>(ClientFrame.FsSub("C:\\Users\\Tester")), sent)
+        assertEquals(DirState.Loading(null), fs.dir("C:\\Users\\Tester").value)
+        fs.onFrame(dir("C:\\Users\\Tester", "b:1", "x"))
+        assertIs<DirState.Ready>(fs.dir("C:\\Users\\Tester").value)
+        again.close()
+    }
+
+    @Test fun anAnsweredFolderNeverTimesOutAndALateAnswerStillWins() = runTest(StandardTestDispatcher()) {
+        val (fs, _) = service()
+        fs.subscribe("/answered"); fs.subscribe("/late"); runCurrent()
+        fs.onFrame(dir("/answered", "b:1", "x"))
+        advanceTimeBy(60_000); runCurrent()
+        assertIs<DirState.Ready>(fs.dir("/answered").value)
+        assertIs<DirState.Failed>(fs.dir("/late").value)
+        fs.onFrame(dir("/late", "b:2", "y"))
+        assertEquals(listOf("y"), assertIs<DirState.Ready>(fs.dir("/late").value).snap.entries.map { it.name })
+    }
+
     @Test fun eviction_keeps_subscribed_folders() = runTest(StandardTestDispatcher()) {
         val sent = mutableListOf<ClientFrame>()
         val http = HttpClient(MockEngine { respond("{}") })
