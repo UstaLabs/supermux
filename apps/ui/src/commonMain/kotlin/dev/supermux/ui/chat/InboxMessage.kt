@@ -15,13 +15,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SmartToy
@@ -33,7 +31,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,14 +38,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -56,6 +63,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.FilePathRef
@@ -66,6 +76,8 @@ import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /** The id an inbox row carries when supermux itself sent it (a child's or council member's end). */
 internal const val SUPERMUX_SENDER_ID = "supermux"
@@ -224,52 +236,40 @@ private const val INBOX_COLLAPSED_LINES = 3
 /**
  * The body, clipped to [INBOX_COLLAPSED_LINES] lines' height with a fade into [background] and a
  * "Show more" under it, when it runs longer. Markdown can't be line-clamped, so the clip is by height:
- * the body is measured at its full height and the box around it shows the first three lines. The
- * choice is kept by the entry's id, like a tool call's, so it survives scrolling the chat.
+ * the body is measured at its full height and shows the first three lines. The choice is kept by the
+ * entry's id, like a tool call's, so it survives scrolling the chat.
+ *
+ * The fold is decided in the layout pass that measures the body ([FoldedBodyPolicy]), never a frame
+ * later: a card that laid out at its full height and folded on the next frame pulled every row under
+ * it toward the end whenever it came into view at the top of the chat, and near the end all the way
+ * back to the end, so scrolling back could not get past it.
  */
 @Composable
 private fun InboxBody(id: String, body: String, onOpenFile: (FilePathRef) -> Unit, background: Color) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    var fullHeight by remember(body) { mutableIntStateOf(0) }
     val lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
     val density = LocalDensity.current
-    val maxPx = with(density) { (if (lineHeight.isSp) lineHeight.toPx() else 24.dp.toPx()) * INBOX_COLLAPSED_LINES }
+    val foldPx = with(density) { (if (lineHeight.isSp) lineHeight.toPx() else 24.dp.toPx()) * INBOX_COLLAPSED_LINES }
     // A little slack: a three-line body a few pixels over (a block gap, rounding) is not "longer".
-    val overflows = fullHeight > maxPx + with(density) { 4.dp.toPx() }
-    val clipped = overflows && !expanded
-    Column {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .then(if (clipped) Modifier.heightIn(max = with(density) { maxPx.toDp() }).clipToBounds() else Modifier),
-        ) {
-            LinkSelectionContainer {
-                MarkdownBody(
-                    text = body,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                        .onSizeChanged { fullHeight = it.height },
-                    onOpenFile = onOpenFile,
-                    linkify = true,
-                )
+    val slackPx = with(density) { 4.dp.toPx() }
+    // What the last layout decided, for the toggle's semantics alone: a body that fits has no button, not even
+    // an unplaced one a screen reader could find. Its size never waits on this.
+    val overflowsState = remember(body) { mutableStateOf(false) }
+    val overflows by overflowsState
+    Layout(
+        content = {
+            Box {
+                LinkSelectionContainer {
+                    MarkdownBody(text = body, modifier = Modifier.fillMaxWidth(), onOpenFile = onOpenFile, linkify = true)
+                }
             }
-            if (clipped) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(with(density) { (maxPx / INBOX_COLLAPSED_LINES).toDp() })
-                        .background(Brush.verticalGradient(listOf(background.copy(alpha = 0f), background))),
-                )
-            }
-        }
-        if (overflows) {
+            Box(Modifier.background(Brush.verticalGradient(listOf(background.copy(alpha = 0f), background))))
             Text(
                 if (expanded) "Show less" else "Show more",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
+                    .then(if (overflows) Modifier else Modifier.clearAndSetSemantics {})
                     .padding(top = 2.dp)
                     .clip(RoundedCornerShape(Radii.sm))
                     .clickable { expanded = !expanded }
@@ -277,8 +277,77 @@ private fun InboxBody(id: String, body: String, onOpenFile: (FilePathRef) -> Uni
                     .padding(vertical = 4.dp)
                     .testTag("inbox-expand:$id"),
             )
+        },
+        measurePolicy = remember(foldPx, slackPx, expanded, overflowsState) {
+            FoldedBodyPolicy(foldPx, slackPx, expanded) { if (overflowsState.value != it) overflowsState.value = it }
+        },
+    )
+}
+
+/**
+ * [InboxBody]'s layout, in one pass: the body (first child) at its full height, cut to [foldPx] when it runs
+ * more than [slackPx] longer and is not [expanded], the fade (second) over the cut and the toggle (third) under
+ * it. A body that fits places neither. [onOverflow] hears each decision.
+ */
+private class FoldedBodyPolicy(
+    val foldPx: Float,
+    val slackPx: Float,
+    val expanded: Boolean,
+    val onOverflow: (Boolean) -> Unit,
+) : MeasurePolicy {
+    private fun overflows(fullHeight: Int) = fullHeight > foldPx + slackPx
+
+    override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+        val (bodyM, fadeM, toggleM) = measurables
+        val full = bodyM.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+        val over = overflows(full.height)
+        onOverflow(over)
+        val folded = over && !expanded
+        val shown = if (folded) foldPx.roundToInt() else full.height
+        val toggle = if (over) toggleM.measure(constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity)) else null
+        val fadeHeight = (foldPx / INBOX_COLLAPSED_LINES).roundToInt()
+        val fade = if (folded) fadeM.measure(Constraints.fixed(full.width, fadeHeight)) else null
+        val width = max(full.width, toggle?.width ?: 0).coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = (shown + (toggle?.height ?: 0)).coerceIn(constraints.minHeight, constraints.maxHeight)
+        return layout(width, height) {
+            if (folded) full.placeRelativeWithLayer(0, 0) { clip = true; shape = TopPart(shown) } else full.placeRelative(0, 0)
+            fade?.placeRelative(0, shown - fadeHeight)
+            toggle?.placeRelative(0, shown)
         }
     }
+
+    // What measure would lay out: a card that hugs its words asks for its body's width.
+    override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int): Int {
+        val body = measurables[0].maxIntrinsicWidth(height)
+        return if (overflows(measurables[0].maxIntrinsicHeight(body))) max(body, measurables[2].maxIntrinsicWidth(height)) else body
+    }
+
+    override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int): Int {
+        val body = measurables[0].minIntrinsicWidth(height)
+        return if (overflows(measurables[0].maxIntrinsicHeight(body))) max(body, measurables[2].minIntrinsicWidth(height)) else body
+    }
+
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int): Int =
+        intrinsicHeight(measurables, width)
+
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int): Int =
+        intrinsicHeight(measurables, width)
+
+    private fun intrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int): Int {
+        val full = measurables[0].maxIntrinsicHeight(width)
+        if (!overflows(full)) return full
+        return (if (expanded) full else foldPx.roundToInt()) + measurables[2].maxIntrinsicHeight(width)
+    }
+}
+
+/** The top [height] px of what it clips. */
+private class TopPart(private val height: Int) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Rectangle(Rect(0f, 0f, size.width, height.toFloat()))
+
+    override fun equals(other: Any?): Boolean = other is TopPart && other.height == height
+
+    override fun hashCode(): Int = height
 }
 
 /**
