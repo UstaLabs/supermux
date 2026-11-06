@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { execFileSync } from "child_process"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { join, sep } from "path"
 import { openDb, runMigrations } from "../storage/db"
 import { MIGRATIONS } from "../storage/migrations"
 import { Registry } from "./registry"
@@ -54,12 +54,15 @@ function setup() {
 test("a worktree start: an asleep row with its future worktree, branch and home, and no folder yet", async () => {
   const { registry, deps, stateDir } = setup()
   const root = repo()
+  // The repo's root as git names it, which the row and its worktree's folder are made from. On Windows the temp folder
+  // can be an 8.3 short name (C:\Users\RUNNER~1\…) that git spells long, so the slug is not the one of `root`.
+  const top = (await getRepoInfo(root)).repoRoot!
   const s = await createAsleep(deps, { workdir: root, requestedName: "Fix login", agent: AgentKind.Codex, model: "gpt-5", reasoningLevel: "high", permissionMode: "auto", account: "codex-team" })
   expect(s.status).toBe("suspended")
   expect(s.connected).toBe(false)
-  expect(s.workdir.startsWith(join(worktreesRoot(), repoSlug(root)) + "/")).toBe(true)
+  expect(s.workdir.startsWith(join(worktreesRoot(), repoSlug(top)) + sep)).toBe(true)
   expect(existsSync(s.workdir)).toBe(false)
-  expect(s).toMatchObject({ name: "Fix login", agent: "codex", model: "gpt-5", reasoningLevel: "high", account: "codex-team", repo_root: root, base_branch: "main", session_branch: "mux/fix-login", core: true })
+  expect(s).toMatchObject({ name: "Fix login", agent: "codex", model: "gpt-5", reasoningLevel: "high", account: "codex-team", repo_root: top, base_branch: "main", session_branch: "mux/fix-login", core: true })
   expect(s.agent_home).toBe(join(stateDir, "agents", "codex", homeDirName("Fix login")))
   expect((await existingBranchNames(root)).has("mux/fix-login")).toBe(true)
   expect(registry.sessions.getById(s.id)?.status).toBe("suspended")

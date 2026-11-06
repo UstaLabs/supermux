@@ -172,7 +172,7 @@ test("retrack: a session whose folder was made after it was tracked gets its wat
   h.svc.sync([{ id: "born", workdir: "/w/born" }])   // nothing changed in the row: sync alone does not look again
   expect(h.watchers.size).toBe(0)
   h.svc.retrack("born")
-  expect([...h.watchers.keys()].sort()).toEqual(["/common", "/common/refs/heads", "/git/born"])
+  expect([...h.watchers.keys()].sort()).toEqual(["/common", join("/common", "refs", "heads"), "/git/born"].sort())
   h.flush()
   await Promise.resolve(); await Promise.resolve()
   expect(h.svc.get("born")?.ahead).toBe(1)
