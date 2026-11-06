@@ -631,6 +631,10 @@ export class WebChannel implements Channel {
   /** Card #76: replies being written, for the apps that asked (`subscribe.streams`). */
   private readonly live = new LiveReplies()
   private readonly liveSockets = new WeakMap<import("bun").ServerWebSocket<WSData>, LiveSocket>()
+  /** Card #76: the chats a socket shows, as its last viewing frame said. Their live text follows them. */
+  private readonly liveShown = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
+  /** Card #62: the chats a socket asked live text for without showing them (`live`: the assistant overlay's Agent). */
+  private readonly livePinned = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
@@ -896,13 +900,20 @@ export class WebChannel implements Channel {
 
   /** Card #76: the chats this socket shows, for live text (an app that never asked has no live socket). */
   private watchLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
-    const socket = this.liveSockets.get(ws)
-    if (socket) this.live.watch(socket, sessions)
+    this.liveShown.set(ws, sessions)
+    this.rewatchLive(ws)
   }
 
-  private liveWatching(ws: import("bun").ServerWebSocket<WSData>): ReadonlySet<string> {
+  /** Card #62: chats this socket wants live text for without showing them. Presence, read and push are untouched. */
+  private pinLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    this.livePinned.set(ws, sessions)
+    this.rewatchLive(ws)
+  }
+
+  /** Live text follows the chats shown and the chats pinned alike. */
+  private rewatchLive(ws: import("bun").ServerWebSocket<WSData>): void {
     const socket = this.liveSockets.get(ws)
-    return socket ? this.live.watching(socket) : new Set()
+    if (socket) this.live.watch(socket, [...(this.liveShown.get(ws) ?? []), ...(this.livePinned.get(ws) ?? [])])
   }
 
   /** Card #76: more of a reply (or thinking) being written in `session`. */
@@ -1869,6 +1880,16 @@ export class WebChannel implements Channel {
       ws.send(JSON.stringify({ type: "pong" }))
       return
     }
+    // Card #62: `live` asks for these chats' live text without showing them: the assistant overlay floats its
+    // Agent's reply over other apps as it is written. It replaces the last such set. Unlike `viewing` it is
+    // presence for nothing (the overlay is not a chat on screen), so nothing is read and pushes still go out.
+    if (frame.type === "live") {
+      const sessions = Array.isArray(frame.sessions)
+        ? frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
+        : []
+      this.pinLive(ws, sessions)
+      return
+    }
     if (frame.type === "viewing") {
       const visible = typeof frame.visible === "boolean" ? frame.visible : undefined
       if (visible === undefined) {
@@ -1891,7 +1912,7 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
-      this.watchLive(ws, session === null ? [] : visible ? [session] : [...this.liveWatching(ws)].filter((s) => s !== session))
+      this.watchLive(ws, session === null ? [] : visible ? [session] : (this.liveShown.get(ws) ?? []).filter((s) => s !== session))
       // A visible device sitting on an exact session has read it up to its
       // newest message. (Sitting on the list, session===null, does not count.)
       if (visible && typeof session === "string") this.opts.markRead?.(session)
