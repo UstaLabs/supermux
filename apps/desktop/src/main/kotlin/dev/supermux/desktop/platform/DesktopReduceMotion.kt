@@ -1,31 +1,28 @@
 package dev.supermux.desktop.platform
 
-import java.util.concurrent.TimeUnit
+import dev.supermux.desktop.host.OsEnv
+import dev.supermux.desktop.host.SystemOsEnv
 
-/** What one settings query's [output] says about reduced motion on [osName]; false when it cannot tell. */
-internal fun reduceMotionFrom(osName: String, output: String?): Boolean {
+/** What one settings query's [output] says about reduced motion on [os]; false when it cannot tell. */
+internal fun reduceMotionFrom(os: DesktopOs, output: String?): Boolean {
     val value = output?.trim() ?: return false
-    return when {
-        osName.startsWith("Mac", ignoreCase = true) -> value == "1"
-        osName.startsWith("Linux", ignoreCase = true) -> value == "false"
-        else -> false
+    return when (os) {
+        DesktopOs.MACOS -> value == "1"
+        DesktopOs.LINUX -> value == "false"
+        DesktopOs.WINDOWS -> false
     }
 }
 
-/** Asks the OS once: macOS `defaults`, GNOME `gsettings`. Windows and anything unknown read as false. Blocking. */
-internal fun probeReduceMotion(osName: String = System.getProperty("os.name").orEmpty()): Boolean {
-    val command = when {
-        osName.startsWith("Mac", ignoreCase = true) -> listOf("defaults", "read", "com.apple.universalaccess", "reduceMotion")
-        osName.startsWith("Linux", ignoreCase = true) -> listOf("gsettings", "get", "org.gnome.desktop.interface", "enable-animations")
-        else -> return false
+/**
+ * Asks the OS once, through [env] within 2 s: macOS `defaults`, GNOME `gsettings`. Windows, and a query that fails
+ * or times out (macOS's key is absent until the user touched the setting), read as false. Blocking.
+ */
+internal fun probeReduceMotion(os: DesktopOs = DesktopOs.current, env: OsEnv = SystemOsEnv): Boolean {
+    val query = when (os) {
+        DesktopOs.MACOS -> listOf("defaults", "read", "com.apple.universalaccess", "reduceMotion")
+        DesktopOs.LINUX -> listOf("gsettings", "get", "org.gnome.desktop.interface", "enable-animations")
+        DesktopOs.WINDOWS -> return false
     }
-    return runCatching {
-        val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        if (!process.waitFor(2, TimeUnit.SECONDS)) {
-            process.destroy()
-            false
-        } else {
-            reduceMotionFrom(osName, process.inputStream.bufferedReader().readText())
-        }
-    }.getOrDefault(false)
+    val result = env.runResult(query, 2_000)
+    return result.exit == 0 && reduceMotionFrom(os, result.out)
 }
