@@ -48,6 +48,14 @@ describe("Kotlin rules", () => {
     expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val os = System.getProperty("os.name")'))).toEqual(["os-check-kt"])
     expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'ProcessBuilder("cmd", "/c", "start")'))).toEqual(["spawn-kt"])
     expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val home = System.getProperty("user.home")'))).toEqual(["env-dirs-kt"])
+    expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val config = System.getenv("XDG_CONFIG_HOME")'))).toEqual(["env-dirs-kt"])
+    expect(ids(kt("apps/desktop/src/main/kotlin/B.kt", 'val run = System.getenv("XDG_RUNTIME_DIR")'))).toEqual(["env-dirs-kt"])
+  })
+
+  // env-dirs-kt is about folders: XDG's session variables say which desktop runs, not where a file goes.
+  test("an XDG variable that is not a folder is not an env-dirs decision", () => {
+    expect(kt("apps/desktop/src/main/kotlin/B.kt", 'val wayland = System.getenv("XDG_SESSION_TYPE") == "wayland"')).toEqual([])
+    expect(kt("apps/desktop/src/main/kotlin/B.kt", 'val desktop = System.getenv("XDG_CURRENT_DESKTOP")')).toEqual([])
   })
 
   test("HostPaths and the desktop's OS seams are allowed", () => {

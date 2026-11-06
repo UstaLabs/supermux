@@ -134,7 +134,8 @@ export const RULES: Rule[] = [
     lang: "kt",
     patterns: [
       /System\.getProperty\(\s*"(?:user\.home|java\.io\.tmpdir)"\s*\)/,
-      /System\.getenv\(\s*"(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_[A-Z_]+)"\s*\)/,
+      // XDG's folder variables (_HOME, _DIRS, XDG_RUNTIME_DIR), not its session ones (XDG_SESSION_TYPE, XDG_CURRENT_DESKTOP).
+      /System\.getenv\(\s*"(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_[A-Z_]*(?:_HOME|_DIRS?))"\s*\)/,
       /\bFile\.createTempFile\(/,
     ],
     allowed: [],
