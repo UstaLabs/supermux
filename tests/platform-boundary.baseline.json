@@ -41,7 +41,7 @@
   },
   "env-dirs-kt": {
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/auth/DesktopTokenStore.kt": 2,
+    "apps/desktop/src/main/kotlin/dev/supermux/desktop/auth/DesktopTokenStore.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/BrokerEnv.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostSupervisor.kt": 2,
@@ -238,7 +238,6 @@
     "src/shared/preflight.ts": 3
   },
   "os-check-kt": {
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/auth/DesktopTokenStore.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/DesktopHostBootstrap.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
