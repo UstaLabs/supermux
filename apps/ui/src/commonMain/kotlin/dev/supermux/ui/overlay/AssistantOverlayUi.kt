@@ -99,8 +99,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.chat.parseChatTs
@@ -109,6 +116,7 @@ import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.appendLinkified
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
@@ -119,7 +127,8 @@ import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.session.wearingGlasses
-import dev.supermux.ui.messagePlainText
+import dev.supermux.ui.PlainLink
+import dev.supermux.ui.messagePlainLinked
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -181,9 +190,9 @@ fun rememberOverlayRig(fleet: FleetStore, agentId: String?): AvatarRig? {
     return agentId?.let { rigs[it] }
 }
 
-/** A reply typing out in the bubble. */
+/** A reply typing out in the bubble: its plain [text], and the [links] its labels keep (bare URLs are in the text). */
 @Immutable
-data class OverlayReply(val id: String, val from: String, val text: String)
+data class OverlayReply(val id: String, val from: String, val text: String, val links: List<PlainLink> = emptyList())
 
 /** The talk controls the hold gesture drives; installed by [OverlayVoice]. */
 class OverlayVoiceControl(val start: () -> Unit, val send: () -> Unit, val cancel: () -> Unit)
@@ -275,9 +284,10 @@ fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) 
         fleet.agentReplies.collect { ev ->
             if (ev.session != id || ui.chatOpen) return@collect
             // The whole reply, plain: "Read it all" shows all of it (a list preview's text stops at 300 characters).
-            val text = messagePlainText(ev.entry.text.orEmpty())
-            if (text.isEmpty()) return@collect
-            ui.reply = OverlayReply(ev.entry.id, agent.name, text)
+            // Its links stay: a label still opens where it pointed.
+            val plain = messagePlainLinked(ev.entry.text.orEmpty())
+            if (plain.text.isEmpty()) return@collect
+            ui.reply = OverlayReply(ev.entry.id, agent.name, plain.text, plain.links)
             ui.replyShown = 0
             ui.replyFolded = false
             ui.replyExpanded = false
@@ -693,6 +703,7 @@ fun OverlayBubble(
             }
             ui.reply != null -> {
                 val r = ui.reply!!
+                val words = rememberReplyText(r)
                 val cut = r.text.length > BUBBLE_CHARS
                 BubbleBox(shape, cs.surfaceContainerHigh, Modifier.clickable(onClick = onOpen).testTag("overlay_reply")) {
                     // As wide as its words, with the ✕ at the far end.
@@ -712,10 +723,13 @@ fun OverlayBubble(
                             ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) }
                         }
                         if (ui.replyExpanded) {
-                            ReplyInFull(r.text, ui.bubbleRoom, onOpen)
+                            ReplyInFull(words, ui.bubbleRoom, onOpen)
                         } else {
                             Text(
-                                r.text.take(ui.replyShown.coerceAtMost(BUBBLE_CHARS)) + if (cut && !ui.speaking) "…" else "",
+                                buildAnnotatedString {
+                                    append(words.subSequence(0, ui.replyShown.coerceIn(0, minOf(words.length, BUBBLE_CHARS))))
+                                    if (cut && !ui.speaking) append("…")
+                                },
                                 color = cs.onSurface,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -736,6 +750,31 @@ fun OverlayBubble(
     }
 }
 
+/**
+ * [reply]'s words with their links, each opening through the platform as the chat's do: a label keeps where it
+ * pointed, and a bare URL opens itself (the chat's own linkifier). The bubble, typing out or read in full, draws
+ * a reply only through here; OverlayLinksTest clicks every overlay surface's links.
+ */
+@Composable
+private fun rememberReplyText(reply: OverlayReply): AnnotatedString {
+    val platform = LocalPlatform.current
+    val color = MaterialTheme.colorScheme.primary
+    return remember(reply, platform, color) {
+        val styles = TextLinkStyles(SpanStyle(color = color, textDecoration = TextDecoration.Underline))
+        val open: (String) -> Unit = { url -> runCatching { platform.openUrl(url) } }
+        buildAnnotatedString {
+            var at = 0
+            for (link in reply.links.sortedBy { it.start }) {
+                if (link.start < at || link.end > reply.text.length) continue
+                appendLinkified(reply.text.substring(at, link.start), styles, open)
+                withLink(LinkAnnotation.Url(link.url, styles) { open(link.url) }) { append(reply.text.substring(link.start, link.end)) }
+                at = link.end
+            }
+            appendLinkified(reply.text.substring(at), styles, open)
+        }
+    }
+}
+
 /** What the bubble keeps for itself around a reply read in full: its padding, the name row, "Open in chat". */
 private val REPLY_CHROME = 100.dp
 
@@ -749,7 +788,7 @@ private val REPLY_MAX = 460.dp
  * "Open in chat" carries on in the chat.
  */
 @Composable
-private fun ReplyInFull(text: String, room: Dp, onOpen: () -> Unit) {
+private fun ReplyInFull(text: AnnotatedString, room: Dp, onOpen: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
     LaunchedEffect(scroll) {
