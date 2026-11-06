@@ -25,6 +25,8 @@ internal suspend fun HostSupervisor.launchLocked(
     healthTimeoutMs: Long = timing.healthTimeoutMs,
     /** The caller already stopped our service's broker ([stopWindowsServiceLocked]). */
     serviceStopped: Boolean = false,
+    /** A takeover the user confirmed: another copy's definition under our name is backed up and stopped. */
+    takingOver: Boolean = false,
 ): String? {
     _backgroundError.value = null
     if (!prefs.background) return launchChildLocked(prefs, bins, carried, healthTimeoutMs)
@@ -42,7 +44,8 @@ internal suspend fun HostSupervisor.launchLocked(
         LaunchGate.Adopted -> return null // a broker of ours is running: nothing to install
     }
     val spec = BrokerService.Spec(broker, brokerEnvFor(prefs, bins, carried), logFile)
-    val installed = withContext(io) { BrokerService.install(spec, osEnv, alreadyStopped = serviceStopped) }
+    val me = me()
+    val installed = withContext(io) { BrokerService.install(spec, osEnv, me, alreadyStopped = serviceStopped, replaceOther = takingOver) }
     log("service install${if (replacingOurs) " (replacing ours)" else ""}: ${installed.describe()}")
     val failure = when (val result = installed) {
         is BrokerService.Result.Installed -> when {
@@ -83,12 +86,13 @@ internal suspend fun HostSupervisor.launchLocked(
         }
         BrokerService.Result.Unsupported -> "not supported on this system"
         is BrokerService.Result.Removed -> result.toString()
+        is BrokerService.Result.NotOurs -> HostSupervisor.ANOTHER_COPY
     }
     if (!allowChildFallback) return failure
     // Never leave a definition that could start a second broker; if it can't be removed, no child
     // either. A 1.0.0 definition (it runs the app, not a broker) is no such risk: left alone, so
     // a declined prompt isn't followed by a second one.
-    if (withContext(io) { BrokerService.isOursInstalled(osEnv) }) removeServiceLocked(prefs.port)?.let { return it }
+    if (withContext(io) { BrokerService.isOursInstalled(osEnv, me) }) removeServiceLocked(prefs.port)?.let { return it }
     mode = null
     _backgroundError.value = "Couldn't keep supermux running in the background: $failure"
     log(_backgroundError.value!!)
@@ -98,7 +102,7 @@ internal suspend fun HostSupervisor.launchLocked(
     // We replaced our own running service, removed it, and the child was refused too. Never end with
     // nothing running and our definition gone: put the service back (the old job is gone by now).
     log("the child fallback failed too ($childWhy); reinstalling the background service")
-    val again = withContext(io) { BrokerService.install(spec, osEnv) }
+    val again = withContext(io) { BrokerService.install(spec, osEnv, me) }
     log("service reinstall: ${again.describe()}")
     return when (again) {
         is BrokerService.Result.Installed -> {
@@ -140,7 +144,8 @@ internal suspend fun HostSupervisor.binaries(): HostBinaries.SidecarBinaries {
  * [port]. Null when done; else why not, and then no child may be started.
  */
 internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
-    val r = withContext(io) { BrokerService.remove(osEnv) }
+    val me = me()
+    val r = withContext(io) { BrokerService.remove(osEnv, me) }
     log("service remove: ${r.describe()}")
     if (r is BrokerService.Result.Failed) return "Couldn't stop the background service: ${r.message}"
     if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after removing the service")
@@ -155,9 +160,13 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
 internal suspend fun HostSupervisor.removeOurDefinitionsLocked(port: Int): String? {
     if (ourServiceInstalled()) return removeServiceLocked(port)
     // Not a live service: the XDG autostart, one written for the next login, or a 1.0.0 one.
-    // None of them has a broker of its own holding the port.
-    if (!withContext(io) { BrokerService.isOursInstalled(osEnv) || BrokerService.isLegacyInstalled(osEnv) }) return null
-    val r = withContext(io) { BrokerService.remove(osEnv) }
+    // None of them has a broker of its own holding the port. Another copy's is never ours to remove.
+    val me = me()
+    if (!withContext(io) { BrokerService.isOursInstalled(osEnv, me) || BrokerService.isLegacyInstalled(osEnv) }) {
+        if (withContext(io) { BrokerService.anotherCopysInstalled(osEnv, me) }) log("not removing the background service: ${HostSupervisor.ANOTHER_COPY}")
+        return null
+    }
+    val r = withContext(io) { BrokerService.remove(osEnv, me) }
     log("login definition remove: ${r.describe()}")
     return (r as? BrokerService.Result.Failed)?.let { "Couldn't remove the login autostart: ${it.message}" }
 }
@@ -212,6 +221,7 @@ internal suspend fun HostSupervisor.launchChildLocked(
         ?: repo?.let { listOf(bunPath(), it.resolve("src/main.ts").toString()) }
         ?: return "the supermux broker isn't bundled with this app"
     val env = childEnv(prefs, bins, carried)
+    val me = me()
     log("starting the broker as a child${if (detached) " (detached)" else ""} on port ${prefs.port}${if (repo != null) " from the dev checkout" else ""}")
     // Spawn and record atomically: a cancel here must never leave an untracked broker running.
     val c = withContext(NonCancellable) {
@@ -224,7 +234,7 @@ internal suspend fun HostSupervisor.launchChildLocked(
             child = c
             childDetached = detached
             mode = HostSupervisor.Mode.CHILD
-            c.pid?.let { pidFile.write(it, c.startMillis) }
+            c.pid?.let { pidFile.write(it, c.startMillis, me.id) }
             c
         }
     } ?: return HostSupervisor.QUITTING
@@ -289,13 +299,38 @@ internal suspend fun HostSupervisor.stopChildLocked() = withContext(NonCancellab
     }
 }
 
-internal fun HostSupervisor.adoptOrphanLocked(): Boolean {
-    val rec = pidFile.read() ?: return false
-    val c = runCatching { adoptFromPidFile(rec, processes) }.getOrNull()?.takeIf { it.isAlive } ?: return false
+internal suspend fun HostSupervisor.adoptOrphanLocked(): Boolean {
+    val c = previousChild() ?: return false
     log("re-parented our broker child from a previous run (pid ${c.pid ?: "?"})")
     child = c
     childDetached = false
     return true
+}
+
+/** The pid file's live child, ours or not (null: none), without re-parenting it. */
+private fun HostSupervisor.pidFileChild(): Pair<ChildPidFile.Record, ChildHandle>? {
+    val rec = pidFile.read() ?: return null
+    val c = runCatching { adoptFromPidFile(rec, processes) }.getOrNull()?.takeIf { it.isAlive } ?: return null
+    return rec to c
+}
+
+/** Our child from a previous run (the pid file names us, or predates install ids). Null: none alive. */
+private suspend fun HostSupervisor.previousChild(): ChildHandle? {
+    val (rec, c) = pidFileChild() ?: return null
+    return c.takeIf { rec.owner == null || rec.owner == me().id }
+}
+
+/**
+ * False when another copy of the app runs what answers on our port (#77): its child holds our pid file,
+ * or a definition it wrote is installed under our names and none of ours is. Its broker says
+ * `managedBy: desktop` too, and is never ours to update, adopt, restart or stop. With no sign either
+ * way, it is ours, as it always was.
+ */
+internal suspend fun HostSupervisor.ownsRunningBroker(): Boolean {
+    if (child?.isAlive == true) return true
+    val me = me()
+    pidFileChild()?.let { (rec, _) -> return rec.owner == null || rec.owner == me.id }
+    return withContext(io) { BrokerService.isOursInstalled(osEnv, me) || !BrokerService.anotherCopysInstalled(osEnv, me) }
 }
 
 /**
@@ -303,8 +338,11 @@ internal fun HostSupervisor.adoptOrphanLocked(): Boolean {
  * written for the next login while this app itself runs as the 1.0.0 keep-alive job (nothing of
  * it runs yet; the broker is our child until then).
  */
-internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean = withContext(io) {
-    BrokerService.isOursInstalled(osEnv) && !BrokerService.isOursXdgAutostart(osEnv) && !BrokerService.appRunsAsService(osEnv)
+internal suspend fun HostSupervisor.ourServiceInstalled(): Boolean {
+    val me = me()
+    return withContext(io) {
+        BrokerService.isOursInstalled(osEnv, me) && !BrokerService.isOursXdgAutostart(osEnv, me) && !BrokerService.appRunsAsService(osEnv)
+    }
 }
 
 /** What [secondBrokerCheck] found behind a live `broker.pid`. */
@@ -365,7 +403,8 @@ internal sealed interface LaunchGate {
 internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (val sb = secondBrokerCheck(port)) {
     SecondBroker.None -> LaunchGate.Proceed
     is SecondBroker.Refuse -> LaunchGate.Refuse(sb.reason)
-    is SecondBroker.Answering -> if (sb.found.isOurs()) {
+    // Another copy's broker says managedBy desktop too: only one this copy started is adopted (#77).
+    is SecondBroker.Answering -> if (sb.found.isOurs() && ownsRunningBroker()) {
         log("a broker of ours finished starting on port $port; using it")
         _hostId.value = sb.found.hostId
         lastHealthyBuild = sb.found.build
@@ -373,7 +412,7 @@ internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (va
         childDetached = false
         LaunchGate.Adopted
     } else {
-        LaunchGate.Refuse("Another supermux started on port $port meanwhile. Try again.")
+        LaunchGate.Refuse(if (sb.found.isOurs()) HostSupervisor.ANOTHER_COPY_RUNNING else "Another supermux started on port $port meanwhile. Try again.")
     }
 }
 
@@ -384,6 +423,7 @@ internal suspend fun HostSupervisor.launchGate(port: Int): LaunchGate = when (va
  */
 internal suspend fun HostSupervisor.stopOrphanLocked(port: Int): String? {
     if (!probe(port).isOurs()) return null
+    if (!ownsRunningBroker()) return HostSupervisor.ANOTHER_COPY_RUNNING
     val pid = otherLiveBrokerPid()
     val h = pid?.takeIf { processes.info(it)?.command?.let(::isBrokerCommand) == true }?.let { processes.handle(it) }
         ?: return "supermux is still running from the background setup. Quit it, then try again."
@@ -427,6 +467,7 @@ internal fun HostSupervisor.logTail(lines: Int = 20): String {
 internal fun BrokerService.Result.describe(): String = when (this) {
     is BrokerService.Result.Installed -> "installed ${path.fileName}${if (enabled) "" else " (not enabled)"}"
     is BrokerService.Result.Removed -> "removed${path?.let { " ${it.fileName}" } ?: " (nothing installed)"}"
+    is BrokerService.Result.NotOurs -> "left ${path.fileName} alone: another copy of the app set it up"
     BrokerService.Result.Unsupported -> "unsupported"
     is BrokerService.Result.Failed -> "failed: ${message.take(200)}"
 }

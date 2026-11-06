@@ -68,7 +68,7 @@ object DesktopHostBootstrap {
      * Before the supervisor exists: write the first `hosting.json` when [initialHostingPrefs] says
      * so (an upgrade paired only to other computers starts with hosting OFF). Best-effort.
      */
-    fun seedHostingPrefs(hosts: List<PairedHost>, store: HostingPrefsStore = HostingPrefsStore()) {
+    fun seedHostingPrefs(hosts: List<PairedHost>, store: HostingPrefsStore = HostingPrefsStore.ofThisUser()) {
         runCatching {
             initialHostingPrefs(hosts, store.exists(), store.load())?.let(store::save)
         }.onFailure { System.err.println("supermux host: seeding hosting prefs failed: ${it.message}") }
@@ -86,13 +86,15 @@ object DesktopHostBootstrap {
     /** One supervisor per process: two would each think they own the broker. */
     private val sharedSupervisor: Lazy<HostSupervisor> = lazy {
         val stateDir = BrokerPaths.defaultStateDir()
-        val prefsStore = HostingPrefsStore()
+        val prefsStore = HostingPrefsStore.ofThisUser()
         HostSupervisor(
             stateDir = stateDir,
             loadPrefs = prefsStore::load,
             savePrefs = prefsStore::save,
             osEnv = SystemOsEnv,
             materialize = { HostBinaries.resolve(stateDir) },
+            identity = InstallIdentity(InstallIdentity.defaultFile()),
+            appDataPredatesIds = { Files.exists(DesktopHostStores.defaultDir().resolve(DesktopHostPersistence.META_FILE)) },
         )
     }
 
@@ -302,6 +304,8 @@ object DesktopHostBootstrap {
             // A broker set up outside the app is not ours to move into or out of the background.
             if (!isReadOnly(supervisor.status.value)) scope.launch { supervisor.setBackground(keepRunning) }
         },
+        // A host this app doesn't manage pairs no new device without its token: say whose it is.
+        whyNoClaim = { HOST_WIZARD_SET_UP_ELSEWHERE.takeIf { isReadOnly(supervisor.status.value) } },
     )
 
     /** What [buildModel] does with a freshly minted trust-on-first-connect token. */

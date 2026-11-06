@@ -65,13 +65,13 @@ class DesktopTokenStore(val path: Path = defaultPath()) {
         private val OWNER_ONLY =
             setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
-        fun defaultPath(): Path {
-            val os = System.getProperty("os.name").lowercase()
-            val base = when {
-                os.contains("win") -> Path.of(System.getenv("APPDATA") ?: (System.getProperty("user.home") + "\\AppData\\Roaming"))
-                else -> Path.of(System.getenv("XDG_CONFIG_HOME") ?: (System.getProperty("user.home") + "/.config"))
-            }
-            return base.resolve("supermux-desktop").resolve("auth.json")
+        fun defaultPath(): Path =
+            configBase(System.getProperty("os.name"), System::getenv, System.getProperty("user.home")).resolve("supermux-desktop").resolve("auth.json")
+
+        /** The platform config dir the app's own data lives under, for [osName], [getenv] and [home]. */
+        internal fun configBase(osName: String, getenv: (String) -> String?, home: String): Path = when {
+            osName.lowercase().contains("win") -> Path.of(getenv("APPDATA") ?: (home + "\\AppData\\Roaming"))
+            else -> Path.of(getenv("XDG_CONFIG_HOME") ?: (home + "/.config"))
         }
     }
 }

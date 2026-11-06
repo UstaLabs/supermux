@@ -203,6 +203,7 @@ class KeepAwakeLidFlowTest {
             io = dispatcher,
             scope = ts.backgroundScope,
             log = {},
+            identity = InstallIdentity(Files.createTempDirectory("ka-app").resolve("install.json")),
         )
         val lease = LidLease(ops, ts.backgroundScope)
         val controls = KeepAwakeControls(

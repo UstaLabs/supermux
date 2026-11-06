@@ -68,6 +68,8 @@ object BrokerService {
          * the user declined the UAC prompt for a changed task definition.
          */
         data class Failed(val message: String, val previousStillRunning: Boolean = false) : Result
+        /** Another copy of the app's definition is at [path]: left exactly as it is (#77). */
+        data class NotOurs(val path: Path) : Result
     }
 
     /** Every definition we write carries these so [Takeover] can never mistake it for an old service. */
@@ -343,34 +345,207 @@ Terminal=false
     private fun registeredTaskXml(env: OsEnv): String? =
         env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML"))
 
+    // ── whose definition is it? (#77) ────────────────────────────────────────────────────────
+    //
+    // Every copy of the app on a computer uses the names above: a dev build next to the installed
+    // app, a reinstall with fresh app data. So each definition carries the id of the copy that wrote
+    // it ([INSTALL_ENV], from [InstallIdentity]), and a copy replaces, restarts or removes only a
+    // definition that carries its own: the app never stops or reconfigures a broker it did not start.
+
+    /** The env key naming the copy of the app ([InstallIdentity]) a definition belongs to. */
+    const val INSTALL_ENV = "MUX_DESKTOP_INSTALL"
+
     /**
-     * Install (or re-install, which restarts) the service. [alreadyStopped]: the caller just stopped
-     * our running service broker itself ([stop], Windows), so don't stop it again. When the app runs
-     * as the job ([appRunsAsService]) nothing running is touched: see [Result.Installed.nextLogin].
+     * The copy of the app asking ([InstallIdentity]). [ownsUnstamped]: a definition from before
+     * install ids (marked, no [INSTALL_ENV]) is this copy's; its first id-aware launch decided so.
+     * [persisted]: false when the id could not be saved or read back, so no definition may carry it.
      */
-    fun install(spec: Spec, env: OsEnv = SystemOsEnv, alreadyStopped: Boolean = false): Result {
+    data class Owner(val id: String, val ownsUnstamped: Boolean = false, val persisted: Boolean = true)
+
+    /** Why an [Owner] that isn't [Owner.persisted] installs nothing. */
+    const val UNSAVED_ID = "this copy of the app couldn't keep its install id, so it sets up no background service"
+
+    /** What an [Owner] may do with a definition under our names. */
+    enum class Ownership {
+        /** It carries the owner's id: replace, restart or remove it. */
+        OURS,
+
+        /** 1.0.0's keep-alive, which runs the app, not a broker: replaced or removed as before. */
+        LEGACY,
+
+        /** Another copy's (another id, or none), or not the app's at all: never touched. */
+        OTHER,
+    }
+
+    /**
+     * Pure. [env] is the text that holds a definition's env (null: not on disk); [marked]: the app
+     * wrote the definition ([MANAGED_MARKER]); [legacy]: it is 1.0.0's keep-alive.
+     */
+    internal fun ownership(env: String?, marked: Boolean, legacy: Boolean, me: Owner): Ownership = when {
+        legacy -> Ownership.LEGACY
+        env != null && INSTALL_ENV in env -> if (me.id in env) Ownership.OURS else Ownership.OTHER
+        marked && me.ownsUnstamped -> Ownership.OURS
+        else -> Ownership.OTHER
+    }
+
+    /** Pure, for [Takeover]: true iff a definition holding its own env is another copy's. */
+    internal fun isAnotherCopys(definition: String, me: Owner): Boolean =
+        ownership(definition, marked = true, legacy = isLegacyDefinition(definition), me = me) == Ownership.OTHER
+
+    private enum class Kind { PLIST, UNIT, XDG, TASK }
+
+    /**
+     * One definition under our names. [env] is the text its env lives in ([envPath]): the definition
+     * itself, the XDG env file, the Windows task loop's env file (null when missing). [marked]: the app
+     * wrote it; a registered task's XML keeps no comment, so every task that isn't 1.0.0's counts.
+     */
+    private class Slot(
+        val kind: Kind, val path: Path, val text: String, val envPath: Path, val env: String?, val marked: Boolean, val legacy: Boolean,
+    ) {
+        val unstamped: Boolean get() = marked && !legacy && (env == null || INSTALL_ENV !in env)
+
+        fun ownership(me: Owner): Ownership = BrokerService.ownership(env, marked, legacy, me)
+    }
+
+    private fun readIfFile(p: Path): String? = if (Files.isRegularFile(p)) Files.readString(p) else null
+
+    private fun launchdSlot(env: OsEnv): Slot? {
+        val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
+        val text = readIfFile(plist) ?: return null
+        return Slot(Kind.PLIST, plist, text, plist, text, MANAGED_MARKER in text, isLegacyDefinition(text))
+    }
+
+    private fun unitSlot(env: OsEnv): Slot? {
+        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
+        val text = readIfFile(unit) ?: return null
+        return Slot(Kind.UNIT, unit, text, unit, text, MANAGED_MARKER in text, isLegacyDefinition(text))
+    }
+
+    private fun xdgSlot(env: OsEnv): Slot? {
+        val entry = xdgAutostartPath(env)
+        val text = readIfFile(entry) ?: return null
+        return Slot(Kind.XDG, entry, text, xdgEnvPath(env), readIfFile(xdgEnvPath(env)), MANAGED_MARKER in text, isLegacyXdgEntry(text))
+    }
+
+    /** The registered task: its XML says whether it is 1.0.0's, its loop's env file whose it is. */
+    private fun taskSlot(env: OsEnv): Slot? {
+        if (!isInstalled(env)) return null
+        val xml = registeredTaskXml(env).orEmpty()
+        val envFile = windowsEnvPath(env)
+        return Slot(Kind.TASK, WINDOWS_TASK_PATH, xml, envFile, readIfFile(envFile), marked = true, legacy = isLegacyDefinition(xml))
+    }
+
+    /** systemd --user needs both systemctl and a runtime dir; otherwise the XDG autostart stands in. */
+    private fun usesSystemd(env: OsEnv): Boolean = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
+
+    private fun slots(env: OsEnv): List<Slot> = when (env.os) {
+        OsEnv.Os.MAC -> listOfNotNull(launchdSlot(env))
+        OsEnv.Os.LINUX -> listOfNotNull(unitSlot(env), xdgSlot(env))
+        OsEnv.Os.WINDOWS -> listOfNotNull(taskSlot(env))
+        OsEnv.Os.OTHER -> emptyList()
+    }
+
+    /** The definition [install] would write over. */
+    private fun installSlot(env: OsEnv): Slot? = when (env.os) {
+        OsEnv.Os.MAC -> launchdSlot(env)
+        OsEnv.Os.LINUX -> if (usesSystemd(env)) unitSlot(env) else xdgSlot(env)
+        OsEnv.Os.WINDOWS -> taskSlot(env)
+        OsEnv.Os.OTHER -> null
+    }
+
+    /**
+     * True iff a definition from before install ids is installed and runs [stateDir]'s broker: what
+     * an earlier version of this app wrote, if anything did (HostSupervisor's first id-aware launch).
+     * The bin dir as each format writes it, then a separator: as is, XML-escaped (plist), systemd-quoted
+     * (Environment=, ExecStart=), sh-quoted (XDG env file) and inside the XDG Exec= line, a PowerShell literal.
+     */
+    fun unstampedRuns(env: OsEnv = SystemOsEnv, stateDir: Path): Boolean = runCatching {
+        val bin = stateDir.resolve(HostBinaries.BIN_SUBDIR).toString()
+        val sh = shQuote(bin).removeSurrounding("'")
+        val forms = listOf(
+            bin, xml(bin), sdQuote(bin).removeSurrounding("\""), sdExecQuote(bin).removeSurrounding("\""),
+            sh, xdgQuote(sh).removeSurrounding("\""), powershellLiteral(bin).removeSurrounding("'"),
+        )
+        val names = forms.distinct().joinToString("|") { Regex.escape(it) }
+        val runs = Regex("""(?:$names)[\\/;:'"<]""")
+        slots(env).any { it.unstamped && (runs.containsMatchIn(it.text) || runs.containsMatchIn(it.env.orEmpty())) }
+    }.getOrDefault(false)
+
+    /**
+     * Writes [me]'s id into the definitions from before install ids that [me] adopted, in place, so no
+     * other copy can adopt them too. Nothing running is reloaded or restarted: launchd and the Windows
+     * task loop read them at the next start, systemd is told to re-read its units. True iff every one
+     * of them carries the id now.
+     */
+    fun stampInPlace(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        var all = true
+        for (slot in slots(env).filter { it.unstamped && it.ownership(me) == Ownership.OURS }) {
+            val text = slot.env
+            val stamped = when {
+                text == null -> null
+                slot.kind == Kind.PLIST -> Regex("""<key>EnvironmentVariables</key>\s*<dict>""").find(text)?.let {
+                    text.replaceRange(it.range, it.value + "\n    <key>$INSTALL_ENV</key>\n    <string>${me.id}</string>")
+                }
+                slot.kind == Kind.UNIT -> Regex("""(?m)^\[Service][ \t]*$""").find(text)?.let {
+                    text.replaceRange(it.range, it.value + "\nEnvironment=" + sdQuote("$INSTALL_ENV=${me.id}"))
+                }
+                slot.kind == Kind.XDG -> endLine(text, "\n") + "export $INSTALL_ENV=" + shQuote(me.id) + "\n"
+                else -> endLine(text, "\r\n") + "\$env:$INSTALL_ENV = " + powershellLiteral(me.id) + "\r\n"
+            }
+            if (stamped == null) { all = false; continue }
+            writePrivate(slot.envPath, stamped)
+            if (slot.kind == Kind.UNIT && usesSystemd(env)) env.run(listOf("systemctl", "--user", "daemon-reload"))
+        }
+        all
+    }.getOrDefault(false)
+
+    private fun endLine(text: String, eol: String) = if (text.isEmpty() || text.endsWith("\n")) text else text + eol
+
+    /**
+     * Install (or re-install, which restarts) [me]'s service; the definition carries [me]'s id.
+     * [alreadyStopped]: the caller just stopped our running service broker itself ([stop], Windows),
+     * so don't stop it again. When the app runs as the job ([appRunsAsService]) nothing running is
+     * touched: see [Result.Installed.nextLogin]. Another copy's definition under our name is left as
+     * it is ([Result.NotOurs]) unless [replaceOther]: a takeover the user confirmed, which backed it
+     * up and stopped it first.
+     */
+    fun install(spec: Spec, env: OsEnv = SystemOsEnv, me: Owner, alreadyStopped: Boolean = false, replaceOther: Boolean = false): Result {
+        if (!me.persisted) return Result.Failed(UNSAVED_ID)
+        // Unreadable is not "nothing there": write nothing over what can't be told apart.
+        val (target, all) = try { installSlot(env) to slots(env) } catch (e: Exception) { return Result.Failed("couldn't read what is installed: ${e.message}") }
+        // Not over another copy's definition, nor next to one (both would start a broker at login).
+        val other = all.firstOrNull { it.ownership(me) == Ownership.OTHER && (it.marked || it.path == target?.path) }
+            ?: target?.takeIf { it.ownership(me) == Ownership.OTHER }
+        if (other != null && !replaceOther) return Result.NotOurs(other.path)
+        val stamped = spec.copy(env = spec.env + (INSTALL_ENV to me.id))
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> installLaunchd(spec, env, asJob)
-            OsEnv.Os.LINUX -> installSystemd(spec, env, asJob)
-            OsEnv.Os.WINDOWS -> installWindowsTask(spec, env, alreadyStopped, asJob)
+            OsEnv.Os.MAC -> installLaunchd(stamped, env, asJob)
+            OsEnv.Os.LINUX -> installSystemd(stamped, env, asJob)
+            OsEnv.Os.WINDOWS -> installWindowsTask(stamped, env, alreadyStopped, asJob)
             OsEnv.Os.OTHER -> Result.Unsupported
         }
     }
 
-    /** Remove our definition (or a 1.0.0 one). When the app runs as the job, the job itself is left to end with the app. */
-    fun remove(env: OsEnv = SystemOsEnv): Result {
+    /**
+     * Remove [me]'s definition (or a 1.0.0 one); another copy's is left as it is ([Result.NotOurs]).
+     * When the app runs as the job, the job itself is left to end with the app.
+     */
+    fun remove(env: OsEnv = SystemOsEnv, me: Owner): Result {
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> removeLaunchd(env, asJob)
-            OsEnv.Os.LINUX -> removeSystemd(env, asJob)
-            OsEnv.Os.WINDOWS -> removeWindowsTask(env, asJob)
+            OsEnv.Os.MAC -> removeLaunchd(env, asJob, me)
+            OsEnv.Os.LINUX -> removeSystemd(env, asJob, me)
+            OsEnv.Os.WINDOWS -> removeWindowsTask(env, asJob, me)
             OsEnv.Os.OTHER -> Result.Unsupported
         }
     }
 
-    /** Restart the running service in place. True iff the OS accepted the command. Never the job that is the app. */
-    fun restart(env: OsEnv = SystemOsEnv): Boolean = if (appRunsAsService(env)) false else when (env.os) {
+    /**
+     * Restart [me]'s running service in place. True iff the OS accepted the command. Never the job
+     * that is the app, never another copy's service.
+     */
+    fun restart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = if (appRunsAsService(env) || !isOursInstalled(env, me)) false else when (env.os) {
         OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
         OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
         // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
@@ -389,24 +564,33 @@ Terminal=false
     }
 
     /**
-     * True iff a definition WE wrote (it carries [MANAGED_MARKER]) is installed. The retired Swift
-     * app used the same launchd label, so file existence alone is not enough.
+     * True iff a definition of [me]'s is installed: it carries [me]'s id. Every copy of the app (and
+     * the retired Swift app, and 1.0.0's keep-alive) used the same names, so existence is not enough.
      */
-    fun isOursInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
-        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
-        when (env.os) {
-            OsEnv.Os.MAC -> ours(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
-            OsEnv.Os.LINUX -> ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) || ours(xdgAutostartPath(env))
-            // The 1.0.0 task had the same name; it runs the app, not the broker.
-            OsEnv.Os.WINDOWS -> isInstalled(env) && registeredTaskXml(env)?.let(::isLegacyDefinition) != true
-            OsEnv.Os.OTHER -> false
-        }
+    fun isOursInstalled(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        slots(env).any { it.ownership(me) == Ownership.OURS }
     }.getOrDefault(false)
 
+    /** True iff a definition another copy of the app wrote is installed under our names (#77). */
+    fun anotherCopysInstalled(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        slots(env).any { it.marked && it.ownership(me) == Ownership.OTHER }
+    }.getOrDefault(false)
+
+    /**
+     * The port another copy's installed definition runs its broker on: its MUX_WEB_PORT, as each format
+     * writes it. Null when no other copy's definition is installed or it names none (#77).
+     */
+    fun anotherCopysPort(env: OsEnv = SystemOsEnv, me: Owner): Int? = runCatching {
+        slots(env).firstOrNull { it.marked && it.ownership(me) == Ownership.OTHER }?.env
+            ?.let { PORT_IN_ENV.find(it) }?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 1..65535 }
+    }.getOrNull()
+
+    /** MUX_WEB_PORT's value in a plist (`</key><string>`), a unit (`=`), the XDG env file (`='`) or the Windows one (` = '`). */
+    private val PORT_IN_ENV = Regex("""MUX_WEB_PORT(?:</key>\s*<string>|\s*=\s*'?)(\d{1,5})(?!\d)""")
+
     /** True iff OUR "service" is the Linux XDG autostart fallback (no systemd unit of ours): it only starts at login. */
-    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
-        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
-        ours(xdgAutostartPath(env)) && !ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))
+    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
+        xdgSlot(env)?.ownership(me) == Ownership.OURS && unitSlot(env)?.ownership(me) != Ownership.OURS
     }.getOrDefault(false)
 
     /** The XDG autostart fallback file (Linux without systemd --user). */
@@ -492,9 +676,10 @@ Terminal=false
         return last
     }
 
-    private fun removeLaunchd(env: OsEnv, asJob: Boolean): Result {
+    private fun removeLaunchd(env: OsEnv, asJob: Boolean, me: Owner): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
+            if (launchdSlot(env)?.ownership(me) == Ownership.OTHER) return Result.NotOurs(plist)
             // As the job, the file goes and the loaded job (us) ends with the app.
             if (!asJob && env.hasCommand("launchctl") && env.uid != null) {
                 env.run(listOf("launchctl", "bootout", "gui/${env.uid}/$LAUNCHD_LABEL"))
@@ -505,10 +690,7 @@ Terminal=false
     }
 
     private fun installSystemd(spec: Spec, env: OsEnv, asJob: Boolean): Result {
-        // systemd --user needs both systemctl and a runtime dir; otherwise fall back to XDG autostart.
-        if (!env.hasCommand("systemctl") || env.xdgRuntimeDir.isNullOrBlank()) {
-            return installXdgAutostart(spec, env)
-        }
+        if (!usesSystemd(env)) return installXdgAutostart(spec, env)
         val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
         return runCatching {
             Files.createDirectories(unit.parent)
@@ -545,19 +727,28 @@ Terminal=false
         }.getOrElse { Result.Failed("xdg autostart install failed: ${it.message}") }
     }
 
-    private fun removeSystemd(env: OsEnv, asJob: Boolean): Result {
+    private fun removeSystemd(env: OsEnv, asJob: Boolean, me: Owner): Result {
         val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
         val autostart = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
         return runCatching {
-            val systemd = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
+            // Either one may be another copy's: that one stays, with all that belongs to it.
+            val unitOther = unitSlot(env)?.ownership(me) == Ownership.OTHER
+            val autostartOther = xdgSlot(env)?.ownership(me) == Ownership.OTHER
+            val systemd = usesSystemd(env) && !unitOther
             // As the job, never --now: that stops this app. The unit ends with the app.
             if (systemd) env.run(listOf("systemctl", "--user", "disable") + (if (asJob) emptyList() else listOf("--now")) + SYSTEMD_NAME)
-            val a = Files.deleteIfExists(unit)
-            Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
-            val b = Files.deleteIfExists(autostart)
-            Files.deleteIfExists(xdgEnvPath(env))
+            val a = !unitOther && Files.deleteIfExists(unit)
+            if (!unitOther) Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
+            val b = !autostartOther && Files.deleteIfExists(autostart)
+            if (!autostartOther) Files.deleteIfExists(xdgEnvPath(env))
             if (systemd) env.run(listOf("systemctl", "--user", "daemon-reload"))
-            Result.Removed(when { a -> unit; b -> autostart; else -> null })
+            when {
+                a -> Result.Removed(unit)
+                b -> Result.Removed(autostart)
+                unitOther -> Result.NotOurs(unit)
+                autostartOther -> Result.NotOurs(autostart)
+                else -> Result.Removed(null)
+            }
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
     }
 
@@ -745,11 +936,14 @@ Terminal=false
     /** schtasks by its System32 path: a bare name is looked up on the (user-influenced) PATH. */
     private const val SCHTASKS = "(\$env:SystemRoot + '\\System32\\schtasks.exe')"
 
-    private fun removeWindowsTask(env: OsEnv, asJob: Boolean): Result {
+    private fun removeWindowsTask(env: OsEnv, asJob: Boolean, me: Owner): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
+            val task = taskSlot(env)
+            // Another copy's task: no UAC prompt to end and delete it, and its env file stays.
+            if (task?.ownership(me) == Ownership.OTHER) return Result.NotOurs(WINDOWS_TASK_PATH)
             Files.deleteIfExists(taskXml)
-            if (!isInstalled(env)) {
+            if (task == null) {
                 Files.deleteIfExists(windowsEnvPath(env))
                 return Result.Removed(null)
             }
