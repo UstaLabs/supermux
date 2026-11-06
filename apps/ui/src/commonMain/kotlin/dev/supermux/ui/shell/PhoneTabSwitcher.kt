@@ -215,6 +215,8 @@ internal fun PhoneTabSwitcher(
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
     cardMenu: @Composable (id: String, content: @Composable () -> Unit) -> Unit,
+    /** A file tab with unsaved edits wears the unsaved dot, so it is seen before it is swiped away. */
+    unsaved: (String) -> Boolean = { false },
     /** A card whose picture is drawn elsewhere for now (the tab morphing in or out of it). */
     hiddenThumbId: String? = null,
     /** A card hidden outright — frame, header and all (the one growing back into the page). */
@@ -271,6 +273,7 @@ internal fun PhoneTabSwitcher(
                         icon = viewFor(id).switcherIcon(),
                         selected = id == selectedId,
                         unread = unread(id),
+                        unsaved = unsaved(id),
                         thumbnail = thumbnails[id],
                         onOpen = { onSelect(id) },
                         onClose = { onClose(id) },
@@ -295,6 +298,7 @@ private fun TabCard(
     thumbnail: ImageBitmap?,
     onOpen: () -> Unit,
     onClose: () -> Unit,
+    unsaved: Boolean = false,
     thumbHidden: Boolean = false,
     hidden: Boolean = false,
     onThumbPlaced: (LayoutCoordinates) -> Unit = {},
@@ -350,6 +354,10 @@ private fun TabCard(
                 Spacer(Modifier.width(6.dp))
                 if (unread) {
                     Box(Modifier.size(6.dp).background(LocalSemantics.current.success, CircleShape).testTag("tab-dot-$id"))
+                    Spacer(Modifier.width(6.dp))
+                }
+                if (unsaved) {
+                    UnsavedDot(onFrame, Modifier.testTag("tab-unsaved-$id"), size = 6.dp)
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(

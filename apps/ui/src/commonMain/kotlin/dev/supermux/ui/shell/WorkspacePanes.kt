@@ -740,6 +740,9 @@ fun PhoneWorkspacePanes(
                     .statusBarsPadding(),
             ) {
                 if (selectedView?.kind != "chat") {
+                    // A file's Save and preview toggle ride on its TAB on wide layouts; with no tabs
+                    // here they ride in this bar (PhoneFileBar.kt).
+                    val file = selectedView?.let { v -> v.filePathOrNull()?.let { path -> v.id to path } }
                     Row(
                         swipeShift.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
                             .testTag("phone_workspace_bar"),
@@ -751,6 +754,7 @@ fun PhoneWorkspacePanes(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp),
                         )
+                        file?.let { (_, path) -> PhoneFileUnsavedDot(ws.documents, path) }
                         Text(
                             selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             fontFamily = MonoFontFamily,
@@ -759,6 +763,7 @@ fun PhoneWorkspacePanes(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
                         )
+                        file?.let { (id, path) -> PhoneFileActions(id, path, ws.documents, ws.previewModes) }
                         PhoneTabCountButton(tabsButton)
                     }
                 }
@@ -823,6 +828,7 @@ fun PhoneWorkspacePanes(
                 viewFor = { viewsById[it] },
                 titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
+                unsaved = { id -> viewsById[id]?.filePathOrNull()?.let(ws.documents::isDirty) == true },
                 thumbnails = thumbnails,
                 onSelect = { id -> pickTab(id) },
                 // The tab in flight is drawn by the morph; its card's own picture waits for it.
