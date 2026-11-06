@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs"
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
@@ -27,6 +27,56 @@ test("knowledge search ranks digest above raw log and finds sections", () => {
   expect(hits.length).toBeGreaterThanOrEqual(2)
   expect(hits[0]!.scope).toBe("digest") // digest boosted to the top
   expect(hits.some((h) => h.path.endsWith("infra.md"))).toBe(true)
+})
+
+// The full rebuild runs at broker start and after a curator run only, and the curator is off by
+// default: a finding saved while the broker runs must still be found (card #83).
+test("a finding appended after the index was built is found without a rebuild", () => {
+  const { db, home } = setup()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  appendFileSync(join(home, "domains", "infra.md"), "\n## Startup env vars (2026-11-06)\nSTRIPE_WEBHOOK_SECRET is read on each request.\n")
+  const hits = s.searchKnowledge("STRIPE_WEBHOOK_SECRET", { includePersonal: false, limit: 10 })
+  expect(hits.map((h) => h.heading)).toEqual(["Startup env vars (2026-11-06)"])
+})
+
+test("a topic file created after the index was built is found, and a removed one leaves the index", () => {
+  const { db, home } = setup()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  writeFileSync(join(home, "domains", "billing.md"), "---\ndescription: billing\n---\n\n## Refunds (2026-11-06)\nPOST /refunds needs paymentIntentId.\n")
+  expect(s.searchKnowledge("paymentIntentId", { includePersonal: false }).map((h) => h.name)).toEqual(["billing"])
+  rmSync(join(home, "domains", "infra.md"))
+  expect(s.searchKnowledge("systemd", { includePersonal: false })).toEqual([])
+})
+
+test("an Agent's own history is found by its search as soon as it appends to it", () => {
+  const { db, home } = setup()
+  mkdirSync(join(home, "agent-memory"))
+  writeFileSync(join(home, "agent-memory", "a1.md"), "")
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  appendFileSync(join(home, "agent-memory", "a1.md"), "## Standup (2026-11-06)\nPost the standup at 09:30 sharp.\n")
+  expect(s.searchKnowledge("standup", { includePersonal: true, agentId: "a1" }).map((h) => h.path)).toEqual([join(home, "agent-memory", "a1.md")])
+})
+
+test("the inbox is searchable: findings not filed under a topic yet", () => {
+  const { db, home } = setup()
+  writeFileSync(join(home, "domains", "_inbox.md"), "# Inbox\n\n## acme-store: vitest without npm install (2026-11-06)\nRun it with bun and a stub react.\n")
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  expect(s.searchKnowledge("vitest", { includePersonal: false }).map((h) => h.name)).toEqual(["_inbox"])
+})
+
+test("a search with nothing changed on disk rewrites nothing in the index", () => {
+  const { db, home } = setup()
+  const s = new SearchStore(db, home)
+  s.rebuildKnowledge()
+  const changes = () => (db.query("SELECT total_changes() AS n").get() as { n: number }).n
+  const before = changes()
+  s.searchKnowledge("deploy", { includePersonal: true })
+  s.searchKnowledge("kotlin", { includePersonal: true })
+  expect(changes()).toBe(before)
 })
 
 test("worker query excludes personal/", () => {
