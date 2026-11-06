@@ -5,7 +5,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** Card #76: the ink edge and the gliding scroll step aside when the OS asks for less motion. */
-class ReduceMotionTest {
+class DesktopReduceMotionTest {
     @Test fun macOsReadsTheUniversalAccessSetting() {
         assertTrue(reduceMotionFrom("Mac OS X", "1\n"))
         assertFalse(reduceMotionFrom("Mac OS X", "0\n"))
