@@ -128,7 +128,9 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
+import { createCheckoutWatch } from "./core/checkout-watch"
+import { gitAsync } from "./core/git/exec"
 import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -584,6 +586,14 @@ const keepAwake = new KeepAwake({
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()
+// A broker run from its checkout keeps the code it started with, while keepers and sessions load the files on disk: when
+// the checkout moves under it, say so (log, /host), never refuse (the keeper-error card). Compiled releases carry their code.
+const checkoutWatch = IS_COMPILED ? undefined : createCheckoutWatch({
+  readHead: () => gitAsync(join(import.meta.dir, ".."), ["rev-parse", "HEAD"], { timeoutMs: 10_000 }).catch(() => null),
+  log: (event, fields) => log.warn(event, fields),
+  intervalMs: 60_000,
+})
+void checkoutWatch?.start()
 // Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
 const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
@@ -2664,6 +2674,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       gitAvailable: gitRequirement.ok,
       requirements: gitRequirement.requirements(),
       keepAwake: keepAwake.state(),
+      checkoutMoved: checkoutWatch?.current(),
     }),
     getHostRequirements: () => gitRequirement.requirements(),
     installGit: () => gitInstaller.install(),

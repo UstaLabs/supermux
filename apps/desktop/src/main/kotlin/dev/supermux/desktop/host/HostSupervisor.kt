@@ -125,6 +125,13 @@ class HostSupervisor(
      */
     val keepAwake: StateFlow<dev.supermux.net.KeepAwakeState?> = _keepAwake.asStateFlow()
 
+    private val _checkoutMoved = MutableStateFlow<String?>(null)
+    /**
+     * The local broker's "restart it to run the new code" when it runs from a checkout that moved under it (`/host`'s
+     * `checkoutMoved`), refreshed by every probe. Null: it has not moved, or no answer yet.
+     */
+    val checkoutMoved: StateFlow<String?> = _checkoutMoved.asStateFlow()
+
     /** The state the broker answered a `PUT /settings/keep-awake` with. */
     fun publishKeepAwake(state: dev.supermux.net.KeepAwakeState) {
         _keepAwake.value = state
@@ -137,6 +144,7 @@ class HostSupervisor(
                 _gitAvailable.value = r.gitAvailable
                 _gitRequirement.value = r.gitRequirement
                 _keepAwake.value = r.keepAwake
+                _checkoutMoved.value = r.checkoutMoved
             }
         }
     }
@@ -406,6 +414,7 @@ class HostSupervisor(
             _gitAvailable.value = null
             _gitRequirement.value = null
             _keepAwake.value = null
+            _checkoutMoved.value = null
             _status.value = HostingStatus.NotHosting
         }
     }

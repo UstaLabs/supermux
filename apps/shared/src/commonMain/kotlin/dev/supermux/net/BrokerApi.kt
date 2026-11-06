@@ -81,7 +81,17 @@ data class HostIdentity(
     val requirements: HostRequirements? = null,
     /** Authed and local callers: "Keep this computer awake". Null from an older broker. */
     val keepAwake: KeepAwakeState? = null,
+    /** Authed and local callers: a broker run from a checkout that moved under it. Null otherwise, or from an older broker. */
+    val checkoutMoved: CheckoutMoved? = null,
 )
+
+/**
+ * `GET /host`'s `checkoutMoved`: the broker runs from a checkout whose HEAD moved since it started ([runs] → [checkout],
+ * short commits), so what it starts now loads code it does not run. [message] is the sentence the apps show. A warning:
+ * the broker refuses nothing.
+ */
+@Serializable
+data class CheckoutMoved(val runs: String = "", val checkout: String = "", val message: String = "")
 
 /**
  * "Keep this computer awake" on a host (spec "Keep the computer awake while hosting"): `GET /host`'s

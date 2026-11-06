@@ -1,6 +1,7 @@
 import type { InstallMode } from "../../core/update/mode"
 import type { HostRequirements } from "../../core/git/requirement"
 import type { KeepAwakeState } from "../../core/power/keep-awake"
+import type { CheckoutMoved } from "../../core/checkout-watch"
 
 export type HostMode = InstallMode
 
@@ -22,6 +23,8 @@ export interface HostInfo {
   requirements?: HostRequirements
   /** "Keep this computer awake" (`core/power/keep-awake`): the setting and whether it holds. */
   keepAwake?: KeepAwakeState
+  /** A broker run from a checkout that moved under it (`core/checkout-watch`): a warning to restart it. */
+  checkoutMoved?: CheckoutMoved
 }
 
 export interface HostBody {
@@ -37,6 +40,7 @@ export interface HostBody {
   gitAvailable?: boolean
   requirements?: HostRequirements
   keepAwake?: KeepAwakeState
+  checkoutMoved?: CheckoutMoved
 }
 
 /**
@@ -52,6 +56,7 @@ export function buildHostBody(info: HostInfo, authed: boolean, directLoopback = 
     // Every client (phone, PWA, desktop) shows "This computer needs git" from this.
     if (info.requirements !== undefined) base.requirements = info.requirements
     if (info.keepAwake !== undefined) base.keepAwake = info.keepAwake
+    if (info.checkoutMoved !== undefined) base.checkoutMoved = info.checkoutMoved
   }
   if (directLoopback) {
     if (info.build !== undefined) base.build = info.build
