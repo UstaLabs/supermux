@@ -20,6 +20,8 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -60,15 +62,20 @@ class ChatAutoscrollTest {
     private fun ComposeUiTest.panel() {
         state = ChatState(messages = history + shots + reply)
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
-            Box(Modifier.requiredSize(width = 400.dp, height = 600.dp)) {
-                ChatPanel(
-                    session = session,
-                    state = state,
-                    actions = ChatActions(),
-                    draft = "",
-                    onDraftChange = {},
-                    showHeader = false,
-                )
+            // The app's own theme, so its bundled fonts lay the text out: this suite measures pixels, and the
+            // machine's default font differs (Noto Sans here, DejaVu Sans on CI, which wraps wider and made the
+            // glide test's frames bigger there).
+            SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                Box(Modifier.requiredSize(width = 400.dp, height = 600.dp)) {
+                    ChatPanel(
+                        session = session,
+                        state = state,
+                        actions = ChatActions(),
+                        draft = "",
+                        onDraftChange = {},
+                        showHeader = false,
+                    )
+                }
             }
         }
         waitForIdle()
