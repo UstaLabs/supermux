@@ -10,12 +10,24 @@ test("maps 200 → ok", async () => {
 
 test("maps 410 (Unregistered) → gone", async () => {
   const a = createApnsAdapter(cfg, async () => ({ status: 410, body: '{"reason":"Unregistered"}' }))
-  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true, reason: "apns_410_Unregistered" })
 })
 
 test("maps other 4xx/5xx → not gone", async () => {
   const a = createApnsAdapter(cfg, async () => ({ status: 503, body: "" }))
-  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false, reason: "apns_503" })
+})
+
+// Card #86: a sandbox token sent to production APNs is BadDeviceToken; the
+// reason now travels back to the broker's log instead of a bare "gone".
+test("names Apple's reason for a dropped token", async () => {
+  const a = createApnsAdapter(cfg, async () => ({ status: 400, body: '{"reason":"BadDeviceToken"}' }))
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true, reason: "apns_400_BadDeviceToken" })
+})
+
+test("names Apple's reason for a refused provider token", async () => {
+  const a = createApnsAdapter(cfg, async () => ({ status: 403, body: '{"reason":"InvalidProviderToken"}' }))
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false, reason: "apns_403_InvalidProviderToken" })
 })
 
 test("silent send uses background push-type with content-available, no alert", async () => {
