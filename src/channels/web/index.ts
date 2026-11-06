@@ -1,6 +1,7 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
@@ -627,6 +628,9 @@ export class WebChannel implements Channel {
   /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
   private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
+  /** Card #76: replies being written, for the apps that asked (`subscribe.streams`). */
+  private readonly live = new LiveReplies()
+  private readonly liveSockets = new WeakMap<import("bun").ServerWebSocket<WSData>, LiveSocket>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
@@ -843,6 +847,7 @@ export class WebChannel implements Channel {
   }
 
   async stop(): Promise<void> {
+    this.live.stop()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
     for (const t of this.perfTimers.splice(0)) clearInterval(t)
@@ -878,6 +883,41 @@ export class WebChannel implements Channel {
     // and the client reads it when it connects. The agent keeps running; it is
     // not bound to a present client.
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
+  }
+
+  private liveSocket(ws: import("bun").ServerWebSocket<WSData>): LiveSocket {
+    let socket = this.liveSockets.get(ws)
+    if (!socket) {
+      socket = { send: (json) => { ws.send(json) }, bufferedAmount: () => ws.getBufferedAmount() }
+      this.liveSockets.set(ws, socket)
+    }
+    return socket
+  }
+
+  /** Card #76: the chats this socket shows, for live text (an app that never asked has no live socket). */
+  private watchLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    const socket = this.liveSockets.get(ws)
+    if (socket) this.live.watch(socket, sessions)
+  }
+
+  private liveWatching(ws: import("bun").ServerWebSocket<WSData>): ReadonlySet<string> {
+    const socket = this.liveSockets.get(ws)
+    return socket ? this.live.watching(socket) : new Set()
+  }
+
+  /** Card #76: more of a reply (or thinking) being written in `session`. */
+  liveAppend(session: string, stream: string, kind: LiveKind, text: string): void {
+    this.live.append(session, stream, kind, text)
+  }
+
+  /** Card #76: a live stream ended; `final` = its stored form follows with the same id. */
+  liveClose(stream: string, final: boolean): void {
+    this.live.close(stream, final)
+  }
+
+  /** Card #76: the session's turn ended; anything still streaming there is dropped. */
+  liveEndSession(session: string): void {
+    this.live.endSession(session)
   }
 
   broadcastToAll(frame: object): void {
@@ -1288,6 +1328,8 @@ export class WebChannel implements Channel {
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
     this.fss.dropSocket(ws)
+    const liveSocket = this.liveSockets.get(ws)
+    if (liveSocket) this.live.leave(liveSocket)
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -1734,6 +1776,10 @@ export class WebChannel implements Channel {
       // `lazyArchived` (card #54): no archived workspaces (or their project links) here; the app
       // fetches `/archived-workspaces?slim=1` after the snapshot, off its first screen's path.
       const lazyArchived = frame.lazyArchived === true
+      // Card #76: `streams: 1` asks for replies while they are written (reply_stream frames) for the chats
+      // this socket shows. Old apps never ask, so they never get them.
+      const liveSocket = typeof frame.streams === "number" && frame.streams >= 1 ? this.liveSocket(ws) : undefined
+      if (liveSocket) this.live.join(liveSocket)
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1787,7 +1833,7 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       laps.lap("rest")
-      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(perf ? { perf: true } : {}) }
+      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
       const text = JSON.stringify(snapshot)
       laps.lap("stringify")
       const sent = ws.send(text)
@@ -1835,6 +1881,7 @@ export class WebChannel implements Channel {
       if (Array.isArray(frame.sessions)) {
         const many = frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
         this.opts.viewingTracker?.setSessions(ws.data.deviceName, many, visible)
+        this.watchLive(ws, visible ? many : [])
         if (visible) for (const s of many) this.opts.markRead?.(s)
         return
       }
@@ -1844,6 +1891,7 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
+      this.watchLive(ws, session === null ? [] : visible ? [session] : [...this.liveWatching(ws)].filter((s) => s !== session))
       // A visible device sitting on an exact session has read it up to its
       // newest message. (Sitting on the list, session===null, does not count.)
       if (visible && typeof session === "string") this.opts.markRead?.(session)

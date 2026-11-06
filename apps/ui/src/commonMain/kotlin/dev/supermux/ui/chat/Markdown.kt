@@ -257,6 +257,8 @@ internal fun MdText(
     style: TextStyle,
 ) {
     val selector = LocalLinkSelector.current
+    // Card #76: a text block of a revealing reply draws the ink edge over itself.
+    val ink = LocalInkBlock.current
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val linkModifier = if (selector == null) Modifier else Modifier.pointerInput(text, selector) {
         awaitPointerEventScope {
@@ -271,8 +273,9 @@ internal fun MdText(
     }
     Text(
         text = text,
-        // Last in the chain so pointer positions are in the text's own coordinates.
-        modifier = modifier.then(linkModifier),
+        // Last in the chain so pointer positions are in the text's own coordinates. The ink edge draws inside any
+        // padding the caller set, in the text's coordinates too.
+        modifier = modifier.then(if (ink == null) Modifier else Modifier.inkEdge(ink) { layout }).then(linkModifier),
         color = color,
         fontWeight = fontWeight,
         textAlign = textAlign,
@@ -385,92 +388,98 @@ fun MarkdownBody(
     loadImage: (suspend (String) -> ImageBitmap?)? = null,
     onOpenUrl: ((String) -> Unit)? = null,
     document: Boolean = false,
+    /** Card #76: the reveal this text is written under (a live reply): its text blocks draw the ink edge. */
+    reveal: LiveRevealState? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val typography = MaterialTheme.typography
     // A document reads at a looser line height than a chat bubble.
     val body = if (document) typography.bodyLarge.copy(lineHeight = typography.bodyLarge.fontSize * 1.6f) else typography.bodyLarge
     val blocks = parseMarkdownBlocks(text)
+    val inkEnds = reveal?.let { blockSourceEnds(text, blocks) }
     val palette = if (document) mdDocumentPalette() else mdPalette()
     @Composable
     fun annotated(t: String) = mdAnnotated(t, onOpenFile, linkify = linkify, onOpenUrl = onOpenUrl, softBreaks = document)
     CompositionLocalProvider(LocalMdPalette provides palette) { Column(modifier = modifier) {
         var prev: MdBlock? = null
-        for (block in blocks) {
+        for ((index, block) in blocks.withIndex()) {
             if (prev != null) Box(Modifier.height(mdBlockGap(prev, block, document)))
             prev = block
-            when (block) {
-                is MdBlock.Prose -> {
-                    if (block.text.isNotBlank()) {
+            // The same structure with or without a reveal, so a reply finishing its reveal keeps its composables.
+            CompositionLocalProvider(LocalInkBlock provides inkEnds?.get(index)?.let { end -> reveal?.let { InkBlock(it, end) } }) {
+                when (block) {
+                    is MdBlock.Prose -> {
+                        if (block.text.isNotBlank()) {
+                            MdText(
+                                text = annotated(block.text),
+                                color = palette.body,
+                                style = body,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    is MdBlock.Code ->
+                        if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
+                        else FencedCodeBlock(block.code, block.lang)
+                    is MdBlock.Heading -> MarkdownHeading(block, annotated(block.text), body, document)
+                    is MdBlock.Quote -> Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Min)
+                            .clip(RoundedCornerShape(topEnd = Radii.sm, bottomEnd = Radii.sm))
+                            .background(palette.quote),
+                    ) {
+                        Box(Modifier.width(3.dp).fillMaxHeight().background(cs.primary.copy(alpha = 0.6f)))
+                        MdText(
+                            text = annotated(block.text),
+                            color = cs.onSurfaceVariant,
+                            style = body,
+                            modifier = Modifier.weight(1f).padding(horizontal = Space.md, vertical = Space.sm),
+                        )
+                    }
+                    is MdBlock.Bullet -> MarkdownListItem(block.depth, body) {
+                        val task = block.task
+                        if (task != null) {
+                            MarkdownCheckbox(task, body, Modifier.width(MdListDimens.MarkerWidth))
+                        } else {
+                            Text(
+                                mdBulletGlyph(block.depth),
+                                color = cs.primary.copy(alpha = 0.8f),
+                                style = body,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.width(MdListDimens.MarkerWidth),
+                            )
+                        }
+                        MdText(
+                            text = annotated(block.text),
+                            // A done task steps back so the open ones stand out.
+                            color = if (block.task == true) cs.onSurfaceVariant else palette.body,
+                            style = body,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    is MdBlock.Numbered -> MarkdownListItem(block.depth, body) {
+                        Text(
+                            "${block.n}.",
+                            color = cs.primary.copy(alpha = 0.8f),
+                            style = body,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.width(MdListDimens.MarkerWidth),
+                        )
                         MdText(
                             text = annotated(block.text),
                             color = palette.body,
                             style = body,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.weight(1f),
                         )
                     }
-                }
-                is MdBlock.Code ->
-                    if (block.lang.equals("mermaid", ignoreCase = true)) MermaidBlock(block.code)
-                    else FencedCodeBlock(block.code, block.lang)
-                is MdBlock.Heading -> MarkdownHeading(block, annotated(block.text), body, document)
-                is MdBlock.Quote -> Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min)
-                        .clip(RoundedCornerShape(topEnd = Radii.sm, bottomEnd = Radii.sm))
-                        .background(palette.quote),
-                ) {
-                    Box(Modifier.width(3.dp).fillMaxHeight().background(cs.primary.copy(alpha = 0.6f)))
-                    MdText(
-                        text = annotated(block.text),
-                        color = cs.onSurfaceVariant,
-                        style = body,
-                        modifier = Modifier.weight(1f).padding(horizontal = Space.md, vertical = Space.sm),
+                    is MdBlock.Rule -> Box(
+                        Modifier.fillMaxWidth().padding(vertical = Space.xs).height(1.dp).background(palette.rule),
                     )
+                    is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify, onOpenUrl)
+                    is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl, onOpenFile = onOpenFile)
                 }
-                is MdBlock.Bullet -> MarkdownListItem(block.depth, body) {
-                    val task = block.task
-                    if (task != null) {
-                        MarkdownCheckbox(task, body, Modifier.width(MdListDimens.MarkerWidth))
-                    } else {
-                        Text(
-                            mdBulletGlyph(block.depth),
-                            color = cs.primary.copy(alpha = 0.8f),
-                            style = body,
-                            textAlign = TextAlign.End,
-                            modifier = Modifier.width(MdListDimens.MarkerWidth),
-                        )
-                    }
-                    MdText(
-                        text = annotated(block.text),
-                        // A done task steps back so the open ones stand out.
-                        color = if (block.task == true) cs.onSurfaceVariant else palette.body,
-                        style = body,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                is MdBlock.Numbered -> MarkdownListItem(block.depth, body) {
-                    Text(
-                        "${block.n}.",
-                        color = cs.primary.copy(alpha = 0.8f),
-                        style = body,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.width(MdListDimens.MarkerWidth),
-                    )
-                    MdText(
-                        text = annotated(block.text),
-                        color = palette.body,
-                        style = body,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                is MdBlock.Rule -> Box(
-                    Modifier.fillMaxWidth().padding(vertical = Space.xs).height(1.dp).background(palette.rule),
-                )
-                is MdBlock.Table -> MarkdownTable(block, onOpenFile, linkify, onOpenUrl)
-                is MdBlock.Image -> MarkdownImage(block, loadImage = loadImage, onOpenUrl = onOpenUrl, onOpenFile = onOpenFile)
             }
         }
     } }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { AgentEvent, BrokerRequest, RequestSubagent, ToolCallEvent } from "../types"
 import type { AgentCommandEntry, EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { answerLabel, mapPermissionRequest, mapUserQuestion } from "./request-map"
@@ -54,15 +55,50 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
   const subagentLabels = new Map<string, { name?: string; description?: string }>()
   let pendingAssistant = ""
   let lastAssistant = ""
+  // Card #76: one live stream per text block (the core's message / reasoning id), from its first piece of
+  // text until its stored form. The id is ours: the core's are not unique across turns (ACP's
+  // "assistant:1" comes back every turn).
+  const streams = new Map<string, string>()
+  const streamKey = (kind: "reply" | "thinking", coreId: string) => `${kind}\u0000${coreId}`
+  function openStream(kind: "reply" | "thinking", coreId: string): string {
+    const key = streamKey(kind, coreId)
+    let id = streams.get(key)
+    if (!id) {
+      id = randomUUID().replace(/-/g, "").slice(0, 12)
+      streams.set(key, id)
+    }
+    return id
+  }
+  function takeStream(kind: "reply" | "thinking", coreId: string): string | undefined {
+    const key = streamKey(kind, coreId)
+    const id = streams.get(key)
+    streams.delete(key)
+    return id
+  }
+  function takeOpen(kind: "reply" | "thinking"): string[] {
+    const out: string[] = []
+    for (const [key, id] of [...streams]) {
+      if (!key.startsWith(`${kind}\u0000`)) continue
+      streams.delete(key)
+      out.push(id)
+    }
+    return out
+  }
 
   const emitTool = (event: ToolCallEvent) => opts.emit(event)
 
-  const emitAssistant = (text: string) => {
+  const emitAssistant = (text: string, stream?: string) => {
     const trimmed = text.trim()
     pendingAssistant = ""
-    if (!trimmed || trimmed === lastAssistant) return
+    if (!trimmed || trimmed === lastAssistant) {
+      // Nothing is stored for it, so nothing will replace the live text: the apps drop it.
+      if (stream) opts.emit({ kind: "live-end", stream, final: false })
+      return
+    }
     lastAssistant = trimmed
-    opts.emit({ kind: "assistant-message", text: trimmed })
+    // The live text's last piece goes out before the stored message, which then replaces it.
+    if (stream) opts.emit({ kind: "live-end", stream, final: true })
+    opts.emit({ kind: "assistant-message", text: trimmed, ...(stream ? { stream } : {}) })
   }
 
   function requestSubagent(subagentId: string | undefined): RequestSubagent {
@@ -96,7 +132,8 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     })
   }
 
-  function handle(event: CoreNormalizedEvent): void {
+  /** Returns the live thinking stream a `reasoning` final closed, so its activity row can carry the id. */
+  function handle(event: CoreNormalizedEvent): string | undefined {
     const kind = event.kind
     const replay = event.replay === true
 
@@ -135,11 +172,22 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
 
     if (kind === "assistant-delta") {
       pendingAssistant += event.text
+      if (event.text) opts.emit({ kind: "live-delta", stream: openStream("reply", event.messageId), streamKind: "reply", text: event.text })
       return
     }
     if (kind === "assistant-message") {
-      emitAssistant(event.text)
+      emitAssistant(event.text, takeStream("reply", event.messageId))
       return
+    }
+    if (kind === "reasoning-delta") {
+      // Redacted thinking (Claude without --thinking-display) sends empty pieces: those open nothing.
+      if (event.text) opts.emit({ kind: "live-delta", stream: openStream("thinking", event.reasoningId), streamKind: "thinking", text: event.text })
+      return
+    }
+    if (kind === "reasoning") {
+      const stream = takeStream("thinking", event.reasoningId)
+      if (stream) opts.emit({ kind: "live-end", stream, final: true })
+      return stream
     }
     if (kind === "tool-call") {
       if (event.phase === "updated") return
@@ -209,7 +257,7 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
     if (kind === "warning" && event.source === "antigravity") {
       // agy auto-denied a tool (headless cannot ask); the turn may end with no text at all, so
       // the denial is the reply the user sees.
-      if (pendingAssistant) emitAssistant(pendingAssistant)
+      if (pendingAssistant) emitAssistant(pendingAssistant, takeOpen("reply")[0])
       emitAssistant(event.message)
       return
     }
@@ -219,7 +267,10 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
   }
 
   function flush(): void {
-    if (pendingAssistant) emitAssistant(pendingAssistant)
+    const open = takeOpen("reply")
+    if (pendingAssistant) emitAssistant(pendingAssistant, open.shift())
+    // Whatever still streams has no stored form coming: the apps drop it.
+    for (const stream of [...open, ...takeOpen("thinking")]) opts.emit({ kind: "live-end", stream, final: false })
   }
 
   return { handle, flush, decorateRequest }

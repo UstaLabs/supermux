@@ -1264,6 +1264,36 @@ acrossQueue("admission failure during native work errors without fake idle", asy
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
+acrossGrok("card #76: live text streams, and the stored message and reasoning row carry its streams", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-live", sessionName: "live", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  const live: Array<{ kind: string; stream: string; streamKind?: string; text?: string; final?: boolean }> = []
+  for (const k of ["live-delta", "live-end"]) adapter.on(k, (e: { kind: string; stream: string }) => live.push(e))
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("think, then answer")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Plan" } } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hel" } } })
+  fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" } } })
+  fake.completePrompt()
+  await sent
+  await flush()
+  await flush()
+  const thinking = live.find((e) => e.kind === "live-delta" && e.streamKind === "thinking")
+  const reply = live.filter((e) => e.kind === "live-delta" && e.streamKind === "reply")
+  expect(thinking?.text).toBe("Plan")
+  expect(reply.map((e) => e.text).join("")).toBe("Hello")
+  expect(live.filter((e) => e.kind === "live-end").map((e) => e.final)).toEqual([true, true])
+  const row = events.filter((e) => e.kind === "activity").flatMap((e) => (e.events ?? []) as Array<{ kind: string; stream?: string }>).find((r) => r.kind === "reasoning")
+  expect(row?.stream).toBe(thinking!.stream)
+  const stored = events.find((e) => e.kind === "assistant-message") as { text?: string; stream?: string } | undefined
+  expect(stored?.text).toBe("Hello")
+  expect(stored?.stream).toBe(reply[0]!.stream)
+})
+
 function grokFrameToUpdate(frame: { method?: string; params?: Record<string, unknown> }) {
   if (frame.method === "session/update" && frame.params && typeof frame.params.update === "object") {
     return { protocol: "acp" as const, value: frame.params.update }

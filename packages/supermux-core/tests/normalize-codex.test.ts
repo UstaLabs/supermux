@@ -42,6 +42,17 @@ describe("codex normalizer", () => {
     expect(n(native("item/reasoning/textDelta", { itemId: "r1", delta: "think", contentIndex: 0 }))[0]).toMatchObject({ kind: "reasoning-delta", text: "think" })
   })
 
+  test("a second reasoning summary part starts a new paragraph", () => {
+    const n = createCodexNormalizer()
+    expect(n(native("item/reasoning/summaryPartAdded", { itemId: "r1", summaryIndex: 0 }))).toEqual([])
+    expect(n(native("item/reasoning/summaryTextDelta", { itemId: "r1", delta: "**Plan**", summaryIndex: 0 })))
+      .toEqual([{ kind: "reasoning-delta", reasoningId: "r1", text: "**Plan**" }])
+    expect(n(native("item/reasoning/summaryPartAdded", { itemId: "r1", summaryIndex: 1 })))
+      .toEqual([{ kind: "reasoning-delta", reasoningId: "r1", text: "\n\n" }])
+    expect(n(native("item/reasoning/summaryTextDelta", { itemId: "r1", delta: "**Check**", summaryIndex: 1 })))
+      .toEqual([{ kind: "reasoning-delta", reasoningId: "r1", text: "**Check**" }])
+  })
+
   test("plan item and turn/plan/updated", () => {
     const n = createCodexNormalizer()
     expect(n(native("item/started", { item: { type: "plan", id: "p1", text: "do it" } }))[0]).toMatchObject({ kind: "plan" })

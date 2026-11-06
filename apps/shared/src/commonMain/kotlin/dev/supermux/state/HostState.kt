@@ -73,6 +73,8 @@ data class HostState(
     val worktreeSizes: Map<String, Long> = emptyMap(),
     /** Worktree ids another device (or an archive) deleted since this client connected. */
     val removedWorktreeIds: Set<String> = emptySet(),
+    /** Card #76: session → the reply / thinking being written now (see [LiveReply]). */
+    val live: Map<String, List<LiveReply>> = emptyMap(),
 )
 
 /** How many just-closed prompts a session keeps on screen. */

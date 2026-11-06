@@ -3,17 +3,23 @@ package dev.supermux.desktop.theme
 import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import dev.supermux.desktop.platform.DesktopPlatform
+import dev.supermux.desktop.platform.probeReduceMotion
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoticeOverlay
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.LocalReduceMotion
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Desktop's thin wrapper over the shared [SupermuxTheme].
@@ -46,11 +52,14 @@ fun DesktopTheme(
     // window root (main + detached) installs them from one place, as on Android.
     val platform = remember { DesktopPlatform() }
     val prefs = uiPrefs ?: remember { UiPrefs(InMemorySettingsStore()) }
+    // Card #76: the OS's reduced-motion setting, asked once per window off the UI thread (false until it answers).
+    val reduceMotion by produceState(false) { value = withContext(Dispatchers.IO) { probeReduceMotion() } }
     CompositionLocalProvider(
         LocalContextMenuRepresentation provides contextMenu,
         LocalPlatform provides platform,
         LocalUiPrefs provides prefs,
         LocalUiPrefsOrNull provides prefs,
+        LocalReduceMotion provides reduceMotion,
     ) {
         SupermuxTheme(
             appearance = appearance,

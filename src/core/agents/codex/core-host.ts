@@ -15,6 +15,7 @@ import { inboxFilePath } from "../../../shared/paths"
 import { HOME } from "../../session-manager/spawn-helper"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { syncCodexSessionCredential } from "../account-env"
+import { codexReasoningArgs } from "../thinking-args"
 import { isSystemAccount } from "../../accounts/broker-accounts"
 
 const log = makeLogger("agents/codex/core-host")
@@ -144,7 +145,8 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         permissions: settings.initial,
         id: "codex",
         command: registration.command ?? "codex",
-        args: registration.args ? [...registration.args] : [...BROKER_CODEX_ARGS],
+        // Card #76: plus model_reasoning_summary, so Codex writes the summaries shown as its thinking.
+        args: [...(registration.args ? registration.args : BROKER_CODEX_ARGS), ...codexReasoningArgs()],
         env: registration.env,
         keeper: {
           stateDirectory,

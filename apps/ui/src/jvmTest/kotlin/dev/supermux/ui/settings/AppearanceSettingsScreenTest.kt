@@ -12,6 +12,8 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -63,6 +65,24 @@ class AppearanceSettingsScreenTest {
         onNodeWithTag("appearance_mode_dark").performClick()
         waitForIdle()
         assertEquals("DARK", store.map.value[SettingsKeys.APPEARANCE])
+    }
+
+    // ── live replies (card #76) ───────────────────────────────────────────────────────────────
+
+    @Test fun live_replies_are_on_until_turned_off_and_on_writes_nothing() = runComposeUiTest {
+        val store = FakeSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { AppearanceSettingsScreen() }
+        waitForIdle()
+        onNodeWithTag("appearance_live_replies_switch").assertIsOn()
+        assertNull(store.map.value[SettingsKeys.LIVE_REPLIES], "the default writes nothing")
+        onNodeWithTag("appearance_live_replies_switch").performClick()
+        waitForIdle()
+        onNodeWithTag("appearance_live_replies_switch").assertIsOff()
+        assertEquals("false", store.map.value[SettingsKeys.LIVE_REPLIES])
+        onNodeWithTag("appearance_live_replies_switch").performClick()
+        waitForIdle()
+        onNodeWithTag("appearance_live_replies_switch").assertIsOn()
+        assertNull(store.map.value[SettingsKeys.LIVE_REPLIES], "back on clears the key")
     }
 
     @Test fun choosing_a_terminal_mode_persists_it() = runComposeUiTest {
