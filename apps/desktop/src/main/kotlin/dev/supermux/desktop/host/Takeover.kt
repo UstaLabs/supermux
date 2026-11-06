@@ -37,6 +37,8 @@ object Takeover {
         val carriedEnv: Map<String, String>,
         /** true: an old env had a non-empty MUX_RELAY_DOMAIN; false: key present but empty; null: absent. */
         val oldRelay: Boolean?,
+        /** The install id of the copy of the app taking over (null: written before install ids). */
+        val owner: String? = null,
     )
 
     sealed interface PrepareResult {
@@ -45,28 +47,30 @@ object Takeover {
     }
 
     private val MAC_LABELS = listOf("dev.supermux.host", "dev.supermux.broker")
-    private val LINUX_UNITS = listOf("supermux.service", "mux.service")
+    /** `supermux setup`'s units, and the desktop app's own (another copy of the app may have written it, #77). */
+    private val LINUX_UNITS = listOf("supermux.service", "mux.service", BrokerService.SYSTEMD_UNIT)
     /** Ours to set, never carried. `MUX_SERVICE_*` name the OLD service: carried, the broker's update would restart it. */
     private val OWNED = setOf(
         "MUX_WEB_PORT", "MUX_MANAGED_BY", "MUX_STATE_DIR", "MUX_HOME", "MUX_RELAY_DOMAIN", "MUX_WEB_PUBLIC_URL",
-        "MUX_SERVICE_UNIT", "MUX_SERVICE_LABEL",
+        "MUX_SERVICE_UNIT", "MUX_SERVICE_LABEL", BrokerService.INSTALL_ENV,
     )
     private const val JOURNAL = "pending.json"
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     // ---- discovery --------------------------------------------------------------------------
 
-    fun findOldServices(env: OsEnv = SystemOsEnv): List<OldService> = when (env.os) {
+    /** The services to take over, as [me] sees them: never one of [me]'s own definitions. */
+    fun findOldServices(env: OsEnv = SystemOsEnv, me: BrokerService.Owner): List<OldService> = when (env.os) {
         OsEnv.Os.MAC -> MAC_LABELS.map { env.home.resolve("Library/LaunchAgents/$it.plist") }
-            .filter { Files.exists(it) && isOldPlist(read(it)) }
+            .filter { Files.exists(it) && isOldPlist(read(it), me) }
             .map { OldService(Kind.LAUNCHD, it.fileName.toString().removeSuffix(".plist"), it.toString()) }
         OsEnv.Os.LINUX -> LINUX_UNITS.map { env.home.resolve(".config/systemd/user/$it") }
-            .filter { Files.exists(it) && isOldUnit(read(it)) }
+            .filter { Files.exists(it) && isOldUnit(read(it), me) }
             .map { OldService(Kind.SYSTEMD, it.fileName.toString(), it.toString()) }
         else -> emptyList()
     }
 
-    fun findOldService(env: OsEnv = SystemOsEnv): OldService? = findOldServices(env).firstOrNull()
+    fun findOldService(env: OsEnv = SystemOsEnv, me: BrokerService.Owner): OldService? = findOldServices(env, me).firstOrNull()
 
     private fun read(p: Path) = String(Files.readAllBytes(p), Charsets.UTF_8)
 
@@ -74,13 +78,13 @@ object Takeover {
         "src/main.ts" in whole || firstWord.endsWith("/bun") || firstWord == "bun"
 
     /**
-     * Our own service (marker or MUX_MANAGED_BY), 1.0.0's keep-alive (it runs the app) and dev
-     * checkouts (bun + src/main.ts) are never old services.
+     * Our own service, 1.0.0's keep-alive (it runs the app) and dev checkouts (bun + src/main.ts) are
+     * never old services. One the app wrote (marker or MUX_MANAGED_BY) is, when another copy of the
+     * app wrote it (#77).
      */
-    private fun isOldPlist(xml: String): Boolean {
-        if (MANAGED_MARKER in xml) return false
+    private fun isOldPlist(xml: String, me: BrokerService.Owner): Boolean {
         val plist = parsePlist(xml) ?: return false
-        if ("MUX_MANAGED_BY" in plist.env) return false
+        if (MANAGED_MARKER in xml || "MUX_MANAGED_BY" in plist.env) return BrokerService.isAnotherCopys(xml, me)
         // 1.0.0's keep-alive ran the APP under dev.supermux.host: not a broker service (and the app may be running as it).
         if (BrokerService.LEGACY_KEEP_ALIVE_ENV in plist.env) return false
         val first = plist.args.firstOrNull() ?: return false
@@ -90,8 +94,9 @@ object Takeover {
 
     private const val MANAGED_MARKER = BrokerService.MANAGED_MARKER
 
-    private fun isOldUnit(unit: String): Boolean {
-        if (MANAGED_MARKER in unit || "MUX_MANAGED_BY" in unit) return false
+    private fun isOldUnit(unit: String, me: BrokerService.Owner): Boolean {
+        if (MANAGED_MARKER in unit || "MUX_MANAGED_BY" in unit) return BrokerService.isAnotherCopys(unit, me)
+        if (BrokerService.isLegacyDefinition(unit)) return false
         val execs = unit.lineSequence().map { it.trim() }.filter { it.startsWith("ExecStart=") }
             .map { it.removePrefix("ExecStart=").trim() }.filter { it.isNotEmpty() }.toList()
         if (execs.isEmpty()) return false
@@ -232,7 +237,7 @@ object Takeover {
 
     private fun journal(stateDir: Path) = stateDir.resolve("takeover-backup/$JOURNAL")
 
-    fun prepare(olds: List<OldService>, stateDir: Path, env: OsEnv = SystemOsEnv): PrepareResult {
+    fun prepare(olds: List<OldService>, stateDir: Path, env: OsEnv = SystemOsEnv, me: BrokerService.Owner? = null): PrepareResult {
         if (olds.isEmpty()) return PrepareResult.Failed("no old service to take over")
         if (olds.any { it.kind == Kind.LAUNCHD } && env.uid == null) return PrepareResult.Failed("cannot control launchd without a user id")
         return try {
@@ -253,14 +258,14 @@ object Takeover {
             for (e in envs) for ((k, v) in carriedEnv(e)) carried.putIfAbsent(k, v)
             val relays = envs.mapNotNull { it["MUX_RELAY_DOMAIN"] }
             val oldRelay = if (relays.isEmpty()) null else relays.any { it.isNotEmpty() }
-            val prepared = Prepared(stateDir.toString(), ones, carried, oldRelay)
+            val prepared = Prepared(stateDir.toString(), ones, carried, oldRelay, me?.id)
             // The journal holds the carried env (maybe tokens): readable by the user only.
             BrokerService.writePrivate(journal(stateDir), json.encodeToString(prepared))
 
             for (old in olds) {
                 val stopped = stop(old, env)
                 if (!stopped) {
-                    rollback(prepared, env)
+                    restore(prepared, env)
                     return PrepareResult.Failed("${old.name} did not stop")
                 }
             }
@@ -301,10 +306,19 @@ object Takeover {
         runCatching { Files.deleteIfExists(journal(Path.of(p.stateDir))) }
     }
 
-    /** Best-effort restore of every old service. Never throws; true iff all were restored and reloaded. */
-    fun rollback(p: Prepared, env: OsEnv = SystemOsEnv): Boolean {
+    /**
+     * Best-effort undo: remove [me]'s new service, then restore every old one. Never throws; true iff
+     * all were restored and reloaded.
+     */
+    fun rollback(p: Prepared, env: OsEnv = SystemOsEnv, me: BrokerService.Owner): Boolean {
         var ok = true
-        try { BrokerService.remove(env) } catch (_: Exception) { ok = false }
+        try { BrokerService.remove(env, me) } catch (_: Exception) { ok = false }
+        return restore(p, env) && ok
+    }
+
+    /** Put every old service back from its backup (and drop the journal). True iff all were reloaded. */
+    private fun restore(p: Prepared, env: OsEnv): Boolean {
+        var ok = true
         for (one in p.olds) {
             ok = try {
                 val old = one.old
@@ -333,11 +347,13 @@ object Takeover {
     }
 
     /** At app launch: finish (healthy) or undo (not healthy) a takeover interrupted mid-way. True iff it did anything. */
-    fun recoverPending(stateDir: Path, env: OsEnv = SystemOsEnv, ourServiceHealthy: Boolean): Boolean {
+    fun recoverPending(stateDir: Path, env: OsEnv = SystemOsEnv, ourServiceHealthy: Boolean, me: BrokerService.Owner): Boolean {
         val j = journal(stateDir)
         if (!Files.exists(j)) return false
         val p = runCatching { json.decodeFromString<Prepared>(read(j)) }.getOrNull() ?: return false
-        if (ourServiceHealthy) commit(p, env) else rollback(p, env)
+        // The journal sits in the state dir every copy shares: another copy's takeover is that copy's to finish.
+        if (p.owner != null && p.owner != me.id) return false
+        if (ourServiceHealthy) commit(p, env) else rollback(p, env, me)
         return true
     }
 
