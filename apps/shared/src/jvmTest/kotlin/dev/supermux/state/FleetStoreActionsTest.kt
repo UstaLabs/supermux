@@ -250,4 +250,26 @@ class FleetStoreActionsTest {
         assertEquals(emptySet(), fleet.projectCatalogHosts.value)
         fleet.close()
     }
+
+    // ── homeDirs: each host's own home folder, from its snapshot (platform layer #29) ──
+
+    @Test fun homeDirsAreEachHostsOwn() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val fleet = FleetStore(
+            store = s, scope = this, deps = testDeps(),
+            appFactory = { url, token, onConn ->
+                HostStore(url, token, this, testDeps(), connectOnInit = false, onConnectionChange = onConn)
+            },
+        )
+        advanceUntilIdle()
+        assertEquals(emptyMap(), fleet.homeDirs.value)
+        fleet.appForRecord("h1")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(homeDir = "/home/ahmet"))
+        fleet.appForRecord("h2")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(homeDir = "C:\\Users\\me"))
+        advanceUntilIdle()
+        assertEquals(mapOf("h1" to "/home/ahmet", "h2" to "C:\\Users\\me"), fleet.homeDirs.value)
+        fleet.close()
+    }
 }

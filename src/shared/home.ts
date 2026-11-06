@@ -1,13 +1,13 @@
-import { homedir, userInfo } from "os"
+import { userInfo } from "os"
+import { dirs } from "@supermux/platform"
 
 /**
- * Portable home-directory resolver. Prefers an explicit, non-empty $HOME, and
- * falls back to os.homedir() so paths never resolve to "/.codex" when HOME is
- * unset (e.g. under systemd or a bare container). Use this everywhere instead
- * of `process.env.HOME ?? ""`.
+ * The user's home folder, by the runtime's rule (dirs.home, Q2): %USERPROFILE% on Windows, $HOME elsewhere. Read from
+ * the environment at the call, so a test's or an override's HOME counts, and os.homedir() when it is unset (under
+ * systemd or a bare container), so paths never resolve to "/.codex". Use this everywhere instead of `process.env.HOME`.
  */
 export function home(): string {
-  return process.env.HOME || homedir()
+  return dirs.home()
 }
 
 /**

@@ -1,10 +1,10 @@
-import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import type { AccountIdentity, AuthAdapter, HomeRoots, Materialized } from "../types.js"
 import { readJson, requireSecret, str, unsupported } from "./shared.js"
+import { dirs } from "@supermux/platform"
 
 export function grokRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.grokRoot ?? process.env.GROK_HOME ?? join(homedir(), ".grok"))
+  return resolve(roots.grokRoot ?? process.env.GROK_HOME ?? join(dirs.home(), ".grok"))
 }
 
 /** grok 1.0.46 auth.json: `{ "<issuer>::<client>": { email, user_id, team_id, key, refresh_token, ... } }`. */

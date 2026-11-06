@@ -115,3 +115,33 @@ export class DirWatchers {
     unref(slot.timer)
   }
 }
+
+/**
+ * One watch on [dir] for a caller that only needs to hear that something changed (main.ts's git-status, worktree and
+ * avatar watches), with the name of the file when the OS gives one. A folder the OS will not watch (ENOSPC, Linux's
+ * inotify limit) is polled every `pollMs` instead of going quiet. An error from the watch (the folder went away; on
+ * Windows a removed folder reports EPERM) is taken, where an FSWatcher with no 'error' listener throws it, and reported
+ * once as a change with no name. A throwing listener never escapes into the event loop.
+ */
+export function watchDir(
+  dir: string,
+  onEvent: (file: string | null) => void,
+  opts: Pick<DirWatchersOpts, "pollMs" | "watchFn"> = {},
+): { close(): void } {
+  const notify = (file: string | null) => {
+    try { onEvent(file) } catch (e) { console.error("[dir-watchers] listener failed", dir, e) }
+  }
+  let watcher: FSWatcher | undefined
+  try {
+    watcher = (opts.watchFn ?? defaultWatch)(dir, (_event, filename) => notify(filename ?? null))
+  } catch {
+    const poll = setInterval(() => notify(null), opts.pollMs ?? 5_000)
+    unref(poll)
+    return { close: () => clearInterval(poll) }
+  }
+  watcher.on?.("error", () => {
+    try { watcher?.close() } catch {}
+    notify(null)
+  })
+  return { close: () => { try { watcher?.close() } catch {} } }
+}

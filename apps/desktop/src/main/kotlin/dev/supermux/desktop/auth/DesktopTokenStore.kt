@@ -1,5 +1,6 @@
 package dev.supermux.desktop.auth
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.AtomicMoveNotSupportedException
@@ -66,12 +67,15 @@ class DesktopTokenStore(val path: Path = defaultPath()) {
             setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
         fun defaultPath(): Path =
-            configBase(System.getProperty("os.name"), System::getenv, System.getProperty("user.home")).resolve("supermux-desktop").resolve("auth.json")
+            configBase(DesktopOs.current, System::getenv, System.getProperty("user.home")).resolve("supermux-desktop").resolve("auth.json")
 
-        /** The platform config dir the app's own data lives under, for [osName], [getenv] and [home]. */
-        internal fun configBase(osName: String, getenv: (String) -> String?, home: String): Path = when {
-            osName.lowercase().contains("win") -> Path.of(getenv("APPDATA") ?: (home + "\\AppData\\Roaming"))
-            else -> Path.of(getenv("XDG_CONFIG_HOME") ?: (home + "/.config"))
+        /**
+         * The platform config dir the app's own data lives under, on [os], for [getenv] and [home]. The OS is
+         * [DesktopOs]'s answer: `contains("win")` here took a "Darwin" for Windows.
+         */
+        internal fun configBase(os: DesktopOs, getenv: (String) -> String?, home: String): Path = when (os) {
+            DesktopOs.WINDOWS -> Path.of(getenv("APPDATA") ?: (home + "\\AppData\\Roaming"))
+            DesktopOs.MACOS, DesktopOs.LINUX -> Path.of(getenv("XDG_CONFIG_HOME") ?: (home + "/.config"))
         }
     }
 }

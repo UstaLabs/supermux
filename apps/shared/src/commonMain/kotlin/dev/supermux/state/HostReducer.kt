@@ -52,6 +52,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             requests = frame.requests,
             permissionModes = frame.permissionModes,
             muxHome = frame.muxHome,
+            homeDir = frame.homeDir,
             // Card #76: the snapshot's open streams are the whole truth about what is being written now.
             live = liveFromSnapshot(frame.streams),
             // A snapshot is a NEW broker connection: the broker disposed the old connection's

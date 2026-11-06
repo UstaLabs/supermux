@@ -7,6 +7,7 @@
 package dev.supermux.ui.files
 
 import androidx.compose.runtime.Immutable
+import dev.supermux.fs.sameHostPath
 
 /** The in-place edit a Files pane has open, or none. Lives in [TreeViewState.inlineEdit]. */
 @Immutable
@@ -32,7 +33,7 @@ data class InlineSlot(val index: Int, val depth: Int)
 fun inlineCreateSlot(rows: List<TreeRow>, root: String, edit: InlineEdit.Create): InlineSlot? {
     val start: Int
     val depth: Int
-    if (trimSlash(edit.parent) == trimSlash(root)) {
+    if (sameHostPath(edit.parent, root)) {
         start = 0
         depth = 0
     } else {
@@ -65,5 +66,3 @@ fun renameSelectionEnd(name: String, folder: Boolean): Int =
  */
 fun commitsOnBlur(name: String, invalid: String?, current: String?): Boolean =
     invalid == null && name != current
-
-private fun trimSlash(p: String) = if (p.length > 1) p.trimEnd('/') else p

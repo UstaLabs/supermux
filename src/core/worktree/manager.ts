@@ -1,13 +1,14 @@
 // src/core/worktree/manager.ts
 import { existsSync, readFileSync, readdirSync } from "fs"
-import { cp, mkdir, rm } from "fs/promises"
-import { basename, dirname, join, resolve, sep } from "path"
+import { mkdir, rm } from "fs/promises"
+import { basename, dirname, join, resolve } from "path"
 import { createHash, randomUUID } from "crypto"
-import { home } from "../../shared/home"
+import { muxHomeNow } from "../../shared/paths"
 import { normalizeName } from "../../shared/slug"
 import { ensureUnique } from "../session-manager/naming"
 import { gitAsync, runAsync } from "../git/exec"
 import { makeLogger } from "../../shared/log"
+import { files, paths, proc } from "@supermux/platform"
 import { msSince } from "../perf/start-trace"
 
 const log = makeLogger("worktree")
@@ -19,11 +20,11 @@ export interface WorktreeHandle {
   repoRoot: string
 }
 
-/** Where session worktrees live. MUX_WORKTREES_ROOT (read per call, not at module load)
- *  overrides it — the test preload points it at a throwaway dir so tests never create
- *  folders in the live ~/.mux/worktrees (~24k leaked before 2026-09-22). */
+/** Where session worktrees live: `<mux home>/worktrees`, the mux home as the environment says now (MUX_HOME, else
+ *  ~/.mux). MUX_WORKTREES_ROOT (read per call, not at module load) overrides it — the test preload points it at a
+ *  throwaway dir so tests never create folders in the live ~/.mux/worktrees (~24k leaked before 2026-09-22). */
 export function worktreesRoot(): string {
-  return process.env.MUX_WORKTREES_ROOT || join(home(), ".mux", "worktrees")
+  return process.env.MUX_WORKTREES_ROOT || join(muxHomeNow().path, "worktrees")
 }
 
 export function repoSlug(repoRoot: string): string {
@@ -98,7 +99,7 @@ export async function ensureWorktreeAt(opts: {
 }): Promise<{ created: boolean }> {
   if (existsSync(opts.workdir)) {
     if (readdirSync(opts.workdir).length > 0) return { created: false }
-    if (!resolve(opts.workdir).startsWith(resolve(worktreesRoot()) + sep)) return { created: false }
+    if (!paths.isStrictlyInside(resolve(opts.workdir), resolve(worktreesRoot()))) return { created: false }
     log.warn("worktree_empty_folder_removed", { workdir: opts.workdir })
     await rm(opts.workdir, { recursive: true, force: true })
   }
@@ -128,9 +129,9 @@ async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Prom
     const src = join(repoRoot, line)
     const dst = join(worktreeDir, line)
     // Containment guard: never read outside the repo or write outside the worktree.
-    if (!resolve(src).startsWith(resolve(repoRoot) + sep) || !resolve(dst).startsWith(resolve(worktreeDir) + sep)) continue
+    if (!paths.isStrictlyInside(resolve(src), resolve(repoRoot)) || !paths.isStrictlyInside(resolve(dst), resolve(worktreeDir))) continue
     if (!existsSync(src)) continue
-    try { await mkdir(dirname(dst), { recursive: true }); await cp(src, dst, { recursive: true }); copied++ } catch { /* best effort */ }
+    try { await mkdir(dirname(dst), { recursive: true }); await files.copyTree(src, dst); copied++ } catch { /* best effort */ }
   }
   return copied
 }
@@ -139,7 +140,13 @@ async function copyWorktreeIncludes(repoRoot: string, worktreeDir: string): Prom
 async function runSetupHook(repoRoot: string, worktreeDir: string, branch: string, base: string): Promise<{ present: boolean; code?: number }> {
   const hook = join(repoRoot, ".mux", "worktree-setup.sh")
   if (!existsSync(hook)) return { present: false }
-  const r = await runAsync("bash", [hook], {
+  // A POSIX script: the bash on PATH, or on Windows Git for Windows' (never cmd.exe, never WSL's).
+  const bash = proc.posixShell()
+  if (!bash) {
+    log.warn("worktree_setup_hook_skipped", { worktreeDir, reason: "no bash to run .mux/worktree-setup.sh (on Windows: install Git for Windows)" })
+    return { present: true }
+  }
+  const r = await runAsync(bash, [hook], {
     cwd: worktreeDir, timeoutMs: 600_000,
     env: { ...process.env, MUX_WORKTREE_DIR: worktreeDir, MUX_REPO_ROOT: repoRoot, MUX_BASE_BRANCH: base, MUX_SESSION_BRANCH: branch },
   })

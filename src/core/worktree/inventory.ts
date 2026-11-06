@@ -3,9 +3,10 @@
 // no broadcast — service.ts adds those. Every child process is async.
 // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md
 import { access, lstat, readdir, readFile, realpath, rm, stat } from "fs/promises"
-import { basename, dirname, join, resolve, sep } from "path"
+import { basename, dirname, join, relative, resolve, sep } from "path"
 import { gitAsync } from "../git/exec"
 import { dirBytes } from "./dir-bytes"
+import { paths } from "@supermux/platform"
 
 /** The session columns inventory needs (one SELECT in service.ts). */
 export interface OwnerRow {
@@ -82,8 +83,7 @@ export function ownersOf(path: string, rows: OwnerRow[]): WorktreeOwner[] {
 }
 
 function owns(worktree: string, workdir: string): boolean {
-  const w = resolve(workdir)
-  return w === worktree || w.startsWith(worktree + sep)
+  return paths.isInside(resolve(workdir), worktree)
 }
 
 export type Canon = (p: string) => Promise<string>
@@ -120,8 +120,8 @@ export async function canonRows(rows: OwnerRow[], canon: Canon): Promise<OwnerRo
 function ownerIndex(realRoot: string, rows: OwnerRow[]): Map<string, OwnerRow[]> {
   const index = new Map<string, OwnerRow[]>()
   for (const r of rows) {
-    if (!r.workdir.startsWith(realRoot + sep)) continue
-    const [slug, name] = r.workdir.slice(realRoot.length + 1).split(sep)
+    if (!paths.isStrictlyInside(r.workdir, realRoot)) continue
+    const [slug, name] = relative(realRoot, r.workdir).split(sep)
     if (!slug || !name) continue
     const key = join(realRoot, slug, name)
     index.set(key, [...(index.get(key) ?? []), r])
@@ -193,7 +193,7 @@ export async function resolveId(root: string, id: string): Promise<string> {
   }
   const realRoot = await realpath(root)
   const real = await realpath(join(root, id)).catch(() => { throw new Error("worktree not found") })
-  if (!real.startsWith(realRoot + sep) || real.slice(realRoot.length + 1).split(sep).length !== 2) throw new Error("worktree outside root")
+  if (!paths.isStrictlyInside(real, realRoot) || relative(realRoot, real).split(sep).length !== 2) throw new Error("worktree outside root")
   return real
 }
 

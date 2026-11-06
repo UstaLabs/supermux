@@ -88,7 +88,7 @@ function realPath(path: string): string {
 const stateDir = resolve(options.state)
 const stateReal = realPath(stateDir) // what a chat's folder is compared with
 const temporary = [tmpdir(), process.env.TMPDIR, "/tmp", "/var/tmp"].filter((dir): dir is string => Boolean(dir))
-if (temporary.map(dir => realPath(resolve(dir))).some(root => stateReal === root || stateReal.startsWith(root + sep))) {
+if (temporary.map(dir => realPath(resolve(dir))).some(root => stateReal === root || stateReal.startsWith(root + sep))) { // platform-ok: both sides are native realpaths, the file system's own spelling
   fail(`${stateDir} is inside a temporary directory agents can write to: pass a --state outside it`)
 }
 

@@ -198,8 +198,10 @@ private val desktopDeps: HostStoreDeps by lazy {
         clientInfo = dev.supermux.net.ClientInfo(
             surface = "desktop",
             version = dev.supermux.desktop.update.DESKTOP_APP_VERSION,
-            os = System.getProperty("os.name").orEmpty().lowercase().let {
-                when { "mac" in it -> "macos"; "win" in it -> "windows"; else -> "linux" }
+            os = when (dev.supermux.desktop.platform.DesktopOs.current) {
+                dev.supermux.desktop.platform.DesktopOs.MACOS -> "macos"
+                dev.supermux.desktop.platform.DesktopOs.WINDOWS -> "windows"
+                dev.supermux.desktop.platform.DesktopOs.LINUX -> "linux"
             },
         ),
     )
@@ -861,7 +863,11 @@ fun main() {
             // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
             val trayIcon = when {
                 isMacOs() -> remember { TrayIcons.painter(mac = true) }
-                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
+                isWindowsOs() -> {
+                    // Off the UI thread, and read again every 30 s: a light/dark switch repaints the glyph.
+                    val light by remember { TrayIcons.taskbarIsLight() }.collectAsState(initial = false)
+                    remember(light) { TrayIcons.painter(mac = false, darkGlyph = light) }
+                }
                 else -> painterResource(TrayIcons.COLOUR)
             }
             Tray(

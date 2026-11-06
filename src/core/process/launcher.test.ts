@@ -37,13 +37,23 @@ describe("resolveCommand", () => {
 })
 
 describe("spawnCommand", () => {
+  // windowsHide is false by default in Node: every agent CLI the broker started flashed a console window on Windows.
+  test("hides the console window unless the caller says otherwise, sync and async", () => {
+    const seen: Array<Record<string, unknown>> = []
+    const record = (...args: unknown[]) => { seen.push(args[2] as Record<string, unknown>); return { pid: 1, status: 0 } as never }
+    spawnCommand("C:\\Tools\\codex.exe", [], { platform: "win32", env: {}, spawn: record })
+    spawnCommandSync("C:\\Tools\\codex.exe", [], { platform: "win32", env: {}, spawnSync: record })
+    spawnCommand("/usr/bin/codex", [], { platform: "linux", env: {}, windowsHide: false, spawn: record })
+    expect(seen.map((o) => o.windowsHide)).toEqual([true, true, false])
+  })
+
   test("spawns exe files directly with the original argv", () => {
     const calls: unknown[][] = []
     const spawn = (...args: unknown[]) => { calls.push(args); return { pid: 1 } as never }
     spawnCommand("C:\\Tools\\codex.exe", ["app-server", "two words"], {
       platform: "win32", env: { PATH: "live" }, stdio: "pipe", spawn,
     })
-    expect(calls).toEqual([["C:\\Tools\\codex.exe", ["app-server", "two words"], { env: { PATH: "live" }, stdio: "pipe" }]])
+    expect(calls).toEqual([["C:\\Tools\\codex.exe", ["app-server", "two words"], { env: { PATH: "live" }, windowsHide: true, stdio: "pipe" }]])
   })
 
   test("runs cmd shims via ComSpec without interpolating raw metacharacters", () => {
@@ -137,6 +147,6 @@ describe("spawnCommandSync", () => {
       platform: "linux", env: { PATH: "/usr/local/bin" },
       spawnSync: ((...args: unknown[]) => { calls.push(args); return { status: 0 } }) as never,
     })
-    expect(calls).toEqual([["/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], { env: { PATH: "/usr/local/bin" } }]])
+    expect(calls).toEqual([["/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], { env: { PATH: "/usr/local/bin" }, windowsHide: true }]])
   })
 })

@@ -1,9 +1,13 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs"
 import { dirname } from "path"
+import { proc } from "@supermux/platform"
 
+/**
+ * Whether [pid] is a live process: the platform's rule, where `EPERM` (someone else's live process, e.g. a broker in
+ * another Windows session) is alive. Counting it as dead let a second broker take over a live one's claim (#36).
+ */
 export function isProcessAlive(pid: number): boolean {
-  if (pid <= 0) return false
-  try { process.kill(pid, 0); return true } catch { return false }
+  return proc.isAlive(pid)
 }
 
 export interface BrokerProbeDeps {
@@ -18,7 +22,7 @@ const defaultProbeDeps: BrokerProbeDeps = {
   readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
   run: (cmd) => {
     try {
-      const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" })
+      const r = Bun.spawnSync(cmd, { ...proc.spawnDefaults(), stdout: "pipe", stderr: "pipe" })
       return r.exitCode === 0 ? r.stdout.toString() : null
     } catch {
       return null

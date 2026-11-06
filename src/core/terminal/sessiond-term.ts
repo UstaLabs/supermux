@@ -105,7 +105,7 @@ function processEnvironment(source: NodeJS.ProcessEnv = process.env): Record<str
 
 function defaultFindExecutable(name: string): string | null {
   try {
-    return Bun.which(name)
+    return Bun.which(name, { PATH: process.env.PATH })
   } catch {
     return null
   }

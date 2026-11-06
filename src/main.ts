@@ -44,7 +44,9 @@ function proxyWsPayload(entry: ProxyEntry, status: ProxyStatus = "unknown") {
 
 import { startSocketServer } from "./core/session-manager/socket-server"
 import { createSupervisor, isDraftSession, reconcileOnStartup } from "./core/session-manager/supervisor"
-import { acquirePidFile, isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
+import { claimBroker } from "./core/session-manager/broker-instance"
+import { writeStopToken } from "./core/session-manager/stop-token"
+import { isProcessAlive, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { captureBaseCommits, spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
@@ -127,7 +129,7 @@ import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
-import { captureWindowsTaskFlag } from "./core/update/apply"
+import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -153,10 +155,12 @@ import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
 import { usesFilesystemEndpoint } from "./core/local-endpoint"
 import {
-  MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
+  MUX_HOME, MUX_HOME_NOTE, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, SESSION_INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync, watch as fsWatch } from "fs"
+import { readEnvText } from "./shared/env-file"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
+import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
@@ -172,7 +176,7 @@ import {
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
 import { spawnSync as spawnSyncForGit } from "child_process"
-import { homedir, hostname, tmpdir } from "os"
+import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
@@ -243,6 +247,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
+import { paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -263,7 +268,7 @@ if (IS_TEST_BROKER) {
   const configuredState = process.env.MUX_STATE_DIR
   const configuredPort = Number(process.env.MUX_WEB_PORT)
   const nestedState = configuredHome && configuredState
-    ? resolve(configuredState).startsWith(resolve(configuredHome) + sep)
+    ? paths.isStrictlyInside(resolve(configuredState), resolve(configuredHome))
     : false
   if (!configuredHome || !configuredState || !nestedState || !Number.isInteger(configuredPort) || configuredPort <= 0 || configuredPort === 9898) {
     log.error("test_broker_isolation_invalid", {
@@ -280,7 +285,7 @@ if (IS_TEST_BROKER) {
 // per-user bin dir the installer added to shell rc — which this long-running
 // process never sourced. Put those dirs on PATH up front so both detection
 // (hasBinary) and spawning can see an agent the user installs at runtime.
-process.env.PATH = withAgentBinDirs(process.env.PATH, homedir())
+process.env.PATH = withAgentBinDirs(process.env.PATH, home())
 
 // Git is optional: agents run in any folder, git only adds worktrees, diffs and change status. On a
 // Mac without the Xcode Command Line Tools /usr/bin/git is Apple's stub, which opens an install
@@ -372,14 +377,27 @@ if (usesFilesystemEndpoint()) tighten(SOCKETS_DIR)
 
 // load .env
 try {
-  for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m && process.env[m[1]!] === undefined) process.env[m[1]!] = m[2]!
+  for (const [key, value] of readEnvText(readFileSync(ENV_FILE, "utf8"))) {
+    if (process.env[key] === undefined) process.env[key] = value
   }
 } catch {}
 
-acquirePidFile(PID_FILE)
+// One broker per state directory (#36): the kernel lock first, then broker.pid. A second broker stops here, before
+// it touches broker.pid, .core.lock or the port, so the first keeps everything it holds. An older broker (no lock)
+// is still caught by broker.pid.
+await claimBroker(STATE_DIR, PID_FILE).catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+  if ((error as { code?: string }).code === "already_running") log.error("broker_already_running", { stateDir: STATE_DIR })
+  else log.error("broker_claim_failed", { error: message })
+  console.error(message)
+  process.exit(1)
+})
 process.on("exit", () => releasePidFile(PID_FILE))
+// Windows, Q2: a .mux kept under a POSIX shell's $HOME (shared/paths.ts defaultMuxHome) is said, never moved silently.
+if (MUX_HOME_NOTE) log.warn("mux_home_under_shell_home", { muxHome: MUX_HOME, note: MUX_HOME_NOTE })
+// The per-boot token of the desktop app's graceful stop request (POST /internal/stop): on Windows, where every
+// external stop is otherwise TerminateProcess, it is how the broker gets to run gracefulShutdown.
+const STOP_TOKEN = writeStopToken(STATE_DIR)
 
 // Schema downgrade guard: refuse to start if state was written by a newer build.
 // Must run BEFORE openDb so we never touch a DB we can't safely migrate.
@@ -690,15 +708,15 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
-    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-    appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+    appData: process.env.APPDATA, platform: process.platform,
     env: process.env,
   },
 ), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
 /** Throws [AgentNotInstalledError] when [kind]'s CLI is not on PATH. Every agent spawn calls it. */
 function assertAgentInstalled(kind: AgentKind): void {
   const probes = { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }
-  if (!detectAgent(kind, probes, { home: homedir() }).installed) throw new AgentNotInstalledError(kind)
+  if (!detectAgent(kind, probes, { home: home() }).installed) throw new AgentNotInstalledError(kind)
 }
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
@@ -931,13 +949,7 @@ function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } 
 const gitStatusService = new GitStatusService({
   compute: (s) => computeLiteStatus(s),
   resolveGitDirs: (s) => resolveGitDirs(s.workdir),
-  watch: (dir, onEvent) => {
-    try {
-      const w = fsWatch(dir, { persistent: false }, () => onEvent())
-      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
-      return { close: () => { try { w.close() } catch {} } }
-    } catch { return { close: () => {} } }
-  },
+  watch: (dir, onEvent) => watchDir(dir, () => onEvent()),
   onChange: (id, git) => webChannel?.broadcastToAll({ type: "session_git", session: id, git }),
   schedule: (fn, ms) => setTimeout(fn, ms),
   cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -2102,8 +2114,8 @@ try {
   const dir = join(getMuxHome(), "agent-memory")
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
-  fsWatch(dir, (_event, file) => {
-    const m = typeof file === "string" ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
+  watchDir(dir, (file) => {
+    const m = file ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
     const id = m?.[1]
     if (!id) return
     clearTimeout(pending.get(id))
@@ -2120,13 +2132,7 @@ const worktreeService = new WorktreeService({
     .query("SELECT id, name, status, user_status, workdir, base_branch, session_branch FROM sessions")
     .all() as OwnerRow[],
   broadcast: (frame) => webChannel?.broadcastToAll(frame),
-  watch: (dir, onEvent) => {
-    try {
-      const w = fsWatch(dir, { persistent: false }, (_e, file) => onEvent(file ? String(file) : null))
-      w.on("error", () => {})   // dir may vanish (worktree removed) — degrade silently
-      return { close: () => { try { w.close() } catch {} } }
-    } catch { return { close: () => {} } }
-  },
+  watch: (dir, onEvent) => watchDir(dir, onEvent),
 })
 // Background liveness poller for exposed proxies. Constructed BEFORE the
 // WebChannel so the channel opts (listProxies/createProxy/updateProxy) can call
@@ -2439,11 +2445,10 @@ function spawnLoginProc(kind: string) {
       child.stderr?.on("data", (d) => cb(d.toString()))
     },
     onExit: (cb: (code: number | null) => void) => { exitCb = cb; child.on("exit", cb) },
+    // The CLI and what it started: its group when detached, its tree on Windows (a .cmd shim's cmd.exe is the root).
     kill: () => {
-      try {
-        if (detached && child.pid) process.kill(-child.pid, "SIGTERM")
-        else child.kill()
-      } catch {}
+      if (child.pid) proc.killTree(child.pid)
+      else try { child.kill() } catch {}
     },
     write: (data: string) => { try { child.stdin?.write(data) } catch {} },
   }
@@ -2521,7 +2526,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // One install job per agent; "installed" is re-probed (binary on PATH) after
   // the installer exits. Referenced lazily by the startAgentInstall closures.
   const installManager = createInstallManager({
-    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: homedir() }).installed,
+    isInstalled: (kind) => detectAgent(kind, { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync }, { home: home() }).installed,
     // Windows: an installer that set the user PATH (codex, cursor, …) changed only the registry —
     // fold its dirs into ours so detection and new sessions/terminals see the agent, no restart.
     refreshPath: async () => {
@@ -2693,6 +2698,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     staticDir: STATIC_DIR,
     staticEmbedded: EMBEDDED_STATIC,
     internalSecret: INTERNAL_SECRET,
+    stopToken: STOP_TOKEN,
+    onStopRequest: () => { void gracefulShutdown("stop-request") },
+    // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
+    onRestartRequest: () => restartService(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())
@@ -3543,8 +3552,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
     paths: {
-      home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-      appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+      home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
+      appData: process.env.APPDATA, platform: process.platform,
     },
     fileExists: existsSync,
     // Every kind answers with the stored-settings oracle, so a stored

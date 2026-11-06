@@ -1,8 +1,10 @@
 package dev.supermux.session
 
 import dev.supermux.fs.hostPathSegments
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.isDriveSegment
 import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.pathLeaf
 import dev.supermux.fs.sameHostSegments
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
@@ -235,24 +237,4 @@ fun formatWorkdir(workdir: String, home: String?): String {
     if (homeSegments != null && sameHostSegments(all.dropLast(1), homeSegments, windows)) return "~$sep$leaf"
     val base = "$parent$sep$leaf"
     return if (segments.size > 2) "…$sep$base" else base
-}
-
-/** The last segment of [path] on either separator: `/a/b` and `C:\a\b` both give `b`. */
-fun pathLeaf(path: String): String {
-    val trimmed = path.trimEnd('/', '\\')
-    return trimmed.substring(trimmed.lastIndexOfAny(charArrayOf('/', '\\')) + 1)
-}
-
-/**
- * Compiled once. [inferHomeDir] runs per session row per sidebar render (via [projectLabel] and
- * [formatWorkdir]); compiling the pattern inside the function made every one of those pay for a
- * fresh regex.
- */
-private val HOME_DIR_RE = Regex("^(/(?:home|Users)/[^/]+|[A-Za-z]:[\\\\/][Uu]sers[\\\\/][^\\\\/]+)")
-
-/** Best-effort home dir (/home/<user>, /Users/<user> or C:\Users\<user>) when none was supplied. */
-fun inferHomeDir(workdir: String?): String? {
-    val probe = workdir ?: ""
-    val m = HOME_DIR_RE.find(probe)
-    return m?.groupValues?.getOrNull(1)
 }

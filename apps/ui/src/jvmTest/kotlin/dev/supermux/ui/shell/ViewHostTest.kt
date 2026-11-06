@@ -616,4 +616,13 @@ class ViewHostTest {
             ),
         )
     }
+
+    // A drive path is absolute: it is never tried inside the preview's folder.
+    @Test
+    fun aWindowsHostsLinkIsTriedInItsFolderOnlyWhenRelative() {
+        val w = "C:\\Users\\me\\proj"
+        assertEquals(listOf("C:\\Users\\other\\a.ts"), tappedPathCandidates(FilePathRef("C:\\Users\\other\\a.ts"), w, relativeTo = "$w\\docs"))
+        assertEquals(listOf("src/a.ts"), tappedPathCandidates(FilePathRef("C:\\Users\\me\\proj\\src\\a.ts"), w, relativeTo = "$w\\docs"))
+        assertEquals(listOf("docs/img/a.png", "img/a.png"), tappedPathCandidates(FilePathRef("img\\a.png"), w, relativeTo = "$w\\docs"))
+    }
 }

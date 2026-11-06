@@ -3,16 +3,16 @@
 // speaks `SttEngine`.
 
 import { existsSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { transcribeAudio, type TranscribeOpts } from "../whisper"
 import type { SpawnFn, SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("stt-whisper")
 
-const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-base.bin")
-const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(homedir(), ".local", "bin", "whisper-cli")
+const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(home(), ".cache", "whisper-models", "ggml-base.bin")
+const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(home(), ".local", "bin", "whisper-cli")
 
 export interface WhisperEngineOpts {
   spawn?: SpawnFn

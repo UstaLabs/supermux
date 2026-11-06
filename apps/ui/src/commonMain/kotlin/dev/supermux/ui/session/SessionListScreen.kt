@@ -109,6 +109,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.hostIsInside
+import dev.supermux.fs.hostParent
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.host.formatLastSeen
@@ -130,8 +134,6 @@ import dev.supermux.session.SessionGroup
 import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.groupSessions
-import dev.supermux.session.inferHomeDir
-import dev.supermux.session.pathLeaf
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
@@ -254,6 +256,8 @@ fun SessionListScreen(
     projects: List<ProjectRef> = emptyList(),
     /** Host record id owning a workspace — pairs a row's projectId with a [ProjectRef]. */
     workspaceHost: (WorkspaceDto) -> String = { "" },
+    /** Each host's own home folder by [workspaceHost]'s id: a folder's label shortens under its own host's home. */
+    homeDirs: Map<String, String> = emptyMap(),
     /** Authenticated project image bytes; null when missing or on failure. */
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
@@ -352,19 +356,20 @@ fun SessionListScreen(
     // Agents' home root (the parent of any Agent's workdir, e.g. ~/.mux/workspace/) never shows.
     val agentHomeRoots = remember(sessions) {
         sessions.filter { it.role == "personal_assistant" }
-            .mapNotNull { s -> s.workdir.trimEnd('/').substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let { "$it/" } }
+            // Never a root (`/`, `C:\`): an Agent at the top of a drive must not hide every project.
+            .mapNotNull { s -> hostParent(s.workdir)?.takeIf { hostParent(it) != null } }
             .toSet()
     }
     val visibleProjects = remember(projects, multiHost, hostFilter, agentHomeRoots) {
         val byHost = if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
         byHost.filterNot { ref ->
             val locs = ref.project.locations
-            locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> (loc.path.trimEnd('/') + "/").startsWith(root) } }
+            locs.isNotEmpty() && locs.all { loc -> agentHomeRoots.any { root -> hostIsInside(loc.path, root) } }
         }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending) {
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces, archivedPending, homeDirs) {
         // Archived rows only decide whether an empty project is shown (archived-only → hidden).
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending) { w ->
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces, hideEmptyProjects = archivedPending, homeOf = { homeDirs[it] }) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
@@ -385,8 +390,8 @@ fun SessionListScreen(
     val renderedProjectIds = remember(groups) {
         groups.mapNotNull { it.projectRef() }.groupBy({ it.hostId }, { it.project.id }).mapValues { it.value.toSet() }
     }
-    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
-        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
+    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost, homeDirs) {
+        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost, homeOf = { homeDirs[it] })
     }
     val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }

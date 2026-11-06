@@ -109,4 +109,17 @@ class FilePathRefTest {
         val m = findFilePathRefs("https://example.com/x.md and src/main.ts:5")
         assertEquals(listOf(FilePathRef("src/main.ts", 5)), m.map { it.ref })
     }
+
+    // A drive-absolute path is a path whatever the host: linked whole, its drive kept, its line read.
+    @Test fun windowsDrivePathsAreLinkedWholeWithTheirLine() {
+        val refs = findFilePathRefs("see C:\\Users\\me\\proj\\src\\main.ts:105 and C:/Users/me/a.ts")
+        assertEquals(listOf("C:\\Users\\me\\proj\\src\\main.ts", "C:/Users/me/a.ts"), refs.map { it.ref.path })
+        assertEquals(105, refs[0].ref.line)
+        assertEquals(FilePathRef("D:\\x\\a.kt", 3), parseFilePathRef("D:\\x\\a.kt:3"))
+    }
+
+    @Test fun aSchemeOrAWordBeforeTheColonIsNotADrive() {
+        assertEquals(emptyList(), findFilePathRefs("https://example.com/a/b.html").map { it.ref.path })
+        assertEquals(emptyList(), findFilePathRefs("version:1/2.5").map { it.ref.path })
+    }
 }

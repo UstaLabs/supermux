@@ -18,6 +18,9 @@ object BrokerService {
     const val XDG_AUTOSTART_FILE = "supermux-host.desktop"
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
+    /** The broker's per-boot stop token (src/core/session-manager/stop-token.ts) and the header that carries it. */
+    const val STOP_TOKEN_FILE = "stop-token"
+    const val STOP_TOKEN_HEADER = "x-supermux-stop-token"
     /** Written by app versions before the env moved out of the task; deleted on install / remove (it held the env). */
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
     /**
@@ -757,21 +760,111 @@ Terminal=false
      * wait until the broker process is gone, so its .exe can be replaced. The task stays registered;
      * [install] or `schtasks /Run` starts it again. No-op elsewhere (false).
      */
-    fun stop(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env)
+    fun stop(env: OsEnv = SystemOsEnv, stateDir: Path? = null, port: Int? = null): Boolean =
+        env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env, stateDir, port)
 
     /**
-     * Stop the task's loop, then its broker, BY PID, and wait for the broker to exit. Never by image
-     * name: every agent's MCP shim is `supermux-broker.exe shim` (and the credential helper
-     * `supermux-broker.exe credential`), and those must survive a broker restart or update.
+     * Stop the task's loop, then its broker, and wait for the broker to exit. Never by image name: every agent's MCP
+     * shim is `supermux-broker.exe shim` (and the credential helper `supermux-broker.exe credential`), and those must
+     * survive a broker restart or update.
+     *
+     * With [stateDir] and [port] (the broker the app hosts): the broker is first ASKED to stop (POST /internal/stop
+     * with its per-boot stop-token), so it runs its graceful shutdown, which a kill (TerminateProcess) never does
+     * (Q8). Only if it is still there is it killed by pid, the one broker.pid names included when no loop is its
+     * parent (an orphan the stop used to skip while reporting success, #36). Success is then no broker holding the
+     * state's lock ([brokerLockPipe]) as well as the pids gone: an older broker takes no lock.
      * False when the processes couldn't be listed or a broker is still alive after ~10 s.
      */
-    private fun stopWindowsTask(env: OsEnv): Boolean {
+    private fun stopWindowsTask(env: OsEnv, stateDir: Path? = null, port: Int? = null): Boolean {
         val procs = listWindowsProcesses(env) ?: return false
         val targets = windowsTaskTargets(procs)
-        // The loop first, or it starts the broker again ~5 s after the kill.
+        // The loop first, or it starts the broker again ~5 s after it exits.
         if (targets.loops.isNotEmpty()) env.run(taskkillArgv(targets.loops))
-        if (targets.brokers.isNotEmpty()) env.run(taskkillArgv(targets.brokers))
-        return awaitWindowsPidsGone(env, targets.brokers)
+        val pipe = stateDir?.let { brokerLockPipe(it.toString()) }
+        if (pipe != null && port != null && brokerHoldsState(env, pipe) == true && requestStop(env, stateDir, port)) {
+            if (awaitLockReleased(env, pipe) == true && awaitWindowsPidsGone(env, targets.brokers)) return true
+        }
+        val brokers = (targets.brokers + listOfNotNull(pidFileBroker(stateDir, procs))).distinct()
+        if (brokers.isNotEmpty()) env.run(taskkillArgv(brokers))
+        val gone = awaitWindowsPidsGone(env, brokers)
+        // Pipes that cannot be listed (no PowerShell answer) leave the pids to decide, as before the lock.
+        return gone && (pipe == null || awaitLockReleased(env, pipe) != false)
+    }
+
+    /** The stop request: true when the broker accepted it (202). No token (an older broker): false, nothing sent. */
+    private fun requestStop(env: OsEnv, stateDir: Path, port: Int): Boolean {
+        val token = runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()
+        if (token.isNullOrEmpty()) return false
+        return env.postLocal("http://127.0.0.1:$port/internal/stop", mapOf(STOP_TOKEN_HEADER to token)) == 202
+    }
+
+    /** The broker broker.pid names, if it runs as a broker (never an agent's `… shim` / `… credential`). */
+    private fun pidFileBroker(stateDir: Path?, procs: List<WinProcess>): Long? {
+        val pid = stateDir?.let { runCatching { Files.readString(it.resolve("broker.pid")).trim().toLong() }.getOrNull() } ?: return null
+        val p = procs.firstOrNull { it.pid == pid } ?: return null
+        return pid.takeIf { p.name.equals(WINDOWS_BROKER_EXE, ignoreCase = true) && isServingBroker(p.commandLine) }
+    }
+
+    /** A broker's own command line: the exe and nothing after it (`shim`, `credential`… are the agents' helpers). */
+    internal fun isServingBroker(commandLine: String): Boolean {
+        val c = commandLine.trim()
+        val rest = if (c.startsWith('"')) c.substringAfter('"').substringAfter('"', "") else c.substringAfter(' ', "")
+        return rest.isBlank()
+    }
+
+    /**
+     * The Windows pipe that is the broker's lock for [stateDir]: `pipeName("broker", …)` in
+     * packages/platform/src/lock.ts, spelled the same way (sha-256 of the path in Windows' normalised, lower-cased
+     * form). One broker per state directory holds it and the kernel drops it with that broker: it is how the app
+     * knows a broker is gone, whoever its parent is.
+     */
+    fun brokerLockPipe(stateDir: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(windowsCanonical(stateDir).toByteArray(Charsets.UTF_8))
+        val hex = digest.joinToString("") { "%02x".format(it) }.take(32)
+        return "\\\\.\\pipe\\supermux-broker-$hex-lock"
+    }
+
+    /** Node's `path.win32.normalize` of an absolute path (a trailing separator kept), lower-cased: what lock.ts hashes. */
+    internal fun windowsCanonical(path: String): String {
+        val p = path.replace('/', '\\')
+        val unc = p.startsWith("\\\\")
+        val drive = if (!unc && p.length >= 2 && p[1] == ':') p.substring(0, 2) else ""
+        val rest = if (unc) p.substring(2) else p.substring(drive.length)
+        val rooted = unc || rest.startsWith('\\')
+        val out = ArrayList<String>()
+        for (segment in rest.split('\\')) when (segment) {
+            "", "." -> {}
+            ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeAt(out.size - 1) else if (!rooted) out += segment
+            else -> out += segment
+        }
+        val root = if (unc) "\\\\" else drive + (if (rooted) "\\" else "")
+        val trailing = if (out.isNotEmpty() && (p.endsWith('\\'))) "\\" else ""
+        return (root + out.joinToString("\\") + trailing).lowercase()
+    }
+
+    /** Lists the named pipes, one `\\.\pipe\…` path a line. Listing connects to none of them. No double quotes (Java). */
+    internal fun listPipesArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "[System.IO.Directory]::GetFiles('\\\\.\\pipe\\')",
+    )
+
+    /** Whether a broker holds [pipe]: null when the pipes could not be listed. */
+    private fun brokerHoldsState(env: OsEnv, pipe: String): Boolean? =
+        env.runCapture(listPipesArgv())?.lineSequence()?.any { it.trim().equals(pipe, ignoreCase = true) }
+
+    /**
+     * Poll until no broker holds [pipe], up to 20 × 500 ms: true once released, false while still held, null when the
+     * pipes cannot be listed at all.
+     */
+    private fun awaitLockReleased(env: OsEnv, pipe: String): Boolean? {
+        for (i in 1..20) {
+            when (brokerHoldsState(env, pipe)) {
+                false -> return true
+                null -> return null
+                true -> env.sleep(500)
+            }
+        }
+        return brokerHoldsState(env, pipe)?.not()
     }
 
     /**

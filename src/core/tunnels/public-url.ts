@@ -10,23 +10,9 @@ import { openDb } from "../storage/db"
 import { SettingsStore } from "../settings/store"
 import { DeviceStore } from "../../channels/web/device-store"
 import type { AppConfig } from "../settings/app-config"
-import type { Run, Println } from "./types"
-
-/** Parse `KEY=value` lines into a map (mirrors how the broker reads .env). */
-function parseEnvFile(text: string): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const line of text.split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m) map.set(m[1]!, m[2]!)
-  }
-  return map
-}
-
-function serializeEnv(map: Map<string, string>): string {
-  let out = ""
-  for (const [k, v] of map) out += `${k}=${v}\n`
-  return out
-}
+import type { Println } from "./types"
+import { STOP_TOKEN_FILE } from "../session-manager/stop-token"
+import { envText, readEnvText } from "../../shared/env-file"
 
 /**
  * Upsert MUX_WEB_PORT + MUX_WEB_PUBLIC_URL in `<stateDir>/.env`, CLOBBERING any
@@ -42,7 +28,7 @@ export function writeEnvPublicUrl(
 ): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const envPath = join(stateDir, ".env")
-  const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_WEB_PORT", port)
   map.set("MUX_WEB_PUBLIC_URL", url)
   // Wildcard (subdomain) mode is env-driven: set it when present, clear a stale
@@ -50,7 +36,7 @@ export function writeEnvPublicUrl(
   // base domain that silently breaks routing).
   if (proxyBaseDomain) map.set("MUX_PROXY_BASE_DOMAIN", proxyBaseDomain)
   else map.delete("MUX_PROXY_BASE_DOMAIN")
-  writeFileSync(envPath, serializeEnv(map))
+  writeFileSync(envPath, envText(map))
   chmodSync(envPath, 0o600)
 }
 
@@ -60,9 +46,9 @@ export function writeEnvPublicUrl(
 export function setEnvRelayDomain(stateDir: string, domain: string): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const envPath = join(stateDir, ".env")
-  const map = existsSync(envPath) ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_RELAY_DOMAIN", domain)
-  writeFileSync(envPath, serializeEnv(map))
+  writeFileSync(envPath, envText(map))
   chmodSync(envPath, 0o600)
 }
 
@@ -111,30 +97,26 @@ export function printPairLink(link: { url: string; name: string }, println: Prin
 }
 
 /**
- * Restart the broker so a changed MUX_WEB_PUBLIC_URL takes effect (the WebChannel
- * captures the origin at construction). Linux: `systemctl --user restart supermux`;
- * macOS: `launchctl kickstart`. Never throws; returns whether it succeeded.
+ * Asks the running broker to restart itself under whatever runs it: systemd, launchd, or the desktop app's unit, agent
+ * or Windows task (update/apply.ts restartService knows which; this process does not). Uses its local
+ * /internal/restart with the per-boot token in [stateDir]. False, with what to do, when it cannot.
  */
-export async function restartBroker(run: Run, println: Println): Promise<boolean> {
-  if (process.platform === "darwin") {
-    const uid = typeof process.getuid === "function" ? process.getuid() : 0
-    const target = `gui/${uid}/dev.supermux.broker`
-    const r = await run(["launchctl", "kickstart", "-k", target])
-    if (r.code === 0) {
-      println("Restarted the broker (launchd) ✔")
+export async function restartBroker(stateDir: string, port: string, println: Println, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const later = "The broker is not running; it picks the new settings up when it starts."
+  let token: string
+  try { token = readFileSync(join(stateDir, STOP_TOKEN_FILE), "utf8").trim() } catch { println(later); return false }
+  try {
+    const r = await fetchImpl(`http://127.0.0.1:${port}/internal/restart`, { method: "POST", headers: { "x-supermux-stop-token": token } })
+    if (r.status === 202) {
+      println("Restarted the broker ✔")
       return true
     }
-    println("Could not restart the broker automatically — restart it yourself:")
-    println(`  launchctl kickstart -k ${target}`)
+    println(r.status === 409
+      ? "The broker does not run under a service manager, so it cannot restart itself: restart it yourself (quit and reopen the supermux app, or run it again)."
+      : `Could not restart the broker (HTTP ${r.status}): restart it yourself.`)
+    return false
+  } catch {
+    println(later)
     return false
   }
-  const r = await run(["systemctl", "--user", "restart", "supermux"])
-  if (r.code === 0) {
-    println("Restarted the broker (systemd) ✔")
-    return true
-  }
-  println("Could not restart the broker automatically — restart it yourself:")
-  println("  systemctl --user restart supermux")
-  println("  (logs: journalctl --user -u supermux -n 50)")
-  return false
 }

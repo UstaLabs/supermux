@@ -1,6 +1,7 @@
 package dev.supermux.desktop.host
 
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.host.PairedHost
 
 import kotlinx.serialization.Serializable
@@ -78,14 +79,18 @@ class HostingPrefsStore(
         /** This user's store: hosting.json beside the app's other data, read from the old place until saved. */
         fun ofThisUser(): HostingPrefsStore = thisUser().let { (now, before) -> HostingPrefsStore(now, oldFile = before) }
 
-        private fun thisUser() = paths(System.getProperty("os.name") ?: "", System::getenv, System.getProperty("user.home") ?: ".")
+        private fun thisUser() = paths(DesktopOs.current, System::getenv, System.getProperty("user.home") ?: ".")
 
         /**
          * hosting.json beside the app's other data ([DesktopHostStores.defaultDir]: hosts, tokens, the
          * install id), and where versions before #77 kept it; null when that is the same place.
          */
-        fun paths(osName: String, getenv: (String) -> String?, home: String): Pair<Path, Path?> {
-            val now = DesktopTokenStore.configBase(osName, getenv, home).resolve("supermux-desktop").resolve("hosting.json")
+        fun paths(osName: String, getenv: (String) -> String?, home: String): Pair<Path, Path?> =
+            paths(DesktopOs.of(osName), getenv, home)
+
+        /** [paths] on [os], the platform's one answer for this computer ([thisUser]). */
+        internal fun paths(os: DesktopOs, getenv: (String) -> String?, home: String): Pair<Path, Path?> {
+            val now = DesktopTokenStore.configBase(os, getenv, home).resolve("supermux-desktop").resolve("hosting.json")
             val before = Path.of(home, ".config", "supermux-desktop", "hosting.json")
             return now to before.takeIf { it != now }
         }

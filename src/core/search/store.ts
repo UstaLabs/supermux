@@ -1,15 +1,12 @@
 import { readdirSync, readFileSync, existsSync } from "fs"
-import { join } from "path"
+import { basename, join } from "path"
 import type { Db } from "../storage/db"
 import { splitSections } from "./sections"
-import { homedir } from "os"
-
-function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/\/$/, "").replace(/[/.]/g, "-")
-}
+import { home } from "../../shared/home"
+import { claudeProjectDirName } from "../agents/claude/project-dir"
 
 function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
-  return join(homedir(), ".claude", "projects", encodeProjectDir(cwd), `${claudeSessionId}.jsonl`)
+  return join(home(), ".claude", "projects", claudeProjectDirName(cwd), `${claudeSessionId}.jsonl`)
 }
 
 export interface KnowledgeHit {
@@ -87,7 +84,9 @@ export class SearchStore {
   }
 
   private indexFile(ins: any, path: string, scope: string, isPersonal: number): void {
-    const name = path.split("/").pop()!.replace(/\.digest\.md$/, "").replace(/\.md$/, "")
+    // The runtime's basename: the path comes from join(), so on Windows it holds \ and a "/" split kept it whole,
+    // and an Agent's filter on its own memory (name = ?) never matched.
+    const name = basename(path).replace(/\.digest\.md$/, "").replace(/\.md$/, "")
     for (const sec of splitSections(readFileSync(path, "utf8"))) {
       if (!sec.body && !sec.heading) continue
       ins.run(scope, name, sec.heading, sec.body, path, isPersonal)

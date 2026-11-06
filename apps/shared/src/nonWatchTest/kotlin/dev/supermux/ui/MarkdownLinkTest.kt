@@ -2,6 +2,7 @@ package dev.supermux.ui
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class MarkdownLinkTest {
     @Test fun links_bare_path_in_prose() {
@@ -72,5 +73,12 @@ class MarkdownLinkTest {
         assertEquals(listOf(MdSpan("report", SpanStyleKind.LINK, url = url)), parseInlineMarkdown("[report]($url)"))
         assertEquals(listOf(MdSpan("top", SpanStyleKind.LINK, url = "#top")), parseInlineMarkdown("[top](#top)"))
         assertEquals(listOf(MdSpan("m", SpanStyleKind.LINK, url = "mailto:a@b.co")), parseInlineMarkdown("[m](mailto:a@b.co)"))
+    }
+
+    // `C:` is a drive, not a URL scheme: the link opens the file.
+    @Test fun aWindowsPathDestinationIsAFileNotAUrl() {
+        assertEquals(FilePathRef("C:\\Users\\me\\a.ts", 12), linkFileRef("C:\\Users\\me\\a.ts:12"))
+        assertEquals(FilePathRef("C:/Users/me/a.ts"), linkFileRef("C:/Users/me/a.ts"))
+        assertNull(linkFileRef("mailto:me@example.com"))
     }
 }

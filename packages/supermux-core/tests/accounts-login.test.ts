@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
 import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
 import { loginPlan, unlinkLink } from "../src/accounts/login.js"
+import { proc } from "@supermux/platform"
 import type { AgentDriver, LoginConfig, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
@@ -104,13 +105,16 @@ test("unlinkLink removes the link to the login directory, never the directory's 
   expect(await readFile(join(base, "token"), "utf8")).toBe("secret")
 })
 
-test("windows login argv: an .exe runs directly, a .cmd shim through cmd.exe with every word quoted", () => {
+// One rule with the broker's launcher (@supermux/platform's windowsLaunch). Core's own refused " % ! in any word, the
+// resolved .cmd path included, so a Windows user named "Ana!" could not run a guided login.
+test("windows login argv: an .exe runs directly, a .cmd shim through cmd.exe by the launcher's rule, any character passes", () => {
   const args = ["auth", "login", "--claudeai", "--email", "a&b@x"]
   expect(windowsLoginArgv("C:\\Users\\a\\.local\\bin\\claude.exe", args)).toEqual(["C:\\Users\\a\\.local\\bin\\claude.exe", ...args])
   const shim = windowsLoginArgv("C:\\npm\\claude.CMD", args)
-  expect(shim.slice(1, 4)).toEqual(["/d", "/s", "/c"])
-  expect(shim[4]).toBe(`""C:\\npm\\claude.CMD" "auth" "login" "--claudeai" "--email" "a&b@x""`)
-  for (const bad of ['a"b@x', "a%PATH%@x", "a!b@x"]) expect(() => windowsLoginArgv("C:\\npm\\claude.cmd", ["--email", bad])).toThrow()
+  expect(shim.slice(1, 5)).toEqual(["/d", "/v:off", "/s", "/c"])
+  expect(shim[5]).toBe(proc.windowsCmdCommandLine("C:\\npm\\claude.CMD", args))
+  for (const word of ['a"b@x', "a%PATH%@x", "a!b@x"]) expect(() => windowsLoginArgv("C:\\npm\\claude.cmd", ["--email", word])).not.toThrow()
+  expect(windowsLoginArgv("C:\\Users\\Ana!\\AppData\\Roaming\\npm\\claude.cmd", ["auth", "login"])[5]).toStartWith('"C:\\Users\\Ana^!\\')
 })
 
 test("claude: PTY login, URL parsed, code typed then Enter, promoted into an account home with shared links", async () => {

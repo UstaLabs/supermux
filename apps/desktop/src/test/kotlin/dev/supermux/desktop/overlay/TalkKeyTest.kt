@@ -1,5 +1,6 @@
 package dev.supermux.desktop.overlay
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -7,7 +8,7 @@ import kotlin.test.assertTrue
 
 class TalkKeyTest {
     // Two keys, one hand, no permission: delivered on macOS 26 (Ahmet's Mac, 2026-11-05, press and release).
-    @Test fun theDefaultIsOptionSpace() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse(null, DesktopOs.MAC))
+    @Test fun theDefaultIsOptionSpace() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse(null, DesktopOs.MACOS))
 
     // The same two keys on Windows.
     @Test fun onWindowsTheDefaultIsAltSpace() {
@@ -21,23 +22,23 @@ class TalkKeyTest {
         assertEquals("Ctrl+Alt+Space", TalkKey.CONTROL_ALT_SPACE.on(DesktopOs.LINUX)?.label)
     }
 
-    @Test fun anUnknownChoiceFallsBackToTheDefault() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("hyper+f5", DesktopOs.MAC))
+    @Test fun anUnknownChoiceFallsBackToTheDefault() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("hyper+f5", DesktopOs.MACOS))
 
-    @Test fun aStoredChoiceIsKept() = assertEquals(TalkKey.RIGHT_OPTION, TalkKey.parse("RIGHT_OPTION", DesktopOs.MAC))
+    @Test fun aStoredChoiceIsKept() = assertEquals(TalkKey.RIGHT_OPTION, TalkKey.parse("RIGHT_OPTION", DesktopOs.MACOS))
 
     @Test fun aChoiceThisOsDoesNotOfferFallsBackToTheDefault() {
         assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("RIGHT_OPTION", DesktopOs.WINDOWS))
-        assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("CONTROL_ALT_SPACE", DesktopOs.MAC))
+        assertEquals(TalkKey.OPTION_SPACE, TalkKey.parse("CONTROL_ALT_SPACE", DesktopOs.MACOS))
     }
 
     @Test fun eachOsHasItsOwnMenu() {
-        assertEquals(listOf("⌥Space", "⌘⇧Space", "⌃⇧Space", "⌃⌥⌘Space", "Right ⌥ alone"), TalkKey.offeredOn(DesktopOs.MAC).map { it.on(DesktopOs.MAC)!!.label })
+        assertEquals(listOf("⌥Space", "⌘⇧Space", "⌃⇧Space", "⌃⌥⌘Space", "Right ⌥ alone"), TalkKey.offeredOn(DesktopOs.MACOS).map { it.on(DesktopOs.MACOS)!!.label })
         assertEquals(listOf("Alt+Space", "Ctrl+Shift+Space", "Ctrl+Alt+Space"), TalkKey.offeredOn(DesktopOs.WINDOWS).map { it.on(DesktopOs.WINDOWS)!!.label })
         assertEquals(listOf("Alt+Space", "Ctrl+Shift+Space", "Ctrl+Alt+Space"), TalkKey.offeredOn(DesktopOs.LINUX).map { it.on(DesktopOs.LINUX)!!.label })
         assertNull(TalkKey.RIGHT_OPTION.on(DesktopOs.LINUX))
     }
 
-    @Test fun optionSpaceIsFirstInTheMenu() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.offeredOn(DesktopOs.MAC).first())
+    @Test fun optionSpaceIsFirstInTheMenu() = assertEquals(TalkKey.OPTION_SPACE, TalkKey.offeredOn(DesktopOs.MACOS).first())
 
     // A bare key as a hot key would take that key from typing in every app.
     @Test fun everyComboHoldsAModifier() {
@@ -46,8 +47,8 @@ class TalkKeyTest {
 
     // ⌥ (Alt) with a letter types a character, and macOS 15+ may hold such hot keys back: ⌥ alone only with Space.
     @Test fun optionOrAltAloneGoesOnlyWithSpace() {
-        for (k in TalkKey.offeredOn(DesktopOs.MAC).filter { it.combo && it.on(DesktopOs.MAC)!!.modifiers == TalkKey.MAC_OPTION }) {
-            assertEquals(TalkKey.MAC_SPACE_KEY, k.on(DesktopOs.MAC)!!.key, k.name)
+        for (k in TalkKey.offeredOn(DesktopOs.MACOS).filter { it.combo && it.on(DesktopOs.MACOS)!!.modifiers == TalkKey.MAC_OPTION }) {
+            assertEquals(TalkKey.MAC_SPACE_KEY, k.on(DesktopOs.MACOS)!!.key, k.name)
         }
         for (k in TalkKey.offeredOn(DesktopOs.WINDOWS).filter { it.on(DesktopOs.WINDOWS)!!.modifiers == TalkKey.WIN_ALT_MOD }) {
             assertEquals(TalkKey.WIN_SPACE_KEY, k.on(DesktopOs.WINDOWS)!!.key, k.name)
@@ -58,8 +59,8 @@ class TalkKeyTest {
     @Test fun noComboIsOneOfMacOsOwnSpaceShortcuts() {
         val m = TalkKey
         val taken = setOf(m.MAC_COMMAND, m.MAC_CONTROL, m.MAC_CONTROL or m.MAC_OPTION, m.MAC_CONTROL or m.MAC_COMMAND, m.MAC_OPTION or m.MAC_COMMAND)
-        for (k in TalkKey.offeredOn(DesktopOs.MAC).filter { it.combo && it.on(DesktopOs.MAC)!!.key == m.MAC_SPACE_KEY }) {
-            assertTrue(k.on(DesktopOs.MAC)!!.modifiers !in taken, k.name)
+        for (k in TalkKey.offeredOn(DesktopOs.MACOS).filter { it.combo && it.on(DesktopOs.MACOS)!!.key == m.MAC_SPACE_KEY }) {
+            assertTrue(k.on(DesktopOs.MACOS)!!.modifiers !in taken, k.name)
         }
     }
 
@@ -79,10 +80,4 @@ class TalkKeyTest {
 
     @Test fun onlyRightOptionAsksForInputMonitoring() =
         assertEquals(listOf(TalkKey.RIGHT_OPTION), TalkKey.entries.filter { it.needsInputMonitoring })
-
-    @Test fun theOsIsToldFromItsName() {
-        assertEquals(DesktopOs.MAC, desktopOsOf("Mac OS X"))
-        assertEquals(DesktopOs.WINDOWS, desktopOsOf("Windows 11"))
-        assertEquals(DesktopOs.LINUX, desktopOsOf("Linux"))
-    }
 }

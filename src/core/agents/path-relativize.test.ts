@@ -42,3 +42,10 @@ test("null workdir -> no-op", () => {
 test("nested path -> nested relative", () => {
   expect(relativizePath("/h/u/proj/a/b/c/d.ts", WD)).toBe("a/b/c/d.ts")
 })
+
+// A tool path on another drive is not under the workdir: win32.relative hands it back absolute, and it reached
+// clients as `D:/data/x` (a "relative" path).
+test.skipIf(process.platform !== "win32")("a path on another drive stays absolute and unchanged", () => {
+  expect(relativizePath("D:\\data\\x.ts", "C:\\w")).toBe("D:\\data\\x.ts")
+  expect(relativizePath("C:\\w\\src\\a.ts", "c:\\W")).toBe("src/a.ts")
+})

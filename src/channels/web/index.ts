@@ -1,6 +1,7 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { timingSafeEqual } from "node:crypto"
 import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
@@ -60,6 +61,7 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -483,6 +485,18 @@ export interface WebChannelOpts {
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
   internalSecret?: string
+  /**
+   * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
+   * carrying it in `x-supermux-stop-token` stops the broker gracefully: the desktop app's stop on Windows, where every
+   * external stop is otherwise TerminateProcess.
+   */
+  stopToken?: string
+  onStopRequest?: () => void
+  /**
+   * With [stopToken]: POST /internal/restart restarts the broker under whatever runs it (update/apply.ts
+   * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
+   */
+  onRestartRequest?: () => boolean
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -2508,6 +2522,32 @@ export class WebChannel implements Channel {
       return Response.json(this.lastClientFrames)
     }
 
+    // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    const stopTokenGiven = (kind: string): boolean => {
+      const given = req.headers.get("x-supermux-stop-token") ?? ""
+      const expected = this.opts.stopToken ?? ""
+      const ok = expected !== "" && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+      if (!ok) log.warn(`${kind}_request_rejected`, { hasToken: given !== "" })
+      return ok
+    }
+    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("stop")) return new Response("forbidden", { status: 403 })
+      log.info("stop_request_accepted")
+      const stop = this.opts.onStopRequest
+      setTimeout(() => stop(), 0) // after this response has gone out
+      return new Response("stopping", { status: 202 })
+    }
+    if (path === "/internal/restart" && this.opts.stopToken && this.opts.onRestartRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("restart")) return new Response("forbidden", { status: 403 })
+      // restartService schedules the restart a moment later, so this answer still goes out.
+      if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
+      log.info("restart_request_accepted")
+      return new Response("restarting", { status: 202 })
+    }
+
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
       // persistent secret embedded in the hook URL so a reachable web port can't
@@ -3963,7 +4003,7 @@ export class WebChannel implements Channel {
       const active = this.opts.getSessionsSnapshot().map((s) => s.repo_root ?? s.workdir)
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
       const projects = uniqueKnownWorkdirs([...active, ...archived], home())
-        .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        .filter((p) => !paths.isInside(p, wtRoot))
         // The mux home and agent folders are supermux's own, not projects to pick.
         .filter((p) => !isMuxInternalPath(p))
         .map((p) => ({ path: p }))

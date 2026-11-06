@@ -6,6 +6,8 @@
 package dev.supermux.desktop.overlay
 
 import com.sun.jna.Callback
+import dev.supermux.desktop.platform.DesktopOs
+import dev.supermux.desktop.platform.openCommand
 import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 
@@ -111,6 +113,6 @@ internal object MacOverlayNative {
 
     /** Opens System Settings › Privacy & Security at [pane] ("ScreenCapture", "ListenEvent"). */
     fun openPrivacySettings(pane: String) {
-        runCatching { ProcessBuilder("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_$pane").start() }
+        runCatching { openCommand("x-apple.systempreferences:com.apple.preference.security?Privacy_$pane", DesktopOs.MACOS).start() }
     }
 }

@@ -1,9 +1,9 @@
 // src/core/worktree/manager.test.ts
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, existsSync, writeFileSync, readFileSync, mkdirSync } from "fs"
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, readFileSync, symlinkSync } from "fs"
 import { homedir, tmpdir } from "os"
-import { join, resolve, sep } from "path"
+import { join, relative, resolve, sep } from "path"
 import { createWorktree, removeWorktree, deriveSessionBranch, ensureWorktreeAt, existingBranchNames, worktreesRoot, createSessionBranch, repoSlug } from "./manager"
 
 function tmpRepo(): string {
@@ -25,16 +25,21 @@ test("tests never create worktrees in the live ~/.mux/worktrees (preload sets MU
   await removeWorktree(h.repoRoot, h.worktreeDir, h.sessionBranch)
 })
 
-test("worktreesRoot reads MUX_WORKTREES_ROOT at call time", () => {
-  const prev = process.env.MUX_WORKTREES_ROOT
+// Without MUX_WORKTREES_ROOT the worktrees live in the mux home, wherever MUX_HOME puts it: the root was
+// $HOME/.mux/worktrees, so a broker with MUX_HOME set made its worktrees outside its own home.
+test("worktreesRoot reads MUX_WORKTREES_ROOT at call time, else the mux home's worktrees folder", () => {
+  const prev = { root: process.env.MUX_WORKTREES_ROOT, home: process.env.MUX_HOME }
   try {
     process.env.MUX_WORKTREES_ROOT = "/tmp/x-root"
     expect(worktreesRoot()).toBe("/tmp/x-root")
     delete process.env.MUX_WORKTREES_ROOT
-    expect(worktreesRoot()).toBe(join(process.env.HOME || homedir(), ".mux", "worktrees"))
+    process.env.MUX_HOME = "/tmp/x-mux-home"
+    expect(worktreesRoot()).toBe(join("/tmp/x-mux-home", "worktrees"))
   } finally {
-    if (prev === undefined) delete process.env.MUX_WORKTREES_ROOT
-    else process.env.MUX_WORKTREES_ROOT = prev
+    for (const [key, value] of [["MUX_WORKTREES_ROOT", prev.root], ["MUX_HOME", prev.home]] as const) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })
 
@@ -64,6 +69,30 @@ test("createWorktree copies .worktreeinclude files", async () => {
   writeFileSync(join(repo, ".worktreeinclude"), ".env\n")
   const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "s" })
   expect(readFileSync(join(h.worktreeDir, ".env"), "utf-8")).toBe("SECRET=1")
+})
+
+test("a .worktreeinclude folder's links point into the worktree, never back into the main checkout", async () => {
+  const repo = tmpRepo()
+  mkdirSync(join(repo, "config", "v2"), { recursive: true })
+  writeFileSync(join(repo, "config", "v2", "app.env"), "MODE=main")
+  symlinkSync("v2", join(repo, "config", "current"), "dir")
+  writeFileSync(join(repo, ".worktreeinclude"), "config\n")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "links" })
+  // A session that writes through the link changes its own copy; the main checkout keeps its file.
+  writeFileSync(join(h.worktreeDir, "config", "current", "app.env"), "MODE=worktree")
+  expect(readFileSync(join(repo, "config", "v2", "app.env"), "utf-8")).toBe("MODE=main")
+  expect(readFileSync(join(h.worktreeDir, "config", "v2", "app.env"), "utf-8")).toBe("MODE=worktree")
+})
+
+test("a .worktreeinclude entry that links out of the repo still reaches its file from the worktree", async () => {
+  const repo = tmpRepo()
+  const secrets = mkdtempSync(join(tmpdir(), "mux-wt-secrets-"))
+  writeFileSync(join(secrets, ".env"), "SECRET=2")
+  // Relative, as `ln -s ../x .env` writes it: from the worktree, which sits elsewhere, it would point nowhere.
+  symlinkSync(relative(repo, join(secrets, ".env")), join(repo, ".env"), "file")
+  writeFileSync(join(repo, ".worktreeinclude"), ".env\n")
+  const h = await createWorktree({ repoRoot: repo, baseBranch: "main", sessionName: "outward" })
+  expect(readFileSync(join(h.worktreeDir, ".env"), "utf-8")).toBe("SECRET=2")
 })
 
 test("ensureWorktreeAt recreates a worktree at the same path when the dir AND its branch are gone (merged-session resume)", async () => {

@@ -252,16 +252,8 @@ object HostBinaries {
         }.getOrNull()
     }
 
-    /** First executable named [name] on `$PATH`, or null. (Dev helper lookup; POSIX hosts.) */
-    fun whichOnPath(name: String): Path? {
-        val path = System.getenv("PATH") ?: return null
-        for (dir in path.split(File.pathSeparator)) {
-            if (dir.isBlank()) continue
-            val p = runCatching { Path.of(dir).resolve(name) }.getOrNull() ?: continue
-            if (Files.isRegularFile(p) && Files.isExecutable(p)) return p
-        }
-        return null
-    }
+    /** The command [name] on this process's PATH, or null: [dev.supermux.desktop.platform.findCommand], PATHEXT on Windows. */
+    fun whichOnPath(name: String): Path? = dev.supermux.desktop.platform.findCommand(name)
 
     // ── materialization (mirrors runtime-assets.ts) ─────────────────────────────────────
 

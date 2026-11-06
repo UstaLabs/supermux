@@ -1,8 +1,8 @@
 import { join } from "path"
-import { homedir } from "os"
 import { resolveCommand } from "../../process/launcher"
 import type { LoginSpawnCommand } from "../login/spawn-command"
 import { codexCredentialFreshness } from "../../../../packages/supermux-core/src/environment/index.js"
+import { home } from "../../../shared/home"
 
 export { codexCredentialFreshness }
 
@@ -11,6 +11,6 @@ export { codexCredentialFreshness }
 export function loginSpawnCommand(): LoginSpawnCommand {
   const env = { ...process.env } as Record<string, string>
   const cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"
-  env.CODEX_HOME = join(homedir(), ".codex")
+  env.CODEX_HOME = join(home(), ".codex")
   return { cmd, args: ["login", "--device-auth"], env }
 }

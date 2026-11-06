@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalPanes
@@ -73,7 +74,7 @@ fun EditorTabs(
             TabChip(
                 path = tab.path,
                 tag = editorTabTag(tab.path),
-                label = tab.path.substringAfterLast('/'),
+                label = pathLeaf(tab.path),
                 active = tab.path == activeTabPath,
                 dirty = isDirty(tab.path),
                 loading = false,
@@ -86,7 +87,7 @@ fun EditorTabs(
             TabChip(
                 path = loadingPath,
                 tag = editorTabLoadingTag(loadingPath),
-                label = loadingPath.substringAfterLast('/'),
+                label = pathLeaf(loadingPath),
                 active = false,
                 dirty = false,
                 loading = true,

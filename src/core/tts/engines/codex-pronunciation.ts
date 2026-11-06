@@ -8,10 +8,10 @@
 // Live probe 2026-07-29: ChatGPT OAuth works; platform sk- path is quota-billed.
 
 import { readFileSync, writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import type { TtsByteStream, TtsEngine, TtsResult, TtsSpeakOpts } from "../tts-types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("tts-codex")
 
@@ -113,7 +113,7 @@ export function codexPronunciationEngine(opts: CodexPronunciationEngineOpts = {}
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
-  const authPath = opts.authPath ?? join(homedir(), ".codex", "auth.json")
+  const authPath = opts.authPath ?? join(home(), ".codex", "auth.json")
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   const loadAuth = (): any | null => readJson(read, authPath)

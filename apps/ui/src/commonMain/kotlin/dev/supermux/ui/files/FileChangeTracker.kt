@@ -6,6 +6,7 @@
 package dev.supermux.ui.files
 
 import dev.supermux.fs.DirSnapshot
+import dev.supermux.fs.hostJoin
 import kotlin.time.TimeSource
 
 /**
@@ -97,6 +98,5 @@ private fun defaultClock(): () -> Long {
     return { start.elapsedNow().inWholeMilliseconds }
 }
 
-/** The absolute path of the workdir-relative [rel] (leading slash optional). */
-fun absoluteInWorkdir(workdir: String, rel: String): String =
-    rel.split('/').filter { it.isNotEmpty() && it != "." }.fold(if (workdir.length > 1) workdir.trimEnd('/') else workdir) { acc, seg -> childOf(acc, seg) }
+/** The absolute path of the workdir-relative [rel] (leading slash optional), in the workdir's separator. */
+fun absoluteInWorkdir(workdir: String, rel: String): String = hostJoin(trimEnd(workdir), rel)

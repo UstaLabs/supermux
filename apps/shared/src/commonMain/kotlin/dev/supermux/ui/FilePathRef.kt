@@ -5,14 +5,16 @@ data class FilePathRef(val path: String, val line: Int? = null, val endLine: Int
 /** One in-text match: half-open [start, end) char range + parsed ref + matched text. */
 data class FilePathMatch(val start: Int, val end: Int, val ref: FilePathRef, val display: String)
 
-/** Path body shared with linkification (relative, absolute, home-relative). Port of FILE_PATH_BODY.
+/** Path body shared with linkification (a Windows drive's, relative, absolute, home-relative). Port of FILE_PATH_BODY.
  *
  *  Exposed so Apple clients can compile the SAME pattern with Foundation's regex engine — see
  *  the note on [findFilePathRefs]. It began as a port of the retired Vue PWA's file-path-ref
  *  helper (retired Vue PWA; see git history before 2026-09-12); this file is now the source of truth.
- *  The file name may start with its dot, so dotfiles (`apps/.gitignore`, `deploy/.env.local`) match. */
+ *  The file name may start with its dot, so dotfiles (`apps/.gitignore`, `deploy/.env.local`) match. A drive's
+ *  path (`C:\Users\me\a.ts`, `C:/Users/me/a.ts`) is matched whole, its drive kept, whatever host the text is from:
+ *  a relative `src\a.ts` is not (on a POSIX host `\` belongs to a name). */
 const val FILE_PATH_BODY: String =
-    """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]*\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]*\.[\w]+"""
+    """[A-Za-z]:[\\/](?:[\w@.-]+[\\/])*[\w.-]*\.[\w]+|(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]*\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]*\.[\w]+"""
 
 private val FILE_PATH_REF_RE = Regex("""^($FILE_PATH_BODY)(?::(.*))?$""")
 

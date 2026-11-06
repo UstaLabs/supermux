@@ -2,6 +2,8 @@
 // with nothing the OS owns.
 package dev.supermux.desktop.overlay
 
+import dev.supermux.desktop.platform.DesktopOs
+
 // macOS: Carbon's modifier bits and the space bar's key code.
 private const val MAC_CMD = 0x100
 private const val MAC_SHIFT = 0x200
@@ -20,15 +22,6 @@ private const val X_CTRL = 0x4
 private const val X_ALT = 0x8 // Mod1
 private const val X_SUPER = 0x40 // Mod4
 private const val X_SPACE = 0x20 // XK_space
-
-/** The desktop OSes, as `os.name` tells them apart. */
-enum class DesktopOs { MAC, WINDOWS, LINUX }
-
-fun desktopOsOf(osName: String): DesktopOs = when {
-    osName.startsWith("Mac") -> DesktopOs.MAC
-    osName.startsWith("Windows") -> DesktopOs.WINDOWS
-    else -> DesktopOs.LINUX
-}
 
 /** A key combination on one OS: how it reads there, and the codes its hot-key API takes. */
 data class KeyCombo(val label: String, val modifiers: Int, val key: Int)
@@ -59,8 +52,8 @@ enum class TalkKey(private val mac: KeyCombo?, private val windows: KeyCombo?, p
     ;
 
     /** This key on [os]; null where it isn't offered. */
-    fun on(os: DesktopOs): KeyCombo? = when (os) {
-        DesktopOs.MAC -> mac
+    internal fun on(os: DesktopOs): KeyCombo? = when (os) {
+        DesktopOs.MACOS -> mac
         DesktopOs.WINDOWS -> windows
         DesktopOs.LINUX -> linux
     }
@@ -85,12 +78,12 @@ enum class TalkKey(private val mac: KeyCombo?, private val windows: KeyCombo?, p
         val DEFAULT = OPTION_SPACE
 
         /** ⌥Space / Alt+Space, but Ctrl+Alt+Space on Linux, whose window managers hold Alt+Space. */
-        fun defaultOn(os: DesktopOs): TalkKey = if (os == DesktopOs.LINUX) CONTROL_ALT_SPACE else DEFAULT
+        internal fun defaultOn(os: DesktopOs): TalkKey = if (os == DesktopOs.LINUX) CONTROL_ALT_SPACE else DEFAULT
 
         /** The keys [os] offers, in the menu's order. */
-        fun offeredOn(os: DesktopOs): List<TalkKey> = entries.filter { it.on(os) != null }
+        internal fun offeredOn(os: DesktopOs): List<TalkKey> = entries.filter { it.on(os) != null }
 
         /** The stored choice; the default when there is none, it is unknown, or [os] doesn't offer it. */
-        fun parse(stored: String?, os: DesktopOs): TalkKey = entries.firstOrNull { it.name == stored && it.on(os) != null } ?: defaultOn(os)
+        internal fun parse(stored: String?, os: DesktopOs): TalkKey = entries.firstOrNull { it.name == stored && it.on(os) != null } ?: defaultOn(os)
     }
 }

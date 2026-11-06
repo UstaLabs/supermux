@@ -2,6 +2,7 @@ import { readFileSync } from "fs"
 import qrcode from "qrcode-terminal"
 import { DeviceStore } from "../src/channels/web/device-store"
 import { DEVICES_FILE, ENV_FILE, HOST_KEY_FILE } from "../src/shared/paths"
+import { readEnvText } from "../src/shared/env-file"
 import { loadOrCreateHostKey } from "../src/core/host-identity"
 
 const name = process.argv[2]
@@ -12,9 +13,8 @@ if (!name) {
 
 // load .env to find MUX_WEB_PUBLIC_URL
 try {
-  for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m && process.env[m[1]!] === undefined) process.env[m[1]!] = m[2]!
+  for (const [key, value] of readEnvText(readFileSync(ENV_FILE, "utf8"))) {
+    if (process.env[key] === undefined) process.env[key] = value
   }
 } catch {}
 

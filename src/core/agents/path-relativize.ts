@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from "node:path"
+import { paths } from "@supermux/platform"
 
 /**
  * If `p` is an absolute path that lives under `workdir`, return it as a
@@ -16,7 +17,9 @@ export function relativizePath(
 ): string {
   if (!workdir || !p) return p
   if (!isAbsolute(p)) return p
+  // Another drive is not under the workdir: relative() hands such a path back absolute.
+  if (!paths.isInside(p, workdir)) return p
   const rel = relative(workdir, p)
-  if (!rel || rel === ".." || rel.startsWith(".." + sep)) return p
+  if (!rel) return p
   return rel.split(sep).join("/")
 }

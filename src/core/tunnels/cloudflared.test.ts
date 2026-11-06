@@ -8,6 +8,10 @@ import {
   installHintLines,
 } from "./cloudflared"
 import { which } from "./run"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { home } from "../../shared/home"
 import type { ConnectCtx, RunResult } from "./types"
 
 // ── test harness ──────────────────────────────────────────────────────────────
@@ -17,17 +21,23 @@ import type { ConnectCtx, RunResult } from "./types"
 
 type Canned = { match: RegExp; result: Partial<RunResult> }
 
-/** Build a ConnectCtx whose `run` records argv and replies from `canned`. */
+/**
+ * Build a ConnectCtx whose `run` records argv and replies from `canned`. A background start is recorded too: it
+ * writes [log] where the tunnel's output would go, and gets pid 4242.
+ */
 function makeCtx(
   over: Partial<ConnectCtx> = {},
   canned: Canned[] = [],
-): { ctx: ConnectCtx; calls: string[][]; out: string[]; opts: Array<Parameters<ConnectCtx["run"]>[1]> } {
+  log = "",
+): { ctx: ConnectCtx; calls: string[][]; out: string[]; opts: Array<Parameters<ConnectCtx["run"]>[1]>; started: string[][]; stopped: number[] } {
   const calls: string[][] = []
   const out: string[] = []
   const opts: Array<Parameters<ConnectCtx["run"]>[1]> = []
+  const started: string[][] = []
+  const stopped: number[] = []
   const ctx: ConnectCtx = {
     port: "8787",
-    stateDir: "/tmp/mux-test",
+    stateDir: mkdtempSync(join(tmpdir(), "mux-tunnel-")),
     tty: false,
     yes: true,
     run: async (argv, o) => {
@@ -40,10 +50,15 @@ function makeCtx(
     // No TTY in tests: ask declines, confirm falls back to its default.
     ask: async () => null,
     confirm: async (_p, def) => def,
+    startDetached: (argv, logPath) => { started.push(argv); writeFileSync(logPath, log); return 4242 },
+    stopTree: (pid) => { stopped.push(pid) },
     ...over,
   }
-  return { ctx, calls, out, opts }
+  return { ctx, calls, out, opts, started, stopped }
 }
+
+/** The config.yml the named flow wrote (under the test home the preload isolates). */
+const writtenConfig = () => readFileSync(join(home(), ".cloudflared", "config.yml"), "utf8")
 
 // ── modes / identity ───────────────────────────────────────────────────────────
 
@@ -148,20 +163,19 @@ test("quick: launches a DETACHED tunnel and polls its log for the URL (unstable 
   const fakeLog =
     "2024 INF Request custom tunnel\n" +
     "2024 INF |  https://random-words-here.trycloudflare.com  |\n"
-  // The URL is read by polling the log via `cat`, not by scrape-then-kill.
-  const { ctx, calls } = makeCtx({ mode: "quick" }, [{ match: /cat /, result: { stdout: fakeLog } }])
+  // The URL is read by polling the tunnel's log, not by scrape-then-kill.
+  const { ctx, calls, started } = makeCtx({ mode: "quick" }, [], fakeLog)
 
   const res = await cloudflaredProvider.up(ctx)
 
   expect(res.publicUrl).toBe("https://random-words-here.trycloudflare.com")
   expect(res.stable).toBe(false)
   expect(res.notes?.[0]).toMatch(/throwaway/i)
-  // CRITICAL: the tunnel is launched DETACHED (nohup, backgrounded) so it SURVIVES
-  // this short-lived CLI — the live smoke proved scrape-then-kill leaves a dead URL.
-  expect(calls[0]![0]).toBe("sh")
-  expect(calls[0]![2]).toContain("nohup cloudflared tunnel")
-  expect(calls[0]![2]).toContain("http://localhost:8787")
-  expect(calls[0]![2]).toContain("cloudflared-quick.pid")
+  // CRITICAL: the tunnel is launched DETACHED so it SURVIVES this short-lived CLI — the
+  // live smoke proved scrape-then-kill leaves a dead URL. No shell: Windows has none.
+  expect(started).toEqual([["cloudflared", "tunnel", "--no-autoupdate", "--url", "http://localhost:8787"]])
+  expect(readFileSync(join(ctx.stateDir, "cloudflared-quick.pid"), "utf8")).toBe("4242")
+  expect(calls.some((c) => c[0] === "sh")).toBe(false)
 })
 
 // ── login ─────────────────────────────────────────────────────────────────────
@@ -185,14 +199,15 @@ test("login: no-ops (no login) for quick mode", async () => {
 // ── down (idempotent teardown) ──────────────────────────────────────────────────
 
 test("down: kills a detached quick tunnel, then best-effort uninstall + cleanup, swallows errors", async () => {
-  const { ctx, calls } = makeCtx({}, [
+  const { ctx, calls, stopped } = makeCtx({}, [
     { match: /service uninstall/, result: { code: 1, stderr: "not installed" } },
     { match: /tunnel cleanup/, result: { code: 1, stderr: "nothing to clean" } },
   ])
+  writeFileSync(join(ctx.stateDir, "cloudflared-quick.pid"), "4242")
   await expect(cloudflaredProvider.down(ctx)).resolves.toBeUndefined()
-  // First: stop a detached quick tunnel via its pidfile.
-  expect(calls[0]![0]).toBe("sh")
-  expect(calls[0]![2]).toContain("cloudflared-quick.pid")
+  // First: stop a detached quick tunnel via its pidfile, and forget it.
+  expect(stopped).toEqual([4242])
+  expect(existsSync(join(ctx.stateDir, "cloudflared-quick.pid"))).toBe(false)
   // Then the named-tunnel teardown.
   expect(calls).toContainEqual(["cloudflared", "service", "uninstall"])
   expect(calls).toContainEqual(["cloudflared", "tunnel", "cleanup", "supermux"])
@@ -232,10 +247,12 @@ test("install: short-circuits to true when cloudflared is already on PATH", asyn
 
 // Force the linux install paths deterministically (this host may have cloudflared
 // and/or a package manager). We stub `which` via mock.module for THESE tests, then
-// restore the real module so nothing leaks into other tests.
+// restore the real module so nothing leaks into other tests. The backup is a copy of
+// the exports: mock.module rewrites the loaded module's namespace in place, so the
+// namespace itself would hold the stub by the time it is put back.
 test("install: on linux with no package manager, prints working install links and returns false", async () => {
   if (process.platform === "darwin") return // brew path is the darwin branch
-  const real = await import("./run")
+  const real = { ...(await import("./run")) }
   mock.module("./run", () => ({ ...real, which: () => false })) // nothing on PATH
   try {
     const { ctx, out } = makeCtx() // yes:true ⇒ consent assumed, no prompt
@@ -251,7 +268,7 @@ test("install: on linux with no package manager, prints working install links an
 
 test("install: on linux with apt + no cloudflared, runs the official apt install script", async () => {
   if (process.platform === "darwin") return
-  const real = await import("./run")
+  const real = { ...(await import("./run")) }
   // cloudflared absent; apt-get present ⇒ the apt branch runs.
   mock.module("./run", () => ({ ...real, which: (b: string) => b === "apt-get" }))
   try {
@@ -334,13 +351,13 @@ test("named: writes config.yml with the broker-host ingress rule (the 404 fix)",
   const res = await cloudflaredProvider.up(ctx)
   expect(res.publicUrl).toBe("https://mux.example.com")
   expect(res.proxyBaseDomain).toBeUndefined()
-  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
-  expect(write).toBeTruthy()
-  expect(write![2]).toContain("hostname: mux.example.com")
-  expect(write![2]).toContain("service: http://localhost:8787")
-  expect(write![2]).toContain("http_status:404")
-  expect(write![2]).toContain("11111111-1111-4111-8111-111111111111.json")
-  expect(write![2]).not.toContain("*.")
+  const config = writtenConfig()
+  expect(config).toContain("hostname: mux.example.com")
+  expect(config).toContain("service: http://localhost:8787")
+  expect(config).toContain("http_status:404")
+  expect(config).toContain("11111111-1111-4111-8111-111111111111.json")
+  expect(config).not.toContain("*.")
+  expect(calls.some((c) => c[0] === "sh")).toBe(false)
   expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "mux.example.com"])
   expect(calls).toContainEqual(["cloudflared", "service", "install"])
 })
@@ -352,8 +369,7 @@ test("named: --wildcard routes *.base and adds a wildcard ingress rule, returns 
   const res = await cloudflaredProvider.up(ctx)
   expect(res.proxyBaseDomain).toBe("example.com")
   expect(calls).toContainEqual(["cloudflared", "tunnel", "route", "dns", "supermux", "*.example.com"])
-  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
-  expect(write![2]).toContain('hostname: "*.example.com"')
+  expect(writtenConfig()).toContain('hostname: "*.example.com"')
 })
 
 test("named: a --wildcard-domain overrides the derived base", async () => {
@@ -373,8 +389,7 @@ test("named: wildcard DNS failure keeps the broker host working and skips proxyB
   ])
   const res = await cloudflaredProvider.up(ctx)
   expect(res.proxyBaseDomain).toBeUndefined()
-  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
-  expect(write![2]).not.toContain("*.example.com")
+  expect(writtenConfig()).not.toContain("*.example.com")
   expect(out.join("\n")).toContain("path mode")
 })
 
@@ -384,9 +399,8 @@ test("named: resolves the tunnel id from `tunnel list` when create says it alrea
     { match: /tunnel list --output json/, result: { stdout: '[{"id":"44444444-4444-4444-4444-444444444444","name":"supermux"}]' } },
   ])
   await cloudflaredProvider.up(ctx)
-  const write = calls.find((c) => c[0] === "sh" && c[2]!.includes("config.yml"))
-  expect(write![2]).toContain("credentials-file:")
-  expect(write![2]).toContain("44444444-4444-4444-4444-444444444444.json")
+  expect(writtenConfig()).toContain("credentials-file:")
+  expect(writtenConfig()).toContain("44444444-4444-4444-4444-444444444444.json")
 })
 
 test("named: rejects a hostname containing shell metacharacters / newlines", async () => {

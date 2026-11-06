@@ -6,6 +6,7 @@ import dev.supermux.net.RemoteRepo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 private fun proj(path: String, label: String = path.substringAfterLast('/')) = ProjectOption(path, label)
 
@@ -136,5 +137,12 @@ class ForgeOmniboxTest {
         val byPath = buildOmniboxOptions("~/projects/gm", catalog, emptyList(), conns, home = "/home/u")
         assertEquals(listOf("g"), byPath.filterIsInstance<OmniOption.Local>().map { it.projectId })
         assertTrue(buildOmniboxOptions("greenmate", catalog, emptyList(), conns).none { it is OmniOption.Create })
+    }
+
+    @Test fun aWindowsPathIsAPath() {
+        assertTrue(looksLikePath("D:\\Projects\\X"))
+        assertTrue(looksLikePath("C:/src"))
+        assertTrue(looksLikePath("\\\\server\\share"))
+        assertFalse(looksLikePath("supermux"))
     }
 }

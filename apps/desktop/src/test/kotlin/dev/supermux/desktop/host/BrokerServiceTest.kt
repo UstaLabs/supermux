@@ -3,6 +3,7 @@ package dev.supermux.desktop.host
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -536,6 +537,89 @@ class BrokerServiceTest {
         win.neverKilledByImage()
         win.neverKilled(400); win.neverKilled(401)
         assertTrue(win.ran.none { it.firstOrNull() == "schtasks" }, "stop leaves the task registered and not started")
+    }
+
+    // ── Windows: the broker is asked to stop first (Q8); success only once no broker holds the state (#36) ───────
+
+    @Test fun brokerLockPipeIsTheOneTheBrokerHolds() {
+        // packages/platform/src/lock.ts pipeName("broker", …) for the same state directories.
+        val home = "\\\\.\\pipe\\supermux-broker-ab9f3a6f357ab1a27153f6d5f88cab2d-lock"
+        assertEquals(home, BrokerService.brokerLockPipe("C:\\Users\\me\\.mux\\state"))
+        assertEquals(home, BrokerService.brokerLockPipe("c:/users/ME/.mux/state"))
+        assertEquals(home, BrokerService.brokerLockPipe("C:\\Users\\me\\.mux\\x\\..\\state"))
+        assertEquals("\\\\.\\pipe\\supermux-broker-5a0032cf7500104195a8a7915bb63630-lock", BrokerService.brokerLockPipe("C:\\Users\\me\\.mux\\state\\"))
+        assertEquals("\\\\.\\pipe\\supermux-broker-755457bddb79c460bca4ba0a000a7adc-lock", BrokerService.brokerLockPipe("D:\\Data\\supermux state"))
+        assertEquals("\\\\.\\pipe\\supermux-broker-f95d372bcec0ccb87387cf132ad04ac4-lock", BrokerService.brokerLockPipe("\\\\server\\share\\mux\\state"))
+        assertEquals("\\\\.\\pipe\\supermux-broker-307856bc1d1342561f45e18801c47209-lock", BrokerService.brokerLockPipe("C:\\Users\\Ömer\\.mux\\state"))
+    }
+
+    /**
+     * [fake] whose broker lock pipe for [state] is listed while [held]; [onPost] answers the stop request (and may let
+     * go of the lock); running [releasedBy] lets go of it too. [events] is what happened, in order.
+     */
+    private class LockedHost(
+        val fake: FakeOsEnv,
+        private val state: String,
+        var held: Boolean = true,
+        private val releasedBy: List<String>? = null,
+        private val onPost: (LockedHost) -> Int?,
+    ) : OsEnv by fake {
+        val events = mutableListOf<String>()
+        val posts = mutableListOf<Pair<String, Map<String, String>>>()
+        override fun run(argv: List<String>): Boolean {
+            events += argv.joinToString(" ")
+            if (argv == releasedBy) held = false
+            return fake.run(argv)
+        }
+        override fun runCapture(argv: List<String>): String? =
+            if (argv == BrokerService.listPipesArgv()) {
+                (if (held) "\\\\.\\pipe\\other\r\n" + BrokerService.brokerLockPipe(state) + "\r\n" else "\\\\.\\pipe\\other\r\n")
+            } else fake.runCapture(argv)
+        override fun postLocal(url: String, headers: Map<String, String>): Int? {
+            events += "POST $url"
+            posts += url to headers
+            return onPost(this)
+        }
+    }
+
+    @Test fun windowsStopAsksTheBrokerToStopAndSucceedsWhenItsLockIsGone() {
+        val state = createTempDirectory()
+        state.resolve("stop-token").writeText("tok")
+        val env = LockedHost(winEnv(), state.toString()) { it.held = false; 202 }
+        assertTrue(BrokerService.stop(env, stateDir = state, port = 9898))
+        assertEquals(listOf("http://127.0.0.1:9898/internal/stop" to mapOf("x-supermux-stop-token" to "tok")), env.posts)
+        val loop = env.events.indexOf(killLoop.joinToString(" "))
+        assertTrue(loop in 0 until env.events.indexOf("POST http://127.0.0.1:9898/internal/stop"), "the loop first, or it starts the broker again")
+        assertTrue(killBroker !in env.fake.ran, "it stopped on its own: no TerminateProcess")
+    }
+
+    // No loop is its parent (the app's old child, or a loop that crashed): the stop used to skip it and report success.
+    @Test fun windowsStopKillsTheOrphanBrokerThatBrokerPidNamesWhenItWillNotStop() {
+        val state = createTempDirectory()
+        state.resolve("broker.pid").writeText("777")
+        val orphan = listOf(
+            "777\t4321\tsupermux-broker.exe\t\"C:\\s\\supermux-broker.exe\"",
+            "778\t777\tsupermux-broker.exe\t\"C:\\s\\supermux-broker.exe\" shim",
+            "",
+        ).joinToString("\r\n")
+        val killOrphan = listOf("taskkill", "/F", "/PID", "777")
+        val env = LockedHost(winEnv(procs = orphan), state.toString(), releasedBy = killOrphan) { null }
+        assertTrue(BrokerService.stop(env, stateDir = state, port = 9898))
+        assertTrue(killOrphan in env.fake.ran)
+        env.fake.neverKilled(778)
+    }
+
+    @Test fun windowsStopFailsWhileABrokerStillHoldsTheState() {
+        val state = createTempDirectory()
+        val env = LockedHost(winEnv(), state.toString()) { null }
+        assertFalse(BrokerService.stop(env, stateDir = state, port = 9898), "a broker still holds the state: not stopped")
+    }
+
+    // PowerShell could not list the pipes: the pids decide, as before the lock existed (an update must not stall on it).
+    @Test fun windowsStopLetsThePidsDecideWhenThePipesCannotBeListed() {
+        val env = winEnv()
+        assertTrue(BrokerService.stop(env, stateDir = createTempDirectory(), port = 9898))
+        assertTrue(killLoop in env.ran && killBroker in env.ran)
     }
 
     @Test fun stopKillsNothingWhenItCannotListProcesses() {

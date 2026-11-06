@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.FsOpRequest
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.sameHostSegment
 import dev.supermux.fs.snapshotOrPrevious
 import dev.supermux.net.FsException
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
@@ -62,15 +64,29 @@ sealed interface FileTreeDialog {
  * invalid but gets an empty message: the dialog just keeps its button disabled. Leading/trailing
  * whitespace is refused rather than trimmed, so what is created is exactly what was typed.
  */
-fun validateNewName(name: String, siblings: Collection<String>, current: String? = null): String? = when {
-    name.isBlank() -> ""
-    name != current && name != name.trim() -> "A name can't start or end with a space"
-    '/' in name -> "A name can't contain “/”"
-    '\u0000' in name -> "A name can't contain a null character"
-    name == "." || name == ".." -> "“$name” isn't a valid name"
-    name != current && name in siblings -> "A file with that name already exists"
-    else -> null
+fun validateNewName(name: String, siblings: Collection<String>, current: String? = null, inFolder: String? = null): String? {
+    // The folder the name goes in says whose rules apply: a Windows host's under a drive or a share.
+    val windows = inFolder != null && isWindowsHostPath(inFolder)
+    val reserved = if (windows) name.firstOrNull { it in WINDOWS_RESERVED_CHARS } else null
+    return when {
+        name.isBlank() -> ""
+        name != current && name != name.trim() -> "A name can't start or end with a space"
+        '/' in name -> "A name can't contain “/”"
+        '\u0000' in name -> "A name can't contain a null character"
+        name == "." || name == ".." -> "“$name” isn't a valid name"
+        reserved != null -> "A name can't contain “$reserved”"
+        windows && WINDOWS_DEVICE_NAME.matches(name) -> "“$name” is reserved on Windows"
+        windows && name != current && name.endsWith('.') -> "A name can't end with “.”"
+        // A Windows host names a file whatever its letter case; a rename that only changes the case is the same file.
+        name != current && siblings.any { it != current && sameHostSegment(it, name, windows) } -> "A file with that name already exists"
+        else -> null
+    }
 }
+
+// What a Windows host refuses in a name besides `/` and NUL (refused everywhere): Win32's reserved characters, and its
+// device names with or without an extension (`NUL.txt` is `NUL`).
+private const val WINDOWS_RESERVED_CHARS = "\\:*?\"<>|"
+private val WINDOWS_DEVICE_NAME = Regex("^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\\..*)?$", RegexOption.IGNORE_CASE)
 
 /** The `error` code of a failed `/fs/ops` call (the body is `{error: code, message}`), or null. */
 fun fsOpErrorCode(e: Throwable): String? {
@@ -170,6 +186,7 @@ private fun InlineEditField(
             current = null,
             folder = edit.folder,
             siblings = siblingNames(fileSystem, edit.parent),
+            inFolder = edit.parent,
             placeholder = if (edit.folder) "Folder name" else "File name",
             onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
             onDone = { name, refocus ->
@@ -187,6 +204,7 @@ private fun InlineEditField(
                 current = oldName,
                 folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                inFolder = parentOf(old),
                 placeholder = null,
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name, refocus ->
@@ -330,6 +348,7 @@ fun FileTreeDialogs(
                 current = null,
                 folder = dialog.folder,
                 siblings = siblingNames(fileSystem, parent),
+                inFolder = parent,
                 onSubmit = { name -> createEntry(fileSystem, parent, name, dialog.folder) },
                 onDone = { name ->
                     afterCreate(view, parent, name, dialog.folder, onOpenFile)
@@ -348,6 +367,7 @@ fun FileTreeDialogs(
                 current = oldName,
                 folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                inFolder = parentOf(old),
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name ->
                     afterRename(view, old, name, onEntryMoved)
@@ -378,6 +398,8 @@ private fun NameDialog(
     current: String?,
     folder: Boolean,
     siblings: List<String>,
+    /** The folder the name goes in: its host's name rules apply. */
+    inFolder: String? = null,
     onSubmit: suspend (String) -> Result<Unit>,
     onDone: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -389,7 +411,7 @@ private fun NameDialog(
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val name = field.text
-    val invalid = validateNewName(name, siblings, current)
+    val invalid = validateNewName(name, siblings, current, inFolder)
     val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
     val submit = {
         if (invalid == null && !busy) {

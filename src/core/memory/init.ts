@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import { buildAgentsMd } from "./index-builder"
-import { home } from "../../shared/home"
+import { muxHomeNow } from "../../shared/paths"
 import { TEMPLATES } from "./templates-embedded"
 
+/** The mux home as the environment says now (shared/paths.ts muxHomeNow: MUX_HOME, else ~/.mux, Q2's rule). */
 export function getMuxHome(): string {
-  return process.env.MUX_HOME ?? join(home(), ".mux")
+  return muxHomeNow().path
 }
 
 export function initMux(home?: string): string {

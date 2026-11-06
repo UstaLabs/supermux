@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from "fs"
-import { resolve } from "path"
+import { resolve, sep } from "path"
 import { home as defaultHome } from "../../shared/home"
 
 export function normalizeWorkdirInput(input: string, homeDir = defaultHome()): string {
@@ -7,18 +7,21 @@ export function normalizeWorkdirInput(input: string, homeDir = defaultHome()): s
   const home = trimTrailingSlash(resolve(homeDir))
   const expanded = trimmed === "~"
     ? home
-    : trimmed.startsWith("~/")
+    : trimmed.startsWith("~/") || trimmed.startsWith(`~${sep}`)
       ? resolve(home, trimmed.slice(2))
       : expandHomePrefixedTilde(trimmed, home)
   const resolved = resolve(expanded)
   return trimTrailingSlash(resolved)
 }
 
+/** `<home>/~/x` (a `~` someone joined onto home instead of expanding) is `<home>/x`, with either of the host's separators. */
 function expandHomePrefixedTilde(input: string, homeDir: string): string {
-  const homeTilde = `${homeDir}/~`
-  if (input === homeTilde) return homeDir
-  if (input.startsWith(`${homeTilde}/`)) {
-    return resolve(homeDir, input.slice(homeTilde.length + 1))
+  for (const s of new Set(["/", sep])) {
+    const homeTilde = `${homeDir}${s}~`
+    if (input === homeTilde) return homeDir
+    if (input.startsWith(`${homeTilde}/`) || input.startsWith(`${homeTilde}${sep}`)) {
+      return resolve(homeDir, input.slice(homeTilde.length + 1))
+    }
   }
   return input
 }

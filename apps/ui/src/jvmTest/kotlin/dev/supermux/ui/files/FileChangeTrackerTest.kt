@@ -112,4 +112,9 @@ class FileChangeTrackerTest {
         assertEquals("/w/src/a.kt", absoluteInWorkdir("/w/", "/src/a.kt"))
         assertEquals("/a.kt", absoluteInWorkdir("/", "a.kt"))
     }
+
+    @Test fun absoluteInWorkdirOnAWindowsHost() {
+        assertEquals("C:\\w\\src\\a.kt", absoluteInWorkdir("C:\\w", "src/a.kt"))
+        assertEquals("C:\\w\\a.kt", absoluteInWorkdir("C:\\w\\", "./a.kt"))
+    }
 }

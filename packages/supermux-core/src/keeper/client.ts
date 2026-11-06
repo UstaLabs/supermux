@@ -1,15 +1,16 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, realpathSync, type Stats } from 'node:fs'
-import { lstat, rm, unlink } from 'node:fs/promises'
+import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
+import { rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { CoreError } from '../errors.js'
 import { assertNoLinksIn, assertRealDirectory, present, readPrivateFile, realDirectoryIn, writePrivateFile } from '../private-files.js'
 import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
+import { files, proc } from '@supermux/platform'
 import { msSince, perfMark } from '../perf-marks.js'
 
 /**
@@ -99,10 +100,8 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   return spec
 }
 
-function alive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try { process.kill(pid, 0); return true } catch { return false }
-}
+/** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
+const alive = (pid: number): boolean => proc.isAlive(pid)
 
 /**
  * The keeper directory of session `sessionId`, `<real state directory>/keepers/<sessionId>`: like `keepers`, a
@@ -154,24 +153,18 @@ function mine(info: Stats): boolean {
  * outside the keeper directory, also sits in a 0700 directory this user owns (not a link to one).
  * A short path under a shared temp dir is predictable: another user could make its directory (once a
  * reboot emptied it, say) and listen there, to be sent a session's token.
+ * Windows: a socket file cannot be stat'ed ("socket"), and a uid or mode would mean nothing there; its
+ * folders (the keeper's, the user's own temp dir) are the user's.
  */
 function trustedSocket(dir: string, path: string): boolean {
-  if (process.platform === 'win32') return listedSocket(path)
   try {
-    const socket = lstatSync(path)
-    if (!socket.isSocket() || !mine(socket)) return false
+    const socket = files.lstatEntry(path)
+    if (socket === 'socket') return true
+    if (!socket?.isSocket() || !mine(socket)) return false
     if (resolve(dirname(path)) === resolve(dir)) return true
     const parent = lstatSync(dirname(path))
     return parent.isDirectory() && mine(parent) && (parent.mode & 0o777) === 0o700
   } catch { return false }
-}
-
-/**
- * Windows: an AF_UNIX socket file is listed in its folder but cannot be stat'ed (EACCES), and a uid or
- * mode would mean nothing there; its folders (the keeper's, the user's own temp dir) are the user's.
- */
-function listedSocket(path: string): boolean {
-  try { return readdirSync(dirname(path)).includes(basename(path)) } catch { return false }
 }
 
 /** The socket a new keeper of `dir` listens on: the first candidate whose directory this user can make private. */
@@ -181,13 +174,9 @@ function newSocketPath(dir: string): string {
 
 /** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */
 async function removeSocket(path: string) {
-  if (process.platform === 'win32') {
-    if (listedSocket(path)) await unlink(path).catch(() => {})
-    return
-  }
   try {
-    const info = await lstat(path)
-    if (info.isSocket() && mine(info)) await unlink(path)
+    const info = files.lstatEntry(path)
+    if (info === 'socket' || (info?.isSocket() && mine(info))) await unlink(path)
   } catch { /* gone */ }
 }
 
@@ -241,12 +230,55 @@ function readFingerprint(path: string): string | undefined {
 export type StopKeeperLimits = Pick<KeeperLimits, 'shutdownTimeoutMs' | 'connectTimeoutMs'>
 
 /**
- * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one):
- * SIGTERM makes the keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
+ * Asks the keeper of `dir` to stop its agent and exit, over its own socket: `hello` with its token, then `shutdown`, as an
+ * attached connection's shutdown() does. A SIGTERM did that on POSIX, but on Windows a signal is TerminateProcess: the
+ * keeper never stopped its agent, wrote its last status or removed its socket. True once the request went out.
  */
-async function retireKeeper(status: KeeperStatus, limits: StopKeeperLimits) {
-  try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
-  await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+function askKeeperToStop(dir: string, status: KeeperStatus, connectTimeoutMs: number): Promise<boolean> {
+  const token = readPrivateFile(join(dir, 'token'))?.trim()
+  if (!token) return Promise.resolve(false)
+  return new Promise(settle => {
+    const sock = createConnection(socketOf(dir, status))
+    let settled = false
+    const done = (sent: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!sent) sock.destroy()
+      settle(sent)
+    }
+    const timer = setTimeout(() => done(false), connectTimeoutMs)
+    let buffer = ''
+    sock.once('connect', () => sock.write(JSON.stringify({ type: 'hello', token, cursor: 'acked' }) + '\n'))
+    sock.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8')
+      for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        let msg: { type?: unknown }
+        try { msg = JSON.parse(line) } catch { continue }
+        if (msg.type === 'welcome') { sock.end(JSON.stringify({ type: 'shutdown' }) + '\n'); done(true); return }
+        if (msg.type === 'error') { done(false); return }
+      }
+    })
+    sock.once('error', () => done(false))
+    sock.once('close', () => done(false))
+  })
+}
+
+/**
+ * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one): asked over its own
+ * socket first (askKeeperToStop), it shuts its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exits. A
+ * keeper that does not is sent SIGTERM, then SIGKILL, and its agent after it.
+ */
+async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeeperLimits) {
+  if (await askKeeperToStop(dir, status, limits.connectTimeoutMs)) {
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
+  if (alive(status.keeperPid)) {
+    try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
   if (alive(status.keeperPid)) {
     try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
     await waitPidDead(status.keeperPid, 2000)
@@ -318,7 +350,7 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
     const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
     if (state === 'down') return false
     if (state === 'unknown') throw new KeeperUnconfirmed(sessionId, status.keeperPid, socketOf(dir, status))
-    await retireKeeper(status, limits)
+    await retireKeeper(dir, status, limits)
     // A keeper killed outright leaves its socket behind.
     await removeSocket(socketOf(dir, status))
     return true
@@ -440,7 +472,7 @@ async function connectLocked(options: {
         throw new KeeperUnconfirmed(options.sessionId, status.keeperPid, sockPath,
           `The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
       }
-      if (state === 'up') await retireKeeper(status, options.limits)
+      if (state === 'up') await retireKeeper(dir, status, options.limits)
       status = await readStatus(statusPath)
     }
   }

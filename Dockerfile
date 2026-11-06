@@ -191,8 +191,9 @@ WORKDIR /app
 # a working `docker compose up` rather than "lockfile not found".
 COPY package.json bun.lock* ./
 # Every workspace in package.json must have its manifest here before install, or Bun
-# stops with "Workspace not found" (supermux-core: the ACP SDK etc.; frp-client: the relay).
+# stops with "Workspace not found" (supermux-core: the ACP SDK etc.; platform: the OS gaps; frp-client: the relay).
 COPY packages/supermux-core/package.json ./packages/supermux-core/
+COPY packages/platform/package.json ./packages/platform/
 COPY packages/frp-client/package.json ./packages/frp-client/
 
 # Install root + workspace dependencies (non-frozen on purpose, see above)

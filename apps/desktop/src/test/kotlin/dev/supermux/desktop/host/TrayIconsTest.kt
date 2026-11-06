@@ -13,6 +13,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 
 class TrayIconsTest {
     private fun resource(name: String): BufferedImage =
@@ -87,5 +93,44 @@ class TrayIconsTest {
             worst = maxOf(worst, abs((want.getRGB(x, y) ushr 24) - (got.getRGB(x, y) ushr 24)))
         }
         assertTrue(worst <= 2, "alpha differs by up to $worst")
+    }
+
+    /** The theme was read once, on the UI thread, by a reg.exe with no time limit; it now goes through OsEnv's limit. */
+    @Test fun theTaskbarThemeIsReadThroughOsEnvWithATimeLimit() {
+        val asked = mutableListOf<Pair<List<String>, Long>>()
+        val os = object : OsEnv by FakeOs(OsEnv.Os.WINDOWS) {
+            override fun runResult(argv: List<String>) = runResult(argv, -1)
+            override fun runResult(argv: List<String>, timeoutMs: Long): OsEnv.RunResult {
+                asked += argv to timeoutMs
+                return OsEnv.RunResult(0, "    SystemUsesLightTheme    REG_DWORD    0x1\r\n", "")
+            }
+        }
+        assertEquals(true, TrayIcons.windowsTaskbarIsLight(os))
+        assertEquals("reg", asked.single().first[0])
+        assertTrue(asked.single().second in 1..10_000, "a time limit: ${asked.single().second}")
+        val failing = object : OsEnv by FakeOs(OsEnv.Os.WINDOWS) {
+            override fun runResult(argv: List<String>) = OsEnv.RunResult(-1, "", "timed out")
+            override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
+        }
+        assertEquals(false, TrayIcons.windowsTaskbarIsLight(failing), "can't tell: the white icon")
+    }
+
+    /** Switching Windows between light and dark left the tray glyph invisible until the app restarted. */
+    @Test fun aThemeSwitchReachesTheTray() = runTest {
+        var light = false
+        var reads = 0
+        val seen = mutableListOf<Boolean>()
+        val job = launch {
+            TrayIcons.taskbarIsLight(read = { reads++; light }, everyMs = 30_000, dispatcher = StandardTestDispatcher(testScheduler)).toList(seen)
+        }
+        runCurrent()
+        assertEquals(listOf(false), seen)
+        advanceTimeBy(30_001); runCurrent()
+        assertEquals(listOf(false), seen, "the same theme draws nothing new")
+        light = true
+        advanceTimeBy(30_001); runCurrent()
+        assertEquals(listOf(false, true), seen)
+        assertEquals(3, reads)
+        job.cancel()
     }
 }

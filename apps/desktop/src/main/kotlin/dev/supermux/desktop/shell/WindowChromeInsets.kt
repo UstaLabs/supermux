@@ -18,15 +18,15 @@ enum class ChromeOs {
     ;
 
     companion object {
-        fun of(osName: String? = System.getProperty("os.name")): ChromeOs {
-            val n = osName?.lowercase().orEmpty()
-            return when {
-                n.contains("mac") || n.contains("darwin") -> MacOs
-                n.contains("linux") -> Linux
-                n.startsWith("windows") -> Windows
-                else -> Other
-            }
+        /** The chrome for [os], [dev.supermux.desktop.platform.DesktopOs]'s one answer. */
+        internal fun of(os: dev.supermux.desktop.platform.DesktopOs): ChromeOs = when (os) {
+            dev.supermux.desktop.platform.DesktopOs.MACOS -> MacOs
+            dev.supermux.desktop.platform.DesktopOs.WINDOWS -> Windows
+            dev.supermux.desktop.platform.DesktopOs.LINUX -> Linux
         }
+
+        /** For an `os.name` value; none is [Other]. */
+        fun of(osName: String?): ChromeOs = if (osName == null) Other else of(dev.supermux.desktop.platform.DesktopOs.of(osName))
     }
 }
 

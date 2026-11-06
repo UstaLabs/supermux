@@ -1,20 +1,27 @@
 package dev.supermux.ui
 
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.hostRelativePath
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.normalizeHostPath
+
+/** Neither absolute on either host nor under `~`: relative to the workdir. */
+private fun isRelativeChatPath(path: String): Boolean =
+    !isAbsoluteEditorPath(path) && path != "~" && !path.startsWith("~/") && !path.startsWith("~\\")
 
 /** Map an agent-mentioned path to a workdir-relative path for the editor API.
- *  Returns "" for the workdir root, or null when the path is outside the workdir.
+ *  Returns "" for the workdir root, or null when the path is outside the workdir. Under a Windows
+ *  workdir a relative path may use `\` and the comparison ignores letter case, as the host does.
  *  Port of toWorkdirRelativePath (workdir-display.ts). */
 fun toWorkdirRelativePath(path: String, workdir: String, homeDir: String?): String? {
     val root = normalizeWorkdirKey(workdir, homeDir)
     val trimmed = stripFilePathRefSuffix(path.trim())
 
-    if (!trimmed.startsWith("/") && !trimmed.startsWith("~/") && trimmed != "~") {
-        return trimmed.removePrefix("./")
+    if (isRelativeChatPath(trimmed)) {
+        return (if (isWindowsHostPath(root)) trimmed.replace('\\', '/') else trimmed).removePrefix("./")
     }
-    val abs = normalizeWorkdirKey(trimmed, homeDir)
-    if (abs == root) return ""
-    return if (abs.startsWith("$root/")) abs.substring(root.length + 1) else null
+    return hostRelativePath(root, normalizeWorkdirKey(trimmed, homeDir))
 }
 
 /**
@@ -25,11 +32,15 @@ fun toWorkdirRelativePath(path: String, workdir: String, homeDir: String?): Stri
 fun toEditorPath(path: String, workdir: String, homeDir: String?): String? {
     val home = homeDir ?: inferHomeDir(workdir)
     val trimmed = stripFilePathRefSuffix(path.trim())
-    val isRelative = !trimmed.startsWith("/") && !trimmed.startsWith("~/") && trimmed != "~"
+    val root = normalizeWorkdirKey(workdir, home)
     // `.`/`..` segments are resolved first, so `../sibling/x` lands outside and `src/../a` inside.
-    val joined = if (isRelative) "${normalizeWorkdirKey(workdir, home)}/$trimmed" else normalizeWorkdirKey(trimmed, home)
-    if (!joined.startsWith("/")) return null // `~` with no home to expand it against
-    val abs = collapseDotSegments(joined)
+    val joined = when {
+        !isRelativeChatPath(trimmed) -> normalizeWorkdirKey(trimmed, home)
+        isWindowsHostPath(root) -> hostJoin(root, trimmed)
+        else -> "$root/$trimmed"
+    }
+    if (!isAbsoluteEditorPath(joined)) return null // `~` with no home to expand it against
+    val abs = if (isWindowsHostPath(joined)) normalizeHostPath(joined) else collapseDotSegments(joined)
     val rel = toWorkdirRelativePath(abs, workdir, home) ?: return abs
     return rel.ifEmpty { null }
 }
@@ -46,10 +57,11 @@ private fun collapseDotSegments(abs: String): String {
 }
 
 /**
- * An editor key that names a file OUTSIDE the workdir by its absolute path ([toEditorPath]).
- * Workdir-relative keys never start with `/`: every open path strips it.
+ * An editor key that names a file OUTSIDE the workdir by its absolute path ([toEditorPath]): `/…` on a
+ * POSIX host, `C:\…` or `\\server\share\…` on Windows. Workdir-relative keys never start with `/`: every
+ * open path strips it.
  */
-fun isAbsoluteEditorPath(path: String): Boolean = path.startsWith("/")
+fun isAbsoluteEditorPath(path: String): Boolean = path.startsWith("/") || isWindowsHostPath(path)
 
 /** Port of normalizeWorkdirKey: expand ~, repair home-prefixed tilde, collapse // , drop trailing /. */
 fun normalizeWorkdirKey(workdir: String, homeDir: String?): String {
@@ -57,9 +69,13 @@ fun normalizeWorkdirKey(workdir: String, homeDir: String?): String {
     val home = normalizeHomeDir(homeDir ?: inferHomeDir(trimmed))
     val expanded = when {
         home != null && trimmed == "~" -> home
+        home != null && isWindowsHostPath(home) && (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) ->
+            hostJoin(home, trimmed.substring(2))
         home != null && trimmed.startsWith("~/") -> "$home/${trimmed.substring(2)}"
         else -> expandHomePrefixedTilde(trimmed, home)
     }
+    // A Windows host's path: its own separators, dots resolved, no trailing separator but at a root.
+    if (isWindowsHostPath(expanded)) return normalizeHostPath(expanded)
     val normalized = expanded.replace(Regex("/+"), "/")
     return if (normalized.length > 1) normalized.trimEnd('/') else normalized
 }
