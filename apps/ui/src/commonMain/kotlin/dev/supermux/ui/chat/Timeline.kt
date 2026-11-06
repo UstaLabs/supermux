@@ -223,18 +223,22 @@ fun AssistantMessage(
     loadImage: (suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
     /** The reply's media and files: between its text and its time row, so they read as one message. */
     media: (@Composable () -> Unit)? = null,
+    /** Card #76: the live reply's unfinished reveal this stored reply takes over and runs to the end. */
+    reveal: LiveRevealState? = null,
 ) {
     Column(Modifier.fillMaxWidth()) {
+        if (reveal != null) RevealDriver(reveal, text, done = true)
         // LinkSelectionContainer makes the prose selectable/copyable; links inside stay clickable, and a
         // right-click on one selects the whole link.
         LinkSelectionContainer {
             MarkdownBody(
-                text = text,
+                text = if (reveal == null) text else dev.supermux.chat.liveMarkdown(text.take(reveal.laidOut)),
                 modifier = Modifier.fillMaxWidth(),
                 onOpenFile = onOpenFile,
                 linkify = true,
                 onOpenUrl = onOpenUrl,
                 loadImage = loadImage,
+                reveal = reveal,
             )
         }
         media?.invoke()
@@ -855,6 +859,7 @@ fun TimelineItemRow(
                                     media = if (!filesInReply) null else {
                                         { AttachmentList(atts.orEmpty(), alignEnd = false, media = media, entryId = item.entry.id) }
                                     },
+                                    reveal = LocalLiveReveals.current?.unfinished(item.entry.stream),
                                 )
                             }
                         }

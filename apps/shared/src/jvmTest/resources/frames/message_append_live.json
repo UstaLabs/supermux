@@ -1,0 +1,14 @@
+{
+  "type": "message_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "entry": {
+    "id": "out:web:9f1c",
+    "ts": "2026-11-05T09:30:00.000Z",
+    "direction": "outbound",
+    "channel": "web",
+    "chat_id": "web",
+    "op": "reply",
+    "text": "Streaming replies show the text as it is written.",
+    "stream": "k3v9q2a8d1f0"
+  }
+}

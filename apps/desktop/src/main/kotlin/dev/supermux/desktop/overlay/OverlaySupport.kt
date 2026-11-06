@@ -1,10 +1,9 @@
 // Where the assistant overlay (#62) can float.
 package dev.supermux.desktop.overlay
 
-import dev.supermux.desktop.platform.DesktopOs
-
 /**
- * macOS only, for now. Windows gets it with its own pass (its hot key, keeping its windows out of
- * captures); until then its switch stays out of Settings. A Linux desktop's compositor may not keep it on top.
+ * macOS and Windows. Linux is built (override-redirect windows above full-screen apps and on every
+ * workspace, an X11 key grab, Wayland's GlobalShortcuts portal) but waits for a check on a real desktop:
+ * under Xvfb its transparent windows can't be seen at all. Until then its switch stays out of Settings.
  */
-internal fun overlaySupportedOn(os: DesktopOs): Boolean = os == DesktopOs.MACOS
+internal fun overlaySupportedOn(osName: String): Boolean = osName.startsWith("Mac") || osName.startsWith("Windows")

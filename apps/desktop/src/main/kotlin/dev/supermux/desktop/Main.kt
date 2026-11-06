@@ -2153,25 +2153,6 @@ fun main() {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
 
-        // #62: the assistant overlay, the Agent floating over every app, while its switch is on.
-        val assistantOverlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
-        val overlayFleet = pairedFleet
-        if (assistantOverlayOn && overlayFleet != null && dev.supermux.desktop.overlay.desktopOverlaySupported) {
-            dev.supermux.desktop.overlay.DesktopAssistantOverlay(
-                overlayFleet,
-                desktopUiPrefs,
-                themed = { content ->
-                    ProvideDesktopAdaptiveLocals {
-                        DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
-                    }
-                },
-                onOpenInApp = { id ->
-                    ui.selectedId = id
-                    showWindow()
-                },
-            )
-        }
-
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not
         // dispose pop-outs of another workspace.
@@ -2248,6 +2229,28 @@ fun main() {
                 }
             }
         }
+        }
+
+        // #62: the assistant overlay, the Agent floating over every app, while its switch is on.
+        // Here, beside the main window and not inside it: a window's content recomposes only on its
+        // own frames, and a window hidden in the tray draws none, so the overlay would never show
+        // its head or bubble while supermux sits in the tray.
+        val assistantOverlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
+        val overlayFleet = pairedFleet
+        if (!shuttingDown && assistantOverlayOn && overlayFleet != null && dev.supermux.desktop.overlay.desktopOverlaySupported) {
+            dev.supermux.desktop.overlay.DesktopAssistantOverlay(
+                overlayFleet,
+                desktopUiPrefs,
+                themed = { content ->
+                    ProvideDesktopAdaptiveLocals {
+                        DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
+                    }
+                },
+                onOpenInApp = { id ->
+                    ui.selectedId = id
+                    showWindow()
+                },
+            )
         }
         }
     } finally {

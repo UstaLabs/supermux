@@ -47,6 +47,8 @@ fun HostTheme(
     pointerAvailable: Boolean = true,
     hardwareKeyboard: Boolean = true,
     widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+    /** Card #76: the OS asks for less motion; see [LocalReduceMotion]. Each platform theme reads its own setting. */
+    reduceMotion: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val prefs = uiPrefs ?: remember { UiPrefs(InMemorySettingsStore()) }
@@ -62,6 +64,7 @@ fun HostTheme(
         LocalHardwareKeyboard provides hardwareKeyboard,
         LocalUiPrefs provides prefs,
         LocalUiPrefsOrNull provides prefs,
+        LocalReduceMotion provides reduceMotion,
     ) {
         SupermuxTheme(appearance = appearance, textScale = textScale, content = content)
     }

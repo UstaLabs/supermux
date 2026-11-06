@@ -53,6 +53,8 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             permissionModes = frame.permissionModes,
             muxHome = frame.muxHome,
             homeDir = frame.homeDir,
+            // Card #76: the snapshot's open streams are the whole truth about what is being written now.
+            live = liveFromSnapshot(frame.streams),
             // A snapshot is a NEW broker connection: the broker disposed the old connection's
             // language servers with it (src/core/lsp/bridge.ts, one LspConnection per socket), so
             // every server this client had open is gone. Say so, and an editor's LSP client opens
@@ -201,6 +203,8 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // the "answered: …" line the close wrote is the record that stays.
         state.copy(
             messages = state.messages + (frame.session to next),
+            // Card #76: the stored reply replaces its live text in the same step, so nothing flickers.
+            live = dropLive(state.live, frame.session, frame.entry.stream),
             closedRequests = if (frame.session in state.closedRequests) {
                 state.closedRequests - frame.session
             } else {
@@ -231,7 +235,17 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     )
     is ServerFrame.ActivityAppend -> state.copy(
         activity = state.activity + (frame.session to ((state.activity[frame.session] ?: emptyList()) + frame.event)),
+        // Card #76: the stored thinking replaces the live thinking in the same step.
+        live = dropLive(state.live, frame.session, frame.event.stream),
     )
+    is ServerFrame.ReplyStream -> {
+        val next = applyLiveDelta(state.live, frame)
+        if (next === state.live) state else state.copy(live = next)
+    }
+    is ServerFrame.ReplyStreamEnd -> {
+        val next = dropLive(state.live, frame.session, frame.stream)
+        if (next === state.live) state else state.copy(live = next)
+    }
     is ServerFrame.RequestOpen -> {
         val prev = state.requests[frame.session] ?: emptyList()
         if (prev.any { it.requestId == frame.request.requestId }) state

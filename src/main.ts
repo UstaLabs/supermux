@@ -180,7 +180,7 @@ import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import type { AgentAdapter, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
+import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -1445,7 +1445,7 @@ export type DispatchResult = { ok: true; delivered: number } | { ok: false; erro
 
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean },
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean; stream?: string },
 ): Promise<DispatchResult> {
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
@@ -1534,6 +1534,8 @@ async function onAssistantMessage(
         op: "reply" as const,
         text: action.text,
         error: ev.error,
+        // Card #76: the app swaps the live text with this stream id for this stored reply.
+        ...(ev.stream ? { stream: ev.stream } : {}),
         attachments: action.attachments?.map((a) => ({
           file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
         })),
@@ -1890,6 +1892,9 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       .then((r) => { if (!r.ok) log.warn("dispatch_assistant_failed", { session: sessionId, err: r.error }) })
       .catch((err) => log.warn("dispatch_assistant_threw", { session: sessionId, err: String(err) }))
   })
+  // Card #76: the reply (and thinking) while it is written, to the apps that show this chat.
+  adapter.on("live-delta", (ev: LiveDeltaEvent) => webChannel?.liveAppend(sessionId, ev.stream, ev.streamKind, ev.text))
+  adapter.on("live-end", (ev: LiveEndEvent) => webChannel?.liveClose(ev.stream, ev.final))
   adapter.on("tool-call", (ev: any) => {
     const now = Date.now()
     const session = registry.get(sessionId)
@@ -1933,6 +1938,8 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     settleChanged(sessionId)
   })
   adapter.on("turn-complete", (ev?: TurnCompleteEvent) => {
+    // Card #76: nothing still streaming in this session will be stored now.
+    webChannel?.liveEndSession(sessionId)
     // Card #75: the first turn is the end of a new session's start trace.
     if (startTraces.traceOf(sessionId)) {
       startTraces.markSession(sessionId, "turn.completed", { error: ev?.error ? String(ev.error).slice(0, 200) : undefined }, true)

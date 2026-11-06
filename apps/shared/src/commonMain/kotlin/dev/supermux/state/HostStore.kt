@@ -133,6 +133,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -140,6 +141,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -197,10 +199,14 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
+    /** Card #76: the user's "Show replies as they're written" (on unless turned off), as the next subscribe sends it. */
+    private val liveRepliesWanted = MutableStateFlow(true)
     val client = BrokerClient(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
-        subscribeFrame = { req -> subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req) },
+        subscribeFrame = { req ->
+            subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req, streams = liveRepliesWanted.value && deps.clientInfo?.surface in LIVE_REPLY_SURFACES)
+        },
         clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
@@ -343,6 +349,9 @@ class HostStore(
     /** Caller session id → the councils it called (spec §5), ordered by creation. */
     val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> =
         _state.map { it.councils }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Card #76: session → its live reply / thinking (only the chats on screen get any). */
+    val liveReplies: StateFlow<Map<String, List<LiveReply>>> =
+        _state.map { it.live }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     /** Chat messages written while the socket was down, in order; sent after the next snapshot. */
@@ -517,11 +526,37 @@ class HostStore(
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
-            stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
-            // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the first,
-            // heavy frame to finish (~0.9 s at launch on desktop, card #54), and every frame —
-            // the 2.3 MB snapshot included — was decoded there. Frames still reduce in [stateScope].
-            stateScope.launch(Dispatchers.Default) { client.run() }
+            // The socket opens only once this collector listens: `frames` keeps no replay, so a
+            // snapshot that arrived while the caller's (UI) thread was still busy — before it first
+            // ran this coroutine — was dropped, and the app showed no sessions until a reconnect
+            // (card #76; HostStoreStartupRaceTest).
+            stateScope.launch {
+                client.frames
+                    // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the
+                    // first, heavy frame to finish (~0.9 s at launch on desktop, card #54), and every
+                    // frame — the 2.3 MB snapshot included — was decoded there. Frames still reduce
+                    // in [stateScope].
+                    .onSubscription {
+                        stateScope.launch(Dispatchers.Default) {
+                            // The first subscribe already carries the stored choice: a device that turned live
+                            // replies off never asks for them, not even once before a resubscribe.
+                            liveRepliesWanted.value = liveRepliesOn(deps.settings.string(SettingsKeys.LIVE_REPLIES).first())
+                            client.run()
+                        }
+                    }
+                    .collect { guarded("reduce") { reduce(it) } }
+            }
+            // Card #76: turning live replies on or off in Settings applies at once: the socket reconnects and its
+            // subscribe asks (or no longer asks); the snapshot that follows carries live text only if it asked.
+            stateScope.launch {
+                deps.settings.string(SettingsKeys.LIVE_REPLIES).collect { stored ->
+                    val on = liveRepliesOn(stored)
+                    if (on != liveRepliesWanted.value) {
+                        liveRepliesWanted.value = on
+                        client.resubscribe()
+                    }
+                }
+            }
             ensureViewingHeartbeat()
         }
     }
@@ -2849,7 +2884,13 @@ internal const val SNAPSHOT_LOG_TAIL = 1
  * archived workspaces without their views/layout. A broker that predates these fields ignores
  * them and sends everything.
  */
-internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null): String = buildJsonObject {
+/**
+ * Card #76: the surfaces that ask for live replies. Desktop first; Android, iOS and the web client joined once each
+ * had been checked (the ink edge, and its reduced-motion fallback) on the emulator, the simulator and a browser.
+ */
+internal val LIVE_REPLY_SURFACES = setOf("desktop", "android", "ios", "web")
+
+internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null, streams: Boolean = false): String = buildJsonObject {
     put("type", "subscribe")
     // Card #54: the launch's trace and this connection's request, so the broker records its
     // snapshot build under them (ignored by a broker that does not trace).
@@ -2864,4 +2905,6 @@ internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = n
     // and no archived workspaces (fetched right after the snapshot, off the first screen's path).
     put("slimSubagents", true)
     put("lazyArchived", true)
+    // Card #76: replies while they are written (reply_stream frames), for the chats on screen.
+    if (streams) put("streams", 1)
 }.toString()

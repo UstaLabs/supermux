@@ -31,8 +31,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
-import dev.supermux.desktop.platform.DesktopOs
-import dev.supermux.desktop.platform.isMacOs
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
@@ -54,6 +52,7 @@ import dev.supermux.ui.overlay.overlayChoiceToStore
 import dev.supermux.ui.overlay.rememberOverlayAgent
 import dev.supermux.ui.overlay.rememberOverlayRig
 import dev.supermux.ui.prefs.UiPrefs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,6 +60,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import java.awt.GraphicsEnvironment
@@ -89,15 +90,22 @@ private const val DOUBLE_CLICK_MS = 300L
 private const val GLASSES_IDLE_MS = 5 * 60_000L
 /** The longest edge of the screen picture sent with a talk. */
 private const val SHARE_MAX_EDGE = 1600
+/** Long enough for the head and bubble to have gone from the screen before it is taken (a few frames). */
+private const val STEP_OUT_MS = 80L
 // Each window has its own title: macOS finds a window by its title to float it everywhere (MacOverlayNative).
 internal const val HEAD_TITLE = "supermux assistant"
 internal const val BUBBLE_TITLE = "supermux assistant bubble"
 internal const val CHAT_TITLE = "supermux assistant chat"
 
-internal val isMac = isMacOs()
+private val os = System.getProperty("os.name").orEmpty()
+internal val desktopOs = desktopOsOf(os)
+internal val isMac = desktopOs == DesktopOs.MAC
+/** A Wayland session: no global key grabs for apps there (only through its GlobalShortcuts portal). */
+internal val waylandSession = desktopOs == DesktopOs.LINUX &&
+    (System.getenv("XDG_SESSION_TYPE") == "wayland" || !System.getenv("WAYLAND_DISPLAY").isNullOrEmpty())
 
 /** Where the overlay can float ([overlaySupportedOn]). */
-val desktopOverlaySupported: Boolean = overlaySupportedOn(DesktopOs.current)
+val desktopOverlaySupported: Boolean = overlaySupportedOn(os)
 
 /**
  * The overlay, while the Appearance switch is on. [themed] wraps a window's content in the app's theme
@@ -118,10 +126,29 @@ fun DesktopAssistantOverlay(
     val rig = rememberOverlayRig(fleet, agent?.id)
     val ui = overlay.ui
     val screenAllowed by prefs.assistantOverlayScreen.collectAsState(true)
-    SideEffect { overlay.allowScreen(screenAllowed) }
+    SideEffect { overlay.allowScreen(screenAllowed && !waylandSession) }
     // The hold-to-talk key works from any app while the overlay is up: the one chosen in Settings.
-    val talkKey by remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it) } }.collectAsState(null)
-    LaunchedEffect(overlay, talkKey) { talkKey?.let { overlay.useTalkKey(it) } }
+    // Read here, not in the effect: by the time the effect runs, the state may already hold the next key.
+    val talkKey = remember { prefs.assistantOverlayTalkKey.map { TalkKey.parse(it, desktopOs) } }.collectAsState(null).value
+    // The same key picked again in Settings sets it up anew, so a desktop that said no is asked again.
+    val picks = TalkKeyStatus.picks.collectAsState().value
+    LaunchedEffect(overlay, talkKey, picks) {
+        val key = talkKey ?: return@LaunchedEffect
+        try {
+            overlay.useTalkKey(key)
+        } catch (e: CancellationException) {
+            // Another key was chosen, or the overlay closed, meanwhile: not a failure.
+            throw e
+        } catch (e: Throwable) {
+            // A key that can't be had must not take the overlay down with it.
+            println("[OverlayKey] ${key.name} failed: $e")
+        }
+    }
+    // Back where it rested last time, before it shows; and where it comes to rest, written down.
+    LaunchedEffect(overlay) {
+        overlay.restore(decodeOverlaySpot(prefs.assistantOverlaySpot.first()))
+        overlay.rested.collect { prefs.putAssistantOverlaySpot(it.encode()) }
+    }
     // Diagnostics: when the bubble comes and goes, and what decided it.
     LaunchedEffect(ui) {
         snapshotFlow { ui.bubbleVisible }.collect { shown ->
@@ -134,7 +161,7 @@ fun DesktopAssistantOverlay(
     }
     DisposableEffect(overlay) { onDispose { overlay.stopTalkKey() } }
 
-    OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
+    if (overlay.placed) OverlayWindow(HEAD_TITLE, overlay.headX, overlay.headY, HEAD_BOX, HEAD_BOX, focusable = false, onCreated = { overlay.headWindow = it }) {
         themed {
             // Hosted once, here: its replies pop the bubble, and hold-to-talk records through its mic.
             OverlayReplies(fleet, agent, ui)
@@ -156,7 +183,7 @@ fun DesktopAssistantOverlay(
                 },
                 contentAlignment = Alignment.Center,
             ) {
-                if (!ui.hidden) OverlayHead(agent, rig, ui, size = HEAD_DP.dp)
+                if (!ui.hidden && !ui.capturing) OverlayHead(agent, rig, ui, size = HEAD_DP.dp)
             }
         }
     }
@@ -237,15 +264,29 @@ private fun OverlayWindow(
             val unique = uniqueOverlayTitle(title)
             ComposeWindow().apply {
                 this.title = unique
-                // macOS: a non-activating panel, so a click doesn't pull you out of the app you're in.
-                if (!focusable) runCatching { type = AwtWindow.Type.POPUP }
+                when (desktopOs) {
+                    // Windows: a tool window, on every virtual desktop and with no taskbar button.
+                    DesktopOs.WINDOWS -> runCatching { type = AwtWindow.Type.UTILITY }
+                    // macOS: a non-activating panel, so a click doesn't pull you out of the app you're in.
+                    // X11: override-redirect, above full-screen windows and on every workspace.
+                    else -> if (!focusable) runCatching { type = AwtWindow.Type.POPUP }
+                }
                 isUndecorated = true
                 isTransparent = true
                 isAlwaysOnTop = true
                 isResizable = false
                 focusableWindowState = focusable
                 setBounds(x, y, width, height)
+                println("[OverlayWindow] $unique created at $x,$y ${width}x$height ($desktopOs)")
                 onCreated(this)
+                if (desktopOs == DesktopOs.WINDOWS) {
+                    addWindowListener(object : WindowAdapter() {
+                        override fun windowOpened(e: WindowEvent) {
+                            WinOverlayNative.floatEverywhere(e.window, focusable)
+                            WinOverlayNative.describe(e.window, unique)
+                        }
+                    })
+                }
                 if (isMac) {
                     addWindowListener(object : WindowAdapter() {
                         override fun windowOpened(e: WindowEvent) {
@@ -264,7 +305,10 @@ private fun OverlayWindow(
                 }
             }
         },
-        dispose = { it.dispose() },
+        dispose = {
+            println("[OverlayWindow] ${it.title} closed")
+            it.dispose()
+        },
         update = { w ->
             if (w.x != x || w.y != y || w.width != width || w.height != height) w.setBounds(x, y, width, height)
         },
@@ -288,8 +332,29 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
     var headX by mutableIntStateOf(startBox.x + startSpot.x.toInt())
     var headY by mutableIntStateOf(startBox.y + startSpot.y.toInt())
 
+    /** Placed: where it rested last time, or its usual spot; the head shows from then on. */
+    var placed by mutableStateOf(false)
+        private set
+
+    /** Each spot it comes to rest at, to be written down. */
+    val rested = MutableSharedFlow<OverlaySpot>(extraBufferCapacity = 1)
+
     init {
         measureRoom()
+    }
+
+    /** Back at [saved] when a screen still holds it; its usual spot otherwise. */
+    fun restore(saved: OverlaySpot?) {
+        val back = restoreSpot(saved, usableScreens(), HEAD_BOX)
+        println("[OverlayHead] placed at ${back?.let { "${it.first},${it.second} (where it rested)" } ?: "$headX,$headY (its usual spot)"}")
+        back?.let { (x, y) ->
+            headX = x
+            headY = y
+            val box = usableBounds(x + HEAD_BOX / 2 to y + HEAD_BOX / 2)
+            ui.edge = if (x + HEAD_BOX / 2 < box.x + box.width / 2) Edge.Left else Edge.Right
+            measureRoom()
+        }
+        placed = true
     }
 
     fun down(x: Int, y: Int, at: Long) {
@@ -370,25 +435,64 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
     private var keyTick: Job? = null
     private var keyTap: MacTalkKeyTap? = null
     private var hotKey: MacHotKey? = null
+    private var winHotKey: WinHotKey? = null
+    private var x11HotKey: X11HotKey? = null
+    private var waylandHotKey: WaylandHotKey? = null
     /** The combo started the talk going on, at this time. */
     private var comboFrom: Long? = null
     private var comboLabel = ""
 
     /**
-     * Listens for [key] from any app, in place of the one before. A combo is macOS's to hand over, no
-     * permission asked; right ⌥ alone needs Input Monitoring (allowed from Settings), so it waits for that.
+     * Listens for [key] from any app, in place of the one before. A combo is the OS's to hand over, no
+     * permission asked (Carbon on a Mac, RegisterHotKey on Windows); right ⌥ alone needs macOS's Input
+     * Monitoring (allowed from Settings), so it waits for that.
      */
     suspend fun useTalkKey(key: TalkKey) {
         stopTalkKey()
+        val combo = key.on(desktopOs) ?: return
+        TalkKeyStatus.refused.value = null
+        if (desktopOs == DesktopOs.WINDOWS) {
+            comboLabel = combo.label
+            val windows = winHotKey ?: WinHotKey(
+                // The hot key's own thread: everything goes on to the overlay's.
+                onPress = { scope.launch { comboDown() } },
+                onRelease = { scope.launch { comboUp() } },
+                onRefused = { TalkKeyStatus.refused.value = it },
+            ).also { winHotKey = it }
+            withContext(Dispatchers.IO) { windows.register(combo) }
+            return
+        }
+        if (desktopOs == DesktopOs.LINUX) {
+            comboLabel = combo.label
+            if (waylandSession) {
+                // Only its GlobalShortcuts portal can hand a key over: the desktop asks the user once.
+                val wayland = waylandHotKey ?: WaylandHotKey(
+                    // A bus thread: everything goes on to the overlay's.
+                    onPress = { scope.launch { comboDown() } },
+                    onRelease = { scope.launch { comboUp() } },
+                ).also { waylandHotKey = it }
+                val name = agent?.name ?: "your Agent"
+                TalkKeyStatus.wayland.value = withContext(Dispatchers.IO) { wayland.register(combo, "Hold to talk to $name") }
+                return
+            }
+            val x11 = x11HotKey ?: X11HotKey(
+                // The grab's own thread: everything goes on to the overlay's.
+                onPress = { scope.launch { comboDown() } },
+                onRelease = { scope.launch { comboUp() } },
+                onRefused = { TalkKeyStatus.refused.value = it },
+            ).also { x11HotKey = it }
+            withContext(Dispatchers.IO) { x11.register(combo) }
+            return
+        }
         if (!isMac) return
         if (key.combo) {
-            comboLabel = key.label
-            val combo = hotKey ?: MacHotKey(
+            comboLabel = combo.label
+            val mac = hotKey ?: MacHotKey(
                 // AppKit's thread: everything goes on to the overlay's.
                 onPress = { scope.launch { comboDown() } },
                 onRelease = { scope.launch { comboUp() } },
             ).also { hotKey = it }
-            combo.register(key.carbonKey, key.carbonModifiers)
+            mac.register(combo.key, combo.modifiers)
             return
         }
         while (!MacOverlayNative.canListenToKeys()) delay(2_000)
@@ -402,6 +506,9 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     fun stopTalkKey() {
         hotKey?.unregister()
+        winHotKey?.unregister()
+        x11HotKey?.unregister()
+        waylandHotKey?.unregister()
         keyTap?.stop()
         keyTap = null
         keyTick?.cancel()
@@ -504,12 +611,25 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     /**
      * Takes the screen the head is on for this talk: a glint across the head, and the picture goes with
-     * your words once you let go. The overlay's own windows are kept out of it natively (macOS sharingType).
+     * your words once you let go. The overlay's own windows are kept out of it natively (macOS sharingType,
+     * Windows display affinity).
      */
     private fun snap() {
         val bounds = screenBounds(headX + HEAD_BOX / 2 to headY + HEAD_BOX / 2)
         scope.launch {
-            val shot = withContext(Dispatchers.IO) { grabScreen(bounds) } ?: return@launch
+            // Linux can't keep a window out of a capture: the overlay steps out for the instant it takes.
+            val stepOut = desktopOs == DesktopOs.LINUX
+            if (stepOut) {
+                ui.capturing = true
+                delay(STEP_OUT_MS)
+            }
+            val shot = (
+                try {
+                    withContext(Dispatchers.IO) { grabScreen(bounds) }
+                } finally {
+                    if (stepOut) ui.capturing = false
+                }
+                ) ?: return@launch
             if (!ui.listening) return@launch
             ui.shots++
             val thumb = withContext(Dispatchers.Default) { shot.scaled(240).toComposeImageBitmap() }
@@ -564,6 +684,7 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
                 delay(16)
             }
             measureRoom()
+            rested.tryEmit(OverlaySpot(headX, headY, box))
         }
     }
 
@@ -628,15 +749,22 @@ private fun BufferedImage.png(maxEdge: Int): ByteArray = ByteArrayOutputStream()
     out.toByteArray()
 }
 
+/** The usable area of every screen, as [usableBounds] measures one. */
+private fun usableScreens(): List<Rectangle> =
+    GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { usable(it.defaultConfiguration) }
+
+private fun usable(gc: java.awt.GraphicsConfiguration): Rectangle {
+    val b = gc.bounds
+    val inset = Toolkit.getDefaultToolkit().getScreenInsets(gc)
+    return Rectangle(b.x + inset.left, b.y + inset.top, b.width - inset.left - inset.right, b.height - inset.top - inset.bottom)
+}
+
 /** The usable area (less the menu bar, the Dock or the taskbar) of the screen holding [point]; the main one for null. */
 private fun usableBounds(point: Pair<Int, Int>?): Rectangle {
     val env = GraphicsEnvironment.getLocalGraphicsEnvironment()
     val device = point?.let { (px, py) -> env.screenDevices.firstOrNull { it.defaultConfiguration.bounds.contains(px, py) } }
         ?: env.defaultScreenDevice
-    val gc = device.defaultConfiguration
-    val b = gc.bounds
-    val inset = Toolkit.getDefaultToolkit().getScreenInsets(gc)
-    return Rectangle(b.x + inset.left, b.y + inset.top, b.width - inset.left - inset.right, b.height - inset.top - inset.bottom)
+    return usable(device.defaultConfiguration)
 }
 
 private fun Rectangle.overlayScreen() = OverlayScreen(width.toFloat(), height.toFloat(), topInset = 0f, bottomInset = 0f, keyboardHeight = 0f)
