@@ -84,6 +84,8 @@ object SettingsKeys {
     const val ASSISTANT_OVERLAY_SCREEN = "appearance:assistantOverlayScreen"
     /** The desktop overlay's hold-to-talk key (#62): a `TalkKey` name; none = the default combo. */
     const val ASSISTANT_OVERLAY_TALK_KEY = "appearance:assistantOverlayTalkKey"
+    /** Where the desktop overlay's head rests (#62): its spot and screen, as the desktop writes them down. */
+    const val ASSISTANT_OVERLAY_SPOT = "appearance:assistantOverlaySpot"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping

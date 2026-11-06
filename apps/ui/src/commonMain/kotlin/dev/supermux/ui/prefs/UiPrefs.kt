@@ -239,6 +239,12 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putAssistantOverlayTalkKey(value: String) =
         settings.putString(SettingsKeys.ASSISTANT_OVERLAY_TALK_KEY, value)
 
+    /** Where the desktop overlay's head rests (#62), as written down; null = its usual spot. */
+    val assistantOverlaySpot: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_SPOT)
+
+    suspend fun putAssistantOverlaySpot(value: String) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_SPOT, value)
+
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =
         settings.string(SettingsKeys.TEXT_SCALE).map { raw ->
