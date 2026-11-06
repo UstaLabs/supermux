@@ -325,7 +325,7 @@ data class PersistedWindowHost(
 )
 
 @OptIn(kotlin.uuid.ExperimentalUuidApi::class)
-private fun newWindowId(): String = kotlin.uuid.Uuid.random().toString()
+internal fun newWindowId(): String = kotlin.uuid.Uuid.random().toString()
 
 fun WindowHost.toPersisted(): PersistedWindowHost = PersistedWindowHost(
     id = id,
@@ -363,9 +363,13 @@ fun defaultTearOutBounds(from: WindowBounds = WindowBounds(0f, 0f, 1440f, 900f))
     WindowBounds(from.x + 80f, from.y + 80f, 800f, 600f)
 
 /**
- * Split [viewId] into its own group if needed, apply [edit] to the transformed tree, then claim
- * that view on an extra host. [edit] is typically `{ t -> layoutSync.edit { t }; layoutSync.tree }`
- * or `{ it }` in unit tests.
+ * Split [viewId] into its own group if needed, then claim that view on an extra host.
+ *
+ * [edit] applies the split — a TRANSFORM of the tree, so the layout sync can replay it over a
+ * broker frame that lands before the write is confirmed — and returns the tree it produced:
+ * typically `{ t -> layoutSync.edit(t); layoutSync.tree }`, or `{ t -> t(tree) }` in unit tests.
+ * (It used to receive the finished tree, which callers wrote back as `edit { next }` — a
+ * replacement that would revive whatever a frame landing mid-edit had removed.)
  */
 fun tearOutTab(
     registry: WindowHostRegistry,
@@ -375,14 +379,14 @@ fun tearOutTab(
     newGroupId: String,
     bounds: WindowBounds,
     hostId: String,
-    edit: (LayoutNode) -> LayoutNode,
+    edit: ((LayoutNode) -> LayoutNode) -> LayoutNode,
 ): WindowHost? {
     val plan = planTearOutTab(tree, viewId, newGroupId) ?: return null
     val sourceExtra = registry.extras().firstOrNull { viewId in it.claimedViewIds }
     if (sourceExtra != null && sourceExtra.claimedViewIds == setOf(viewId)) {
         return null
     }
-    val nextTree = edit(plan.first(tree))
+    val nextTree = edit(plan.first)
     if (sourceExtra != null) {
         registry.shrinkClaim(sourceExtra.id, viewId, nextTree)
     }
@@ -415,7 +419,7 @@ fun tearOutTabLive(
     tree: LayoutNode,
     viewId: String,
     workspaceId: String,
-    edit: (LayoutNode) -> LayoutNode,
+    edit: ((LayoutNode) -> LayoutNode) -> LayoutNode,
 ): WindowHost? = tearOutTab(
     registry = registry,
     tree = tree,

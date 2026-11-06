@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -207,9 +208,11 @@ data class ComposerAttachment(
  * `ChatPanel`). Drives the SAME stage/upload/send funnel the attach affordance and Send use.
  *
  * [file] is null when the host could not resolve the request into a file at all (a path that is not
- * a file); the composer then consumes the request without staging anything.
+ * a file); the composer then consumes the request without staging anything. With [send] false the
+ * file is only staged, as if picked: the user writes the message and sends it (the assistant
+ * overlay's "Share what's on screen").
  */
-data class ComposerExternalAttach(val file: PickedFile?, val text: String)
+data class ComposerExternalAttach(val file: PickedFile?, val text: String, val send: Boolean = true)
 
 /** One-shot "transcribe these bytes and append the cleaned text to the draft" request — the
  *  `SM_DICTATE` headless hook, which proves the real POST→append round-trip under Xvfb where there
@@ -613,6 +616,12 @@ fun Composer(
     placeholder: String = DEFAULT_COMPOSER_PLACEHOLDER,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
+    /**
+     * The host's own ways to attach something, as chips at the start of the row above the field
+     * (the assistant overlay's "Share what's on screen"). Null = none: the row shows only while
+     * something is staged.
+     */
+    leadingChips: (@Composable RowScope.() -> Unit)? = null,
     /**
      * Set when the HOST owns the external-file drop target for a larger surface (the whole chat
      * panel). The composer then installs no target of its own, highlights on the host's drag state
@@ -1059,6 +1068,10 @@ fun Composer(
             return@LaunchedEffect
         }
         val newId = stage(file)
+        if (!request.send) {
+            onExternalAttachConsumed()
+            return@LaunchedEffect
+        }
         // Poll (200ms) for the new chip to leave Uploading — up to 60s (a resumable chunk loop, not
         // a single request; generous so a slow/large file doesn't false-time-out).
         var waited = 0L
@@ -1457,7 +1470,7 @@ fun Composer(
                             }
                         }
                     }
-                } else if (attachments.isNotEmpty() || pastePending) {
+                } else if (attachments.isNotEmpty() || pastePending || leadingChips != null) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1466,6 +1479,7 @@ fun Composer(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        leadingChips?.invoke(this)
                         if (pastePending) PastePendingChip()
                         attachments.forEach { att ->
                             key(att.id) {

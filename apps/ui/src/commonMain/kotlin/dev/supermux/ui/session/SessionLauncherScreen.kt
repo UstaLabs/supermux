@@ -171,6 +171,7 @@ import dev.supermux.workspace.launchLocation
 import dev.supermux.workspace.orderProjectCatalog
 import dev.supermux.workspace.projectLocationKey
 import dev.supermux.workspace.projectOwning
+import dev.supermux.util.PerfTrace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -908,6 +909,8 @@ fun SessionLauncherScreen(
         // screen and cancelling this coroutine) as soon as the broker binds it, and the dispose
         // flush must not write the just-sent text back. A failure re-arms the draft save.
         draftCleared = true
+        // Card #75: one trace from this Send to the first reply on screen.
+        PerfTrace.beginStart(wd.trim(), "agent" to agent, "model" to model, "worktree" to wantsWorktree, "files" to toUpload.size)
         scope.launch {
             // A retained chip list (Android) outlives this screen, so the next launcher must not
             // open with this message's files. Kept only on a real failure, for the retry; a
@@ -955,7 +958,9 @@ fun SessionLauncherScreen(
         BoxWithConstraints(
             outer
                 .fillMaxSize()
-                .background(cs.surfaceContainerHigh)
+                // The tone of the "Start a new session" card that opens it: set off from the
+                // sidebar's frame, and not the chat's either.
+                .background(cs.surfaceContainer)
                 // The soft keyboard shrinks the scroll viewport (as the chat composer dock does),
                 // so a long prompt's growing field scrolls into view instead of under the IME.
                 // The Scaffold shell consumes its own padding first, so the nav bar isn't doubled.
@@ -1448,7 +1453,7 @@ private fun LauncherHostPill(
         Row(
             modifier = modifier
                 .clip(RoundedCornerShape(20.dp))
-                .background(cs.surfaceContainer)
+                .background(cs.surfaceContainerHighest)
                 .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
                 .clickable(enabled = enabled) { haptic.perform(HapticKind.Tick); expanded = true }
                 .padding(
@@ -1502,7 +1507,7 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
+            .background(cs.surfaceContainerHighest)
             .clickable { haptic.perform(HapticKind.Tick); onClick() }
             .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,

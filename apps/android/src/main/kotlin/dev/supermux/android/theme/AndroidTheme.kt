@@ -75,6 +75,8 @@ fun AndroidTheme(
         // NOT the other way round: `screenWidthDp` excludes the system bars before API 35, so the
         // window's own bounds are the measurement that agrees with desktop and iOS.
         widthClass = rememberWindowWidthClass(LocalConfiguration.current.screenWidthDp),
+        // Card #76: "Remove animations" turns the live reply's ink edge and gliding scroll off.
+        reduceMotion = rememberReduceMotion(),
     ) {
         // A rotation recreates the activity, and with it every composition: the composer's staged
         // photos (and their uploads) live in the process instead, so turning the phone keeps them.

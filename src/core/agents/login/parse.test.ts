@@ -33,6 +33,14 @@ describe("login output parsers", () => {
     expect(parseAntigravityLoginUrl(output)).toBe(AGY_URL)
   })
 
+  test("agy under a Windows ConPTY: the cursor move after the URL ends it, the next line is not glued on", () => {
+    // Shape captured from agy 1.5.0 under the broker's ConPTY on Windows 11 (2026-11-04): ConPTY draws the
+    // blank line after the URL as a cursor move (ESC[5;1H), and the URL used to end in "…stateWaiting".
+    const output = `Authentication required. Please visit the URL to log in:\r\n  ${AGY_URL}\x1b[5;1HWaiting for authentication (timeout 60s)...\r\n`
+      + `\x1b]0;C:\\Users\\Tester\\AppData\\Local\\agy\\bin\\agy.exe\x07\x1b[?25hOr, paste the authorization code here and press Enter:\r\n`
+    expect(parseAntigravityLoginUrl(output)).toBe(AGY_URL)
+  })
+
   test("agy: only an accounts.google.com URL counts, colorized or not", () => {
     expect(parseAntigravityLoginUrl("see https://antigravity.google/docs for help")).toBeNull()
     expect(parseAntigravityLoginUrl("Authentication required")).toBeNull()

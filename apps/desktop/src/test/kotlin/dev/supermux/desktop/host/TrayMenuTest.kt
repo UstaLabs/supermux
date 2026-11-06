@@ -147,6 +147,21 @@ class TrayMenuTest {
         )
     }
 
+    // #62: the assistant overlay's switch sits under Open, where the overlay is offered.
+    @Test fun theAssistantOverlayIsACheckboxUnderOpen() {
+        val m = TrayModel.of(running, HostingPrefs(), 2, null)
+        assertEquals(
+            listOf("H:🟢 supermux is running · 2 sessions", "Open supermux", "[x]Assistant overlay", "--", "Restart", "[x]Keep running in the background", "--", "Quit supermux"),
+            labels(trayMenuItems(m, background = true, assistant = true)),
+        )
+        assertTrue("[ ]Assistant overlay" in labels(trayMenuItems(m, background = true, assistant = false)))
+    }
+
+    @Test fun noAssistantOverlayWhereItIsNotOffered() {
+        val m = TrayModel.of(running, HostingPrefs(), 2, null)
+        assertTrue(labels(trayMenuItems(m, background = true)).none { "Assistant" in it })
+    }
+
     @Test fun crashLoopMenuHasShowLogAndTryAgain() {
         val m = TrayModel.of(HostingStatus.CantStart("x"), HostingPrefs(), 0, null)
         assertEquals(

@@ -51,6 +51,9 @@ object SettingsKeys {
     const val FILES_REVEAL_ACTIVE = "files:revealActive"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */
     const val CHAT_DETAIL_LEVEL = "chatDetail:level"
+    /** Card #76: "false" = don't ask for replies while they're written (show finished messages only). Unset = on:
+     *  the default writes nothing, so this device's settings file only changes when someone turns it off. */
+    const val LIVE_REPLIES = "chat:liveReplies"
     /** `DictationMode.wire` ("broker"/"device") — where THIS device's dictation is recognised.
      *  Device-local on purpose: only some hosts have an on-device recogniser. Unset = the
      *  default rule in `dev.supermux.ui.chat.resolveDictationMode`. */
@@ -70,6 +73,19 @@ object SettingsKeys {
     const val DYNAMIC_COLOR = "appearance:dynamicColor"
     /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
     const val TEXT_SCALE = "appearance:textScale"
+    /** "true"/"false": the assistant overlay (#62, experimental), the default Agent floating over
+     *  other apps. Per device, never synced; unset = off. */
+    const val ASSISTANT_OVERLAY = "appearance:assistantOverlay"
+    /** The Agent the assistant overlay shows on this device (a session id), picked in its chat's
+     *  header. Per device, never synced; unset = the default Agent. */
+    const val ASSISTANT_OVERLAY_AGENT = "appearance:assistantOverlayAgent"
+    /** "true"/"false": your screen goes with what you say when you hold the overlay to talk (Android asks
+     *  once per session). Per device, never synced; unset = on. */
+    const val ASSISTANT_OVERLAY_SCREEN = "appearance:assistantOverlayScreen"
+    /** The desktop overlay's hold-to-talk key (#62): a `TalkKey` name; none = the default combo. */
+    const val ASSISTANT_OVERLAY_TALK_KEY = "appearance:assistantOverlayTalkKey"
+    /** Where the desktop overlay's head rests (#62): its spot and screen, as the desktop writes them down. */
+    const val ASSISTANT_OVERLAY_SPOT = "appearance:assistantOverlaySpot"
     /**
      * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
      * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping
@@ -111,3 +127,6 @@ class HostStoreDeps(
     fun nowIso(): String = clock.now().toString()
     fun nowMs(): Long = clock.now().toEpochMilliseconds()
 }
+
+/** Card #76: the stored "Show replies as they're written" answer; on unless it says "false". */
+fun liveRepliesOn(stored: String?): Boolean = stored?.toBooleanStrictOrNull() ?: true

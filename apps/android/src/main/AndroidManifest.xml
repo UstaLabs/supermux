@@ -7,6 +7,14 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- QR pairing scan (zxing-android-embedded also declares this; explicit here). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- The assistant overlay (#62, experimental, off by default): the default Agent as a chat head
+         over other apps. "Display over other apps" is granted by the user on a system page, and the
+         foreground service that owns the windows needs these types. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
          the camera is optional so non-camera devices can still install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -72,6 +80,27 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- The assistant overlay's windows (overlay/AssistantOverlayService.kt). specialUse: a chat
+             head the user turned on; microphone: hold-to-talk while another app is in front;
+             mediaProjection: your screen with hold-to-talk, once Android has asked. -->
+        <service
+            android:name=".overlay.AssistantOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone|mediaProjection">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="The user's assistant as a chat head over other apps (Display over other apps), turned on by the user." />
+        </service>
+        <!-- The overlay's way to the screen-capture consent and the pickers (overlay/OverlayBridgeActivity.kt):
+             invisible, in a task of its own so supermux's window is not brought along, gone once answered. -->
+        <activity
+            android:name=".overlay.OverlayBridgeActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.overlay"
+            android:excludeFromRecents="true"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

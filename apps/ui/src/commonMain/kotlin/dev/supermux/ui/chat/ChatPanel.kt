@@ -91,6 +91,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -135,6 +136,7 @@ import dev.supermux.ui.countToolsSince
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
+import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -144,8 +146,15 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.turnBoundaryMs
 import dev.supermux.util.formatDuration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.exp
+import kotlin.math.max
 import kotlin.time.Clock
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
@@ -181,6 +190,36 @@ private fun transcriptAtEnd(state: LazyListState, slopPx: Float): Boolean {
     val last = info.visibleItemsInfo.lastOrNull() ?: return true
     if (last.index != info.totalItemsCount - 1) return false
     return last.offset + last.size + info.afterContentPadding - info.viewportEndOffset <= slopPx
+}
+
+/** How far the transcript's end is below the viewport's end, in px: 0 at the end, MAX_VALUE when the last row is off screen. */
+private fun distanceToEnd(state: LazyListState): Float {
+    if (!state.canScrollForward) return 0f
+    val info = state.layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull() ?: return Float.MAX_VALUE
+    if (last.index != info.totalItemsCount - 1) return Float.MAX_VALUE
+    return (last.offset + last.size + info.afterContentPadding - info.viewportEndOffset).toFloat()
+}
+
+/** Card #76: how fast the transcript eases toward a revealing reply's end; past [GLIDE_MAX_PX] it jumps as before. */
+private const val GLIDE_TAU_MS = 90.0
+private const val GLIDE_MAX_PX = 400f
+
+/**
+ * Eases [state] to the transcript's end: each frame covers `1 - exp(-dt / GLIDE_TAU_MS)` of what is left, then it
+ * settles exactly there. A reader's drag outranks it (their scroll cancels ours).
+ */
+private suspend fun glideToEnd(state: LazyListState) {
+    var last = withFrameMillis { it }
+    while (true) {
+        val left = distanceToEnd(state)
+        if (left <= 0.5f || left > GLIDE_MAX_PX) break
+        val now = withFrameMillis { it }
+        val dt = (now - last).coerceIn(1L, 64L).toDouble()
+        last = now
+        state.scrollBy(max(1f, left * (1 - exp(-dt / GLIDE_TAU_MS)).toFloat()))
+    }
+    if (state.canScrollForward) state.scrollBy(100_000f)
 }
 
 /** Fade, not a rule: a short scrim of the panel's own background. Non-interactive. */
@@ -234,6 +273,8 @@ data class ChatState(
     val listedSessions: Set<String> = emptySet(),
     /** The host holds this chat's whole history page and extras (card #54's "fully shown" mark). */
     val historyLoaded: Boolean = true,
+    /** Card #76: this chat's reply / thinking being written now (thinking first). */
+    val live: List<dev.supermux.state.LiveReply> = emptyList(),
 )
 
 /**
@@ -355,6 +396,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     val loadedChats by app.loadedChats.collectAsState()
     val historyLoaded = sessionId in loadedChats
+    val liveMap by app.liveReplies.collectAsState()
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -374,6 +416,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         councilActivity = councilActivityOf(councilsMap[sessionId].orEmpty(), agentMap, activityMap),
         listedSessions = listedSessions,
         historyLoaded = historyLoaded,
+        live = liveMap[sessionId].orEmpty(),
     )
 }
 
@@ -393,12 +436,16 @@ internal fun uniqueTimelineKeys(items: List<TimelineItem>): List<String> {
 }
 
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
-    is TimelineItem.Msg -> "m:${item.entry.id}"
+    // Card #76: a stored row with a stream keeps the key its live row had, so the swap keeps its slot.
+    is TimelineItem.Msg -> "m:${item.entry.stream ?: item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
-    is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
+    is TimelineItem.Activity -> item.event.stream?.let { "a:$it" } ?: "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
     is TimelineItem.SubagentCard -> "s:${item.subagent.id}"
     is TimelineItem.CouncilCard -> "c:${item.council.id}"
 }
+
+/** Card #76: a live row's key, the same one its stored row will have (see [timelineItemKey]). */
+private fun liveRowKey(row: dev.supermux.state.LiveReply): String = if (row.thinking) "a:${row.stream}" else "m:${row.stream}"
 
 /**
  * Full chat surface for [session].
@@ -434,6 +481,8 @@ fun ChatPanel(
     onExternalDictateConsumed: () -> Unit = {},
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
+    /** The host's own attach chips above the composer's field (see [Composer]'s `leadingChips`). */
+    composerChips: (@Composable RowScope.() -> Unit)? = null,
     // ── Header slots ────────────────────────────────────────────────────────────────
     /** This session's proxies, loaded on open and only when [showHeader]. */
     forceLinksMenu: Boolean = false,
@@ -539,8 +588,11 @@ fun ChatPanel(
     val activity = state.activity
     val subagents = state.subagents
     val councils = state.councils
-    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils) {
-        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working, councils = councils)
+    // Card #76: while anything is live, the redacted "Thinking…" spinner row is not needed: the live rows are the progress.
+    val live = state.live
+    val liveIdle = live.isEmpty()
+    val timelineItems = remember(messages, activity, hideTools, subagents, working, councils, liveIdle) {
+        mergeTimeline(messages, activity, hideTools = hideTools, subagents = subagents, working = working && liveIdle, councils = councils)
     }
     // Card #54: the chat-open trace's two screen marks — the first frame that draws any of this
     // chat, and the first that draws it with its whole history loaded.
@@ -554,9 +606,29 @@ fun ChatPanel(
             dev.supermux.util.PerfTrace.firstMilestone("chat.complete", "items" to timelineItems.size, "messages" to messages.size, "activity" to activity.size, trace = trace)
         }
     }
+    // Card #75: a session the launcher just started — the first frame that draws its chat, and the
+    // first that draws its agent's reply, end that start's trace.
+    val firstReplyId = remember(messages) { messages.firstOrNull { it.direction == "outbound" && it.op == "reply" }?.id }
+    LaunchedEffect(session.id, firstReplyId) {
+        if (!dev.supermux.util.PerfTrace.startActive) return@LaunchedEffect
+        val trace = dev.supermux.util.PerfTrace.startTraceFor(session.id) ?: return@LaunchedEffect
+        withFrameNanos { }
+        dev.supermux.util.PerfTrace.firstMilestone("start.chat.shown", "session" to session.id, trace = trace)
+        if (firstReplyId != null) {
+            dev.supermux.util.PerfTrace.firstMilestone("start.reply.drawn", "session" to session.id, trace = trace)
+            dev.supermux.util.PerfTrace.endStart(trace)
+        }
+    }
     // LazyColumn throws (and freezes the whole Compose UI) on a duplicate key, so make every key
     // unique even if two items ever resolve to the same id: later duplicates get a #n suffix.
     val timelineKeys = remember(timelineItems) { uniqueTimelineKeys(timelineItems) }
+    // Card #76: what is being written now. A live row whose stored row already arrived is not drawn twice
+    // (two rows with one key would throw).
+    // Card #76: the reveals of this chat's live replies, by stream (the stored reply finishes an unfinished one).
+    val reveals = remember(session.id) { LiveReveals() }
+    val liveRows = remember(live, timelineKeys) {
+        if (live.isEmpty()) live else timelineKeys.toHashSet().let { taken -> live.filterNot { liveRowKey(it) in taken } }
+    }
     // Medium: runs of consecutive tool rows render as one tool-call group.
     val toolRuns = remember(timelineItems, highDetail) { if (highDetail) emptyMap() else toolRuns(timelineItems) }
     val foldedRows = remember(toolRuns) { foldedRows(toolRuns) }
@@ -644,11 +716,21 @@ fun ChatPanel(
         // bottom, so scrolling back into a long last reply jumped the reader to its end.
         var prevSize by remember(session.id) { mutableIntStateOf(-1) }
         var autoFollow by remember(session.id) { mutableStateOf(true) }
-        // Our own follow scroll is moving the transcript: the positions it passes are not the reader's.
-        var followScroll by remember(session.id) { mutableStateOf(false) }
+        // Our own follow scrolls moving the transcript (a new row's, the glide): the positions they pass are not the
+        // reader's. A count, not a flag (card #76): the glide takes the scroll from a new row's follow, and the follow
+        // that stops must not unmark the glide still moving, or its positions read as the reader leaving the end.
+        var followScrolls by remember(session.id) { mutableIntStateOf(0) }
+        // The tail below can see a follow scroll's last step only after that scroll has ended: a new row restarting
+        // the follow mid-scroll left the transcript short of the end, and that step read as the reader leaving, so
+        // nothing followed again (card #76, a slow web page). A follow that finished, or that this panel stopped,
+        // keeps its last positions ours for one more look; one the reader's scroll took over does not.
+        var followScrollEnded by remember(session.id) { mutableStateOf(false) }
         // Medium folds a tool run into its first row and draws nothing for the rest, so "the last row"
         // is the last row that draws, not the last index.
-        val lastShown by rememberUpdatedState(remember(timelineItems, toolRuns) { shownTail(timelineItems.size, toolRuns).first })
+        // Card #76: live rows come after the timeline, so the last one of them is the transcript's last row.
+        val lastShown by rememberUpdatedState(remember(timelineItems, toolRuns, liveRows.size) {
+            if (liveRows.isNotEmpty()) timelineItems.size + liveRows.size - 1 else shownTail(timelineItems.size, toolRuns).first
+        })
         val panelActive by rememberUpdatedState(active)
         val followSlop = with(density) { FOLLOW_SLOP.toPx() }
         // Growth that lands mid-scroll is held, and applied when that scroll settles if the reader is
@@ -661,6 +743,29 @@ fun ChatPanel(
             withFrameNanos { }
             if (find.current < 0) listState.scrollBy(100_000f)
         }
+        // Card #76: a revealing reply (the live row, or the stored row finishing its reveal) grows a word at a time;
+        // while following, the transcript eases after it instead of jumping a line at a time. Reduced motion jumps.
+        val reduceMotion = dev.supermux.ui.theme.LocalReduceMotion.current
+        val revealingTail = liveRows.lastOrNull()?.let { !it.thinking } == true ||
+            (liveRows.isEmpty() && (timelineItems.lastOrNull() as? TimelineItem.Msg)?.entry?.stream?.let { reveals.unfinished(it) } != null)
+        val glideTail by rememberUpdatedState(!reduceMotion && revealingTail)
+        val glides = remember(session.id) { Channel<Unit>(Channel.CONFLATED) }
+        LaunchedEffect(session.id, listState) {
+            for (request in glides) {
+                followScrolls++
+                var settled = false
+                try {
+                    glideToEnd(listState)
+                    settled = true
+                } catch (e: CancellationException) {
+                    // The reader took the scroll: theirs wins. Only a real cancellation ends this loop.
+                    currentCoroutineContext().ensureActive()
+                } finally {
+                    followScrolls--
+                    if (settled) followScrollEnded = true
+                }
+            }
+        }
         LaunchedEffect(session.id, listState) {
             var seen: TranscriptTail? = null
             snapshotFlow {
@@ -670,11 +775,13 @@ fun ChatPanel(
                     atEnd = transcriptAtEnd(listState, followSlop),
                     lastRow = lastShown,
                     lastRowSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastShown }?.size ?: -1,
-                    ours = followScroll,
+                    ours = followScrolls > 0 || followScrollEnded,
                 )
             }.collect { now ->
                 val before = seen
                 seen = now
+                // That one look at a follow scroll that ended is used up.
+                if (followScrollEnded && followScrolls == 0) followScrollEnded = false
                 if (before == null) return@collect
                 // Following is decided by where the transcript is SCROLLED. Rows that grow or arrive
                 // under a still transcript leave it as it was: a new row below would otherwise read as
@@ -687,7 +794,11 @@ fun ChatPanel(
                 // last row grows. A row scrolling back into view has not grown.
                 val grew = now.lastRow == before.lastRow && before.lastRowSize >= 0 && now.lastRowSize > before.lastRowSize
                 if (grew && panelActive && autoFollow && find.current < 0 && listState.canScrollForward) {
-                    if (listState.isScrollInProgress) pendingPin = true else launch { pinToEnd() }
+                    when {
+                        glideTail -> glides.trySend(Unit)
+                        listState.isScrollInProgress -> pendingPin = true
+                        else -> launch { pinToEnd() }
+                    }
                 }
             }
         }
@@ -699,23 +810,30 @@ fun ChatPanel(
                 }
             }
         }
-        LaunchedEffect(session.id, timelineItems.size, working, active) {
+        // Card #76: live rows count as rows: one appearing is followed like a new message, and the stored row
+        // taking a live row's place adds none.
+        val rowCount = timelineItems.size + liveRows.size
+        LaunchedEffect(session.id, rowCount, working, active) {
             if (!active) return@LaunchedEffect
-            val target = timelineItems.size - 1
+            val target = rowCount - 1
             if (target < 0) return@LaunchedEffect
             val first = prevSize < 0
             // A find hit on screen holds the transcript where it is.
-            if (first || (timelineItems.size > prevSize && autoFollow && find.current < 0)) {
-                followScroll = true
+            if (first || (rowCount > prevSize && autoFollow && find.current < 0)) {
+                followScrolls++
+                var settled = false
                 try {
                     if (first) listState.scrollToItem(target) else listState.animateScrollToItem(target)
                     // The last row may be taller than the screen: settle on its end, not its top.
                     pinToEnd()
+                    settled = true
                 } finally {
-                    followScroll = false
+                    followScrolls--
+                    // Stopped by this effect restarting (a newer row): its last step is ours too.
+                    if (settled || !currentCoroutineContext().isActive) followScrollEnded = true
                 }
             }
-            prevSize = timelineItems.size
+            prevSize = rowCount
         }
 }
 
@@ -765,10 +883,14 @@ fun ChatPanel(
         dead -> null
         working && agent != null -> {
             if (hideTools) {
-                val base = if (agent.detail == "running") "running" else "thinking"
+                val base = when (agent.detail) { "running" -> "running"; "starting" -> "starting"; else -> "thinking" }
                 formatLowWorkingStatus(base, agent.detail, agent.tool, toolCountSinceTurn(), "")
             } else {
-                if (agent.detail == "running") "running ${agent.tool ?: "tool"}…" else "thinking…"
+                when (agent.detail) {
+                    "running" -> "running ${agent.tool ?: "tool"}…"
+                    "starting" -> "starting…"
+                    else -> "thinking…"
+                }
             }
         }
         sending -> "sending…"
@@ -970,6 +1092,7 @@ fun ChatPanel(
                 placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
+                leadingChips = composerChips,
                 dropState = dropState,
                 externalDictate = externalDictate,
                 onExternalDictateConsumed = onExternalDictateConsumed,
@@ -1024,6 +1147,7 @@ fun ChatPanel(
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
+                LocalLiveReveals provides reveals,
             ) {
             LazyColumn(
                 state = listState,
@@ -1064,6 +1188,11 @@ fun ChatPanel(
                             )
                         }
                     }
+                }
+                // Card #76: what the agent is writing right now, keyed like the stored rows that replace it.
+                items(liveRows, key = ::liveRowKey) { row ->
+                    if (row.thinking) LiveThinkingRow(row, folded = liveRows.any { !it.thinking })
+                    else LiveReplyRow(row, reveals.of(row.stream), onOpenFile)
                 }
                 // Running background tasks live in the strip over the composer (with the running
                 // subagents), not as chips in the transcript: one place for "still going".
@@ -1335,14 +1464,14 @@ private fun WorkingIndicator(
     // Medium: platform baseline (working/thinking + tool). Low: shared enrichment with tool count.
     val label = if (detailLow) {
         formatLowWorkingStatus(
-            baseLabel = if (agent.detail == "running") "working" else "thinking",
+            baseLabel = workingBaseLabel(agent.detail),
             detail = agent.detail,
             tool = agent.tool,
             toolCount = toolCount,
             durationLabel = durationLabel,
         )
     } else {
-        val base = (if (agent.detail == "running") "working" else "thinking") +
+        val base = workingBaseLabel(agent.detail) +
             (agent.tool?.takeIf { agent.detail == "running" }?.let { " · $it" } ?: "")
         base + (if (durationLabel.isNotEmpty()) " · $durationLabel" else "")
     }

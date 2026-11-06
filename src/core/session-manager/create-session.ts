@@ -1,10 +1,11 @@
 // The one create path (spec 2026-10-28 §4). The launcher (POST /sessions) and spawn_session start a
-// session through it, and so will delegate and council. It spawns the agent, puts the session in a
-// workspace (its own, or the one it joins) and tells the clients: the workspace frame first, then
-// the full session_added.
+// session through it, and so will delegate and council. It creates the session (the launcher's asleep,
+// card #75; a door's once its agent is up), puts it in a workspace (its own, or the one it joins) and
+// tells the clients: the workspace frame first, then the full session_added.
 import { AgentKind } from "../../shared/agents"
 import type { Session } from "./types"
 import type { WorkspaceDto } from "../workspace/dto"
+import { msSince, startTraces } from "../perf/start-trace"
 
 export type CreateSessionArgs = {
   workdir: string
@@ -24,6 +25,10 @@ export type CreateSessionArgs = {
   workspaceId?: string
   /** The pending "+ → Chat" tab of that workspace to bind, instead of adding a tab. */
   viewId?: string
+  /** Card #75: this start's trace id, when tracing is on. */
+  perfTrace?: string
+  /** Card #75, the launcher: the session is created asleep and announced at once; its first message wakes it. */
+  asleep?: boolean
 }
 
 export type CreatedSession = {
@@ -51,6 +56,8 @@ export type CreateSessionDeps = {
     worktree?: boolean
     baseBranch?: string
     inheritFromSessionId?: string
+    perfTrace?: string
+    asleep?: boolean
   }): Promise<{ name: string; session_id: string }>
   /** A live (not archived) session. */
   getSession(id: string): Session | undefined
@@ -64,7 +71,6 @@ export type CreateSessionDeps = {
   workspaceDto(workspaceId: string): WorkspaceDto | undefined
   broadcast(frame: object): void
   broadcastProjects(): void
-  refreshTelegramMenu(): Promise<void>
   /** The session object of a session_added frame. */
   sessionFrame(session: Session): object
   /** The session's resolved reasoning level. */
@@ -78,7 +84,7 @@ export type CreateSessionDeps = {
  * Agent made by create_agent).
  */
 export function announceCreated(
-  deps: Omit<CreateSessionDeps, "spawn" | "getSession" | "refreshTelegramMenu" | "sessionEffort">,
+  deps: Omit<CreateSessionDeps, "spawn" | "getSession" | "sessionEffort">,
   entry: Session,
   opts: { workspaceId?: string; viewId?: string; inheritFrom?: string } = {},
 ): void {
@@ -113,10 +119,14 @@ export async function createSession(deps: CreateSessionDeps, args: CreateSession
     worktree: args.worktree,
     baseBranch: args.baseBranch,
     inheritFromSessionId: args.inheritFrom,
+    perfTrace: args.perfTrace,
+    asleep: args.asleep,
   })
   const entry = deps.getSession(r.session_id)
+  const t = performance.now()
   if (entry) announceCreated(deps, entry, { workspaceId: args.workspaceId, viewId: args.viewId, inheritFrom: args.inheritFrom })
-  await deps.refreshTelegramMenu()
+  startTraces.mark(args.perfTrace, "announced", { ms: msSince(t) })
+  // No Telegram menu refresh here: the spawn already started the start's one, in the background (card #75).
   return {
     id: entry?.id ?? r.session_id,
     name: entry?.name ?? r.name,

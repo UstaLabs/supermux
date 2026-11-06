@@ -18,6 +18,8 @@ export type AssistantMessageEvent = {
   files?: string[]
   format?: "text" | "markdownv2"
   keyboard?: string[]
+  /** Card #76: the live stream this stored message replaces in the app (the bridge's id for its text block). */
+  stream?: string
 }
 
 export type ToolCallEvent = {
@@ -43,6 +45,14 @@ export type TurnFailedEvent = { kind: "turn-failed"; error: Error }
 export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string; recoverable?: boolean }
 
 export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
+
+/** Card #76: a piece of the reply (or thinking) being written, before it is stored. */
+export type LiveDeltaEvent = { kind: "live-delta"; stream: string; streamKind: "reply" | "thinking"; text: string }
+/**
+ * Card #76: a live stream ended. `final`: its stored message or reasoning row follows at once with the same
+ * `stream` id and replaces it in the app; otherwise nothing replaces it and the apps drop it.
+ */
+export type LiveEndEvent = { kind: "live-end"; stream: string; final: boolean }
 
 export type BrokerRequestOption = { id: string; label: string; kind?: string }
 
@@ -119,6 +129,8 @@ export type AgentEvent =
   | TurnFailedEvent
   | AgentErrorEvent
   | ActivityCardsEvent
+  | LiveDeltaEvent
+  | LiveEndEvent
   | RequestOpenEvent
   | RequestClosedEvent
   | SubagentEvent

@@ -2,19 +2,10 @@ package dev.supermux.android
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import dev.supermux.ui.chat.MessageTts
-import dev.supermux.android.host.HostStores
-import dev.supermux.android.settings.AndroidSettingsStore
-import dev.supermux.host.HostSnapshotStore
 import dev.supermux.state.FleetStore
-import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
-import dev.supermux.state.cioHttpFactory
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.editor.WalkthroughState
@@ -22,7 +13,7 @@ import dev.supermux.ui.prefs.UiPrefs
 
 /** The Android half of the walkthrough seam: `:shared`'s [WalkthroughSeam] over `:ui`'s
  *  [WalkthroughState]. Identical to desktop's `DesktopWalkthroughSeam` and kept beside the DI that
- *  installs it (the `HostStore` factory below), because the store's generic parameter is chosen
+ *  installs it (the `HostStore` factory in [AppFleet]), because the store's generic parameter is chosen
  *  per app. */
 object AndroidWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
     override fun create(sessionId: String) = WalkthroughState(sessionId)
@@ -30,75 +21,24 @@ object AndroidWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
 }
 
 /**
- * Activity-scoped holder for the shared [FleetStore] (spec §5). All multi-host state and every
- * action live in [fleet]; this class only owns the Android-only pieces: the DataStore-backed
- * settings, the read-aloud seam and the offline-snapshot publisher the
- * push service reads.
+ * Activity-scoped handle on the process's [FleetStore] (spec §5). The store itself lives in
+ * [AppFleet], which the assistant overlay's service shares; this view model holds it while the
+ * activity lives (a rotation keeps it) and lets go when the activity really finishes. With nothing
+ * else holding it, that closes every connection, exactly as when the view model owned it.
  */
 class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val appContext = application.applicationContext
+    private val shared = AppFleet.acquire(application, this)
 
-    val deps = HostStoreDeps(
-        httpFactory = cioHttpFactory(),
-        settings = AndroidSettingsStore(appContext),
-        media = dev.supermux.android.platform.AndroidMedia.cache(appContext),
-        clientInfo = dev.supermux.net.ClientInfo(
-            surface = "android",
-            version = runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName }.getOrNull(),
-            os = "android",
-            osMajor = android.os.Build.VERSION.RELEASE.substringBefore('.').toIntOrNull(),
-        ),
-    )
+    val deps: HostStoreDeps = shared.deps
 
     /** Editor + chat-detail preferences, on the same DataStore as drafts / launcher prefs. */
-    val uiPrefs = UiPrefs(deps.settings)
+    val uiPrefs: UiPrefs = shared.uiPrefs
 
-    /** Per-host offline-snapshot cache (spec §5), also read by the push service. */
-    private val snapshotStore: HostSnapshotStore = HostStores.snapshotStore(appContext)
-
-    val fleet: FleetStore = run {
-        HostStores.migrateFromLegacyIfNeeded(appContext)
-        FleetStore(
-            store = HostStores.store(appContext),
-            scope = viewModelScope,
-            deps = deps,
-            snapshots = snapshotStore,
-            appFactory = { url, token, onConn ->
-                HostStore(
-                    url, token, viewModelScope, deps,
-                    onConnectionChange = onConn,
-                    walkthroughSeam = AndroidWalkthroughSeam,
-                    bindTts = { resolve, speak, speakUrl ->
-                        MessageTts.resolveEngine = resolve
-                        MessageTts.speakRemoteStream = speak
-                        MessageTts.speakRemoteUrl = speakUrl
-                    },
-                )
-            },
-        )
-    }
-
-    init {
-        fleet.bindMessageTts()
-        // Spec §5: persist each host's last-known LIVE session list so the push service (and the
-        // next launch) can name a session for a host that is currently offline.
-        viewModelScope.launch {
-            combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
-                .collect { (sessions, owners) ->
-                    val records = fleet.store.list()
-                    snapshotStore.retainOnly(records.map { it.recordId })
-                    val now = System.currentTimeMillis()
-                    records.forEach { host ->
-                        val mine = sessions.filter { owners[it.id] == host.recordId }
-                        if (mine.isNotEmpty()) snapshotStore.replace(host.recordId, mine, now, host.version)
-                    }
-                }
-        }
-    }
+    val fleet: FleetStore = shared.fleet
 
     override fun onCleared() {
         super.onCleared()
-        fleet.close()
+        AppFleet.release(this)
     }
 
     companion object {

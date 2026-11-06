@@ -11,6 +11,7 @@
 // `sidebar_collapse`.
 package dev.supermux.ui.shell
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -85,7 +86,9 @@ fun SidebarDivider(
     val active = hovered || dragging
 
     val hairlineColor by animateColorAsState(
-        targetValue = if (active) cs.primary.copy(alpha = 0.90f) else cs.onSurface.copy(alpha = 0.18f),
+        // No line at rest: the panes' sheets, in the frame the sidebar shares, are the edge. It shows
+        // only to be grabbed.
+        targetValue = if (active) cs.primary.copy(alpha = 0.90f) else Color.Transparent,
         animationSpec = tween(120),
         label = "sidebar_hairline_color",
     )

@@ -390,3 +390,22 @@ test("subagent lifecycle bodies produce no activity rows", () => {
   const act = createNormalizedActivity({ workdir: WD })
   expect(act.handle(envelope("claude", { kind: "subagent", subagentId: "a1", phase: "started" }, 1, {}), NOW)).toEqual([])
 })
+
+// Card #76.
+test("Claude's thinking progress makes one redacted row per stretch of thinking, not one per update", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  const redacted = (id: string, seq: number) => act.handle(envelope("claude", { kind: "reasoning", reasoningId: id, redacted: true }, seq, {}), NOW)
+  expect(redacted("u1", 1).length).toBe(1)
+  expect(redacted("u2", 2)).toEqual([])
+  expect(redacted("u3", 3)).toEqual([])
+  act.handle(envelope("claude", { kind: "assistant-message", messageId: "m", text: "hi" }, 4, {}), NOW)
+  expect(redacted("u4", 5).length).toBe(1)
+  // A subagent's thinking is its own stretch.
+  expect(act.handle(envelope("claude", { kind: "reasoning", reasoningId: "c1", redacted: true, subagentId: "a1" }, 6, {}), NOW).length).toBe(1)
+})
+
+test("a summary is the thinking text (Codex withholds the raw thinking)", () => {
+  const act = createNormalizedActivity({ workdir: WD })
+  const rows = act.handle(envelope("codex", { kind: "reasoning", reasoningId: "r1", redacted: true, summary: ["**Plan**", "**Check**"] }, 1, {}), NOW)
+  expect(rows).toEqual([{ ts: new Date(NOW).toISOString(), kind: "reasoning", title: "Thinking", detail: "**Plan**\n\n**Check**" }])
+})

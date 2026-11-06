@@ -51,9 +51,16 @@ export async function deliverInbound(
   } catch (err) {
     log.warn("inbound_on_accepted_failed", { session: sessionId, err: err instanceof Error ? err.message : String(err) })
   }
-  await adapter.send(text, meta)
-
+  // Marked at hand-over, not when send() returns: a core adapter's send() resolves when the TURN
+  // ends, and the same message re-sent during that turn must not start another (card #75). A
+  // hand-over that throws is unmarked, so the sender's retry still goes through.
   if (messageId) deps.seen.mark(sessionId, messageId)
+  try {
+    await adapter.send(text, meta)
+  } catch (err) {
+    if (messageId) deps.seen.unmark(sessionId, messageId)
+    throw err
+  }
   deps.onDelivered?.(sessionId)
   return { ok: true }
 }

@@ -1,7 +1,12 @@
 // Cluster G1: the process-wide handle behind `Platform.windows` on desktop.
 package dev.supermux.desktop.shell
 
+import dev.supermux.ui.panes.TabDropEndpoint
+import dev.supermux.ui.panes.TabHandoff
+import dev.supermux.ui.panes.TabTearOff
 import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.shell.windows.WindowHostRegistry
+import dev.supermux.ui.workspace.WorkspaceSession
 
 /**
  * Desktop's [WindowHostController]: the three verbs a shared shell needs over [WindowHostRegistry].
@@ -40,6 +45,11 @@ object DesktopWindowHostController : WindowHostController {
         this.release = release
     }
 
+    /** The window registry live tear-off claims new windows on — bound by `Main.kt`, its owner. */
+    fun bindRegistry(registry: WindowHostRegistry) {
+        DesktopTearOff.bind(registry)
+    }
+
     override fun tearOutTab(viewId: String) {
         tearOutTab?.invoke(viewId)
     }
@@ -51,4 +61,25 @@ object DesktopWindowHostController : WindowHostController {
     override fun release(hostId: String) {
         release?.invoke(hostId)
     }
+
+    /**
+     * Resolved per call, not once: a window's panes keep the object they were handed, and must
+     * reach whichever drag world is bound now (see [bindRegistry]), even one bound after them.
+     */
+    override fun tabTearOff(hostId: String, ws: WorkspaceSession, workspaceId: String): TabTearOff =
+        object : TabTearOff {
+            private fun world() = DesktopTearOff.world?.tearOffFor(hostId, ws.layoutSync, workspaceId)
+
+            override fun register(endpoint: TabDropEndpoint) {
+                world()?.register(endpoint)
+            }
+
+            override fun unregister(endpoint: TabDropEndpoint) {
+                world()?.unregister(endpoint)
+            }
+
+            override fun takeOverOnStart(handoff: TabHandoff): Boolean = world()?.takeOverOnStart(handoff) == true
+
+            override fun takeOverOutside(handoff: TabHandoff): Boolean = world()?.takeOverOutside(handoff) == true
+        }
 }

@@ -665,10 +665,13 @@ export function createCodexNormalizer(): CodexNormalizer {
     if (method === "item/reasoning/summaryPartAdded") {
       const id = str(params.itemId) ?? "reasoning"
       const prev = reasoning.get(id) ?? { text: "", summary: [] }
+      // Summary parts are separate paragraphs ("**Drafting …**", "**Checking …**"): streamed, they would run
+      // together, so a part after the first starts with a paragraph break.
+      const after = prev.summary.some(part => part.length > 0)
       const part = typeof params.summary === "string" ? params.summary : typeof params.text === "string" ? params.text : ""
       if (part) prev.summary = [...prev.summary, part]
       reasoning.set(id, prev)
-      return []
+      return after ? [{ kind: "reasoning-delta", reasoningId: id, text: "\n\n" }] : []
     }
     if (method === "item/plan/delta") {
       const id = str(params.itemId) ?? "plan"

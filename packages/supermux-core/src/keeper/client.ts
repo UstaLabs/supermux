@@ -10,6 +10,7 @@ import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
+import { msSince, perfMark } from '../perf-marks.js'
 
 /**
  * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
@@ -400,7 +401,11 @@ export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConn
   if (options.cursor !== 'acked' && (typeof options.cursor !== 'number' || !Number.isInteger(options.cursor) || options.cursor < 0)) throw new TypeError('invalid cursor')
   const spec = validateSpec(options.spec)
   const limits = validateLimits(options.limits)
-  return serialize(sessionId, () => connectLocked({ stateDirectory, sessionId, spec, limits, cursor: options.cursor }))
+  const started = performance.now()
+  return serialize(sessionId, () => connectLocked({ stateDirectory, sessionId, spec, limits, cursor: options.cursor })).then(conn => {
+    perfMark(sessionId, 'keeper.connected', { ms: msSince(started) })
+    return conn
+  })
 }
 
 async function connectLocked(options: {
@@ -454,6 +459,7 @@ async function connectLocked(options: {
     sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
     const entry = keeperEntry()
+    const spawnStarted = performance.now()
     const child = spawn(entry.command, entry.args, {
       detached: true,
       stdio: 'ignore',
@@ -492,6 +498,7 @@ async function connectLocked(options: {
         if (Date.now() - started > options.limits.connectTimeoutMs) throw new Error('keeper status did not appear')
         await sleep(20)
       }
+      perfMark(options.sessionId, 'keeper.spawned', { ms: msSince(spawnStarted) })
     } catch (err) {
       const failure = await keeperFailure(err, statusPath, spawnedPid)
       await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)

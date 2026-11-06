@@ -28,6 +28,8 @@ export interface ActivityEvent {
    * it under that subagent instead of the parent's timeline. Parent rows never carry it.
    */
   subagentId?: string
+  /** Card #76: on a reasoning row, the live thinking stream it replaces in the app. */
+  stream?: string
   /**
    * `subagent_message` rows: one message of a subagent's conversation, in order with its tool
    * rows. `from` = the subagent wrote it; `to` = its prompt or a follow-up, `sender` says whose.

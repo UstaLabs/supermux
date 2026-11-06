@@ -203,6 +203,10 @@ function inputRecord(input: unknown): Record<string, unknown> | undefined {
 export function createNormalizedActivity(opts: { workdir?: string }) {
   const workdir = opts.workdir
   const pending = new Map<string, Pending>()
+  // Card #76: Claude reports thinking progress (system/thinking_tokens) once per thinking update, each an
+  // empty reasoning body. One redacted row stands for a stretch of thinking: the next one waits until
+  // something else happened in that thread (a reply, a tool, a plan). Keyed by subagent ("" = the parent).
+  const redactedOpen = new Set<string>()
 
   function get(callId: string): Pending {
     let p = pending.get(callId)
@@ -407,6 +411,8 @@ export function createNormalizedActivity(opts: { workdir?: string }) {
   function rowsFor(event: NormalizedEvent, now: number): ActivityEvent[] {
     const body = event.event
     if (!body) return []
+    const thread = body.subagentId ?? ""
+    if (body.kind !== "reasoning" && body.kind !== "reasoning-delta") redactedOpen.delete(thread)
     if (body.kind === "command-output") {
       const p = get(body.callId)
       p.outputAcc += body.delta
@@ -426,15 +432,19 @@ export function createNormalizedActivity(opts: { workdir?: string }) {
     }
     if (body.kind === "reasoning" || body.kind === "reasoning-delta") {
       if (body.kind === "reasoning-delta") return []
-      const redacted = body.redacted === true
-      const text = redacted ? "" : (body.text ?? body.summary?.join("\n") ?? "")
-      const title = redacted ? "Thinking (redacted)" : "Thinking"
-      const detail = redacted ? undefined : (text ? clip(text, DETAIL_MAX).text : undefined)
+      // Codex withholds its raw thinking (the core marks it redacted) but may write summaries: those ARE the
+      // thinking the user sees, joined as the stream showed them.
+      const text = body.text ?? (body.summary?.length ? body.summary.join("\n\n") : "")
+      if (!text) {
+        if (redactedOpen.has(thread)) return []
+        redactedOpen.add(thread)
+        return [{ ts: new Date(now).toISOString(), kind: "reasoning", title: "Thinking (redacted)" }]
+      }
       return [{
         ts: new Date(now).toISOString(),
         kind: "reasoning",
-        title,
-        ...(detail ? { detail } : {}),
+        title: "Thinking",
+        detail: clip(text, DETAIL_MAX).text,
       }]
     }
     if (body.kind === "plan") {

@@ -12,6 +12,8 @@ export const SETTLE_DEBOUNCE_MS = 2000
 export type SettleInputs = {
   /** Its agent runs (a crashed child gets the crash notice instead). */
   alive: boolean
+  /** Suspended: nothing runs until a message wakes it, so the nudge does (boot leaves workers asleep). */
+  asleep: boolean
   /** A turn runs. */
   running: boolean
   /** Inbox messages not yet handed over, or input queued in its adapter. */
@@ -39,7 +41,7 @@ export type SettleDecision = "none" | "nudge" | "notify"
 /** `inputs` undefined: not a child to watch now (council member, child or parent archived). */
 export function evaluate(task: ChildTask | undefined, inputs: SettleInputs | undefined): SettleDecision {
   if (!task || !inputs) return "none"
-  const settled = inputs.alive && !inputs.running && !inputs.queuedInput && !inputs.backgroundWork && !inputs.pendingRequest
+  const settled = (inputs.alive || inputs.asleep) && !inputs.running && !inputs.queuedInput && !inputs.backgroundWork && !inputs.pendingRequest
   if (!settled || task.reported || task.told || task.notified) return "none"
   if (!task.nudged) return "nudge"
   return task.turnSinceNudge ? "notify" : "none"

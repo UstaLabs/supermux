@@ -7,6 +7,8 @@
 //   bun scripts/perf-timeline.ts list        recent launches and chat opens
 //   bun scripts/perf-timeline.ts launch [TRACE] [--device NAME]   one app launch (default: the newest)
 //   bun scripts/perf-timeline.ts chat [TRACE] [--device NAME] [--last N]   chat opens (default: the newest)
+//   bun scripts/perf-timeline.ts start [TRACE] [--last N]         session starts, send → first reply (card #75)
+//   bun scripts/perf-timeline.ts starts [--last N]                 the last N starts (default 10): each step's median, min, max
 //   bun scripts/perf-timeline.ts ws [--minutes N]                 WebSocket frames per type (default 10 min)
 //
 // Reads <state>/perf/perf.jsonl (+ .1), or --file PATH. MUX_STATE_DIR picks another broker's state.
@@ -14,7 +16,7 @@ import { existsSync, readFileSync, statSync } from "fs"
 import { join } from "path"
 import { STATE_DIR } from "../src/shared/paths"
 import { PerfLog } from "../src/core/perf/perf-log"
-import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderWs } from "../src/core/perf/timeline"
+import { latestTrace, listTraces, parsePerfLines, renderChat, renderLaunch, renderStart, renderStartSummary, renderWs } from "../src/core/perf/timeline"
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | undefined => {
@@ -26,7 +28,8 @@ const flag = (name: string): string | undefined => {
 }
 const file = flag("--file")
 const device = flag("--device")
-const last = Number(flag("--last") ?? "1")
+const flagLast = flag("--last")
+const last = Number(flagLast ?? "1")
 const minutes = Number(flag("--minutes") ?? "10")
 const [command = "launch", traceArg] = args
 
@@ -55,7 +58,7 @@ switch (command) {
     console.log(`tracing: ${perf.enabled() ? "ON" : "off"}${process.env.MUX_PERF === "1" ? " (MUX_PERF=1 in this shell)" : ""}`)
     console.log(`file: ${f}${existsSync(f) ? ` (${(statSync(f).size / 1024).toFixed(0)} KB)` : " (none yet)"}, ${events.length} events`)
     const traces = listTraces(events)
-    console.log(`launches: ${traces.filter((t) => t.kind === "launch").length}, chat opens: ${traces.filter((t) => t.kind === "chat").length}`)
+    console.log(`launches: ${traces.filter((t) => t.kind === "launch").length}, chat opens: ${traces.filter((t) => t.kind === "chat").length}, session starts: ${traces.filter((t) => t.kind === "start").length}`)
     break
   }
   case "list": {
@@ -76,12 +79,24 @@ switch (command) {
     console.log(traces.length ? traces.map((t) => renderChat(events, t)).join("\n\n") : "No chat open recorded yet.")
     break
   }
+  case "start": {
+    const events = parsePerfLines(load())
+    const traces = traceArg ? [traceArg] : listTraces(events).filter((t) => t.kind === "start" && (device === undefined || t.device === device)).slice(-Math.max(1, last)).map((t) => t.trace)
+    console.log(traces.length ? traces.map((t) => renderStart(events, t)).join("\n\n") : "No session start recorded yet. `bun scripts/perf-timeline.ts on`, then start a session.")
+    break
+  }
+  case "starts": {
+    const events = parsePerfLines(load())
+    const traces = listTraces(events).filter((t) => t.kind === "start" && (device === undefined || t.device === device)).slice(-Math.max(1, Number(flagLast ?? 10))).map((t) => t.trace)
+    console.log(renderStartSummary(events, traces))
+    break
+  }
   case "ws": {
     const events = parsePerfLines(load())
     console.log(renderWs(events, Date.now() - minutes * 60_000))
     break
   }
   default:
-    console.log("usage: bun scripts/perf-timeline.ts on|off|status|list|launch [TRACE]|chat [TRACE]|ws [--minutes N] [--device NAME] [--file PATH]")
+    console.log("usage: bun scripts/perf-timeline.ts on|off|status|list|launch [TRACE]|chat [TRACE]|start [TRACE]|starts|ws [--minutes N] [--device NAME] [--last N] [--file PATH]")
     process.exit(1)
 }

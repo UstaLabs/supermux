@@ -1190,9 +1190,11 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         return
       }
       if (this.stallTimer) this.disarmStall()
-      this.bridge.handle(event.event)
+      const thinkingStream = this.bridge.handle(event.event)
       const env = event.event
       const cards = this.activity.handle({ ...env, event: env }, Date.now())
+      // Card #76: the stored thinking takes the live thinking's place in the app.
+      if (thinkingStream) for (const card of cards) if (card.kind === "reasoning") card.stream = thinkingStream
       if (cards.length) this.emit("activity", { kind: "activity", events: cards })
       this.threadRows(env as unknown as { kind: string; subagentId?: string; replay?: boolean })
       if (env.subagentId && env.kind === "tool-call" && env.phase === "started" && env.replay !== true) {

@@ -1,6 +1,7 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
@@ -128,6 +129,11 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
+}
+
+/** An app-minted message id (`web-<uuid>`): the broker logs and dedupes the message under it. Anything else is ignored. */
+function clientMessageIdOf(value: unknown): string | undefined {
+  return typeof value === "string" && /^web-[A-Za-z0-9._:-]{1,120}$/.test(value) ? value : undefined
 }
 
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
@@ -355,7 +361,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -493,6 +499,12 @@ export interface WebChannelOpts {
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   getSessionWorkdir?: (name: string) => string | undefined
+  /**
+   * Card #75: resolves once a folder the broker is making exists (a session born asleep has its
+   * worktree checked out on its first wake), at once for any other path. The files routes, folder
+   * subscriptions and terminals wait on it instead of failing with a missing folder.
+   */
+  folderReady?: (path: string) => Promise<void>
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
@@ -616,6 +628,9 @@ export class WebChannel implements Channel {
   /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
   private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
+  /** Card #76: replies being written, for the apps that asked (`subscribe.streams`). */
+  private readonly live = new LiveReplies()
+  private readonly liveSockets = new WeakMap<import("bun").ServerWebSocket<WSData>, LiveSocket>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
@@ -832,6 +847,7 @@ export class WebChannel implements Channel {
   }
 
   async stop(): Promise<void> {
+    this.live.stop()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
     for (const t of this.perfTimers.splice(0)) clearInterval(t)
@@ -867,6 +883,41 @@ export class WebChannel implements Channel {
     // and the client reads it when it connects. The agent keeps running; it is
     // not bound to a present client.
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
+  }
+
+  private liveSocket(ws: import("bun").ServerWebSocket<WSData>): LiveSocket {
+    let socket = this.liveSockets.get(ws)
+    if (!socket) {
+      socket = { send: (json) => { ws.send(json) }, bufferedAmount: () => ws.getBufferedAmount() }
+      this.liveSockets.set(ws, socket)
+    }
+    return socket
+  }
+
+  /** Card #76: the chats this socket shows, for live text (an app that never asked has no live socket). */
+  private watchLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    const socket = this.liveSockets.get(ws)
+    if (socket) this.live.watch(socket, sessions)
+  }
+
+  private liveWatching(ws: import("bun").ServerWebSocket<WSData>): ReadonlySet<string> {
+    const socket = this.liveSockets.get(ws)
+    return socket ? this.live.watching(socket) : new Set()
+  }
+
+  /** Card #76: more of a reply (or thinking) being written in `session`. */
+  liveAppend(session: string, stream: string, kind: LiveKind, text: string): void {
+    this.live.append(session, stream, kind, text)
+  }
+
+  /** Card #76: a live stream ended; `final` = its stored form follows with the same id. */
+  liveClose(stream: string, final: boolean): void {
+    this.live.close(stream, final)
+  }
+
+  /** Card #76: the session's turn ended; anything still streaming there is dropped. */
+  liveEndSession(session: string): void {
+    this.live.endSession(session)
   }
 
   broadcastToAll(frame: object): void {
@@ -1277,6 +1328,8 @@ export class WebChannel implements Channel {
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
     this.fss.dropSocket(ws)
+    const liveSocket = this.liveSockets.get(ws)
+    if (liveSocket) this.live.leave(liveSocket)
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -1324,6 +1377,8 @@ export class WebChannel implements Channel {
     if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
 
     await lane.ready()
+    // A session born asleep gets its folder on its first wake: its terminal waits for it (card #75).
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1384,6 +1439,7 @@ export class WebChannel implements Channel {
       try { ws.close(1011, "terminal reset failed") } catch {}
       return
     }
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1720,6 +1776,10 @@ export class WebChannel implements Channel {
       // `lazyArchived` (card #54): no archived workspaces (or their project links) here; the app
       // fetches `/archived-workspaces?slim=1` after the snapshot, off its first screen's path.
       const lazyArchived = frame.lazyArchived === true
+      // Card #76: `streams: 1` asks for replies while they are written (reply_stream frames) for the chats
+      // this socket shows. Old apps never ask, so they never get them.
+      const liveSocket = typeof frame.streams === "number" && frame.streams >= 1 ? this.liveSocket(ws) : undefined
+      if (liveSocket) this.live.join(liveSocket)
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1773,7 +1833,7 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       laps.lap("rest")
-      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(perf ? { perf: true } : {}) }
+      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
       const text = JSON.stringify(snapshot)
       laps.lap("stringify")
       const sent = ws.send(text)
@@ -1821,6 +1881,7 @@ export class WebChannel implements Channel {
       if (Array.isArray(frame.sessions)) {
         const many = frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
         this.opts.viewingTracker?.setSessions(ws.data.deviceName, many, visible)
+        this.watchLive(ws, visible ? many : [])
         if (visible) for (const s of many) this.opts.markRead?.(s)
         return
       }
@@ -1830,6 +1891,7 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
+      this.watchLive(ws, session === null ? [] : visible ? [session] : [...this.liveWatching(ws)].filter((s) => s !== session))
       // A visible device sitting on an exact session has read it up to its
       // newest message. (Sitting on the list, session===null, does not count.)
       if (visible && typeof session === "string") this.opts.markRead?.(session)
@@ -1881,10 +1943,7 @@ export class WebChannel implements Channel {
         return
       }
 
-      const clientMessageId = typeof frame.client_message_id === "string"
-        && /^web-[A-Za-z0-9._:-]{1,120}$/.test(frame.client_message_id)
-        ? frame.client_message_id
-        : undefined
+      const clientMessageId = clientMessageIdOf(frame.client_message_id)
 
       const msg: InboundMessage = {
         channel: "web",
@@ -1934,7 +1993,9 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "fs_sub" && typeof frame.path === "string") {
-      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      const path = frame.path
+      const since = typeof frame.since === "string" ? frame.since : undefined
+      void (this.opts.folderReady?.(path) ?? Promise.resolve()).then(() => this.fss.subscribe(ws, path, since))
       return
     }
     if (frame.type === "fs_unsub" && typeof frame.path === "string") {
@@ -3487,6 +3548,7 @@ export class WebChannel implements Channel {
     if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
+        await this.opts.folderReady?.(p)
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
@@ -4034,7 +4096,9 @@ export class WebChannel implements Channel {
           viewId,
           firstMessage,
           firstAttachments,
+          firstMessageId: clientMessageIdOf(body.client_message_id),
           device: auth.device.name,
+          perfTrace: (req.headers.get("x-mux-trace") ?? "").split("/")[0] || undefined,
         })
         return this.json(result)
       } catch (err: any) {

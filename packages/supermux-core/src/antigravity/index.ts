@@ -21,8 +21,10 @@ import { requireCloseMode } from "../types.js"
 import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAntigravitySession, saveAntigravityState } from "./files.js"
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
+import { antigravityUpdaterEnv } from "./updater.js"
 
 export { createAntigravityNormalizer, type AntigravityNormalizer } from "./normalize.js"
+export { antigravityUpdaterEnv } from "./updater.js"
 
 export type AntigravityPermissions = Extract<PermissionsSpec, { kind: "antigravity" }>
 
@@ -308,6 +310,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       normalizer.setServerAliases(launch.serverAliases)
       env.HOME = home.shadow
       if (process.platform === "win32") env.USERPROFILE = home.shadow
+      Object.assign(env, antigravityUpdaterEnv())
       const epoch = Date.now().toString(36)
       normalizer.newGeneration(epoch)
       let p!: Proc

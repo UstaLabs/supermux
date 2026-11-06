@@ -1,14 +1,22 @@
 package dev.supermux.ios
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.rememberWindowWidthClass
 import dev.supermux.ui.platform.NoticeOverlay
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
+import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSOperationQueue
 import platform.GameController.GCMouse
+import platform.UIKit.UIAccessibilityIsReduceMotionEnabled
+import platform.UIKit.UIAccessibilityReduceMotionStatusDidChangeNotification
 
 /**
  * iOS's thin wrapper over `:ui`'s [HostTheme] — the third and last one, beside `AndroidTheme` and
@@ -76,7 +84,25 @@ fun IosTheme(
         // simulator reports the Mac's keyboard), so the Files tree keeps its dialogs.
         hardwareKeyboard = false,
         widthClass = rememberWindowWidthClass(),
+        // Card #76: Settings › Accessibility › Motion › Reduce Motion turns the live reply's ink edge and gliding
+        // scroll off.
+        reduceMotion = rememberReduceMotion(),
     ) {
         NoticeOverlay(platform.notices, content)
     }
+}
+
+/** iOS's Reduce Motion, kept current while it changes. */
+@Composable
+private fun rememberReduceMotion(): Boolean {
+    var reduce by remember { mutableStateOf(UIAccessibilityIsReduceMotionEnabled()) }
+    DisposableEffect(Unit) {
+        val observer = NSNotificationCenter.defaultCenter.addObserverForName(
+            name = UIAccessibilityReduceMotionStatusDidChangeNotification,
+            `object` = null,
+            queue = NSOperationQueue.mainQueue,
+        ) { _ -> reduce = UIAccessibilityIsReduceMotionEnabled() }
+        onDispose { NSNotificationCenter.defaultCenter.removeObserver(observer) }
+    }
+    return reduce
 }
