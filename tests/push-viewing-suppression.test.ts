@@ -23,7 +23,7 @@ const fire = (vt: ViewingTracker, sent: string[], devices: string[], isMuted = (
     sessionId: "S",
     isMuted,
     devices: () => devices,
-    anyPresent: (sid) => vt.isAnyPresentFor(sid),
+    presentOn: (sid) => vt.presentDevicesFor(sid),
   })
 
 test("GLOBAL suppress: if ANY device is present for the session, NO device is notified", async () => {
@@ -68,7 +68,7 @@ test("non-web chat_id is ignored (telegram path untouched)", async () => {
     sessionId: "S",
     isMuted: () => false,
     devices: () => ["a"],
-    anyPresent: () => false,
+    presentOn: () => [],
   })
   expect(sent).toEqual([])
 })

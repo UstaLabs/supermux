@@ -122,10 +122,16 @@ export class ViewingTracker {
    * anywhere, no device should buzz.
    */
   isAnyPresentFor(sessionId: string): boolean {
-    for (const device of this.states.keys()) {
-      if (this.isPresentFor(device, sessionId)) return true
+    return this.presentDevicesFor(sessionId).length > 0
+  }
+
+  /** The devices that make a push for `sessionId` redundant, for the push decision log. */
+  presentDevicesFor(sessionId: string): { device: string; onList: boolean }[] {
+    const out: { device: string; onList: boolean }[] = []
+    for (const [device, s] of this.states) {
+      if (this.isPresentFor(device, sessionId)) out.push({ device, onList: s.onList })
     }
-    return false
+    return out
   }
 
   /**

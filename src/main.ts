@@ -149,7 +149,7 @@ import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
 import { PushSubscriptionStore } from "./core/push/subscriptions"
 import { createPushSender } from "./core/push/sender"
-import { firePushForReply } from "./core/push/hook"
+import { firePushForReply, firePushToAll } from "./core/push/hook"
 import { DevicePushTokenStore } from "./core/push/device-tokens"
 import { createRelayClient } from "./core/push/relay-adapter"
 import { ViewingTracker } from "./core/push/viewing-tracker"
@@ -1559,7 +1559,7 @@ async function onAssistantMessage(
         isMuted: () => !!registry.get(sessionId)?.mute,
         isInternal: () => !!registry.get(sessionId)?.internal,
         devices: () => pushStore.all().map((s) => s.device),
-        anyPresent: (sid) => viewingTracker.isAnyPresentFor(sid),
+        presentOn: (sid) => viewingTracker.presentDevicesFor(sid),
         nativeSender,
         nativeDevices,
         hostId: hostIdentity.hostId,
@@ -1744,8 +1744,12 @@ function fireFinishPush(sessionName: string, sessionId: string, job: FinishJob):
     // kept / nothing_to_do → no push
   }
   if (!text) return
-  try { for (const sub of pushStore.all()) void pushSender.sendToDevice(sub.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
-  try { for (const r of deviceTokenStore.all()) if (r.routing_token) void nativeSender.sendToDevice(r.device, { session: sessionName, sessionId, text, ts: new Date().toISOString() }) } catch {}
+  void firePushToAll({
+    sender: pushSender, nativeSender, nativeDevices,
+    devices: () => pushStore.all().map((s) => s.device),
+    payload: { session: sessionName, sessionId, text, ts: new Date().toISOString() },
+    trigger: "finish",
+  }).catch((err) => log.warn("push_hook_failed", { err: err?.message ?? String(err) }))
 }
 
 function finishReadinessById(sessionId: string): FinishReadiness | { error: string } {
@@ -4889,9 +4893,12 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
         })().catch((err) => log.warn("curator_archive_failed", { err: String(err) }))
       },
       postNotice: async (_cid, text) => {
-        const payload = { session: "curator", text, ts: new Date().toISOString() }
-        for (const s of pushStore.all()) await pushSender.sendToDevice(s.device, payload)
-        for (const r of deviceTokenStore.all()) if (r.routing_token) await nativeSender.sendToDevice(r.device, payload)
+        await firePushToAll({
+          sender: pushSender, nativeSender, nativeDevices,
+          devices: () => pushStore.all().map((s) => s.device),
+          payload: { session: "curator", text, ts: new Date().toISOString() },
+          trigger: "curator",
+        })
       },
       reindex: () => { searchStore.rebuildKnowledge() },
   }

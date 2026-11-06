@@ -38,7 +38,7 @@ function fire(sessionId: string, isMuted: (id: string) => boolean) {
     sender, action, sessionName: sessionId, sessionId,
     isMuted,
     devices: () => [deviceName],
-    anyPresent: (s) => tracker.isAnyPresentFor(s),
+    presentOn: (s) => tracker.presentDevicesFor(s),
   })
 }
 

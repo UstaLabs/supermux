@@ -41,3 +41,64 @@ test("a device with no routing token is reported gone (nothing to send to)", asy
   const client = createRelayClient({ store: s, relayUrl: "https://relay.test", fetchImpl: async () => new Response('{"ok":true}') })
   expect(await client.sendToDevice("missing", { session: "s", ts: "t" })).toEqual({ ok: false, gone: true })
 })
+
+function recorder() {
+  const lines: { level: string; msg: string; extra?: Record<string, unknown> }[] = []
+  const at = (level: string) => (msg: string, extra?: Record<string, unknown>) => { lines.push({ level, msg, extra }) }
+  const log = { debug: at("debug"), info: at("info"), warn: at("warn"), error: at("error") }
+  return { log, lines }
+}
+
+// Card #86: every native push result is logged, so "sent" can be told from
+// "never sent" without asking the phone.
+test("logs a push the relay accepted", async () => {
+  const s = store(); s.putNative("phone", "android", "rt-1", await deviceKey())
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => new Response('{"ok":true}') })
+  await client.sendToDevice("phone", { session: "s", ts: "t" })
+  expect(lines).toEqual([{ level: "info", msg: "push_result", extra: { device: "phone", transport: "relay", platform: "android", ok: true } }])
+})
+
+// The July outage: a relay host answering 404 made res.json() throw, and the
+// bare catch dropped every push without a word.
+test("a relay answering a non-2xx status is a logged failure", async () => {
+  const s = store(); s.putNative("phone", "ios", "rt-1", await deviceKey())
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => new Response("not found", { status: 404 }) })
+  expect(await client.sendToDevice("phone", { session: "s", ts: "t" })).toEqual({ ok: false, gone: false })
+  expect(s.get("phone")).not.toBeNull()
+  expect(lines).toEqual([{ level: "warn", msg: "push_result", extra: { device: "phone", transport: "relay", platform: "ios", ok: false, status: 404, reason: "http_404" } }])
+})
+
+test("a network failure is logged", async () => {
+  const s = store(); s.putNative("phone", "ios", "rt-1", await deviceKey())
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => { throw new Error("getaddrinfo EAI_AGAIN") } })
+  expect(await client.sendToDevice("phone", { session: "s", ts: "t" })).toEqual({ ok: false, gone: false })
+  expect(lines).toEqual([{ level: "warn", msg: "push_result", extra: { device: "phone", transport: "relay", platform: "ios", ok: false, reason: "network", err: "getaddrinfo EAI_AGAIN" } }])
+})
+
+test("the relay's own failure reason is logged", async () => {
+  const s = store(); s.putNative("phone", "ios", "rt-1", await deviceKey())
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => new Response('{"ok":false,"gone":false,"reason":"apns_403_InvalidProviderToken"}') })
+  await client.sendToDevice("phone", { session: "s", ts: "t" })
+  expect(lines).toEqual([{ level: "warn", msg: "push_result", extra: { device: "phone", transport: "relay", platform: "ios", ok: false, status: 200, reason: "apns_403_InvalidProviderToken" } }])
+})
+
+test("a target the relay calls gone is removed, and the removal is logged", async () => {
+  const s = store(); s.putNative("phone", "ios", "rt-1", await deviceKey())
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => new Response('{"ok":false,"gone":true,"reason":"apns_400_BadDeviceToken"}') })
+  await client.sendToDevice("phone", { session: "s", ts: "t" })
+  expect(s.get("phone")).toBeNull()
+  expect(lines).toEqual([{ level: "warn", msg: "push_target_removed", extra: { device: "phone", transport: "relay", platform: "ios", reason: "apns_400_BadDeviceToken" } }])
+})
+
+test("a device with no routing token is logged as not registered", async () => {
+  const s = store()
+  const { log, lines } = recorder()
+  const client = createRelayClient({ store: s, relayUrl: "https://relay.test", log, fetchImpl: async () => new Response('{"ok":true}') })
+  await client.sendToDevice("missing", { session: "s", ts: "t" })
+  expect(lines).toEqual([{ level: "warn", msg: "push_result", extra: { device: "missing", transport: "relay", ok: false, reason: "not_registered" } }])
+})

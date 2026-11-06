@@ -204,3 +204,23 @@ test("visible=false removes only that session", () => {
   expect(t.isPresentFor("dev1", "s1")).toBe(false)
   expect(t.isPresentFor("dev1", "s2")).toBe(true)
 })
+
+// Card #86: a skipped push must say which device made it redundant.
+test("presentDevicesFor names each present device and whether it sits on the list", () => {
+  const t = new ViewingTracker()
+  t.update("macos-3", { session: null, visible: true })
+  t.update("fold", { session: "ana", visible: true })
+  t.update("ipad", { session: "other", visible: true })
+  t.update("web", { session: "ana", visible: false })
+  expect(t.presentDevicesFor("ana")).toEqual([
+    { device: "macos-3", onList: true },
+    { device: "fold", onList: false },
+  ])
+})
+
+test("presentDevicesFor leaves out expired entries", async () => {
+  const t = new ViewingTracker({ ttlMs: 20 })
+  t.update("macos-3", { session: null, visible: true })
+  await new Promise((r) => setTimeout(r, 40))
+  expect(t.presentDevicesFor("ana")).toEqual([])
+})
