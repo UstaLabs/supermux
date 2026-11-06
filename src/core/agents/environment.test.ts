@@ -19,6 +19,13 @@ test("environment.md is shared with workers, so it never names personal/ or agen
   expect(env).not.toContain("agent-memory")
 })
 
+test("environment.md: a topic may have no digest (the curator is off by default), so the history is read too, and the inbox is searchable", () => {
+  const flat = env.replace(/\s+/g, " ")
+  expect(flat).toContain("curator is off by default")
+  expect(flat).toContain("read the history too")
+  expect(flat).toMatch(/`domains\/_inbox\.md` — [^-]*`memory_search` covers it/)
+})
+
 test("the curator digests agent memory and never posts with a reply tool", () => {
   expect(curator).toContain("agent-memory/<id>.md")
   expect(curator).toContain("agent-memory/<id>.digest.md")

@@ -40,11 +40,15 @@ A shared, file-based memory home at `~/.mux`, shared by every session:
 
 - `agents.md` — the live index of knowledge domains (inlined at the end of
   these instructions).
-- `domains/<topic>.digest.md` — the curator-maintained current truth. Never
-  write it; the nightly curator owns it.
-- `domains/<topic>.md` — the dated history; append findings here (create the
-  file if needed, or use `domains/_inbox.md`). Keep entries concise — facts and
-  gotchas, not essays.
+- `domains/<topic>.md` — the dated history, the full record of what sessions
+  saved; append findings here (create the file if needed, or use
+  `domains/_inbox.md`). Keep entries concise — facts and gotchas, not essays.
+- `domains/<topic>.digest.md` — a curated summary of that history, written only
+  by the nightly curator (never write it). The curator is off by default, so a
+  topic may have no digest, and a digest lacks the newest entries: read the
+  history too.
+- `domains/_inbox.md` — findings not filed under a topic yet; `memory_search`
+  covers it.
 - `conventions.md` — universal project rules. Read it.
 
 Searching: use `memory_search` to find knowledge across domains, and

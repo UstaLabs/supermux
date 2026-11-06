@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync } from "fs"
+import { readdirSync, readFileSync, existsSync, statSync } from "fs"
 import { basename, join } from "path"
 import type { Db } from "../storage/db"
 import { splitSections } from "./sections"
@@ -52,7 +52,15 @@ export interface SessionFilter {
   limit?: number
 }
 
+/** A file the knowledge index covers; `stamp` is its size and mtime, taken before it is read. */
+type KnowledgeFile = { path: string; scope: string; isPersonal: number; stamp: string }
+
+const INSERT_KNOWLEDGE = "INSERT INTO memory_fts (scope, name, heading, body, path, is_personal) VALUES (?, ?, ?, ?, ?, ?)"
+
 export class SearchStore {
+  /** Each indexed file's stamp as of the last (re)index; undefined until the first build. */
+  private stamps: Map<string, string> | undefined
+
   constructor(
     private readonly db: Db,
     private readonly home: string,
@@ -60,40 +68,74 @@ export class SearchStore {
 
   /** Wipe + repopulate the knowledge index from domains/, personal/, conventions.md, agent-memory/. */
   rebuildKnowledge(): void {
-    const ins = this.db.prepare(
-      "INSERT INTO memory_fts (scope, name, heading, body, path, is_personal) VALUES (?, ?, ?, ?, ?, ?)",
-    )
+    const files = this.knowledgeFiles()
+    const ins = this.db.prepare(INSERT_KNOWLEDGE)
     const tx = this.db.transaction(() => {
       // DELETE + re-inserts as one atomic swap: a throw mid-rebuild won't leave the index empty.
       this.db.exec("DELETE FROM memory_fts")
-      this.indexDir(ins, join(this.home, "domains"), (f) => (f.endsWith(".digest.md") ? "digest" : "domain"), 0, (f) => f !== "_inbox.md" && f.endsWith(".md"))
-      this.indexDir(ins, join(this.home, "personal"), () => "personal", 1, (f) => f.endsWith(".md"))
-      const conv = join(this.home, "conventions.md")
-      if (existsSync(conv)) this.indexFile(ins, conv, "conventions", 0)
-      // Agent memory (spec §4): scope "agent", name = the agent id (".digest" stripped by indexFile).
-      this.indexDir(ins, join(this.home, "agent-memory"), () => "agent", 0, (f) => f.endsWith(".md"))
+      for (const f of files) this.indexFile(ins, f)
     })
     tx()
+    this.stamps = new Map(files.map((f) => [f.path, f.stamp]))
   }
 
-  private indexDir(ins: any, dir: string, scopeOf: (f: string) => string, isPersonal: number, accept: (f: string) => boolean): void {
-    if (!existsSync(dir)) return
-    for (const file of readdirSync(dir).filter(accept).sort()) {
-      this.indexFile(ins, join(dir, file), scopeOf(file), isPersonal)
+  /**
+   * Re-indexes only the files written, added or removed since the last (re)index. Agents write memory at any time,
+   * while the full rebuild runs at broker start and after a curator run, which is off by default: without this a
+   * finding saved since then is never found (card #83). Unchanged files cost a stat; a full rebuild of a large home
+   * blocks the broker for up to a second.
+   */
+  private refreshKnowledge(): void {
+    const stamps = this.stamps
+    if (!stamps) return this.rebuildKnowledge()
+    const files = this.knowledgeFiles()
+    const changed = files.filter((f) => stamps.get(f.path) !== f.stamp)
+    const present = new Set(files.map((f) => f.path))
+    const removed = [...stamps.keys()].filter((path) => !present.has(path))
+    if (changed.length === 0 && removed.length === 0) return
+    const ins = this.db.prepare(INSERT_KNOWLEDGE)
+    const del = this.db.prepare("DELETE FROM memory_fts WHERE path = ?")
+    const tx = this.db.transaction(() => {
+      for (const path of [...removed, ...changed.map((f) => f.path)]) del.run(path)
+      for (const f of changed) this.indexFile(ins, f)
+    })
+    tx()
+    this.stamps = new Map(files.map((f) => [f.path, f.stamp]))
+  }
+
+  private knowledgeFiles(): KnowledgeFile[] {
+    const files: KnowledgeFile[] = []
+    const add = (path: string, scope: string, isPersonal: number) => {
+      const st = statSync(path)
+      files.push({ path, scope, isPersonal, stamp: `${st.size}:${st.mtimeMs}` })
     }
+    const addDir = (dir: string, scopeOf: (f: string) => string, isPersonal: number) => {
+      if (!existsSync(dir)) return
+      for (const file of readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) add(join(dir, file), scopeOf(file), isPersonal)
+    }
+    // The inbox too: with the curator off, nothing ever files its findings under a topic.
+    addDir(join(this.home, "domains"), (f) => (f.endsWith(".digest.md") ? "digest" : "domain"), 0)
+    addDir(join(this.home, "personal"), () => "personal", 1)
+    const conv = join(this.home, "conventions.md")
+    if (existsSync(conv)) add(conv, "conventions", 0)
+    // Agent memory (spec §4): scope "agent", name = the agent id (".digest" stripped by indexFile).
+    addDir(join(this.home, "agent-memory"), () => "agent", 0)
+    return files
   }
 
-  private indexFile(ins: any, path: string, scope: string, isPersonal: number): void {
+  private indexFile(ins: any, file: KnowledgeFile): void {
     // The runtime's basename: the path comes from join(), so on Windows it holds \ and a "/" split kept it whole,
     // and an Agent's filter on its own memory (name = ?) never matched.
-    const name = basename(path).replace(/\.digest\.md$/, "").replace(/\.md$/, "")
-    for (const sec of splitSections(readFileSync(path, "utf8"))) {
+    const name = basename(file.path).replace(/\.digest\.md$/, "").replace(/\.md$/, "")
+    for (const sec of splitSections(readFileSync(file.path, "utf8"))) {
       if (!sec.body && !sec.heading) continue
-      ins.run(scope, name, sec.heading, sec.body, path, isPersonal)
+      ins.run(file.scope, name, sec.heading, sec.body, file.path, file.isPersonal)
     }
   }
 
   searchKnowledge(query: string, opts: { includePersonal: boolean; agentId?: string; limit?: number }): KnowledgeHit[] {
+    // A failed refresh (a file removed mid-read) leaves the last index in place and is retried by the next search.
+    try { this.refreshKnowledge() } catch { /* the index is rebuildable */ }
     const limit = opts.limit ?? 10
     const personalClause = opts.includePersonal ? "" : "AND is_personal = 0"
     // Agent memory is visible only to its own Agent; everyone else never sees scope "agent".
