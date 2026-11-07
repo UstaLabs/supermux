@@ -6,9 +6,10 @@ import { APPLE_GIT_STUB, noCltDir } from "./clt-guard"
 import {
   GIT_HINT_DARWIN, GIT_HINT_LINUX, GIT_HINT_WINDOWS_BROWSER, GitInstaller,
   GitRequirementMonitor, type GitInstallStatus, INSTALL_COOLDOWN_MS, wingetFailure, OPEN_GIT_DOWNLOAD_PAGE, WINGET_INSTALL_GIT, WINGET_MAX_MS,
-  XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor,
+  XCODE_SELECT_INSTALL, checkGit, checkGitSync, expandWindowsVars, gitInstallFor, REGISTRY_FALLBACK_MS, registryPathReader,
   spawnDetached, type GitRequirement, type GitRequirementDeps, type RegistryScope,
 } from "./requirement"
+import { Unsupported } from "@supermux/platform"
 
 let stateDir: string
 beforeEach(() => { stateDir = mkdtempSync(join(tmpdir(), "git-req-")) })
@@ -113,6 +114,55 @@ test("win32: Git for Windows' default dirs are probed even when the registry has
 test("win32: nowhere means missing; a failing registry read is just 'nothing there'", async () => {
   const f = fakeDeps("win32", {}, { readRegistryPath: async () => { throw new Error("reg failed") } })
   expect(await checkGit(f.d)).toEqual({ found: false })
+})
+
+// #100: while git was missing, every 10 s re-check read both registry Paths through PowerShell, two processes a tick.
+test("windows: the registry Path is read in place, and PowerShell is never started", async () => {
+  let powershell = 0
+  const read = registryPathReader({
+    native: (scope) => (scope === "user" ? "%USERPROFILE%\\bin" : null),
+    powershell: async () => { powershell++; return "never" },
+    now: () => 0,
+  })
+  for (let tick = 0; tick < 6; tick++) {
+    expect(await read("user")).toBe("%USERPROFILE%\\bin")
+    expect(await read("machine")).toBeNull()
+  }
+  expect(powershell).toBe(0)
+})
+
+test("windows without Bun's ffi: PowerShell reads each scope at most once a minute", async () => {
+  let now = 0
+  const asked: RegistryScope[] = []
+  const read = registryPathReader({
+    native: () => { throw new Unsupported("registry.readString", "no ffi") },
+    powershell: async (scope) => { asked.push(scope); return `${scope}#${asked.length}` },
+    now: () => now,
+  })
+  for (; now < REGISTRY_FALLBACK_MS; now += 10_000) {
+    expect(await read("user")).toBe("user#1")
+    expect(await read("machine")).toBe("machine#2")
+  }
+  expect(asked).toEqual(["user", "machine"])
+  expect(await read("user")).toBe("user#3")
+  expect(asked).toEqual(["user", "machine", "user"])
+})
+
+test("windows: a registry read that fails is just 'nothing there', with no PowerShell either", async () => {
+  let powershell = 0
+  const read = registryPathReader({
+    native: () => { throw new Error("RegGetValueW failed with Windows error 5") },
+    powershell: async () => { powershell++; return "never" },
+    now: () => 0,
+  })
+  expect(await read("machine")).toBeNull()
+  expect(powershell).toBe(0)
+  const failing = registryPathReader({
+    native: () => { throw new Unsupported("registry.readString", "no ffi") },
+    powershell: async () => { throw new Error("powershell.exe was not found") },
+    now: () => 0,
+  })
+  expect(await failing("user")).toBeNull()
 })
 
 test("our own shim dir is never looked at", () => {
