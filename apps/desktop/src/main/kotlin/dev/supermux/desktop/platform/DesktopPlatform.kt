@@ -149,7 +149,7 @@ class DesktopPlatform : Platform {
     override val mic: MicCapture = DesktopMicCapture()
 
     /**
-     * The assistant overlay (#62): on macOS and Windows a window may float over other apps without asking;
+     * The assistant overlay (#62): on macOS, Windows and Linux a window may float over other apps without asking;
      * macOS asks for the mic the first time hold-to-talk records. Elsewhere there is no overlay.
      */
     override val assistantOverlay: dev.supermux.ui.platform.AssistantOverlayHost? =

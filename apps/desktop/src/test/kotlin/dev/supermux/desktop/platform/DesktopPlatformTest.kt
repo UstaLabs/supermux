@@ -52,7 +52,7 @@ class DesktopPlatformTest {
                 scrcpy = false,
                 // A Mac trackpad's wheel stream carries the system's momentum, with no lift in it.
                 trackpadMomentum = isMacOs(),
-                // #62: the assistant overlay floats over other apps on macOS and Windows.
+                // #62: the assistant overlay floats over other apps on macOS, Windows and Linux.
                 assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,
             ),
             DesktopPlatform().caps,
