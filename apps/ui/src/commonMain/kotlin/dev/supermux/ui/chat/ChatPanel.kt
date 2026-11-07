@@ -129,6 +129,7 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.TestIds
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -663,7 +664,18 @@ fun ChatPanel(
     }
 
     // ── Autoscroll ────────────────────────────────────────────────────────────────────────────
-    val listState = rememberLazyListState()
+    // Where the reader is, kept outside this composition: an Android rotation rebuilds the panel,
+    // and a width-class change rebuilds it somewhere else in the tree, and either one used to put a
+    // reader who had scrolled up back at the end (#89).
+    val place = rememberRetained("chat.place:${session.id}") { TranscriptPlace() }
+    val listState = rememberLazyListState(place.index, place.offset)
+    LaunchedEffect(listState, place) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                place.index = index
+                place.offset = offset
+            }
+    }
     val density = LocalDensity.current
     val find = remember(session.id) { ChatFindState() }
     // This chat's hits; All chats leaves the transcript alone.
@@ -714,8 +726,10 @@ fun ChatPanel(
         // bottom edge on screen, give or take [FOLLOW_SLOP]. Anywhere above stays put, inside a reply
         // taller than the screen too: "one of the last two rows is on screen" used to count as the
         // bottom, so scrolling back into a long last reply jumped the reader to its end.
-        var prevSize by remember(session.id) { mutableIntStateOf(-1) }
-        var autoFollow by remember(session.id) { mutableStateOf(true) }
+        // In [place], so a rebuilt panel knows the rows it already showed and whether the reader was
+        // following them: it does not jump a reader who had scrolled up back to the end.
+        var prevSize by place::rows
+        var autoFollow by place::autoFollow
         // Our own follow scrolls moving the transcript (a new row's, the glide): the positions they pass are not the
         // reader's. A count, not a flag (card #76): the glide takes the scroll from a new row's follow, and the follow
         // that stops must not unmark the glide still moving, or its positions read as the reader leaving the end.
@@ -1553,4 +1567,13 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
             }
         }
     }
+}
+
+/** Where a reader is in one session's transcript, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class TranscriptPlace {
+    var index = 0
+    var offset = 0
+    /** Rows already shown; -1 before the first content, which jumps to the end. */
+    var rows by mutableIntStateOf(-1)
+    var autoFollow by mutableStateOf(true)
 }

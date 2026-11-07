@@ -37,7 +37,22 @@ internal fun ComposeUiTest.setPlatformContent(
     /** ChatPanel reads the chat-detail level; an unprovided [LocalUiPrefs] throws by design. */
     uiPrefs: UiPrefs = UiPrefs(FakeSettingsStore()),
     content: @Composable () -> Unit,
-) = setContent {
+) = setContent { PlatformTestProviders(platform, pointer, widthClass, inputMode, uiPrefs, content) }
+
+/**
+ * [setPlatformContent]'s providers on their own, for a test that owns its `setContent` (state
+ * restoration). [platform] and [uiPrefs] have no defaults: built in here they would be new objects
+ * on every recomposition, so the caller builds them once, outside.
+ */
+@Composable
+internal fun PlatformTestProviders(
+    platform: FakePlatform,
+    pointer: Boolean,
+    widthClass: WindowWidthClass,
+    inputMode: InputMode,
+    uiPrefs: UiPrefs,
+    content: @Composable () -> Unit,
+) {
     CompositionLocalProvider(
         LocalPlatform provides platform,
         LocalPointerAvailable provides pointer,

@@ -164,6 +164,9 @@ class FleetStore(
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
 
+    /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
+    val retainedUi = RetainedUiState(fleetScope)
+
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
