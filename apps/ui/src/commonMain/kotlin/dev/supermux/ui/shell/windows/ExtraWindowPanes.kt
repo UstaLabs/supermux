@@ -5,6 +5,7 @@
 // slice. The window around it — a desktop `Window {}`, an Android activity — is the host's.
 package dev.supermux.ui.shell.windows
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,11 +14,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.ShortcutDispatcher
+import dev.supermux.ui.keys.ShortcutRoot
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.WorkspacePanes
 import dev.supermux.ui.shell.WorkspacePanesBind
+import dev.supermux.ui.shell.addTerminalInWindow
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
@@ -36,7 +42,8 @@ fun extraWindowTitle(
 }
 
 /**
- * The panes of extra window [hostId]: the slice of [bind]'s workspace that window claims.
+ * The panes of extra window [hostId]: the slice of [bind]'s workspace that window claims. It is also that
+ * window's keyboard root ([ShortcutRoot]), so a host puts no other around it.
  *
  * [onTearOutTab] tears a tab out of THIS window into yet another one — the host's verb, because
  * only the host knows how to open the window that results.
@@ -60,27 +67,32 @@ fun ExtraWindowPanes(
     val hosted = ui.windows.layoutFor(hostId, ws.layoutSync.tree)
     val tabDragState = remember(hostId) { PaneDragController() }
     var closeCandidate by remember(hostId) { mutableStateOf<ViewDto?>(null) }
-    WorkspacePanes(
-        hostId = hostId,
-        layout = hosted,
-        current = current,
-        session = bind.session,
-        ws = ws,
-        app = bind.app,
-        appFor = bind.appFor,
-        ui = ui,
-        drafts = bind.drafts,
-        overlayScope = bind.overlayScope,
-        launcherPane = bind.launcherPane,
-        tabDragState = tabDragState,
-        closeCandidate = closeCandidate,
-        onCloseCandidate = { closeCandidate = it },
-        sessionNames = bind.sessionNames,
-        unreadSessions = bind.unreadSessions,
-        modifier = modifier,
-        onTearOutTab = onTearOutTab,
-        stripChrome = stripChrome,
-    )
+    ShortcutRoot(remember(hostId) { ShortcutDispatcher() }, modifier) {
+        // A torn-off window has the pane and workspace keys; the window-level ones (new session, settings,
+        // sidebar) belong to the main window.
+        RegisterCommand(AppCommands.NewTerminal) { addTerminalInWindow(ui, hostId, ws, bind.app, current.id); true }
+        WorkspacePanes(
+            hostId = hostId,
+            layout = hosted,
+            current = current,
+            session = bind.session,
+            ws = ws,
+            app = bind.app,
+            appFor = bind.appFor,
+            ui = ui,
+            drafts = bind.drafts,
+            overlayScope = bind.overlayScope,
+            launcherPane = bind.launcherPane,
+            tabDragState = tabDragState,
+            closeCandidate = closeCandidate,
+            onCloseCandidate = { closeCandidate = it },
+            sessionNames = bind.sessionNames,
+            unreadSessions = bind.unreadSessions,
+            modifier = Modifier.fillMaxSize(),
+            onTearOutTab = onTearOutTab,
+            stripChrome = stripChrome,
+        )
+    }
 }
 
 /**

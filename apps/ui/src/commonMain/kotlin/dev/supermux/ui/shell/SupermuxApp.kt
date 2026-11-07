@@ -196,7 +196,6 @@ import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.ui.panes.TAB_STRIP_HEIGHT
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
-import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
@@ -1888,16 +1887,7 @@ private fun WorkspacePanel(
             if (compact) {
                 addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL)
             } else {
-                val hostId = ui.windows.mainHostId
-                val tree = ui.windows.layoutFor(hostId, layoutSync.tree)
-                val gid = ws.focusedViewId?.let { groupIdOf(tree, it) }
-                    ?: ws.focusedFileViewId?.let { groupIdOf(tree, it) }
-                    ?: firstGroupId(tree)
-                if (gid != null) {
-                    wsApp.addWorkspaceView(current.id, NewViewKind.TERMINAL, gid) { newViewId ->
-                        ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                    }
-                }
+                addTerminalInWindow(ui, ui.windows.mainHostId, ws, wsApp, current.id)
             }
         }
         RegisterCommand(AppCommands.NewTerminal, enabled = !ui.overlayOpen, scope = LocalKeyScope.current?.root) {

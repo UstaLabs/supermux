@@ -145,6 +145,7 @@ import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
 import dev.supermux.workspace.collectActiveViewIds
+import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
@@ -996,6 +997,21 @@ internal fun addPhoneView(
         state = state,
     )
     app.addWorkspaceView(workspace.id, kind.wire, state, id)
+}
+
+/**
+ * A terminal tab in window [hostId]: in the group of the pane pressed last, else of the file last worked in, else
+ * the window's first group, the way "+ → Terminal" adds one there.
+ */
+fun addTerminalInWindow(ui: ShellUiState, hostId: String, ws: WorkspaceSession, app: HostStore, workspaceId: String) {
+    val tree = ui.windows.layoutFor(hostId, ws.layoutSync.tree)
+    val gid = ws.focusedViewId?.let { groupIdOf(tree, it) }
+        ?: ws.focusedFileViewId?.let { groupIdOf(tree, it) }
+        ?: firstGroupId(tree)
+        ?: return
+    app.addWorkspaceView(workspaceId, NewViewKind.TERMINAL, gid) { newViewId ->
+        ui.windows.expandClaim(hostId, setOf(newViewId), ws.layoutSync.tree)
+    }
 }
 
 /** A pane's [KeyContext], from its view's kind (ViewHost.kt's switch). */
