@@ -102,6 +102,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -110,13 +111,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.supermux.chat.liveMarkdown
 import dev.supermux.chat.parseChatTs
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.state.FleetStore
+import dev.supermux.state.LiveReply
 import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.InkBlock
+import dev.supermux.ui.chat.LiveRevealState
+import dev.supermux.ui.chat.RevealDriver
 import dev.supermux.ui.chat.appendLinkified
+import dev.supermux.ui.chat.inkEdge
 import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
@@ -127,10 +134,13 @@ import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
 import dev.supermux.ui.session.wearingGlasses
-import dev.supermux.ui.PlainLink
+import dev.supermux.ui.PlainMessage
+import dev.supermux.ui.messagePlainText
 import dev.supermux.ui.messagePlainLinked
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
@@ -190,9 +200,12 @@ fun rememberOverlayRig(fleet: FleetStore, agentId: String?): AvatarRig? {
     return agentId?.let { rigs[it] }
 }
 
-/** A reply typing out in the bubble: its plain [text], and the [links] its labels keep (bare URLs are in the text). */
+/**
+ * The reply on show: its [text] as the Agent wrote it (Markdown), the live [stream] it came from (null: nobody saw it
+ * being written), and whether it is [done] (stored) or still being written.
+ */
 @Immutable
-data class OverlayReply(val id: String, val from: String, val text: String, val links: List<PlainLink> = emptyList())
+data class OverlayReply(val id: String, val from: String, val text: String, val stream: String? = null, val done: Boolean = true)
 
 /** The talk controls the hold gesture drives; installed by [OverlayVoice]. */
 class OverlayVoiceControl(val start: () -> Unit, val send: () -> Unit, val cancel: () -> Unit)
@@ -209,7 +222,7 @@ class OverlayUiState {
     var heard by mutableStateOf("")
     /** The voice level 0..1 the avatar moves with: [levelTarget], smoothed (see [smoothLevel]). */
     var level by mutableFloatStateOf(0f)
-    /** The voice right now: yours while listening, the reply's stand-in while it types out. */
+    /** The voice right now: yours while listening, the reply's stand-in while it is written. */
     var levelTarget by mutableFloatStateOf(0f)
     /** Talking stopped; waiting for the last words before sending. */
     var finishing by mutableStateOf(false)
@@ -220,7 +233,8 @@ class OverlayUiState {
     /** No mic: say so instead of listening. */
     var micMissing by mutableStateOf(false)
     var reply by mutableStateOf<OverlayReply?>(null)
-    var replyShown by mutableIntStateOf(0)
+    /** The reply's ink-edge reveal while it is written (#76's, as the chat's live row has): null when it shows as it is. */
+    internal var reveal by mutableStateOf<LiveRevealState?>(null)
     var replyFolded by mutableStateOf(false)
     /** "Read it all": the reply shows whole, as tall as [bubbleRoom] lets it; it doesn't fold away meanwhile. */
     var replyExpanded by mutableStateOf(false)
@@ -252,7 +266,8 @@ class OverlayUiState {
     var screenOn by mutableStateOf(true)
     var voice: OverlayVoiceControl? = null
 
-    val speaking: Boolean get() = reply?.let { replyShown < it.text.length } == true
+    /** The reply is still being written or revealed: the head speaks meanwhile. */
+    val speaking: Boolean get() = reveal?.let { !it.finished } == true
 
     /** Anything for the bubble to show right now. */
     val bubbleVisible: Boolean
@@ -266,56 +281,89 @@ class OverlayShot(val thumb: ImageBitmap, val png: Deferred<ByteArray?>) {
     var dropped by mutableStateOf(false)
 }
 
-/** The longest stretch of a reply the bubble types out; the rest is one tap away. */
+/** The longest stretch of a reply the bubble shows; the rest is one tap away. */
 private const val BUBBLE_CHARS = 150
 
 /** How long it works after you talked before giving up on an answer. */
 private const val THINKING_MAX_MS = 90_000L
 
 /**
- * Pops the bubble when the Agent replies (unless its chat is open), types it out while the avatar
- * speaks, then folds it into the count after a while (not while you read it all). Hosted once, in the
- * head's composition.
+ * Pops the bubble when the Agent replies (unless its chat is open) and shows the reply as it is actually written: its
+ * live text under the chat's own ink-edge reveal (#76), which the stored reply then finishes. A reply nobody saw being
+ * written (live replies off in Settings, an older broker) shows as it is, at once. Shown whole, it folds into the count
+ * after a while (not while you read it all). It asks for its Agent's live text without claiming the chat is on screen.
+ * Hosted once, in the head's composition.
  */
 @Composable
 fun OverlayReplies(fleet: FleetStore, agent: OverlayAgent?, ui: OverlayUiState) {
     val id = agent?.id ?: return
+    // Live text without presence: nothing is read and pushes still go out (FleetStore.pinLive).
+    DisposableEffect(fleet, id) {
+        fleet.pinLive(setOf(id))
+        onDispose { fleet.pinLive(emptySet()) }
+    }
+    val live by (remember(fleet, id) { fleet.appFor(id) }?.liveReplies ?: NoLiveReplies).collectAsState()
+    val writing = live[id]?.lastOrNull { !it.thinking }
+    // A reply being written: the bubble shows it, and follows it as more is written.
+    LaunchedEffect(writing?.stream, writing?.text) {
+        val w = writing ?: return@LaunchedEffect
+        if (ui.chatOpen) return@LaunchedEffect
+        val shown = ui.reply
+        if (shown?.stream == w.stream) {
+            if (!shown.done) ui.reply = shown.copy(text = w.text)
+            return@LaunchedEffect
+        }
+        ui.reveal = LiveRevealState()
+        ui.reply = OverlayReply(w.stream, agent.name, w.text, stream = w.stream, done = false)
+        ui.replyFolded = false
+        ui.replyExpanded = false
+        ui.thinking = false
+    }
+    // A stored reply finishes the reveal of the stream it replaces; one nobody saw being written shows as it is.
     LaunchedEffect(id) {
         fleet.agentReplies.collect { ev ->
             if (ev.session != id || ui.chatOpen) return@collect
-            // The whole reply, plain: "Read it all" shows all of it (a list preview's text stops at 300 characters).
-            // Its links stay: a label still opens where it pointed.
-            val plain = messagePlainLinked(ev.entry.text.orEmpty())
-            if (plain.text.isEmpty()) return@collect
-            ui.reply = OverlayReply(ev.entry.id, agent.name, plain.text, plain.links)
-            ui.replyShown = 0
-            ui.replyFolded = false
-            ui.replyExpanded = false
+            val text = ev.entry.text.orEmpty()
+            if (messagePlainText(text).isEmpty()) return@collect
+            val continues = ev.entry.stream != null && ui.reply?.stream == ev.entry.stream && ui.reveal?.finished == false
+            if (!continues) {
+                ui.reveal = null
+                ui.replyFolded = false
+                ui.replyExpanded = false
+            }
+            ui.reply = OverlayReply(ev.entry.id, agent.name, text, stream = ev.entry.stream, done = true)
             ui.thinking = false
         }
     }
     val reply = ui.reply
-    LaunchedEffect(reply?.id) {
-        val r = reply ?: return@LaunchedEffect
-        val shown = minOf(r.text.length, BUBBLE_CHARS)
-        while (ui.replyShown < shown) {
-            delay(40)
-            val next = minOf(shown, ui.replyShown + 3)
-            // Its mouth moves with the words as they appear.
-            ui.levelTarget = speechLevel(r.text.subSequence(ui.replyShown, next))
-            ui.replyShown = next
+    val reveal = ui.reveal
+    // The reveal's clock runs here, whichever window shows the bubble.
+    if (reply != null && reveal != null) RevealDriver(reveal, reply.text, done = reply.done)
+    // Its mouth moves with the words as they appear.
+    LaunchedEffect(reveal) {
+        if (reveal == null) {
+            ui.levelTarget = 0f
+            return@LaunchedEffect
         }
-        ui.levelTarget = 0f
-        ui.replyShown = r.text.length
+        var from = 0
+        snapshotFlow { reveal.laidOut }.collect { to ->
+            val text = ui.reply?.text.orEmpty()
+            ui.levelTarget = if (to in (from + 1)..text.length) speechLevel(text.subSequence(from, to)) else 0f
+            from = to
+        }
     }
-    // Typed out, it folds into the count after a while, unless you are reading it all.
-    val typed = reply != null && ui.replyShown >= reply.text.length
-    LaunchedEffect(reply?.id, typed, ui.replyExpanded) {
-        if (!typed || ui.replyExpanded) return@LaunchedEffect
+    // Shown whole, it folds into the count after a while, unless you are reading it all.
+    val whole = reply != null && reply.done && (reveal == null || reveal.finished)
+    LaunchedEffect(reply?.id, whole, ui.replyExpanded) {
+        if (!whole || ui.replyExpanded) return@LaunchedEffect
+        ui.levelTarget = 0f
         delay(7_000)
         ui.replyFolded = true
     }
 }
+
+/** A host not known yet has nothing being written. */
+private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStateFlow(emptyMap())
 
 /**
  * Hold-to-talk: the composer's own dictation, so the overlay hears exactly as the chat's mic does. When
@@ -703,8 +751,13 @@ fun OverlayBubble(
             }
             ui.reply != null -> {
                 val r = ui.reply!!
-                val words = rememberReplyText(r)
-                val cut = r.text.length > BUBBLE_CHARS
+                // While its reveal runs, what the reveal has laid out of it (made safe to draw as it stands); then all of it.
+                val running = ui.reveal?.takeIf { !it.finished }
+                val source = if (running != null) liveMarkdown(r.text.take(running.laidOut)) else r.text
+                val words = rememberReplyText(remember(source) { messagePlainLinked(source) })
+                val cut = words.length > BUBBLE_CHARS
+                // The ink edge, where the newest words are: on the whole reply, or on the bubble's while it holds them.
+                val ink = running?.let { InkBlock(it, it.laidOut) }
                 BubbleBox(shape, cs.surfaceContainerHigh, Modifier.clickable(onClick = onOpen).testTag("overlay_reply")) {
                     // As wide as its words, with the ✕ at the far end.
                     Column(Modifier.width(IntrinsicSize.Max)) {
@@ -723,15 +776,19 @@ fun OverlayBubble(
                             ) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp)) }
                         }
                         if (ui.replyExpanded) {
-                            ReplyInFull(words, ui.bubbleRoom, onOpen)
+                            ReplyInFull(words, ink, ui.bubbleRoom, onOpen)
                         } else {
+                            var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
                             Text(
                                 buildAnnotatedString {
-                                    append(words.subSequence(0, ui.replyShown.coerceIn(0, minOf(words.length, BUBBLE_CHARS))))
+                                    append(words.subSequence(0, minOf(words.length, BUBBLE_CHARS)))
                                     if (cut && !ui.speaking) append("…")
                                 },
                                 color = cs.onSurface,
                                 style = MaterialTheme.typography.bodyMedium,
+                                onTextLayout = { layout = it },
+                                modifier = Modifier.testTag("overlay_reply_text")
+                                    .then(ink?.takeIf { !cut }?.let { Modifier.inkEdge(it) { layout } } ?: Modifier),
                             )
                             if (cut && !ui.speaking) {
                                 Text(
@@ -751,12 +808,12 @@ fun OverlayBubble(
 }
 
 /**
- * [reply]'s words with their links, each opening through the platform as the chat's do: a label keeps where it
- * pointed, and a bare URL opens itself (the chat's own linkifier). The bubble, typing out or read in full, draws
- * a reply only through here; OverlayLinksTest clicks every overlay surface's links.
+ * A reply's words with their links, each opening through the platform as the chat's do: a label keeps where it
+ * pointed, and a bare URL opens itself (the chat's own linkifier). The bubble, as it is written or read in full,
+ * draws a reply only through here; OverlayLinksTest clicks every overlay surface's links.
  */
 @Composable
-private fun rememberReplyText(reply: OverlayReply): AnnotatedString {
+private fun rememberReplyText(reply: PlainMessage): AnnotatedString {
     val platform = LocalPlatform.current
     val color = MaterialTheme.colorScheme.primary
     return remember(reply, platform, color) {
@@ -788,7 +845,7 @@ private val REPLY_MAX = 460.dp
  * "Open in chat" carries on in the chat.
  */
 @Composable
-private fun ReplyInFull(text: AnnotatedString, room: Dp, onOpen: () -> Unit) {
+private fun ReplyInFull(text: AnnotatedString, ink: InkBlock?, room: Dp, onOpen: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
     LaunchedEffect(scroll) {
@@ -800,11 +857,14 @@ private fun ReplyInFull(text: AnnotatedString, room: Dp, onOpen: () -> Unit) {
     // The bubble's own colour, so the fades read as the text running on under its edge.
     val bubble = cs.surfaceContainerHigh
     Box(Modifier.heightIn(max = (minOf(room, REPLY_MAX) - REPLY_CHROME).coerceAtLeast(80.dp))) {
+        var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
         Text(
             text,
             color = cs.onSurface,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.verticalScroll(scroll).testTag("overlay_reply_full"),
+            onTextLayout = { layout = it },
+            modifier = Modifier.verticalScroll(scroll).testTag("overlay_reply_full")
+                .then(ink?.let { Modifier.inkEdge(it) { layout } } ?: Modifier),
         )
         if (scroll.value > 0) {
             Box(

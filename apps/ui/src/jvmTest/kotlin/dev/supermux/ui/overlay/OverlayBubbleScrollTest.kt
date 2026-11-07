@@ -29,8 +29,8 @@ class OverlayBubbleScrollTest {
 
     private fun ComposeUiTest.bubble(text: String = long): OverlayUiState {
         val ui = OverlayUiState().apply {
+            // A stored reply nobody saw being written: it shows as it is, whole.
             reply = OverlayReply("r1", "Anya", text)
-            replyShown = text.length
             replyExpanded = true
             bubbleRoom = 700.dp
         }
