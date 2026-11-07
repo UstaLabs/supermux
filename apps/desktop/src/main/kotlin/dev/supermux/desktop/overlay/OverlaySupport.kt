@@ -2,8 +2,9 @@
 package dev.supermux.desktop.overlay
 
 /**
- * macOS and Windows. Linux is built (override-redirect windows above full-screen apps and on every
- * workspace, an X11 key grab, Wayland's GlobalShortcuts portal) but waits for a check on a real desktop:
- * under Xvfb its transparent windows can't be seen at all. Until then its switch stays out of Settings.
+ * macOS, Windows and Linux. On Linux the head and bubble are override-redirect windows, above full-screen apps and
+ * on every workspace (X11, and XWayland on Wayland); the key from any app is an X11 grab, and on Wayland only its
+ * GlobalShortcuts portal can hand one over. Checked on real GNOME, KDE and X11 desktops, not only Xvfb.
  */
-internal fun overlaySupportedOn(osName: String): Boolean = osName.startsWith("Mac") || osName.startsWith("Windows")
+internal fun overlaySupportedOn(osName: String): Boolean =
+    osName.startsWith("Mac") || osName.startsWith("Windows") || osName.startsWith("Linux")

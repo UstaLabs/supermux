@@ -10,8 +10,8 @@ class OverlaySupportTest {
     // Windows: its hot key (RegisterHotKey), a tool window on every virtual desktop, kept out of captures.
     @Test fun windowsHasTheOverlay() = assertTrue(overlaySupportedOn("Windows 11"))
 
-    // Linux waits for a check on a real desktop: under Xvfb its transparent windows can't be seen at all.
-    @Test fun linuxWaitsForARealDesktopCheck() = assertFalse(overlaySupportedOn("Linux"))
+    // Linux: checked on real GNOME, KDE and X11 desktops (headless on the box's GPU), not just Xvfb.
+    @Test fun linuxHasTheOverlay() = assertTrue(overlaySupportedOn("Linux"))
 
     // Only the desktops it was built and checked on.
     @Test fun anotherOsHasNone() = assertFalse(overlaySupportedOn("FreeBSD"))
