@@ -48,6 +48,12 @@ interface OsEnv {
 
     /** Linux: this process's `/proc/self/cgroup` (which systemd unit runs us); null elsewhere or unreadable. */
     fun selfCgroup(): String? = null
+
+    /**
+     * POSTs an empty body to the loopback [url] with [headers]: the status code, or null when nothing answered within
+     * a few seconds. The broker's stop request (BrokerService.stop) goes through it.
+     */
+    fun postLocal(url: String, headers: Map<String, String>): Int? = null
 }
 
 /** The real environment: OS from `os.name`, uid via UnixSystem (guarded), PATH command probing. */
@@ -79,10 +85,23 @@ object SystemOsEnv : OsEnv {
     @Volatile var defaultTimeoutMs: Long = DEFAULT_TIMEOUT_MS
     const val DEFAULT_TIMEOUT_MS = 30_000L
 
+    // In-process (findOnPath): no `which` (missing on Windows and some Linux images) or `where` process.
     override fun hasCommand(name: String): Boolean =
-        runResult(listOf(if (os == OsEnv.Os.WINDOWS) "where" else "which", name), 5_000).exit == 0
+        dev.supermux.desktop.platform.findOnPath(name, System.getenv("PATH"), os == OsEnv.Os.WINDOWS, System.getenv("PATHEXT")) != null
 
     override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
+
+    override fun postLocal(url: String, headers: Map<String, String>): Int? = try {
+        val request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
+            .timeout(java.time.Duration.ofSeconds(5))
+            .POST(java.net.http.HttpRequest.BodyPublishers.noBody())
+            .apply { headers.forEach { (k, v) -> header(k, v) } }
+            .build()
+        java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(2)).build()
+            .send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode()
+    } catch (_: Exception) {
+        null
+    }
 
     override fun runResult(argv: List<String>): OsEnv.RunResult = runResult(argv, defaultTimeoutMs)
 

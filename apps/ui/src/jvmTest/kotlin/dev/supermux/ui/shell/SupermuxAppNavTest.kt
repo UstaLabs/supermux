@@ -16,6 +16,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -49,6 +51,7 @@ import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.widgets.LocalSoftKeyboardTakesBack
 import dev.supermux.workspace.singleViewLayout
 import dev.supermux.workspace.toDto
 import kotlinx.serialization.json.JsonObject
@@ -163,6 +166,90 @@ class SupermuxAppNavTest {
         assertEquals(listOf(Route.Home), ui.backStack.toList())
     }
 
+    // ── The soft keyboard closes first (#30) ──────────────────────────────────────────────────
+
+    /**
+     * BACK with the soft keyboard up closes the keyboard and leaves the chat open.
+     *
+     * The gesture fired here is BACK reaching the APP while the keyboard is up, which Android does
+     * whenever the app's callback sits above the keyboard's on the window (widgets/KeyboardBack.kt
+     * has the platform side). The layer pop is on for as long as a chat is open, so without the
+     * keyboard rule it took that BACK and left the chat with the keyboard still showing.
+     */
+    @Test fun compact_back_with_the_keyboard_up_closes_the_keyboard_and_keeps_the_chat() = runComposeUiTest {
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        val app = oneWorkspaceStore()
+        val input = ShellBackInput()
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
+        }
+        val keyboard = CountingKeyboard()
+        var keyboardUp by mutableStateOf(false)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides owner,
+                LocalSoftwareKeyboardController provides keyboard,
+                LocalSoftKeyboardTakesBack provides keyboardUp,
+            ) {
+                SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+            }
+        }
+        waitForIdle()
+        // Up AFTER the chat opened, the way a tap on the composer raises it.
+        keyboardUp = true
+        waitForIdle()
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertEquals("s1", ui.selectedId)
+
+        // With the keyboard down, the next BACK is the chat's again.
+        keyboardUp = false
+        waitForIdle()
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertEquals(null, ui.selectedId)
+    }
+
+    /** The rule is the shell's, not one screen's: a pushed route keeps its page while typing too. */
+    @Test fun compact_back_with_the_keyboard_up_keeps_a_pushed_route_open() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        val input = ShellBackInput()
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
+        }
+        val keyboard = CountingKeyboard()
+        var keyboardUp by mutableStateOf(false)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides owner,
+                LocalSoftwareKeyboardController provides keyboard,
+                LocalSoftKeyboardTakesBack provides keyboardUp,
+            ) {
+                SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+            }
+        }
+        waitForIdle()
+        ui.openSettings()
+        waitForIdle()
+        keyboardUp = true
+        waitForIdle()
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, keyboard.hides)
+        assertTrue(ui.settingsOpen)
+
+        keyboardUp = false
+        waitForIdle()
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
+    }
+
     // ── Compact: the launcher and Usage are REAL screens ───────────────────────────────────────
 
     @Test fun the_launcher_is_a_route_under_compact_and_a_detail_pane_when_wide() = runComposeUiTest {
@@ -274,7 +361,7 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         waitForIdle()
         onNodeWithTag("settings_row_voice").assertIsDisplayed()
 
@@ -285,7 +372,7 @@ class SupermuxAppNavTest {
         // The CAUSE, not just the symptom: the route was never rewritten. `settingsSection` reads
         // the live `Route.Settings` off the stack, so anything other than the section it was
         // opened with means the compact push reported itself back and the entry was re-keyed.
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertEquals(SettingsSection.Providers, ui.settingsSection)
     }
 
     /**
@@ -293,7 +380,7 @@ class SupermuxAppNavTest {
      * phone, not on the index with `ShellUiState.lspSettingsOpen` claiming otherwise.
      *
      * The hub seeds its compact push stack from `section` for exactly this, treating the
-     * `Route.Settings` default ([SettingsSection.Agents]) as "just Settings" and anything else as a
+     * `Route.Settings` default ([SettingsSection.Providers]) as "just Settings" and anything else as a
      * destination. That seeding is only safe because the settings entry has a stable content key;
      * while the route WAS the key, a rewrite would have re-seeded and reopened the section under
      * the user.
@@ -360,15 +447,15 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         waitForIdle()
         onNodeWithTag("settings_hub_rail").assertIsDisplayed()
-        onNodeWithText("body:" + SettingsSection.Agents.name + ":0").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Providers.name + ":0").assertIsDisplayed()
 
         onNodeWithTag("probe").performClick()
         onNodeWithTag("probe").performClick()
         waitForIdle()
-        onNodeWithText("body:" + SettingsSection.Agents.name + ":2").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Providers.name + ":2").assertIsDisplayed()
 
         onNodeWithTag("settings_section_devices").performClick()
         waitForIdle()
@@ -417,5 +504,16 @@ private class ShellBackInput : NavigationEventInput() {
         dispatchOnBackStarted(NavigationEvent())
         dispatchOnBackProgressed(NavigationEvent(progress = 1f))
         dispatchOnBackCompleted()
+    }
+}
+
+/** The soft keyboard, counted: the desktop has none, so the shell's calls are what is asserted. */
+private class CountingKeyboard : SoftwareKeyboardController {
+    var hides = 0
+
+    override fun show() {}
+
+    override fun hide() {
+        hides++
     }
 }

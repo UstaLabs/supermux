@@ -17,7 +17,10 @@ import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { syncCursorSessionCredential } from "../account-env"
-import { isSystemAccount } from "../../accounts/broker-accounts"
+import { SIGN_IN_EXPIRED, isSystemAccount, markSignInExpired } from "../../accounts/broker-accounts"
+import { CURSOR_SIGN_IN_EXPIRED, cursorRefusedLogin } from "./auth"
+import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/index.js"
 
 const log = makeLogger("agents/cursor/core-host")
 
@@ -125,6 +128,26 @@ function asPrepareExtra(registration: HostRegistration): CursorPrepareExtra {
   }
 }
 
+/**
+ * An open cursor-agent refuses for its login (ACP auth_required: the sign-in expired or was revoked) fails
+ * as Core's account_expired, in the words every surface uses, and marks the account it ran on, so Settings
+ * and the chat's account pill say so and Providers offers the sign-in again. Other failures pass as they are.
+ */
+function withSignInRefusal(driver: AgentDriver, account: string | undefined): AgentDriver {
+  return {
+    ...driver,
+    async open(context) {
+      try {
+        return await driver.open(context)
+      } catch (error) {
+        if (!cursorRefusedLogin(error)) throw error
+        markSignInExpired(account ?? systemAccountId("cursor"), CURSOR_SIGN_IN_EXPIRED)
+        throw new CoreError(SIGN_IN_EXPIRED, CURSOR_SIGN_IN_EXPIRED, { cause: error })
+      }
+    },
+  }
+}
+
 function userConfigDir(): string {
   if (process.platform === "win32") {
     return process.env.APPDATA || join(HOME, "AppData", "Roaming")
@@ -158,7 +181,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       const extraModel = typeof registration.extra?.model === "string" ? registration.extra.model : undefined
       const opts = cursorOpts(stateDirectory, registration.env, extraModel ?? ctx.configuration?.model, extra.permissionMode ?? extraPermissionMode(registration.extra, "cursor"))
       const overrides: SessionConfiguration = ctx.configuration ? { ...ctx.configuration } : {}
-      return factory ? factory(opts, overrides) : cursor(opts)
+      return withSignInRefusal(factory ? factory(opts, overrides) : cursor(opts), ctx.account)
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
@@ -184,7 +207,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       return {
         env: prepared.env,
         context: {
-          instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir }),
+          instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
           plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },

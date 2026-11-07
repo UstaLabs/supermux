@@ -21,12 +21,14 @@
 import { main as coreJourney } from "./core-journey.spec"
 import { main as composerAttachment } from "./composer-attachment.spec"
 import { main as voiceRecorder } from "./voice-recorder.spec"
+import { main as dictationStream } from "./dictation-stream.spec"
 import { main as pushBanner } from "./push-banner.spec"
 
 const JOURNEYS: Array<[string, () => Promise<void>]> = [
   ["core-journey", coreJourney],
   ["composer-attachment", composerAttachment],
   ["voice-recorder", voiceRecorder],
+  ["dictation-stream", dictationStream],
   ["push-banner", pushBanner],
 ]
 

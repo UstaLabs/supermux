@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.chatTimeLabel
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.MessageSearchHit
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -116,6 +117,9 @@ class ChatSearchHost(
         _jump.value = ChatJump(hit.session_id, hit.message_id, query)
         openSession(hit.session_id)
     }
+
+    /** Bring [sessionId]'s chat on screen (an inbox message's sender). */
+    fun openChat(sessionId: String) = openSession(sessionId)
 
     /** Open [sessionId]'s find bar — for a header the chat panel does not draw itself. */
     fun openFind(sessionId: String) {
@@ -340,6 +344,16 @@ private fun ChatSearchResults(
     }
 }
 
+/**
+ * A hit's line: who said it, then the snippet. The user's own message reads "You: "; a message from
+ * another session (or supermux, or a council) names its sender, without the ids agents are shown.
+ */
+internal fun chatSearchHitText(hit: MessageSearchHit): String = when {
+    hit.channel == "inbox" -> "${hit.from_session_name?.takeIf { it.isNotBlank() } ?: "Another session"}: ${noticePlainText(hit.snippet)}"
+    hit.direction == "inbound" -> "You: ${hit.snippet}"
+    else -> hit.snippet
+}
+
 /** One fleet hit: chat name · project, when, and the snippet with [query] picked out. */
 @Composable
 fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: () -> Unit) {
@@ -361,7 +375,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            val project = hit.workdir.trimEnd('/').substringAfterLast('/')
+            val project = pathLeaf(hit.workdir)
             if (project.isNotEmpty()) {
                 Text(
                     "  ·  $project",
@@ -378,11 +392,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
             }
         }
         Text(
-            highlightMatches(
-                (if (hit.direction == "inbound") "You: " else "") + hit.snippet,
-                query,
-                cs.primary,
-            ),
+            highlightMatches(chatSearchHitText(hit), query, cs.primary),
             color = cs.onSurfaceVariant,
             fontSize = 12.sp,
             maxLines = 2,

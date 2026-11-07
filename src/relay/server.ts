@@ -1,9 +1,26 @@
 import type { RelayCore } from "./core"
+import { makeLogger } from "../shared/log"
+
+const log = makeLogger("relay/server")
 
 const json = (b: any, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } })
 
 export function makeRelayHandler(core: RelayCore) {
+  const handle = route(core)
+  // An error escaping the route used to reach Bun, which printed a stack trace and
+  // answered an HTML page the broker could not read (card #86).
+  return async (req: Request): Promise<Response> => {
+    try {
+      return await handle(req)
+    } catch (err: any) {
+      log.error("relay_handler_error", { path: new URL(req.url).pathname, err: err?.message ?? String(err) })
+      return json({ ok: false, gone: false, reason: "relay_error" }, 500)
+    }
+  }
+}
+
+function route(core: RelayCore) {
   return async (req: Request): Promise<Response> => {
     const { pathname } = new URL(req.url)
     if (req.method !== "POST") return new Response("method", { status: 405 })

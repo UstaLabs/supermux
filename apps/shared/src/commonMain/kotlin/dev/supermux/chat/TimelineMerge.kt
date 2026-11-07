@@ -5,6 +5,7 @@ package dev.supermux.chat
 
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
+import dev.supermux.proto.CouncilView
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.Subagent
 
@@ -36,6 +37,20 @@ sealed interface TimelineItem {
         val spawn: Tool? = null,
         val children: List<TimelineItem> = emptyList(),
     ) : TimelineItem
+
+    /**
+     * ONE card per council the session called (spec §5.1), its forwarded reports folded in. [call] is
+     * the caller's `council` tool row ([CouncilView.callId]) the card takes the place of, when there
+     * is one. [at] is where it sits: that call, else its first forwarded report, else its creation.
+     * [failures]: member letter → the error its turn last stopped with (supermux's notice), for the
+     * failed rows.
+     */
+    data class CouncilCard(
+        val council: CouncilView,
+        val call: Tool? = null,
+        val at: String = council.createdAt,
+        val failures: Map<String, String> = emptyMap(),
+    ) : TimelineItem
 }
 
 /** Where an item sits in the stream (ISO-8601, sorts lexicographically). */
@@ -47,6 +62,7 @@ val TimelineItem.sortTs: String
         is TimelineItem.SubagentCard -> spawn?.event?.ts
             ?: children.firstOrNull()?.sortTs
             ?: epochMillisToIso(subagent.startedAt)
+        is TimelineItem.CouncilCard -> at
     }
 
 /**
@@ -64,6 +80,11 @@ val TimelineItem.sortTs: String
  * place of the parent's spawning tool row (matched by [Subagent.parentCallId] == callId) or, when
  * there is none, sits at the subagent's first row / start time.
  *
+ * Councils: each of [councils] is one [TimelineItem.CouncilCard], in place of the caller's `council`
+ * tool row (matched by [CouncilView.callId]) or, without one, at its first forwarded report / its
+ * creation. Forwarded reports (rows with a known [LogEntry.council_id]) live in the card and leave
+ * the chat; a report of a council the session has no view of stays a row.
+ *
  * @param hideTools when true (chat detail = low), omit tool cards; activity is still ingested by the caller.
  *   Subagent cards stay (the subagent is the unit of work), only their tool rows go.
  * @param subagents the session's subagent views (HostState.subagents); may be empty.
@@ -77,6 +98,7 @@ fun mergeTimeline(
     hideTools: Boolean = false,
     subagents: List<Subagent> = emptyList(),
     working: Boolean = false,
+    councils: List<CouncilView> = emptyList(),
 ): List<TimelineItem> {
     // callId -> resolved final status + output detail from `tool_result` events.
     // Broker sets phase=completed and title=error|done (not always phase=failed).
@@ -111,7 +133,19 @@ fun mergeTimeline(
     val childRows = LinkedHashMap<String, MutableList<ActivityEvent>>()
     val spawnRows = HashMap<String, ActivityEvent>()
     val items = ArrayList<TimelineItem>(messages.size + activity.size)
-    messages.forEach { items.add(TimelineItem.Msg(it)) }
+    val councilIds = councils.mapTo(HashSet()) { it.id }
+    val byCouncilCall = councils.mapNotNull { c -> c.callId?.let { it to c.id } }.toMap()
+    val councilCalls = HashMap<String, ActivityEvent>()
+    val firstReport = HashMap<String, String>()
+    for (m in messages) {
+        val council = m.council_id
+        if (council != null && council in councilIds) {
+            val prev = firstReport[council]
+            if (prev == null || m.ts < prev) firstReport[council] = m.ts
+            continue
+        }
+        items.add(TimelineItem.Msg(m))
+    }
     // One row per tool call: a second `tool` event for a callId we already have (e.g. the
     // broker's "auto-approved: …" row when the permission policy answers) is folded away — two
     // rows with the same callId would also collide as LazyColumn keys and crash the chat.
@@ -121,6 +155,11 @@ fun mergeTimeline(
         val child = e.subagentId
         if (child != null) {
             childRows.getOrPut(child) { ArrayList() }.add(e)
+            continue
+        }
+        val councilOf = e.callId?.let { byCouncilCall[it] }
+        if (councilOf != null && e.kind == "tool") {
+            if (councilOf !in councilCalls) councilCalls[councilOf] = e
             continue
         }
         val spawnOf = e.callId?.let { bySpawn[it] }
@@ -147,7 +186,33 @@ fun mergeTimeline(
             .dropSettledRedacted(working)
         items.add(TimelineItem.SubagentCard(subagent, spawn, children))
     }
+    for (c in councils) {
+        val call = councilCalls[c.id]?.let { fold(it) as? TimelineItem.Tool }
+        val at = call?.event?.ts ?: firstReport[c.id] ?: c.createdAt
+        items.add(TimelineItem.CouncilCard(c, call, at, councilFailures(c, messages)))
+    }
     return items.sortedBy { it.sortTs }.dropSettledRedacted(working)
+}
+
+/**
+ * Member letter → the error its turn last stopped with, from supermux's notices to the caller
+ * (`"<council> · <letter> [<name>:<id>] stopped with an error:\n<error>"`, the broker's text).
+ */
+internal fun councilFailures(council: CouncilView, messages: List<LogEntry>): Map<String, String> {
+    val prefix = "${council.name} · "
+    val out = HashMap<String, String>()
+    for (m in messages) {
+        if (m.channel != "inbox" || m.from_session_id != "supermux") continue
+        val text = m.text ?: continue
+        if (!text.startsWith(prefix)) continue
+        val head = text.substringBefore('\n')
+        if (!head.endsWith("stopped with an error:")) continue
+        val letter = head.removePrefix(prefix).substringBefore(" [")
+        if (council.members.none { it.letter == letter }) continue
+        val reason = text.substringAfter('\n', "").trim()
+        if (reason.isNotEmpty()) out[letter] = reason
+    }
+    return out
 }
 
 /** A reasoning row whose thought stream the model redacted (no text to expand). */

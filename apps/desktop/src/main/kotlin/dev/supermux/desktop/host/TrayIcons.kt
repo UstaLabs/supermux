@@ -8,6 +8,13 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlin.math.roundToInt
 
 /**
@@ -48,16 +55,31 @@ object TrayIcons {
      * Draw the black glyph? macOS always (a template); Windows only on a light taskbar. The registry
      * is read ([taskbarIsLight]) only on Windows.
      */
-    fun darkGlyph(mac: Boolean, windows: Boolean, taskbarIsLight: () -> Boolean = ::windowsTaskbarIsLight): Boolean =
+    fun darkGlyph(mac: Boolean, windows: Boolean, taskbarIsLight: () -> Boolean = { windowsTaskbarIsLight() }): Boolean =
         mac || (windows && taskbarIsLight())
 
-    /** True iff the Windows taskbar is light (the Windows 11 default). False on failure: the white icon. */
-    fun windowsTaskbarIsLight(): Boolean = runCatching {
-        val p = ProcessBuilder("reg", "query", PERSONALIZE_KEY, "/v", "SystemUsesLightTheme")
-            .redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readText()
-        p.waitFor()
-        parseSystemUsesLightTheme(out) ?: false
+    /**
+     * The Windows taskbar's theme over time, for the tray glyph: [read] now and every [everyMs] on [dispatcher] (never
+     * the UI thread), emitted when it changes, so switching Windows between light and dark repaints the tray.
+     */
+    fun taskbarIsLight(
+        read: () -> Boolean = { windowsTaskbarIsLight() },
+        everyMs: Long = 30_000,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): Flow<Boolean> = flow {
+        while (true) {
+            emit(read())
+            delay(everyMs)
+        }
+    }.distinctUntilChanged().flowOn(dispatcher)
+
+    /**
+     * True iff the Windows taskbar is light (the Windows 11 default), asked of reg.exe through [env] within [timeoutMs]
+     * (a hung reg.exe is killed). False on failure or timeout: the white icon.
+     */
+    fun windowsTaskbarIsLight(env: OsEnv = SystemOsEnv, timeoutMs: Long = 5_000): Boolean = runCatching {
+        val result = env.runResult(listOf("reg", "query", PERSONALIZE_KEY, "/v", "SystemUsesLightTheme"), timeoutMs)
+        result.exit == 0 && parseSystemUsesLightTheme(result.out) == true
     }.getOrDefault(false)
 
     /** Pure: the `reg query … /v SystemUsesLightTheme` output → light (true) / dark (false), or null. */

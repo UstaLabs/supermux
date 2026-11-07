@@ -157,6 +157,9 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
     override fun probeMime(name: String): String =
         mimeForFileName(safeFileName(name)) ?: "application/octet-stream"
 
+    /** A picked clip's preview is already its first frame as a JPEG ([clipFirstFrameJpeg]). */
+    override fun posterJpeg(preview: Any?): ByteArray? = preview as? ByteArray
+
     /**
      * A real file under `NSTemporaryDirectory()`, returned as a `file://` URL string.
      *

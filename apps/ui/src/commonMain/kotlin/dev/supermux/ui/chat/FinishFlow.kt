@@ -85,9 +85,12 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.Dialog
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** Header Finish button — a compact M3 [TextButton] with an unacked-result dot overlay.
@@ -154,6 +157,9 @@ private enum class FinishView { Menu, Running, Outcome }
  * windowless `runComposeUiTest` seam.
  *
  * [onAck] (Android) marks the unacked-result dot seen the moment the flow opens.
+ *
+ * [form] keeps what is typed and the verify work in flight outside this composition, for a flow
+ * that a rotation or a width change rebuilds (#89); null keeps them in this composition.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -168,6 +174,7 @@ fun FinishFlow(
     onSendToAgent: (String) -> Unit,
     onDismiss: () -> Unit,
     onAck: () -> Unit = {},
+    form: FinishForm? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     // Block dismiss mid-job (a brief, self-resolving state); Android hides Done while running.
@@ -185,6 +192,7 @@ fun FinishFlow(
             onDismiss = onDismiss,
             onAck = onAck,
             modifier = mod,
+            form = form,
         )
     }
     if (LocalWindowWidthClass.current == WindowWidthClass.Compact) {
@@ -229,6 +237,7 @@ internal fun FinishFlowContent(
     onDismiss: () -> Unit,
     onAck: () -> Unit = {},
     modifier: Modifier = Modifier,
+    form: FinishForm? = null,
 ) {
     val cs = MaterialTheme.colorScheme
 
@@ -236,9 +245,13 @@ internal fun FinishFlowContent(
     var loadingReadiness by remember { mutableStateOf(false) }
     var runError by remember { mutableStateOf<String?>(null) }
     var confirmingDiscard by remember { mutableStateOf(false) }
-    var commitMessage by remember { mutableStateOf("Session changes") }
-    var verifyDraft by remember { mutableStateOf<VerifyDraft?>(null) }
-    var verifySaving by remember { mutableStateOf(false) }
+    // What is typed, and the verify work in flight, live in [form] when the caller keeps one (#89):
+    // the work then runs on the fleet's scope, and the flow on screen when it lands reads its result.
+    val kept = form ?: remember { FinishForm() }
+    val workScope = if (form != null) rememberRetainedScope() else rememberCoroutineScope()
+    var commitMessage by kept::commitMessage
+    var verifyDraft by kept::verifyDraft
+    val verifySaving = kept.verifySaving
 
     val view = when {
         finishJob == null -> FinishView.Menu
@@ -261,6 +274,43 @@ internal fun FinishFlowContent(
     // Kickoff callback shared by every onFinish(...) — surfaces a rejected kick-off in the menu.
     val kickoff: (Boolean) -> Unit = { ok ->
         if (!ok) runError = "Couldn't start finish — check your connection and try again."
+    }
+
+    // "Generate verify" and the draft's Save: started here, finished on [workScope], and cancelled
+    // when the flow closes ([FinishForm.close]), as this flow's own scope used to cancel them.
+    val generate: () -> Unit = {
+        if (!kept.generating) {
+            kept.generating = true
+            kept.work = workScope.launch {
+                try {
+                    onVerifySuggest()?.let { kept.verifyDraft = VerifyDraft(it.content, it.source) }
+                } finally {
+                    kept.generating = false
+                }
+            }
+        }
+    }
+    val saveVerify: () -> Unit = {
+        val draft = kept.verifyDraft
+        if (draft != null && !kept.verifySaving) {
+            kept.verifySaving = true
+            kept.work = workScope.launch {
+                try {
+                    if (onVerifySave(draft.content)?.ok == true) {
+                        kept.verifyDraft = null
+                        kept.verifySaved = true
+                    }
+                } finally {
+                    kept.verifySaving = false
+                }
+            }
+        }
+    }
+    // A saved verify.sh kicks the merge off, from the flow on screen when the save lands.
+    LaunchedEffect(kept, kept.verifySaved) {
+        if (!kept.verifySaved) return@LaunchedEffect
+        kept.verifySaved = false
+        onFinish("merge", null, null, null, kickoff)
     }
 
     Column(
@@ -303,11 +353,11 @@ internal fun FinishFlowContent(
                 verifyDraft = verifyDraft,
                 onVerifyDraftChange = { verifyDraft = it },
                 verifySaving = verifySaving,
-                onVerifySavingChange = { verifySaving = it },
+                generating = kept.generating,
+                onGenerate = generate,
+                onSaveVerify = saveVerify,
                 onFinish = onFinish,
                 kickoff = kickoff,
-                onVerifySuggest = onVerifySuggest,
-                onVerifySave = onVerifySave,
                 onSendToAgent = onSendToAgent,
                 onClearJob = onClearJob,
                 onDismiss = onDismiss,
@@ -613,11 +663,11 @@ private fun OutcomeBody(
     verifyDraft: VerifyDraft?,
     onVerifyDraftChange: (VerifyDraft?) -> Unit,
     verifySaving: Boolean,
-    onVerifySavingChange: (Boolean) -> Unit,
+    generating: Boolean,
+    onGenerate: () -> Unit,
+    onSaveVerify: () -> Unit,
     onFinish: OnFinish,
     kickoff: (Boolean) -> Unit,
-    onVerifySuggest: suspend () -> VerifySuggestResult?,
-    onVerifySave: suspend (String) -> VerifySaveResult?,
     onSendToAgent: (String) -> Unit,
     onClearJob: () -> Unit,
     onDismiss: () -> Unit,
@@ -690,7 +740,8 @@ private fun OutcomeBody(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                        .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .testTag("finish_commit_message"),
                 )
                 DismissRow(done)
                 val isPr = finishJob?.action == "pr"
@@ -709,9 +760,7 @@ private fun OutcomeBody(
                     ActionRow("Merge without verifying", Icons.Filled.WarningAmber, color = cs.tertiary) {
                         onFinish("merge", true, null, null, kickoff)
                     }
-                    LoadingActionRow("Generate verify", Icons.Filled.AutoAwesome) {
-                        onVerifySuggest()?.let { onVerifyDraftChange(VerifyDraft(it.content, it.source)) }
-                    }
+                    LoadingActionRow("Generate verify", Icons.Filled.AutoAwesome, busy = generating, onClick = onGenerate)
                 } else {
                     Caption("Draft · ${verifyDraft.source.uppercase()}")
                     OutlinedTextField(
@@ -721,21 +770,11 @@ private fun OutcomeBody(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 140.dp)
-                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                            .padding(horizontal = 20.dp, vertical = 6.dp)
+                            .testTag("finish_verify_draft"),
                     )
                     DismissRow(done)
-                    LoadingActionRow("Save", Icons.Filled.Check, enabled = !verifySaving) {
-                        onVerifySavingChange(true)
-                        try {
-                            val r = onVerifySave(verifyDraft.content)
-                            if (r?.ok == true) {
-                                onVerifyDraftChange(null)
-                                onFinish("merge", null, null, null, kickoff)
-                            }
-                        } finally {
-                            onVerifySavingChange(false)
-                        }
-                    }
+                    LoadingActionRow("Save", Icons.Filled.Check, busy = verifySaving, onClick = onSaveVerify)
                 }
             }
 
@@ -826,18 +865,20 @@ private fun ActionRow(
     }
 }
 
-/** An [ActionRow] whose onClick runs a suspend body, showing a spinner while in flight. */
+/**
+ * An [ActionRow] for work in flight: a spinner while [busy]. The caller runs the work, so it can
+ * outlive this row (#89: a rotation rebuilds the flow; see [FinishForm]).
+ */
 @Composable
 private fun LoadingActionRow(
     label: String,
     icon: ImageVector,
+    busy: Boolean,
     enabled: Boolean = true,
-    onClick: suspend () -> Unit,
+    onClick: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf(false) }
     val active = enabled && !busy
     Row(
         modifier = Modifier
@@ -845,8 +886,7 @@ private fun LoadingActionRow(
             .then(
                 if (active) Modifier.clickable {
                     haptic.perform(HapticKind.Tick)
-                    busy = true
-                    scope.launch { try { onClick() } finally { busy = false } }
+                    onClick()
                 } else Modifier,
             )
             .heightIn(min = 48.dp)
@@ -1003,7 +1043,11 @@ class FinishBindings(
 @Composable
 fun FinishHeaderButton(session: SessionInfo, bindings: FinishBindings) {
     if (session.session_branch == null) return
-    var showFlow by remember(session.id) { mutableStateOf(false) }
+    // The open flow, what is typed in it and its verify work, kept with the session (#89): an
+    // Android rotation recreated the chat and closed the flow, and took the commit message, a
+    // verify.sh draft and a "Generate verify" in flight with it.
+    val form = rememberRetained("finish:${session.id}") { FinishForm() }
+    var showFlow by form::open
     var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
     val job = bindings.job
     val isUnacked = job != null && job.status != "running" && job.startedAt != ackedStartedAt
@@ -1026,7 +1070,36 @@ fun FinishHeaderButton(session: SessionInfo, bindings: FinishBindings) {
             onVerifySave = bindings.verifySave,
             onSendToAgent = bindings.sendToAgent,
             onAck = { ackedStartedAt = job?.startedAt ?: ackedStartedAt },
-            onDismiss = { showFlow = false },
+            onDismiss = { form.close() },
+            form = form,
         )
+    }
+}
+
+/**
+ * One session's Finish flow outside its composition (`rememberRetained`, #89): open or not, the
+ * commit message, the verify.sh draft, and the verify work in flight. Closing it resets all of it
+ * and cancels that work, as closing the flow did when this lived in the flow.
+ */
+class FinishForm {
+    var open by mutableStateOf(false)
+    var commitMessage by mutableStateOf("Session changes")
+    var verifyDraft by mutableStateOf<VerifyDraft?>(null)
+    /** "Generate verify" in flight. */
+    var generating by mutableStateOf(false)
+    var verifySaving by mutableStateOf(false)
+    /** The draft was saved: the flow on screen kicks the merge off. */
+    var verifySaved by mutableStateOf(false)
+    internal var work: Job? = null
+
+    fun close() {
+        work?.cancel()
+        work = null
+        open = false
+        commitMessage = "Session changes"
+        verifyDraft = null
+        generating = false
+        verifySaving = false
+        verifySaved = false
     }
 }

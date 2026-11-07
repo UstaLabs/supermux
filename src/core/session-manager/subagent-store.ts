@@ -259,12 +259,15 @@ export class SubagentStore extends EventEmitter {
     return (this.threads.get(sessionId) ?? []).map((m) => ({ ...m }))
   }
 
-  /** The agent process died: nothing it was running can still finish. */
-  abandonRunning(sessionId: string, now: number = Date.now()): void {
+  /**
+   * The agent process died: nothing it was running can still finish. `keep` names entries that are
+   * not its own work (a delegated child is a session of its own, spec §3.1).
+   */
+  abandonRunning(sessionId: string, now: number = Date.now(), keep?: (subagentId: string) => boolean): void {
     const list = this.bySession.get(sessionId)
     if (!list) return
     for (const entry of list.values()) {
-      if (entry.view.status !== "running") continue
+      if (entry.view.status !== "running" || keep?.(entry.view.id)) continue
       entry.view.status = "cancelled"
       entry.view.endedAt = now
       entry.view.lastActivityAt = now

@@ -1,0 +1,27 @@
+{
+  "name": "@supermux/frp-client",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A dependency-free frp client (frpc) for Node and Bun: frp's v1 protocol over TLS and yamux, running in your process instead of as a separate frpc binary.",
+  "license": "MIT",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test tests"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

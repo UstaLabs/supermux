@@ -84,6 +84,13 @@ class WorkspaceGroupingTest {
     }
 
     @Test
+    fun agentsStillRunningAfterTheParentsTurnCountAsWorking() {
+        val w = ws("w1", "a", "/p", views = listOf(chatView("v1", "s1")))
+        val states = mapOf("s1" to AgentStatus(phase = "idle", working = false, waiting = true, bgOpen = 1, agentsRunning = 1))
+        assertEquals(WorkspaceActivity.WORKING, workspaceActivity(w, states))
+    }
+
+    @Test
     fun agentStateIsNoneForAWorkspaceWithNoChatView() {
         val w = ws("w1", "a", "/p")
         assertEquals(WorkspaceActivity.NONE, workspaceActivity(w, emptyMap()))
@@ -117,7 +124,7 @@ class WorkspaceGroupingTest {
 
         assertEquals(2, groups.size)
         assertEquals(PA_GROUP_KEY, groups[0].key)
-        assertEquals("Personal Assistants", groups[0].label)
+        assertEquals("Agents", groups[0].label)
         assertEquals(listOf("w-pa"), groups[0].workspaces.map { it.id })
         assertEquals(listOf("w1"), groups[1].workspaces.map { it.id })
     }
@@ -369,5 +376,24 @@ class WorkspaceGroupingTest {
     fun withoutArchivedInfoEmptyProjectsStayVisible() {
         val groups = groupWorkspaces(emptyList(), home = "/home/u", projects = listOf(proj("p1", "Any")))
         assertEquals(listOf("Any"), groups.map { it.label })
+    }
+
+    // Each host's own home shortens its folders: a Mac's /Users/ahmet/site reads ~/site beside a Linux box's
+    // /home/ahmet/proj, not …/ahmet/site under the one home the app used to guess for the whole fleet.
+    @Test
+    fun eachHostsFoldersShortenUnderThatHostsOwnHome() {
+        val box = ws("w1", "a", "/home/ahmet/proj")
+        val mac = ws("w2", "b", "/Users/ahmet/site")
+        val homes = mapOf("box" to "/home/ahmet", "mac" to "/Users/ahmet")
+        val groups = groupWorkspaces(
+            listOf(box, mac), home = "/home/ahmet",
+            hostOf = { if (it.id == "w1") "box" else "mac" }, homeOf = { homes[it] },
+        )
+        assertEquals(listOf("~/proj", "~/site"), groups.map { it.label })
+        val archived = groupArchivedWorkspaces(
+            listOf(mac.copy(status = "archived")), home = "/home/ahmet",
+            hostOf = { "mac" }, homeOf = { homes[it] },
+        )
+        assertEquals(listOf("~/site"), archived.map { it.label })
     }
 }

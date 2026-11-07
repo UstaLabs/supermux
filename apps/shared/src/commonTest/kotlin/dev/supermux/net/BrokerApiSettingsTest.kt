@@ -42,7 +42,7 @@ class BrokerApiSettingsTest {
     }
 
     // BrokerApi always sends bodies via setBody(String) (JSON) or setBody(text)
-    // for soul — both become TextContent. ByteArrayContent is covered for safety.
+    // — both become TextContent. ByteArrayContent is covered for safety.
     private fun HttpRequestData.bodyText(): String =
         when (val c = this.body) {
             is io.ktor.http.content.TextContent -> c.text
@@ -215,7 +215,6 @@ class BrokerApiSettingsTest {
         assertEquals("http://h/settings/config", r.url.toString())
         val b = r.bodyText()
         assertEquals("""{"voiceCleanupModel":"claude-haiku"}""", b)
-        assertFalse(b.contains("paName"))
         assertFalse(b.contains("codexApiKey"))
     }
 
@@ -287,7 +286,7 @@ class BrokerApiSettingsTest {
     }
 
     @Test fun app_config_voice_stt_null_when_absent() {
-        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        val c = json.decodeFromString<AppConfigDto>("{}")
         assertNull(c.voiceSttEngine)
     }
 
@@ -302,7 +301,7 @@ class BrokerApiSettingsTest {
     }
 
     @Test fun app_config_voice_engine_null_when_absent() {
-        val c = json.decodeFromString<AppConfigDto>("""{"paName":"x"}""")
+        val c = json.decodeFromString<AppConfigDto>("{}")
         assertNull(c.voiceCleanupEngine)
     }
 
@@ -384,18 +383,6 @@ class BrokerApiSettingsTest {
         assertEquals("Enter code: AB-12", res.instructions)
         assertEquals("auto", res.method)
         assertEquals("""{"providerId":"anthropic","method":0}""", reqs.single().bodyText())
-    }
-
-    @Test fun soul_put_uses_text_plain() = runTest {
-        val reqs = mutableListOf<HttpRequestData>()
-        val api = captured(sink = reqs)
-        val ok = api.putSoul("# soul")
-        assertTrue(ok)
-        val r = reqs.single()
-        assertEquals(HttpMethod.Put, r.method)
-        assertEquals("http://h/settings/soul", r.url.toString())
-        assertEquals("# soul", r.bodyText())
-        assertTrue(r.body.contentType.toString().startsWith("text/plain"), "ct=${r.body.contentType}")
     }
 
     @Test fun finish_readiness_GET_and_decode() = runTest {

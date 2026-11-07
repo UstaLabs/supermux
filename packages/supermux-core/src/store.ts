@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { mkdir, open, readdir, rename, rm } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
-import { uptime } from "node:os"
+import { files, lock } from "@supermux/platform"
 import { CoreError } from "./errors.js"
 import { normalizeContext, normalizePolicy } from "./context/index.js"
 import { assertRealDirectory, present, readPrivateFile, realDirectoryIn } from "./private-files.js"
@@ -19,6 +19,7 @@ export class SessionStore {
   private real: string
   private owner = false
   private closed = false
+  private instance: lock.InstanceLock | undefined
 
   constructor(directory: string) {
     this.directory = resolve(directory)
@@ -30,28 +31,46 @@ export class SessionStore {
     if (this.closed) throw new CoreError("store_closed", "The session store is closed")
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     this.real = realpathSync(this.directory)
+    // One core per state directory, decided by the kernel first (@supermux/platform's lock): it is never stale and a
+    // reused pid never holds it. .core.lock stays for older cores, which read it; while this core holds the kernel
+    // lock, a readable .core.lock is provably stale, whatever its pid (#36: a pid reused in the same boot locked the
+    // state until someone deleted the file by hand).
+    try {
+      this.instance = await lock.singleInstance("core", this.real)
+    } catch (error) {
+      if ((error as { code?: string }).code === "already_running") {
+        throw new CoreError("state_locked", "State directory is already owned by a running core.")
+      }
+      throw error
+    }
     const lockPath = join(this.directory, ".core.lock")
-    let lock
-    for (let attempt = 0; ; attempt++) {
-      try {
-        lock = await open(lockPath, "wx", 0o600)
-        break
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        if (attempt > 0 || !(await reclaimStaleLock(lockPath))) {
-          throw new CoreError("state_locked", "State directory is already owned. After a crash, verify its owner has exited before removing .core.lock.")
+    let file
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          file = await open(lockPath, "wx", 0o600)
+          break
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+          if (attempt > 0 || !(await reclaimStaleLock(lockPath))) {
+            throw new CoreError("state_locked", "State directory is already owned. After a crash, verify its owner has exited before removing .core.lock.")
+          }
         }
       }
+    } catch (error) {
+      await this.instance.release()
+      this.instance = undefined
+      throw error
     }
     this.owner = true
     try {
-      await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+      await file.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
       realDirectoryIn(this.real, "sessions")
       realDirectoryIn(this.real, "subagents")
     } catch (error) {
       await this.close()
       throw error
-    } finally { await lock.close() }
+    } finally { await file.close() }
   }
 
   private path(id: string): string {
@@ -107,7 +126,7 @@ export class SessionStore {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(record)); await file.sync() } finally { await file.close() }
       this.folder("sessions")
-      await rename(temp, path)
+      await files.replace(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
 
@@ -177,7 +196,7 @@ export class SessionStore {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify(subagents)) } finally { await file.close() }
       this.folder("subagents")
-      await rename(temp, path)
+      await files.replace(temp, path)
     } finally { await rm(temp, { force: true }) }
   }
 
@@ -187,14 +206,17 @@ export class SessionStore {
       await rm(join(this.directory, ".core.lock"), { force: true })
       this.owner = false
     }
+    await this.instance?.release()
+    this.instance = undefined
   }
 }
 
 /**
- * Moves aside a lock whose owner provably no longer holds it: the recorded pid is gone, or the
- * lock was written before this boot (after a reboot the pid may belong to an unrelated process).
- * An unreadable lock is never reclaimed — it may be a live owner mid-write. A link (or a file of
- * another user) is refused (`state_unsafe`), never read through.
+ * Moves aside a .core.lock left by an owner that no longer holds the state. Called only while this core holds the
+ * kernel lock, which no other running core can: a readable lock is then stale whatever its pid (an unclean stop left
+ * it, and on Windows its pid is soon an unrelated process's). Cores from before the kernel lock ship in the broker and
+ * stop with it, so none runs beside this one. An unreadable lock is never reclaimed — it may be an owner mid-write. A
+ * link (or a file of another user) is refused (`state_unsafe`), never read through.
  */
 async function reclaimStaleLock(lockPath: string): Promise<boolean> {
   let text: string | undefined
@@ -208,8 +230,6 @@ async function reclaimStaleLock(lockPath: string): Promise<boolean> {
   const pid = owner.pid
   const startedAt = typeof owner.startedAt === "string" ? Date.parse(owner.startedAt) : NaN
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || Number.isNaN(startedAt)) return false
-  const bootedAt = Date.now() - uptime() * 1000
-  if (startedAt >= bootedAt && processExists(pid)) return false
   // Rename rather than delete, then confirm it was the lock we judged: a concurrent reclaimer
   // may already have replaced it with its own live lock, which must be put back untouched.
   const aside = `${lockPath}.stale-${randomUUID()}`
@@ -226,17 +246,12 @@ async function reclaimStaleLock(lockPath: string): Promise<boolean> {
   return true
 }
 
-function processExists(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH"
-  }
-}
-
 function validRecord(value: unknown): value is SessionRecord {
   if (!value || typeof value !== "object") return false
   const r = value as Record<string, unknown>
   return r.version === 1 && typeof r.id === "string" && typeof r.agent === "string" && !!r.agent
     && typeof r.agentSessionId === "string" && !!r.agentSessionId
+    && (r.previousAgentSessionId === undefined || (typeof r.previousAgentSessionId === "string" && !!r.previousAgentSessionId))
     && typeof r.cwd === "string" && isAbsolute(r.cwd)
     && typeof r.createdAt === "string" && Number.isFinite(Date.parse(r.createdAt))
     && (r.authProfile === undefined || typeof r.authProfile === "string")

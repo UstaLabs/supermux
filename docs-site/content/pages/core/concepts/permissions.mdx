@@ -1,0 +1,85 @@
+---
+title: Permissions
+description: Each agent's own permission modes, requests delivered as events, and answers that come from your code.
+---
+
+The library never approves anything behind your back. Each agent keeps its own permission system, and every request it makes reaches your code as an event you answer.
+
+## Defaults: each CLI's asking mode
+
+`supermux()` starts every agent in its own asking mode. None of the defaults approves by itself:
+
+| Agent | Default |
+|---|---|
+| Claude Code | `permissionMode: "default"`, prompts sent to your code |
+| Codex | `sandbox: "workspace-write"`, `approvalPolicy: "on-request"` |
+| Grok Build, OpenCode | `policy: "ask"` |
+| Cursor | `policy: "ask"`, mode `agent` |
+| Antigravity | `mode: "default"` (it can't ask: it refuses what its mode doesn't allow) |
+
+## The specs
+
+A permission spec is a tagged object per agent family:
+
+```ts
+type PermissionsSpec =
+  | { kind: "claude"; permissionMode: "bypassPermissions" | "acceptEdits" | "default" | "plan" | "auto" | "dontAsk" }
+  | { kind: "codex"; approvalPolicy: "never" | "on-request" | "untrusted"; sandbox: "read-only" | "workspace-write" | "danger-full-access" }
+  | { kind: "acp"; policy: "auto-approve" | "ask" | "read-only"; nativeMode: string | null; askKinds?: ToolKind[]; readableRoots?: string[] }
+  | { kind: "antigravity"; mode: "bypass" | "acceptEdits" | "plan" | "default" }
+```
+
+Set one per session with `sessions.create({ …, permissions })`, or change it while the session runs:
+
+```ts
+const { applied } = await session.setPermissions({ kind: "claude", permissionMode: "acceptEdits" })
+// applied: "now", or "next-turn" for Codex and Antigravity
+```
+
+For the ACP agents (Grok Build, OpenCode, Cursor) the core applies the policy itself:
+
+- `auto-approve` takes the first allow option and emits `permission-auto`.
+- `ask` with `askKinds` asks only for those kinds of tool and approves the rest.
+- `read-only` refuses edits, deletes, moves and commands, and approves the rest.
+- `readableRoots` approves reads and searches inside those folders under any policy.
+
+## Requests are events
+
+When an agent needs approval, you get a `permission-request` event; a question arrives as `user-question`. Both stay pending in `session.requests` until you answer:
+
+```ts
+core.subscribe(e => {
+  if (e.type !== "session.event" || e.event.kind !== "permission-request") return
+  const session = core.sessions.live(e.sessionId)
+  const allow = e.event.options.find(o => o.kind === "allow_once")
+  const reject = e.event.options.find(o => o.kind === "reject_once")
+  // Ask a person; here we refuse anything that runs a command.
+  const answer = e.event.toolCall.category === "execute" ? reject : allow
+  if (answer) session?.requests.respond(e.event.requestId, { optionId: answer.id }).catch(console.error)
+})
+```
+
+- **Match options by `kind`**, never by a fixed id. Claude Code and Codex use the kind names as ids, but ACP agents use their own.
+- Options have the kinds `allow_once`, `allow_always`, `reject_once` and `reject_always`. `allow_always` is only offered when the agent proposes a lasting rule.
+- Add a `message` to tell the agent why: `{ optionId, message }`. ACP agents ignore it.
+- Answer a question with `{ answers: { [questionId]: optionId | optionId[] | freeText } }`, or `{ decline: true }`.
+
+## When nobody answers
+
+- **While your process is attached**, a request never expires. The turn waits. Answer it, refuse it, or interrupt the session.
+- **While nobody is attached**, the keeper parks it. If no process attaches within `parkedDeadlineMs`, the keeper answers it with an error. See [The keeper](/core/concepts/keeper).
+- Interrupting or closing a session cancels its pending requests.
+- At most `limits.maxPending` requests can wait (128 by default). More are cancelled straight away, with a `warning`.
+
+## Running unattended
+
+For work with nobody at the keyboard, pick a mode that never asks:
+
+| Agent | Never asks |
+|---|---|
+| Claude Code | `permissionMode: "acceptEdits"`, `"dontAsk"` or `"bypassPermissions"` |
+| Codex | `approvalPolicy: "never"` |
+| Grok Build, OpenCode, Cursor | `policy: "auto-approve"` |
+| Antigravity | `mode: "bypass"` |
+
+Or keep an asking mode and answer from code, as above.

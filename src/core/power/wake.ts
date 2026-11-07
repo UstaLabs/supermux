@@ -126,7 +126,7 @@ export class WakeDetector {
 export interface WakeActions {
   /** Sleep is not idleness: move idle baselines forward. */
   shiftIdle(sleptMs: number): void
-  /** Reconnect the relay now (new lease, fresh frpc). */
+  /** Reconnect the relay now (new lease, fresh tunnel session). */
   refreshRelay(): Promise<void>
   /** The power source and git may have changed while asleep. */
   recheckGit(): Promise<unknown>

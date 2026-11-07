@@ -47,11 +47,14 @@ fun WorktreeCleanupSection(
     /** The size of a worktree the lookup didn't already know; fetched after the changes are
      *  shown, so the dialog never waits on a folder walk. */
     size: suspend (id: String) -> Long? = { null },
+    /** Holds the tick outside this section, for a dialog a rotation or a width change rebuilds. */
+    tick: WorktreeCleanupTick? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     var loading by remember(workdirs) { mutableStateOf(true) }
     var found by remember(workdirs) { mutableStateOf<List<WorktreeForWorkdirDto>>(emptyList()) }
-    var checked by remember(workdirs) { mutableStateOf(false) }
+    val ownTick = remember(workdirs) { WorktreeCleanupTick() }
+    var checked by (tick ?: ownTick)::checked
     /** Sizes fetched after load, by id; a null value = the fetch found none. */
     var fetched by remember(workdirs) { mutableStateOf<Map<String, Long?>>(emptyMap()) }
     LaunchedEffect(workdirs) {
@@ -61,6 +64,11 @@ fun WorktreeCleanupSection(
         loading = true
         found = workdirs.distinct().mapNotNull { runCatching { load(it) }.getOrNull() }.distinctBy { it.id }
         loading = false
+        // A tick kept through a rebuild (#89) is reported again, with the ids just found.
+        if (checked) {
+            val ids = found.filter { w -> w.owners.none { it.isLive && it.id !in archivingSessionIds } }.map { it.id }
+            if (ids.isEmpty()) checked = false else onDeleteChange(true, ids)
+        }
         for (w in found) {
             if (w.bytes == null) launch { val b = runCatching { size(w.id) }.getOrNull(); fetched = fetched + (w.id to b) }
         }
@@ -116,6 +124,11 @@ fun WorktreeCleanupSection(
             WorktreeChangesList(w.changes, Modifier.padding(start = 12.dp))
         }
     }
+}
+
+/** A [WorktreeCleanupSection]'s "also delete" tick, held by whoever must keep it. */
+class WorktreeCleanupTick {
+    var checked by mutableStateOf(false)
 }
 
 /** Which dialog ran the archive-and-delete, for the notice's wording. */

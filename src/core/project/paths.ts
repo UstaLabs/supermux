@@ -1,12 +1,25 @@
-import { posix } from "path"
+import { posix, win32 } from "path"
+import { paths } from "@supermux/platform"
+
+/** A Windows broker's absolute path: a drive and its root (`C:\`, `C:/`) or a share (`\\server\share`). */
+const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+\\[^\\/]+)/
 
 /**
  * One normalization for registration AND lookup (spec "Resolution"): lexical only —
  * separators, dot segments, trailing slash. No realpath, no case folding: reads must
  * not touch the filesystem, and archived paths may no longer exist.
+ *
+ * A Windows path normalizes to `\` with an upper-case drive letter, the one case fold:
+ * git prints `C:/x`, a shell may say `c:\x`, and both are the same folder.
  */
 export function normalizeLocationPath(path: string): string | undefined {
-  if (!path || !path.startsWith("/")) return undefined
+  if (!path) return undefined
+  if (WINDOWS_ABSOLUTE.test(path)) {
+    const n = win32.normalize(path)
+    const trimmed = n.length > win32.parse(n).root.length ? n.replace(/\\+$/, "") : n
+    return trimmed.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+  }
+  if (!path.startsWith("/")) return undefined
   const n = posix.normalize(path)
   return n.length > 1 ? n.replace(/\/+$/, "") : n
 }
@@ -25,9 +38,10 @@ function expandHome(path: string, home?: string): string {
 }
 
 function isUnderManagedRoot(p: string, managedWorktreesRoot?: string): boolean {
-  return !!managedWorktreesRoot && (
-    managedWorktreesRoot === "/" || p === managedWorktreesRoot || p.startsWith(managedWorktreesRoot + "/")
-  )
+  if (!managedWorktreesRoot) return false
+  // The root's own kind of path decides (a registry may hold a Windows broker's paths): relative() of that flavour,
+  // which handles a root ("/", "C:\") and a Windows folder's letter case.
+  return paths.isInside(p, managedWorktreesRoot, WINDOWS_ABSOLUTE.test(managedWorktreesRoot) ? win32 : posix)
 }
 
 /**
@@ -55,11 +69,12 @@ export function effectiveLocation(
 }
 
 /**
- * The default project name: the path's last segment ("/home/u/projects/app" → "app").
- * The home dir itself is "~"; the filesystem root stays "/".
+ * The default project name: the path's last segment ("/home/u/projects/app" → "app",
+ * "D:\Projects\app" → "app"). The home dir itself is "~"; a root ("/", "D:\") stays itself.
  */
 export function pathLabel(path: string, home: string): string {
   if (home && path === home) return "~"
+  if (WINDOWS_ABSOLUTE.test(path)) return win32.basename(path) || path
   const segments = path.split("/").filter(Boolean)
   return segments[segments.length - 1] ?? path
 }

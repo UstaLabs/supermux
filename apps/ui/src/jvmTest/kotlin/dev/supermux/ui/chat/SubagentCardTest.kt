@@ -176,6 +176,81 @@ class SubagentCardTest {
         onNodeWithTag("subagent-strip-more").assertDoesNotExist()
     }
 
+    private fun iso(ms: Long) = ms.toString() // parseChatTs reads epoch millis as-is
+
+    @Test
+    fun lane_bars_are_its_tool_calls_with_the_live_one_reaching_now() {
+        val t0 = 1_700_000_000_000L
+        val s = Subagent(id = "sa1", status = "running", startedAt = t0)
+        val rows = listOf(
+            ActivityEvent(ts = iso(t0 + 1_000), kind = "tool", tool = "Read", title = "Read: a.kt", detail = "/w/a.kt", callId = "c1", subagentId = "sa1"),
+            ActivityEvent(ts = iso(t0 + 2_000), kind = "tool_result", callId = "c1", subagentId = "sa1", phase = "completed"),
+            ActivityEvent(ts = iso(t0 + 2_500), kind = "tool", tool = "Read", title = "Read: b.kt", detail = "/w/b.kt", callId = "c2", subagentId = "sa1"),
+            ActivityEvent(ts = iso(t0 + 3_000), kind = "tool_result", callId = "c2", subagentId = "sa1", phase = "completed"),
+            ActivityEvent(ts = iso(t0 + 10_000), kind = "tool", tool = "Bash", title = "Bash: npm test", detail = "npm test", callId = "c3", subagentId = "sa1"),
+            ActivityEvent(ts = iso(t0 + 11_000), kind = "tool", tool = "Read", title = "parent", callId = "p1"),
+        )
+        val bars = laneBars(s, rows, now = t0 + 20_000)
+        // Every call keeps its own bar and one label; the gaps (>= 400ms) are thinking.
+        assertEquals(listOf(true, false, true, false, true, false), bars.map { it.thinking })
+        val tools = bars.filterNot { it.thinking }
+        assertEquals(listOf("Read a.kt", "Read b.kt", "npm test"), tools.map { it.label })
+        assertEquals(t0 + 1_000 to t0 + 2_000, tools[0].start to tools[0].end)
+        assertEquals(t0 + 3_000 to t0 + 10_000, bars[4].start to bars[4].end)
+        assertTrue(tools[2].live)
+        assertEquals(t0 + 20_000, tools[2].end)
+    }
+
+    @Test
+    fun a_running_lane_with_no_call_in_flight_is_thinking_up_to_now() {
+        val t0 = 1_700_000_000_000L
+        val s = Subagent(id = "sa1", status = "running", startedAt = t0)
+        val rows = listOf(
+            ActivityEvent(ts = iso(t0 + 1_000), kind = "tool", tool = "Read", detail = "/w/a.kt", callId = "c1", subagentId = "sa1"),
+            ActivityEvent(ts = iso(t0 + 2_000), kind = "tool_result", callId = "c1", subagentId = "sa1", phase = "completed"),
+        )
+        val last = laneBars(s, rows, now = t0 + 9_000).last()
+        assertTrue(last.thinking && last.live)
+        assertEquals(t0 + 2_000 to t0 + 9_000, last.start to last.end)
+    }
+
+    @Test
+    fun calls_in_flight_together_stack_into_rows_and_each_ends_at_its_own_result() {
+        val t0 = 1_700_000_000_000L
+        val s = Subagent(id = "sa1", status = "running", startedAt = t0)
+        fun call(id: String, at: Long) = ActivityEvent(ts = iso(t0 + at), kind = "tool", tool = "WebFetch", detail = "https://$id.dev/x", callId = id, subagentId = "sa1")
+        fun done(id: String, at: Long) = ActivityEvent(ts = iso(t0 + at), kind = "tool_result", callId = id, subagentId = "sa1", phase = "completed")
+        val rows = listOf(call("a", 1_000), call("b", 1_200), call("c", 1_400), done("b", 3_000), call("d", 3_500), done("a", 6_000))
+        val tools = laneBars(s, rows, now = t0 + 8_000).filterNot { it.thinking }
+        assertEquals(listOf(0, 1, 2, 1), tools.map { it.row }) // d reuses b's row once b is done
+        assertEquals(t0 + 6_000, tools[0].end) // a runs to ITS result, not to b's start
+        assertTrue(tools[2].live && tools[3].live) // c and d are still in flight
+    }
+
+    @Test
+    fun a_lane_without_rows_is_one_bar_for_the_whole_run() {
+        val s = Subagent(id = "sa1", status = "completed", startedAt = 1_000, endedAt = 9_000, activity = "Reading x")
+        assertEquals(listOf(LaneBar(1_000, 9_000, "Reading x")), laneBars(s, emptyList(), now = 50_000))
+    }
+
+    @Test
+    fun the_last_15s_ticks_every_5s() {
+        assertEquals(5_000L, laneTickStepMs(LANE_WINDOW_MS))
+        assertEquals("−5m", laneTickLabel(300_000))
+        assertEquals("−45s", laneTickLabel(45_000))
+    }
+
+    @Test
+    fun a_lone_item_opens_its_lanes_only_when_expanded() = runComposeUiTest {
+        val s = sub { it.copy(id = "a1", startedAt = System.currentTimeMillis() - 30_000) }
+        setContent { Themed { RunningStrip(listOf(s), emptyList(), onOpenSubagent = {}) } }
+        onNodeWithTag("subagent-lane-bar:a1:0", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("subagent-strip-lanes").performClick()
+        onNodeWithTag("subagent-lane-bar:a1:0", useUnmergedTree = true).assertExists()
+        onNodeWithTag("subagent-strip-more").performClick()
+        onNodeWithTag("subagent-lane-bar:a1:0", useUnmergedTree = true).assertDoesNotExist()
+    }
+
     @Test
     fun strip_is_absent_when_nothing_runs() = runComposeUiTest {
         setContent { Themed { RunningStrip(listOf(sub("completed")), emptyList(), onOpenSubagent = {}) } }

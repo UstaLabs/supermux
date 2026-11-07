@@ -74,3 +74,20 @@ test("snapshot carries subagents per session", async () => {
   ws.close()
   expect(snapshot.subagents).toEqual({ s1: [sub] })
 })
+
+test("snapshot carries councils per session", async () => {
+  const token = boot({ getSessionCouncils: (id) => (id === "s1" ? [{ id: "c1" }] : []) })
+  await channel!.start()
+  const ws = new WebSocket(`ws://127.0.0.1:${channel!.boundPort}/ws`, { headers: { Cookie: `cmux_token=${token}` } } as any)
+  const snapshot = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe" }))
+    ws.onmessage = (m) => {
+      const frame = JSON.parse(String(m.data))
+      if (frame.type === "snapshot") resolve(frame)
+    }
+    ws.onerror = (e) => reject(e)
+    setTimeout(() => reject(new Error("no snapshot")), 3000)
+  })
+  ws.close()
+  expect(snapshot.councils).toEqual({ s1: [{ id: "c1" }] })
+})

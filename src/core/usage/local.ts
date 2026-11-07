@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readdirSync, readSync, statSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import type { ClaudeUsage, CodexUsage, CodexUsageWindow, UsageWindow } from "./index"
+import { home } from "../../shared/home"
 
 const CLAUDE_LOCAL_MAX_AGE_MS = 60 * 60_000
 const CODEX_SCAN_FILES = 8
@@ -34,7 +34,7 @@ function optionalClaudeWindow(w: any): UsageWindow | null {
 }
 
 export function readClaudeLocalUsage(
-  claudeJsonPath = join(homedir(), ".claude.json"),
+  claudeJsonPath = join(home(), ".claude.json"),
 ): { data: ClaudeUsage; fetchedAt: Date } | null {
   if (!existsSync(claudeJsonPath)) return null
   let raw: any
@@ -245,7 +245,7 @@ function readCodexFromFile(path: string): { data: CodexUsage; fetchedAt: Date } 
 }
 
 export function readCodexLocalUsage(
-  sessionsDir = join(homedir(), ".codex", "sessions"),
+  sessionsDir = join(home(), ".codex", "sessions"),
 ): { data: CodexUsage; fetchedAt: Date } | null {
   if (!existsSync(sessionsDir)) return null
 

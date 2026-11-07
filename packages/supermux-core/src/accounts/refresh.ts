@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { CoreError } from "../errors.js"
 import { assertVaultId } from "./vault.js"
 import type { Account, AuthAdapter, FetchLike, Vault } from "./types.js"
+import { files } from "@supermux/platform"
 
 /** A lock older than this is stale even when its pid is alive (pid reuse, hung holder). */
 const LOCK_STALE_MS = 120_000
@@ -62,9 +63,11 @@ export class RefreshCoordinator {
           try { if (JSON.parse(await readFile(path, "utf8")).nonce === nonce) await rm(path, { force: true }) } catch { /* already gone */ }
         }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        // Windows: a lock just removed (a stale one taken over, or a holder's release) keeps its name a moment.
+        const held = files.nameStillHeld(error)
+        if (!held && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+        if (!held && await stale(path)) { await rm(path, { force: true }); continue }
       }
-      if (await stale(path)) { await rm(path, { force: true }); continue }
       if (Date.now() > deadline) throw new CoreError("account_refresh_failed", `Account ${id}: another process holds the refresh lock`)
       await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
     }
@@ -86,6 +89,7 @@ async function stale(path: string): Promise<boolean> {
     if (typeof pid !== "number") return true
     try { process.kill(pid, 0); return false } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" }
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? false : Promise.reject(error)
+    // Gone, or (Windows) being removed: not a stale lock to take over.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" || files.nameStillHeld(error) ? false : Promise.reject(error)
   }
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.input.key.Key
@@ -44,6 +45,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.session.WorkspaceListTestIds
 import dev.supermux.host.WorkspaceViewingSnapshot
 import dev.supermux.host.visibleWorkspaceChatIds
 import dev.supermux.net.BrokerApi
@@ -139,6 +141,39 @@ class AppShellTest {
             )
         }
 
+    /** One live workspace (w1) and, in the same folder, one archived workspace (wa). */
+    private fun archivedWorkspaceApp(): HostStore = appFor(mutableListOf()).also { app ->
+        app.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    dev.supermux.proto.SessionInfo(id = "s1", name = "worker-s1", workdir = "/w1", agent = "claude"),
+                ),
+                workspaces = listOf(
+                    dev.supermux.proto.WorkspaceDto(
+                        id = "w1",
+                        name = "project-w1",
+                        workdir = "/w1",
+                        primarySessionId = "s1",
+                        layout = singleViewLayout("g-w1", "v-w1").toDto(),
+                        views = listOf(
+                            dev.supermux.proto.ViewDto(
+                                id = "v-w1",
+                                workspaceId = "w1",
+                                kind = "chat",
+                                state = kotlinx.serialization.json.JsonObject(
+                                    mapOf("sessionId" to kotlinx.serialization.json.JsonPrimitive("s1")),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                archivedWorkspaces = listOf(
+                    dev.supermux.proto.WorkspaceDto(id = "wa", name = "old-work", status = "archived", workdir = "/w1"),
+                ),
+            ),
+        )
+    }
+
     // Cluster G8: viewing presence runs on `:shared`'s own snapshot shape (Android's, which
     // already carried the resolved chat ids) rather than AppShell's local layout+views copy.
     private fun viewingSnapshot(
@@ -150,6 +185,27 @@ class AppShellTest {
         visibleChatSessionIds = listOf(sessionId),
         appForeground = appForeground,
     )
+
+    // #57: with no title band (iPad, Android, the web) the shell draws the sidebar toggle in a band
+    // of the sidebar's own — the only on-screen way a tablet collapses and restores its sidebar, and
+    // it must not move between the two states.
+    @Test fun without_a_title_band_the_sidebar_toggle_stays_in_one_spot_in_both_states() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = twoWorkspaceApp()
+        setPlatformContent {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        val open = onNodeWithTag("sidebar_toggle").assertIsDisplayed().getBoundsInRoot()
+        onNodeWithTag("sidebar_toggle").performClick()
+        waitForIdle()
+        assertTrue(ui.sidebarCollapsed)
+        onNodeWithTag("sidebar_rail").assertIsDisplayed()
+        assertEquals(open, onNodeWithTag("sidebar_toggle").getBoundsInRoot(), "the toggle does not move")
+        onNodeWithTag("sidebar_toggle").performClick()
+        waitForIdle()
+        assertTrue(!ui.sidebarCollapsed)
+    }
 
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
         val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
@@ -170,6 +226,58 @@ class AppShellTest {
         assertTrue(ui.launcherOpen)
         onNodeWithTag("launcher_overlay").assertIsDisplayed()
         onNodeWithTag("launcher_message").assertIsDisplayed()
+    }
+
+    // "If I click on an archived session and then click start a new session, it doesn't work."
+    // The archived workspace's notice owned the detail pane ahead of the launcher, so New Session
+    // pushed its route and the screen did not change.
+    @Test fun new_session_opens_the_launcher_while_an_archived_workspace_is_selected() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = archivedWorkspaceApp()
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) } // see on_new_session_…
+        setPlatformContent(uiPrefs = prefs) {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        onNodeWithTag(WorkspaceListTestIds.ARCHIVED_FOLD).performClick()
+        waitForIdle()
+        onNodeWithTag(WorkspaceListTestIds.archived("wa")).performClick()
+        waitForIdle()
+        onNodeWithTag("archived_workspace_detail").assertIsDisplayed()
+
+        onNodeWithTag("new_session_row").performClick()
+        waitForIdle()
+
+        assertTrue(ui.launcherOpen) // the click always opened it; the notice hid it
+        onNodeWithTag("launcher_overlay").assertIsDisplayed()
+        onNodeWithTag("launcher_message").assertIsDisplayed()
+        onNodeWithTag("archived_workspace_detail").assertDoesNotExist()
+    }
+
+    // Closing the launcher goes back to what was open under it, as it does for a live session.
+    @Test fun escape_from_the_launcher_returns_to_the_selected_archived_workspace() = runComposeUiTest {
+        val ui = ShellUiState().apply {
+            selectArchivedWorkspace("wa")
+            openLauncher()
+        }
+        val app = archivedWorkspaceApp()
+        val prefs = UiPrefs(InMemorySettingsStore())
+        runBlocking { prefs.putLauncherDraft(LauncherDraft(workdir = "/proj/x")) } // see on_new_session_…
+        setPlatformContent(uiPrefs = prefs) {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_overlay").assertIsDisplayed()
+
+        // Escape reaches the launcher from inside it, as in escape_closes_…: focus its field first.
+        onNodeWithTag("launcher_message").requestFocus()
+        onNodeWithTag("launcher_overlay").performKeyInput { pressKey(Key.Escape) }
+        waitForIdle()
+
+        assertFalse(ui.launcherOpen)
+        assertEquals("wa", ui.selectedArchivedWorkspaceId)
+        onNodeWithTag("archived_workspace_detail").assertIsDisplayed()
     }
 
     @Test fun submit_with_a_resolved_id_selects_sends_and_closes() = runComposeUiTest {

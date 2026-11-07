@@ -6,6 +6,7 @@ import { claude, type ClaudeOptions } from "./claude/index.js"
 import { codex, type CodexOptions } from "./codex/index.js"
 import { cursor, grok, opencode, type CursorOptions, type GrokOptions, type OpenCodeOptions } from "./agents/index.js"
 import { antigravity, type AntigravityOptions } from "./antigravity/index.js"
+import { dirs } from "@supermux/platform"
 
 type KeeperLimits = { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
 type AcpPermissions = Extract<PermissionsSpec, { kind: "acp" }>
@@ -147,7 +148,7 @@ export type AntigravityInput = Input<Pick<AntigravityOptions, (typeof PICKED.ant
    * `@supermux/core/environment`). A relative path resolves against the process's cwd.
    */
   home: string
-  /** The real HOME the shadow mirrors. Absent: `os.homedir()`. A relative path resolves against the process's cwd. */
+  /** The real HOME the shadow mirrors. Absent: the user's home (%USERPROFILE% on Windows, $HOME elsewhere). A relative path resolves against the process's cwd. */
   userHome?: string
 }
 /**
@@ -262,7 +263,7 @@ function buildAntigravity(dir: string, input: AntigravityInput): AgentDriver {
     ...options, id: "antigravity",
     permissions: { kind: "antigravity", mode },
     // Resolved here: agy would take a relative HOME against the session's cwd (the user's project).
-    home: { shadow: resolve(home), user: resolve(userHome ?? homedir()) },
+    home: { shadow: resolve(home), user: resolve(userHome ?? dirs.home()) },
     keeper: keeperOf(dir, limits, keeper),
   })
 }

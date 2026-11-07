@@ -49,6 +49,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Difference
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -95,6 +101,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -107,6 +114,10 @@ import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.files.activeFilePath
 import dev.supermux.ui.files.filePathOrNull
+import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.terminal.terminalPalette
+import dev.supermux.ui.theme.GeistFontFamily
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.files.isFilesTreeView
 import dev.supermux.ui.files.nextFocusedFileView
 import dev.supermux.ui.panes.DefaultTabChip
@@ -135,6 +146,8 @@ import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
+import dev.supermux.ui.retain.newRetainedPageOpening
+import dev.supermux.ui.retain.rememberRetained
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -237,7 +250,9 @@ fun WorkspacePanes(
     val documents = ws.documents
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
-    var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
+    // Kept with the workspace for a rebuilt layout (see [WorkspacePanesKept]).
+    val kept = rememberWorkspacePanesKept(current.id)
+    var walkthroughSessionId by kept::walkthroughSessionId
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
@@ -260,8 +275,10 @@ fun WorkspacePanes(
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
         bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
+    val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
     PaneHost(
         layout = layout,
+        tearOff = tearOff,
         titleFor = { vid -> viewsById[vid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
@@ -303,20 +320,22 @@ fun WorkspacePanes(
         modifier = modifier,
         chrome = stripChrome,
         emptyGroupSlot = { WorkspaceEmptyHint() },
-        labelFont = MonoFontFamily,
+        labelFont = GeistFontFamily,
+        sheetColor = { id -> sheetToneOf(id?.let { viewsById[it] }) },
         tabSlot = { itemId, tabState ->
             val v = viewsById[itemId]
             val filePath = v
                 ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
                 ?.stateString("path")
             // Touch has no right-click, so a device that CAN open a second window offers "Move to
-            // New Window" on a long press instead. A held finger never reaches the strip's drag
-            // threshold, so this does not fight the tab drag.
+            // New Window" on a long press instead. The same hold is what arms a touch tab drag, so
+            // the menu waits for the finger to lift: hold-and-move drags, hold-and-lift is the menu.
             TabLongPressMenu(
                 enabled = !LocalContextMenuAvailable.current,
                 itemId = itemId,
                 onMoveToNewWindow = if (windowsSeam != null) ({ onTearOutTab(itemId) }) else null,
                 bulkEntries = { bulkEntries(itemId) },
+                openOnRelease = true,
             ) {
                 if (filePath == null) {
                     RowContextMenu(
@@ -331,8 +350,12 @@ fun WorkspacePanes(
                             title = v?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
                             dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
-                            labelFont = MonoFontFamily,
+                            labelFont = GeistFontFamily,
                             onClose = { _ -> onCloseCandidate(v) },
+                            icon = {
+                                val agent = v?.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.agent }
+                                ViewTabIcon(v, agent, tabState.selected)
+                            },
                         )
                         }
                     }
@@ -340,7 +363,7 @@ fun WorkspacePanes(
                     Box(Modifier.observePress(itemId) { ws.focusedFileViewId = itemId }) {
                     WorkspaceFileTab(
                         itemId = itemId,
-                        title = filePath.substringAfterLast('/'),
+                        title = pathLeaf(filePath),
                         path = filePath,
                         state = tabState,
                         dirty = documents.isDirty(filePath),
@@ -404,6 +427,7 @@ fun WorkspacePanes(
                         reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                     }
                 },
+                retainKey = kept.closingKey,
             )
         }
     }
@@ -449,20 +473,21 @@ fun PhoneWorkspacePanes(
     )
     val tabs = phoneTabModel(layout, current.activeViewId)
     val viewsById = ws.viewsById
-    var showAdd by remember { mutableStateOf(false) }
-    var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
-    var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
+    val kept = rememberWorkspacePanesKept(current.id)
+    var showAdd by kept::addViewOpen
+    val closeCandidate = kept.closingViewId?.let { viewsById[it] }
+    var walkthroughSessionId by kept::walkthroughSessionId
 
     fun closeOrConfirm(view: ViewDto) {
-        if (view.closeNeedsConfirmation()) closeCandidate = view
+        if (view.closeNeedsConfirmation()) kept.askToClose(view)
         else app.closeWorkspaceView(current.id, view.id)
     }
 
     // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
     val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
-    LaunchedEffect(closeCandidate == null, bulkQueue.size) {
+    LaunchedEffect(kept.closingViewId == null, bulkQueue.size) {
         // An editor closes on the spot (no candidate), so keep going until one needs its question.
-        while (closeCandidate == null) closeOrConfirm(nextBulkClose(bulkQueue) { viewsById[it] } ?: break)
+        while (kept.closingViewId == null) closeOrConfirm(nextBulkClose(bulkQueue) { viewsById[it] } ?: break)
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
@@ -472,8 +497,9 @@ fun PhoneWorkspacePanes(
         }
 
     // The switcher (see PhoneTabSwitcher.kt) replaced the tab strip: the views live behind one
-    // count button, and each card shows the frame its view last drew.
-    var switcherOpen by remember(current.id) { mutableStateOf(false) }
+    // count button, and each card shows the frame its view last drew. Whether it is open is kept
+    // with the workspace ([WorkspacePanesKept]); one that comes back open starts shown, unanimated.
+    var switcherOpen by kept::gridOpen
     val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
     val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
     suspend fun snapshot(id: String): ImageBitmap? {
@@ -497,13 +523,13 @@ fun PhoneWorkspacePanes(
     var morph by remember(current.id) { mutableStateOf<TabMorph?>(null) }
     val morphProgress = remember(current.id) { Animatable(0f) }
     val morphAlpha = remember(current.id) { Animatable(1f) }
-    val gridAlpha = remember(current.id) { Animatable(0f) }
+    val gridAlpha = remember(current.id) { Animatable(if (switcherOpen) 1f else 0f) }
     var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var page by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val thumbSlots = remember(current.id) { mutableMapOf<String, LayoutCoordinates>() }
     // The live view under the grid is hidden once something opaque covers it, so a platform view
     // (iOS UIKitView) can never draw over the grid.
-    var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
+    var hideUnderGrid by remember(current.id) { mutableStateOf(switcherOpen) }
     var morphJob by remember { mutableStateOf<Job?>(null) }
     // While a picked card grows into the page the grid keeps showing the OLD selection, and the
     // picked card's own frame is hidden: otherwise its header flips to the selected (teal) fill
@@ -721,6 +747,9 @@ fun PhoneWorkspacePanes(
                     .statusBarsPadding(),
             ) {
                 if (selectedView?.kind != "chat") {
+                    // A file's Save and preview toggle ride on its TAB on wide layouts; with no tabs
+                    // here they ride in this bar (PhoneFileBar.kt).
+                    val file = selectedView?.let { v -> v.filePathOrNull()?.let { path -> v.id to path } }
                     Row(
                         swipeShift.fillMaxWidth().height(44.dp).padding(start = 16.dp, end = 4.dp)
                             .testTag("phone_workspace_bar"),
@@ -732,6 +761,7 @@ fun PhoneWorkspacePanes(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp),
                         )
+                        file?.let { (_, path) -> PhoneFileUnsavedDot(ws.documents, path) }
                         Text(
                             selectedView?.let { liveViewTitle(it, sessionNames::get) } ?: "view",
                             fontFamily = MonoFontFamily,
@@ -740,6 +770,7 @@ fun PhoneWorkspacePanes(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
                         )
+                        file?.let { (id, path) -> PhoneFileActions(id, path, ws.documents, ws.previewModes) }
                         PhoneTabCountButton(tabsButton)
                     }
                 }
@@ -804,6 +835,7 @@ fun PhoneWorkspacePanes(
                 viewFor = { viewsById[it] },
                 titleFor = { id -> viewsById[id]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
                 unread = { id -> viewsById[id].tabUnread(id == tabs.selectedId, unreadSessions) },
+                unsaved = { id -> viewsById[id]?.filePathOrNull()?.let(ws.documents::isDirty) == true },
                 thumbnails = thumbnails,
                 onSelect = { id -> pickTab(id) },
                 // The tab in flight is drawn by the morph; its card's own picture waits for it.
@@ -871,23 +903,58 @@ fun PhoneWorkspacePanes(
         CloseViewDialog(
             view = v,
             sessionNames = sessionNames,
-            onDismiss = { closeCandidate = null },
+            onDismiss = { kept.askToClose(null) },
             onConfirm = {
                 app.closeWorkspaceView(current.id, v.id)
-                closeCandidate = null
+                kept.askToClose(null)
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
             worktreeForWorkdir = { app.worktreeForWorkdir(it) },
             worktreeSize = { app.worktreeSize(it) },
             onConfirmDeletingWorktree = { ids ->
-                closeCandidate = null
+                kept.askToClose(null)
                 app.closeViewAndDeleteWorktree(current.id, v.id, ids) {
                     reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                 }
             },
+            retainKey = kept.closingKey,
         )
     }
 }
+
+/**
+ * What a workspace's panes had open, kept by the fleet for a layout that a rotation or a width
+ * change rebuilds (#89): whose walkthrough the Changes pane shows, the close question with its
+ * worktree choice, and on a phone the tab grid and its "add a view" sheet. Both layouts read the
+ * same one, so the layout a swap builds finds what the other had open.
+ */
+internal class WorkspacePanesKept {
+    var walkthroughSessionId by mutableStateOf<String?>(null)
+    /**
+     * The view whose close is being asked about. Resolved against the live views, so a view that
+     * goes away takes its question with it.
+     */
+    var closingViewId by mutableStateOf<String?>(null)
+        private set
+    /** Names this asking: its worktree choice is kept under it, so the next asking starts unticked. */
+    private var closingOpening: String? = null
+    var gridOpen by mutableStateOf(false)
+    var addViewOpen by mutableStateOf(false)
+
+    /** Ask about closing [view], or drop the question (null). */
+    fun askToClose(view: ViewDto?) {
+        closingOpening = view?.let { newRetainedPageOpening() }
+        closingViewId = view?.id
+    }
+
+    /** What the close dialog keeps its worktree choice under, while a question is open. */
+    val closingKey: String? get() = closingOpening?.let { "closeView:$it" }
+}
+
+/** The [WorkspacePanesKept] of [workspaceId]. */
+@Composable
+internal fun rememberWorkspacePanesKept(workspaceId: String): WorkspacePanesKept =
+    rememberRetained("workspace:$workspaceId:panes") { WorkspacePanesKept() }
 
 /** Chrome's page ⇄ card morph and the grid's fade, measured off a screen recording of it. */
 private const val SWITCHER_MORPH_MS = 260
@@ -986,7 +1053,8 @@ private fun WorkspacePaneContent(
                 chatState = { sid -> rememberChatState(viewApp, sid) },
                 chatActions = { s ->
                     val openAccounts = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Accounts) } }
-                    rememberChatActions(viewApp, s, openAccounts = openAccounts)
+                    val openSignIn = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers) } }
+                    rememberChatActions(viewApp, s, openAccounts = openAccounts, openSignIn = openSignIn)
                 },
                 drafts = drafts,
                 documents = documents,
@@ -1104,11 +1172,21 @@ private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
  * short press, or one that moves past the touch slop (a tab drag, a strip scroll), is left
  * entirely alone. Only once the press has been held does it claim the gesture — it consumes the
  * rest of it, so the tab's own click does not also fire on release.
+ *
+ * With [onRelease] it claims nothing instead, and fires on LIFT: a held finger that then moves past
+ * the slop is the start of a drag (a tab strip's tab is dragged by hold-then-move on touch), so it
+ * is left to the drag and [onLongPress] never runs; one that lifts in place gets it. Firing at the
+ * hold would open a popup in the middle of the drag, and a focusable popup takes the rest of the
+ * gesture on Compose Multiplatform hosts.
  */
-internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = composed {
+internal fun Modifier.longPress(
+    key: Any?,
+    onRelease: Boolean = false,
+    onLongPress: () -> Unit,
+): Modifier = composed {
     val haptics = LocalHapticFeedback.current
     val latest by rememberUpdatedState(onLongPress)
-    pointerInput(key) {
+    pointerInput(key, onRelease) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val slop = viewConfiguration.touchSlop
@@ -1126,6 +1204,18 @@ internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = 
             }
             if (endedEarly != null) return@awaitEachGesture
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (onRelease) {
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                        .firstOrNull { it.id == down.id } ?: break
+                    if ((change.position - down.position).getDistance() > slop) break
+                    if (!change.pressed) {
+                        latest()
+                        break
+                    }
+                }
+                return@awaitEachGesture
+            }
             latest()
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -1147,6 +1237,11 @@ internal fun TabLongPressMenu(
     itemId: String,
     onMoveToNewWindow: (() -> Unit)?,
     bulkEntries: () -> List<RowContextMenuEntry>,
+    /**
+     * True on a drag-reorderable strip, where the hold also arms a touch drag: the menu opens when
+     * the held finger LIFTS in place, and a held finger that moves drags the tab instead.
+     */
+    openOnRelease: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     if (!enabled) {
@@ -1154,7 +1249,7 @@ internal fun TabLongPressMenu(
         return
     }
     var open by remember(itemId) { mutableStateOf(false) }
-    Box(Modifier.longPress(itemId) { open = true }) {
+    Box(Modifier.longPress(itemId, onRelease = openOnRelease) { open = true }) {
         content()
         DropdownMenu(
             expanded = open,
@@ -1195,3 +1290,37 @@ internal fun TabLongPressMenu(
  */
 internal fun ViewDto?.tabUnread(selected: Boolean, unreadSessions: Set<String>): Boolean =
     !selected && this?.chatSessionId()?.let { it in unreadSessions } == true
+
+/** The tone a view's content is drawn on: the sheet under its strip, and its tab while active. */
+@Composable
+private fun sheetToneOf(v: ViewDto?): Color {
+    val cs = MaterialTheme.colorScheme
+    return when {
+        v == null -> cs.surfaceContainerLow
+        // A chat tab with no chat yet shows the launcher, in its own tone.
+        v.kind == "chat" && v.chatSessionId() == null -> cs.surfaceContainer
+        v.kind == "terminal" -> terminalPalette().background
+        v.filePathOrNull() != null -> Color(LocalPanes.current.code)
+        v.kind == "editor" && v.stateString("mode") == "diff" -> cs.surface
+        else -> cs.surfaceContainerLow
+    }
+}
+
+/** A tab's 16 dp icon: the agent's mark on a chat, a glyph for what any other view holds. */
+@Composable
+private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
+    if (v?.kind == "chat" && agent != null) {
+        AgentLogo(agent = agent, size = 14.dp)
+        return
+    }
+    val cs = MaterialTheme.colorScheme
+    val glyph = when {
+        v?.kind == "chat" -> Icons.Outlined.ChatBubbleOutline
+        v?.kind == "terminal" -> Icons.Outlined.Terminal
+        v?.kind == "display" -> Icons.Outlined.DesktopWindows
+        v?.kind == "editor" && v.stateString("mode") == "diff" -> Icons.Outlined.Difference
+        v != null && v.isFilesTreeView() -> Icons.Outlined.Folder
+        else -> Icons.AutoMirrored.Outlined.InsertDriveFile
+    }
+    Icon(glyph, contentDescription = null, tint = if (selected) cs.onSurface else cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+}

@@ -11,7 +11,6 @@
 #     build-binary.sh compiles from src/cli.ts (boots src/main.ts on no subcommand), so the
 #     shipped host runs the exact release broker.
 #   • mux-sessiond.exe      — the persistent ConPTY/Job Object owner. Windows only.
-#   • frpc[.exe]            — frp 0.61.1 client, for the relay provider. All targets.
 #   • tmux                  — static tmux. Linux/macOS only, and now for AGENT sessions
 #     only: workspace terminals moved to zmx in Plan 4, and the Claude native-terminal
 #     retirement — the thing that takes tmux out of the product — has not landed.
@@ -27,7 +26,6 @@
 # Binary sourcing is override-first so a headless/offline build can supply prebuilts:
 #   SUPERMUX_BROKER=<path>  use this broker instead of compiling
 #   SUPERMUX_SESSIOND=<path> use this sessiond instead of compiling
-#   SUPERMUX_FRPC=<path>    use this frpc instead of downloading
 #   SUPERMUX_TMUX=<path>    use this static tmux instead of fetching
 #   SUPERMUX_ZMX_DIR=<dir>  use this prebuilt zmx bundle (bin/ + manifest.json)
 #   SUPERMUX_SKIP_BROKER=1  don't compile missing broker/sessiond overrides (wiring tests)
@@ -85,15 +83,8 @@ else
   rm -f "$DEST/mux-sessiond.exe"
 fi
 
-# ── frpc (all targets) ────────────────────────────────────────────────────────────────
-if [ -n "${SUPERMUX_FRPC:-}" ]; then
-  echo "[stage] frpc: from SUPERMUX_FRPC=$SUPERMUX_FRPC"
-  cp "$SUPERMUX_FRPC" "$DEST/frpc$EXE"
-else
-  "$ROOT/scripts/fetch-frpc.sh" "$TARGET" "$DEST/frpc$EXE"
-fi
-chmod +x "$DEST/frpc$EXE" 2>/dev/null || true
-echo "[stage] frpc: $DEST/frpc$EXE ($(wc -c < "$DEST/frpc$EXE") bytes)"
+# The relay tunnel runs inside the broker now; an frpc left in an old staging dir must not ship.
+rm -f "$DEST/frpc" "$DEST/frpc.exe"
 
 # ── tmux (Linux/macOS only) ───────────────────────────────────────────────────────────
 if [ "$TARGET" = "windows-x64" ]; then

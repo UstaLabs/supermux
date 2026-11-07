@@ -28,12 +28,15 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.media.RangeResult
+import dev.supermux.util.PerfTrace
+import dev.supermux.proto.ClientLogEntry
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.push.NativePushRegistration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerialName
@@ -41,11 +44,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.Clock
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -211,8 +216,6 @@ data class SecretlessClaimResult(val paired: Boolean = false, val name: String =
 
 @Serializable
 data class AppConfigDto(
-    val paName: String = "",
-    val paWorkdir: String = "",
     val webPublicUrl: String = "",
     val telegramConfigured: Boolean = false,
     val claudeConfigured: Boolean = false,
@@ -238,6 +241,9 @@ data class AppConfigDto(
     val voiceCodexAvailable: Boolean = false,
     /** Probed, not stored: the configured STT engine is fast enough for live partial passes. */
     val voiceLivePartials: Boolean = false,
+    /** Probed, not stored: the broker takes live dictation as a stream (`/transcribe/stream`) —
+     *  it hears the pauses and owns the text, so the app only sends audio. */
+    val voiceStreaming: Boolean = false,
 )
 
 @Serializable
@@ -274,6 +280,10 @@ data class ArchivedDto(
     val agent: String = "claude",
     val killed_at: String? = null,
     val repo_root: String? = null,
+    /** "personal_assistant" for an archived Agent; null on an older broker. */
+    val role: String? = null,
+    /** An archived Agent's avatar content hash. */
+    val avatar: String? = null,
 )
 
 @Serializable
@@ -351,7 +361,7 @@ data class SpawnRequest(
     val reasoningLevel: String? = null,
     /** Catalog permission-mode id for the chosen agent (absent = broker default). */
     val permissionMode: String? = null,
-    /** Account id for the chosen agent (GET /accounts); absent = its system account. */
+    /** Absent = Auto: the broker picks the agent's account with the most room left. "<agent>:system" = the system login. */
     val account: String? = null,
     /** draft | in_progress — draft creates without spawning an agent process. */
     val userStatus: String? = null,
@@ -387,6 +397,8 @@ data class SpawnRequest(
      * handoff). The client must not also WS-send this text — that raced spawn.
      */
     val firstMessage: String? = null,
+    /** Card #75: the app's own id for [firstMessage] (`web-<uuid>`), the one the broker logs it under. */
+    @SerialName("client_message_id") val clientMessageId: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */
@@ -407,6 +419,9 @@ data class DraftAttachmentDto(
 
 @Serializable
 data class ReorderSessionsBody(val orderedIds: List<String>)
+
+@Serializable
+data class LinkPosterBody(val poster_file_id: String)
 
 @Serializable
 data class WorkspacesResponse(val workspaces: List<WorkspaceDto> = emptyList())
@@ -575,12 +590,17 @@ data class CreateProxyResponse(
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
 
-/** GET /me → paired status + optional relayUrl for native-push registration. */
+/**
+ * GET /me → paired status and the broker's relays. `relayUrl` is the connectivity relay when one is
+ * on, and the push relay on an older broker without one; `pushRelayUrl` is always the push relay
+ * (card #86).
+ */
 @Serializable
 data class MeResponse(
     val paired: Boolean = false,
     val device: String? = null,
     val relayUrl: String? = null,
+    val pushRelayUrl: String? = null,
 )
 
 // ─── Usage (GET /usage → fetchAllUsage) ──────────────────────────────────────
@@ -732,6 +752,9 @@ data class UsageResponse(
      *  it could not reach without a message, and a null map VALUE is not something
      *  `coerceInputValues` can rescue (it only defaults properties). */
     val errors: Map<String, String?> = emptyMap(),
+    /** Why a provider's [errors] entry, when the broker knows: `account_expired` = its login was refused,
+     *  sign in again. Absent on older brokers. */
+    val errorCodes: Map<String, String?> = emptyMap(),
     /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
     val fetchedAt: Map<String, String?> = emptyMap(),
     /** live | agent | local | cache — where each provider's current data came from. */
@@ -758,6 +781,8 @@ data class AccountUsage(
     val cursor: CursorUsage? = null,
     val grok: GrokUsage? = null,
     val error: String? = null,
+    /** Why [error], when the broker knows (`account_expired`: the login was refused). */
+    val errorCode: String? = null,
     val fetchedAt: String? = null,
     val refreshing: Boolean = false,
 )
@@ -864,7 +889,7 @@ data class VerifySuggestResult(val content: String = "", val source: String = ""
 @Serializable
 data class VerifySaveResult(val ok: Boolean = false, val reason: String? = null)
 
-// ─── Personal Assistants (GET/POST /api/pas) ─────────────────────────────────
+// ─── Agents (GET/POST /api/pas) ─────────────────────────────────
 @Serializable
 data class PADto(
     val id: String,
@@ -1013,6 +1038,10 @@ data class MessageSearchHit(
     val message_id: String,
     val ts: String = "",
     val direction: String = "",
+    /** "inbox" for a message from another session (or supermux, or a council). */
+    val channel: String = "",
+    /** Who sent an inbox message. */
+    val from_session_name: String? = null,
     /** The match with context either side; `…` marks a cut. */
     val snippet: String = "",
 )
@@ -1261,6 +1290,8 @@ data class AgentInstallStatus(
     val kind: String = "",
     val installed: Boolean = false,
     val authed: Boolean = false,
+    /** The provider refused the login on disk (an expired sign-in): [authed] is false, sign in again. */
+    val signInExpired: Boolean = false,
 )
 
 /** Broker-owned background job for installing one agent CLI. */
@@ -1307,6 +1338,8 @@ data class AccountUnavailableDto(
     val reason: String = "",
     /** ISO-8601. */
     val since: String = "",
+    /** A refusal clients act on: `account_expired` = the login must be signed in again. */
+    val code: String? = null,
 )
 
 /** Who an account is signed in as (whatever the agent's login exposes). */
@@ -1335,6 +1368,8 @@ data class AccountDto(
     val createdAt: String = "",
     val usage: List<AccountUsageWindowDto> = emptyList(),
     val unavailable: AccountUnavailableDto? = null,
+    /** The account "Auto" would start a new chat of this agent on now (the broker's pick). */
+    val auto: Boolean = false,
 )
 
 @Serializable
@@ -1494,9 +1529,6 @@ private data class RenameBody(val name: String)
 private data class MuteBody(val muted: Boolean)
 
 @Serializable
-private data class PaNameBody(val paName: String)
-
-@Serializable
 private data class CreateProxyBody(val sessionName: String, val port: Int, val domain: String? = null)
 
 @Serializable
@@ -1535,8 +1567,17 @@ private data class GlossaryBody(val glossary: List<String>)
 
 @Serializable
 private data class CreatePABody(
-    val name: String, val agent: String? = null, val model: String? = null, val focusText: String? = null,
+    val name: String,
+    val agent: String? = null,
+    val model: String? = null,
+    /** The avatar JSON (FORMAT.md) picked in the gallery; an older broker ignores it. */
+    val avatar: String? = null,
+    /** The effort (reasoning level) the Agent runs at. */
+    val reasoningLevel: String? = null,
 )
+
+@Serializable
+private data class UpdatePABody(val isDefault: Boolean? = null, val name: String? = null)
 
 @Serializable
 private data class PathBody(val path: String)
@@ -1596,7 +1637,6 @@ private data class OpenCodeOAuthFinishBody(val providerId: String, val method: I
 @Serializable
 private data class ConfigPatchBody(
     val onboarded: Boolean? = null,
-    val paName: String? = null,
     val voiceSttEngine: String? = null,
     val voiceCleanupModel: String? = null,
     val voiceCleanupEngine: String? = null,
@@ -1676,6 +1716,13 @@ private data class RefreshUsageBody(
     val force: Boolean,
 )
 
+/** How every BrokerApi failure's message starts: they are all CancellationExceptions (see `decode`). */
+private const val UNAVAILABLE = "BrokerApi request unavailable"
+
+/** POST /client-logs body: app log lines for the broker's own log. */
+@Serializable
+private data class ClientLogsBody(val entries: List<ClientLogEntry>)
+
 /** POST $relayUrl/register body. */
 @Serializable
 private data class RegisterPushRelayBody(
@@ -1708,6 +1755,11 @@ class BrokerApi(
     private val token: String,
     private val http: HttpClient,
 ) {
+    init {
+        // Card #54: every request this client sends lands in the load-time trace.
+        http.installPerfTrace()
+    }
+
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
@@ -1756,20 +1808,42 @@ class BrokerApi(
      */
     private suspend inline fun <reified T> decode(resp: HttpResponse): T {
         try {
+            val bodyStart = PerfTrace.elapsedMicros()
             val text = resp.bodyAsText()
-            if (resp.status.isSuccess()) return json.decodeFromString(text)
+            if (resp.status.isSuccess()) {
+                val decodeStart = PerfTrace.elapsedMicros()
+                val value: T = json.decodeFromString(text)
+                // Card #54: the body's read and decode, joined to its request by id.
+                resp.call.request.attributes.getOrNull(PerfRequestKey)?.let { perf ->
+                    PerfTrace.event(
+                        "http.body",
+                        "req" to perf.req,
+                        "chars" to text.length,
+                        "bodyMs" to (decodeStart - bodyStart) / 1000.0,
+                        "decodeMs" to (PerfTrace.elapsedMicros() - decodeStart) / 1000.0,
+                        trace = perf.trace,
+                    )
+                }
+                return value
+            }
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-            throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+            throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
             throw c
         } catch (e: Throwable) {
             println("[BrokerApi] request failed: ${e.message?.take(160)}")
-            throw CancellationException("BrokerApi request unavailable: ${e.message}")
+            throw CancellationException("$UNAVAILABLE: ${e.message}")
         }
     }
 
-    private suspend inline fun <reified T> getJson(url: String): T =
-        decode(http.get(url) { authHeader() })
+    /** GET [url] as [T]; [trace] files the request under a chat open rather than the launch (card #54). */
+    private suspend inline fun <reified T> getJson(url: String, trace: String? = null): T =
+        decode(
+            http.get(url) {
+                authHeader()
+                if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
+            },
+        )
 
     /**
      * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
@@ -1786,7 +1860,7 @@ class BrokerApi(
             ""
         }
         println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+        throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
     }
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
@@ -1988,11 +2062,18 @@ class BrokerApi(
         })
     }
 
-    /** DELETE /sessions/<id> */
+    /** DELETE /sessions/<id>. Non-2xx throws (SKIE-safe, see [ensureMutationSuccess]). */
     suspend fun kill(id: String) {
-        http.delete("$httpBase/sessions/$id") {
+        ensureMutationSuccess(http.delete("$httpBase/sessions/$id") {
             authHeader()
-        }
+        })
+    }
+
+    /** POST /councils/<id>/end — the user's Stop council: ends it and stops its members. Non-2xx throws. */
+    suspend fun endCouncil(id: String) {
+        ensureMutationSuccess(http.post("$httpBase/councils/$id/end") {
+            authHeader()
+        })
     }
 
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
@@ -2089,9 +2170,9 @@ class BrokerApi(
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
         decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
 
-    /** GET /archived-workspaces */
-    suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =
-        getJson<WorkspacesResponse>("$httpBase/archived-workspaces").workspaces
+    /** GET /archived-workspaces; [slim] = without views and layout (card #54). */
+    suspend fun listArchivedWorkspaces(slim: Boolean = false): List<WorkspaceDto> =
+        getJson<WorkspacesResponse>("$httpBase/archived-workspaces${if (slim) "?slim=1" else ""}").workspaces
 
     /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
     suspend fun restoreWorkspace(id: String): WorkspaceDto =
@@ -2228,10 +2309,11 @@ class BrokerApi(
         })
     }
 
-    /** POST /sessions */
-    suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
+    /** POST /sessions; [trace] files it under a session start (card #75) rather than the launch. */
+    suspend fun spawn(req: SpawnRequest, trace: String? = null): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
             authHeader()
+            if (trace != null) attributes.put(PerfRequestKey, PerfRequest(trace, PerfTrace.nextReq()))
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
@@ -2241,10 +2323,6 @@ class BrokerApi(
     suspend fun getConfig(): AppConfigDto =
         getJson("$httpBase/settings/config")
 
-    /** PUT /settings/config {"paName": ...} — back-compat shim; prefer [saveConfig]. */
-    suspend fun putConfig(paName: String) =
-        putJson("$httpBase/settings/config", PaNameBody(paName))
-
     /**
      * PUT /settings/config — partial patch. Only non-null args are serialized
      * (explicitNulls=false), so unset fields are never overwritten on the broker.
@@ -2252,7 +2330,6 @@ class BrokerApi(
      */
     suspend fun saveConfig(
         onboarded: Boolean? = null,
-        paName: String? = null,
         voiceSttEngine: String? = null,
         voiceCleanupModel: String? = null,
         voiceCleanupEngine: String? = null,
@@ -2267,7 +2344,6 @@ class BrokerApi(
         "$httpBase/settings/config",
         ConfigPatchBody(
             onboarded = onboarded,
-            paName = paName,
             voiceSttEngine = voiceSttEngine,
             voiceCleanupModel = voiceCleanupModel,
             voiceCleanupEngine = voiceCleanupEngine,
@@ -2357,36 +2433,6 @@ class BrokerApi(
             off += p.size
         }
         return out
-    }
-
-    /**
-     * GET /settings/soul → soul.md text.
-     * Empty string is a legitimate empty soul; non-2xx throws [CancellationException]
-     * (same SKIE-safe contract as [decode]) so callers can distinguish fetch-failure from
-     * an intentionally blank soul — critical so a failed load never becomes a blank Save.
-     */
-    suspend fun getSoul(): String {
-        val resp = http.get("$httpBase/settings/soul") { authHeader() }
-        if (resp.status.isSuccess()) return resp.bodyAsText()
-        val text = try {
-            resp.bodyAsText()
-        } catch (c: CancellationException) {
-            throw c
-        } catch (_: Throwable) {
-            ""
-        }
-        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
-    }
-
-    /** PUT /settings/soul (text/plain body) → true on success. */
-    suspend fun putSoul(text: String): Boolean {
-        val resp = http.put("$httpBase/settings/soul") {
-            authHeader()
-            contentType(ContentType.Text.Plain)
-            setBody(text)
-        }
-        return resp.status.isSuccess()
     }
 
     // ── Agents: install status + link/code login ───────────────────────────────
@@ -2800,12 +2846,15 @@ class BrokerApi(
         }
     }
 
-    /** GET /api/pas — the personal assistants. */
+    /** GET /api/pas — the Agents (kept on the old path so pre-Agents brokers answer too). */
     suspend fun listPAs(): List<PADto> = getJson<PAListResponse>("$httpBase/api/pas").pas
 
-    /** POST /api/pas {name, agent?, model?, focusText?} — spawn a personal assistant. */
-    suspend fun createPA(name: String, agent: String? = null, model: String? = null, focusText: String? = null) =
-        postJson("$httpBase/api/pas", CreatePABody(name, agent, model, focusText))
+    /** POST /api/pas {name, agent?, model?, avatar?} — create an Agent. Non-2xx throws. */
+    suspend fun createPA(name: String, agent: String? = null, model: String? = null, avatar: String? = null, reasoningLevel: String? = null) =
+        postJson("$httpBase/api/pas", CreatePABody(name, agent, model, avatar, reasoningLevel))
+
+    suspend fun updatePA(id: String, isDefault: Boolean? = null, name: String? = null) =
+        patchJson("$httpBase/api/pas/${urlEncode(id)}", UpdatePABody(isDefault, name))
 
     /** GET /proxies */
     suspend fun proxies(): List<ProxyDto> =
@@ -2972,6 +3021,19 @@ class BrokerApi(
     }
 
     /**
+     * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
+     * device's own uploads). False when the broker refused it, or is older than posters.
+     */
+    suspend fun linkPoster(clipFileId: String, posterFileId: String): Boolean {
+        val resp = http.post("$httpBase/files/${urlEncode(clipFileId)}/poster") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(LinkPosterBody(posterFileId)))
+        }
+        return resp.status.isSuccess()
+    }
+
+    /**
      * GET /files/<id> for bytes [from]..[to], streamed to [sink] as they arrive — the media cache's
      * download, so a 500 MB clip never sits in memory and no single request outlives its timeout.
      * Returns the file's total size, or null on any failure. The broker answers an end past the size
@@ -3105,8 +3167,8 @@ class BrokerApi(
         }).glossary
 
     /** GET /sessions/<id>/messages — the message log for a (possibly archived) session. */
-    suspend fun archivedLogs(sessionId: String): List<LogEntry> =
-        getJson("$httpBase/sessions/$sessionId/messages")
+    suspend fun archivedLogs(sessionId: String, trace: String? = null): List<LogEntry> =
+        getJson("$httpBase/sessions/$sessionId/messages", trace)
 
     /** GET /search/messages?q= — live sessions' messages containing [q], newest first. */
     suspend fun searchMessages(q: String, limit: Int = 50): List<MessageSearchHit> =
@@ -3114,8 +3176,8 @@ class BrokerApi(
 
     /** GET /sessions/<id>/chat-extras — an open chat's activity + slash commands, which a
      *  `trimExtras` snapshot leaves out for chats that were not on screen. */
-    suspend fun chatExtras(sessionId: String): ChatExtras =
-        getJson("$httpBase/sessions/$sessionId/chat-extras")
+    suspend fun chatExtras(sessionId: String, trace: String? = null): ChatExtras =
+        getJson("$httpBase/sessions/$sessionId/chat-extras", trace)
 
     /** GET /projects → known project working directories (absolute paths). */
     suspend fun listProjects(): List<String> =
@@ -3290,6 +3352,22 @@ class BrokerApi(
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
+    /** PUT /agents/<id>/avatar (the avatar JSON as the body). Non-2xx throws. */
+    suspend fun putAgentAvatar(agentId: String, json: String) {
+        val resp = http.put("$httpBase/agents/${urlEncode(agentId)}/avatar") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json)
+        }
+        if (!resp.status.isSuccess()) throw IllegalStateException("avatar not saved (${resp.status.value}): ${resp.bodyAsText().take(200)}")
+    }
+
+    /** GET /agents/<id>/avatar → the Agent's avatar JSON (FORMAT.md); null when it has none. */
+    suspend fun getAgentAvatar(agentId: String): String? {
+        val resp = http.get("$httpBase/agents/${urlEncode(agentId)}/avatar") { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsText() else null
+    }
+
     /** GET /sessions/<id>/walkthrough → { walkthrough } envelope; null when none authored. */
     suspend fun getWalkthrough(sessionId: String): Walkthrough? =
         getJson<WalkthroughResult>("$httpBase/sessions/$sessionId/walkthrough").walkthrough
@@ -3431,11 +3509,76 @@ class BrokerApi(
     // ── Push registration ─────────────────────────────────────────────────────
 
     /**
-     * GET /me → returns the `relayUrl` field (null when the broker is not configured
-     * with a relay URL or the response can't be decoded).
+     * GET /me → the broker's push relay: `pushRelayUrl`, or `relayUrl` from a broker older than
+     * card #86; null when it names neither. With the hosted connectivity relay on, an older
+     * broker's `relayUrl` is the tunnel, which answers /register with a 404.
      */
-    suspend fun pushRelayUrl(): String? =
-        getJson<MeResponse>("$httpBase/me").relayUrl
+    suspend fun pushRelayUrl(): String? {
+        val me = getJson<MeResponse>("$httpBase/me")
+        return me.pushRelayUrl?.takeIf { it.isNotBlank() } ?: me.relayUrl
+    }
+
+    /**
+     * One phone's native-push registration with this broker: its push relay takes [pushToken]
+     * and returns a routing token, which this broker then stores with [pubkey]. How it ended also
+     * goes to the broker's log (client log, category "push", never a token): from 10-27 every
+     * phone failed here and only the phone's own log said so (card #86). A real cancellation is
+     * rethrown; every other failure is the result.
+     */
+    suspend fun registerNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val outcome = attemptNativePush(platform, pushToken, pubkey)
+        reportPush(platform, outcome)
+        return outcome
+    }
+
+    private suspend fun attemptNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val relayUrl = try {
+            pushRelayUrl()
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("me", failureOf(e))
+        }
+        if (relayUrl.isNullOrBlank()) return NativePushRegistration.NoPushRelay
+        val routingToken = try {
+            registerPushTokenWithRelay(relayUrl, platform, pushToken)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("relay", failureOf(e), relayUrl)
+        } ?: return NativePushRegistration.AwaitingBootstrap(relayUrl)
+        try {
+            registerPushDevice(platform, routingToken, pubkey)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("broker", failureOf(e), relayUrl)
+        }
+        return NativePushRegistration.Registered(routingToken, relayUrl)
+    }
+
+    /** Best effort: a broker that cannot take the report has the registration all the same. */
+    private suspend fun reportPush(platform: String, outcome: NativePushRegistration) {
+        val (event, details) = when (outcome) {
+            is NativePushRegistration.Registered -> "push_registered" to mapOf("relay" to outcome.relayUrl)
+            is NativePushRegistration.NoPushRelay -> "push_register_skipped" to mapOf("reason" to "no_push_relay")
+            is NativePushRegistration.AwaitingBootstrap ->
+                "push_register_pending" to mapOf("relay" to outcome.relayUrl, "reason" to "awaiting_bootstrap")
+            is NativePushRegistration.Failed -> "push_register_failed" to buildMap {
+                put("stage", outcome.stage)
+                put("error", outcome.error)
+                outcome.relayUrl?.let { put("relay", it) }
+            }
+        }
+        val data = JsonObject((details + ("platform" to platform)).mapValues { JsonPrimitive(it.value) })
+        val entry = ClientLogEntry("push", event, Clock.System.now().toEpochMilliseconds(), data)
+        try {
+            postJson("$httpBase/client-logs", ClientLogsBody(listOf(entry)))
+        } catch (e: Throwable) {
+            failureOf(e)
+        }
+    }
+
+    /** A failed request as text. Every BrokerApi failure arrives as a CancellationException
+     *  (see [decode]); a real cancellation is rethrown. */
+    private fun failureOf(e: Throwable): String {
+        if (e is CancellationException && e.message?.startsWith(UNAVAILABLE) != true) throw e
+        return (e.message ?: e::class.simpleName ?: "failed").take(300)
+    }
 
     /**
      * POST /push/device — registers this device with the broker after the app has
@@ -3549,4 +3692,6 @@ data class ChatExtras(
     val activity: List<dev.supermux.proto.ActivityEvent> = emptyList(),
     val commands: List<dev.supermux.proto.SlashCommand> = emptyList(),
     val commandsResolved: Boolean = false,
+    /** The session's full subagent list (card #54); null from an older broker. */
+    val subagents: List<dev.supermux.proto.Subagent>? = null,
 )

@@ -9,7 +9,7 @@ import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type 
 import { resolveCommand } from "../../process/launcher"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
@@ -120,7 +120,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.codexHost)
-  const sessionHome = join(STATE_DIR, "agents", "codex", name)
+  const sessionHome = join(STATE_DIR, "agents", "codex", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Codex, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -183,6 +183,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)
@@ -219,12 +221,13 @@ export async function resumeCodexSession(
     onThreadId?: (name: string, sid: string) => void
     codexHost?: CodexCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; fast?: boolean; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; fast?: boolean; agent_session_id?: string; permissionMode?: string; account?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     command: resolveCodexCommand({}),
@@ -243,6 +246,7 @@ export async function resumeCodexSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         command: resolveCodexCommand({}),
@@ -315,6 +319,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

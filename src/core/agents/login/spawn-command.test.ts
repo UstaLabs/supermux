@@ -18,6 +18,8 @@ describe("antigravity loginSpawnCommand", () => {
       expect(spec.env?.DISPLAY).toBeUndefined()
       expect(spec.env?.WAYLAND_DISPLAY).toBeUndefined()
       expect(spec.env?.BROWSER).toBe("true")
+      // Off Windows agy's updater is silent and keeps agy current: left on (#70).
+      expect(spec.env?.AGY_CLI_DISABLE_AUTO_UPDATE).toBeUndefined()
       expect(process.env.DISPLAY).toBe(":0")
       expect(spec.cwd).toBeDefined()
       expect(spec.cwd!.startsWith(tmpdir())).toBe(true)
@@ -76,8 +78,19 @@ describe("antigravity loginSpawnCommand", () => {
     expect(spec.detached).toBe(true)
   })
 
-  test("Windows has no pty: no system login command", () => {
-    expect(antigravityLoginSpawnCommand("win32")).toBeNull()
+  test("Windows runs agy under a ConPTY, with no sh openers and no BROWSER=true", () => {
+    const spec = antigravityLoginSpawnCommand("win32")!
+    try {
+      expect(spec.conpty).toBe(true)
+      expect(spec.cmd).toBe(resolveCommand(["agy"], spec.env!, "win32") ?? "agy")
+      expect(spec.args).toEqual(["-p=Reply with the single word OK."])
+      expect(spec.env?.BROWSER).toBe(process.env.BROWSER)
+      expect(readdirSync(join(spec.cwd!, "..", ".bin"))).toEqual([])
+      // agy's updater would open a console window during the sign-in (#70).
+      expect(spec.env?.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true")
+    } finally {
+      spec.cleanup?.()
+    }
   })
 
   test("is the antigravity entry of the per-kind table", () => {
@@ -91,8 +104,12 @@ describe("shQuote / ptyLoginSpawnCommand", () => {
     expect(shQuote("it's")).toBe("'it'\\''s'")
   })
 
-  test("linux wraps any command in util-linux script", () => {
-    expect(ptyLoginSpawnCommand("echo hi", "x", "linux")).toEqual({ cmd: "script", args: ["-qec", "echo hi", "/dev/null"] })
+  test("linux wraps any command in util-linux script, every word quoted", () => {
+    expect(ptyLoginSpawnCommand("/opt/a b/x", ["it's"], "x", "linux")).toEqual({ cmd: "script", args: ["-qec", "stty cols 600; exec '/opt/a b/x' 'it'\\''s'", "/dev/null"] })
+  })
+
+  test("windows asks the spawner for a ConPTY with the plain argv (there is no script)", () => {
+    expect(ptyLoginSpawnCommand("claude", ["auth", "login"], "x", "win32")).toEqual({ cmd: "claude", args: ["auth", "login"], conpty: true })
   })
 })
 
@@ -104,7 +121,7 @@ describe("claudeLoginSpawnCommand", () => {
         "-c",
         `cat | /bin/sh -c 'trap "/usr/bin/pkill -TERM -P \\"$PPID\\" -x cat 2>/dev/null || true" EXIT; /usr/bin/script -q /dev/null /bin/sh -c "$1"' supermux-claude-script "$1"`,
         "supermux-claude-login",
-        "stty cols 600; exec claude auth login",
+        "stty cols 600; exec 'claude' 'auth' 'login'",
       ],
       detached: true,
     })
@@ -113,8 +130,12 @@ describe("claudeLoginSpawnCommand", () => {
   test("uses util-linux script syntax on Linux", () => {
     expect(claudeLoginSpawnCommand("linux")).toEqual({
       cmd: "script",
-      args: ["-qec", "stty cols 600; exec claude auth login", "/dev/null"],
+      args: ["-qec", "stty cols 600; exec 'claude' 'auth' 'login'", "/dev/null"],
     })
+  })
+
+  test("uses a ConPTY on Windows", () => {
+    expect(claudeLoginSpawnCommand("win32")).toEqual({ cmd: "claude", args: ["auth", "login"], conpty: true })
   })
 
   test.skipIf(process.platform !== "darwin")("macOS wrapper exits when the PTY command exits while stdin remains open", async () => {

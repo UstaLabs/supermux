@@ -49,6 +49,19 @@ test("a lock written before the last boot is reclaimed even if its pid is alive 
   await store.open()
   expect(JSON.parse(await readFile(join(dir, ".core.lock"), "utf8")).startedAt).not.toBe("2000-01-01T00:00:00.000Z")
 })
+// #36: after an unclean stop (on Windows every external stop is one) the lock's pid can belong, in the same boot, to
+// an unrelated live process: here, this one. The core then refused the state until someone deleted the file by hand.
+// The kernel lock decides now: while no core holds it, a readable .core.lock is stale whatever its pid.
+test("a lock whose pid is alive again in the same boot is reclaimed while no core holds the state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "core-store-"))
+  dirs.push(dir)
+  const left = new Date(Date.now() - 1000).toISOString()
+  await writeFile(join(dir, ".core.lock"), JSON.stringify({ pid: process.pid, startedAt: left }))
+  const store = new SessionStore(dir)
+  stores.push(store)
+  await store.open()
+  expect(JSON.parse(await readFile(join(dir, ".core.lock"), "utf8")).startedAt).not.toBe(left)
+})
 test("an unreadable lock is never reclaimed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "core-store-"))
   dirs.push(dir)

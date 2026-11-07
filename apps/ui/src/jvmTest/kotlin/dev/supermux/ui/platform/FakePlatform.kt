@@ -247,6 +247,11 @@ internal class FakeFiles(
         stagedBytes.add(bytes.size)
         return if (stageFails) null else "file:///fake/$name"
     }
+
+    /** What [posterJpeg] makes of a pick's preview (a phone's grabbed frame); none by default. */
+    var posterFrames: (Any?) -> ByteArray? = { null }
+
+    override fun posterJpeg(preview: Any?): ByteArray? = posterFrames(preview)
 }
 
 /** Recording [MicCapture]: drive it through [startResult]/[audio] and assert [events]. */

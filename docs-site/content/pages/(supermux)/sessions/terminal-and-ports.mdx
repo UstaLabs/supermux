@@ -1,0 +1,44 @@
+---
+title: Terminal and ports
+description: Open a real terminal in any workspace, and turn a port on your computer into a link you can open anywhere.
+---
+
+## Terminal
+
+Press <Kbd>Ctrl</Kbd> <Kbd>T</Kbd> (<Kbd>⌘</Kbd> <Kbd>T</Kbd> on a Mac), or click **+** in the tab bar and choose **Terminal**. You get a shell in the workspace's folder, on the computer that runs your agents.
+
+- **It keeps running.** Close the app or lose the connection, and the shell is still there when you come back.
+- **Closing the tab stops it.** supermux asks first.
+- **Copy and paste** work with <Kbd>Ctrl</Kbd> <Kbd>Shift</Kbd> <Kbd>C</Kbd> / <Kbd>V</Kbd> or <Kbd>⌘</Kbd> <Kbd>C</Kbd> / <Kbd>V</Kbd>. <Kbd>Ctrl</Kbd> <Kbd>C</Kbd> copies when text is selected, and interrupts the program otherwise.
+- **Find** with <Kbd>Ctrl</Kbd> <Kbd>Shift</Kbd> <Kbd>F</Kbd> or <Kbd>⌘</Kbd> <Kbd>F</Kbd>.
+- **Links** ask before they open.
+
+### On a phone or tablet
+
+A key bar sits above the on-screen keyboard: **Esc**, **Tab**, **Ctrl**, **Alt**, the arrow keys, **Home**, **End**, **PgUp**, **PgDn**, a few symbols, **Paste**, **Find** and **Hide keyboard**.
+
+**Ctrl** and **Alt** are sticky: tap once to use them with the next key, twice to keep them on, and once more to let go.
+
+## Ports
+
+When an agent runs a web app or a server, you often want to open it in a browser, maybe on your phone. supermux can turn any port on your computer into a link.
+
+Ask the agent, for example "start the dev server and give me a link". It exposes the port and replies with the address.
+
+- **Private** (the default): only your paired devices can open it.
+- **Public**: anyone with the link can open it. Use this for sharing, and switch it back afterwards.
+
+### Where to find your links
+
+- **In a chat**: the globe button in the chat's header lists that session's links.
+- **Proxies**: open **Settings ▸ Proxies** (or **Proxies** in the sidebar's **⋮** menu) to see every link. You can copy or open a link, switch it between public and private, or **Remove** it. **Expose port** adds one yourself: pick the session and the port.
+
+Making a link public asks first: anyone with the URL can then reach that port.
+
+<Callout title="Links that live under a path">
+By default a link looks like `https://…/p/my-app/`. Apps that expect to sit at the root of a domain, like many development servers, may not load there. Setting up your own domain with subdomains avoids that; it's an advanced setting on a server install.
+</Callout>
+
+## Displays
+
+Agents can also start a display: a screen you can watch and control from the app. On Linux it's a virtual screen, on a Mac it's your real screen (with Screen Sharing turned on), and it can also be an Android phone or emulator. It opens as a **Display** view in the workspace.

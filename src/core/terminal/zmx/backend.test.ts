@@ -12,6 +12,7 @@ import {
   type WorkspaceBackendWorld,
 } from "../workspace-backend.contract"
 import {
+  isWorkspaceTerminalError,
   WorkspaceTerminalError,
   type WorkspaceTerminalEvent,
   type WorkspaceTerminalKey,
@@ -45,6 +46,11 @@ import type { HelperCommandBody, HelperEvent } from "./protocol"
 
 const encoder = new TextEncoder()
 
+/** The next turn of the event loop. By then the microtask queue — every promise
+ * hop a prompt `emit` needs — has drained, which is the moment the viewer cap
+ * is judged at (`ZmxViewer.#checkBacklog`). */
+const nextTurn = () => new Promise<void>(resolve => setImmediate(resolve))
+
 type FakeTarget = {
   name: string
   socket: string
@@ -72,6 +78,10 @@ class FakeZmx {
   createGate?: Promise<void>
   attachGate?: Promise<void>
   killGate?: Promise<void>
+  /** Hold an attach AFTER its connect and BEFORE its label handshake — the
+   * window in which the real helper is reading `mux.target` from a daemon it
+   * has already connected to. `reached` fires once an attach is in it. */
+  handshake?: { reached: () => void; gate: Promise<void> }
   /** Every command any helper was asked to run, for order assertions. */
   readonly commands: HelperCommandBody[] = []
   readonly launched: FakeHelper[] = []
@@ -174,6 +184,17 @@ class FakeHelper implements ZmxHelperFacade {
     await this.world.attachGate
     const target = this.world.targets.get(command.socket)
     if (!target) throw new WorkspaceTerminalError("target-not-found", "ConnectionRefused")
+    const handshake = this.world.handshake
+    if (handshake) {
+      handshake.reached()
+      await handshake.gate
+      // The daemon hung up while the label was being read: the helper's
+      // `verifyTarget` says `Disconnected`, which it maps to
+      // `backend-unavailable` — it cannot tell a closed target from a crash.
+      if (!this.world.targets.has(command.socket)) {
+        throw new WorkspaceTerminalError("backend-unavailable", "Disconnected", true)
+      }
+    }
     this.#verify(target, command.name)
     this.#attached = target
     target.viewers.push(this)
@@ -715,6 +736,51 @@ describe("ZmxWorkspaceBackend", () => {
     expect(events.some(event => event.type === "exit")).toBe(false)
   })
 
+  test("a close that hangs up on an attach mid-handshake is target-not-found, not a retryable failure", async () => {
+    // The real helper CONNECTS first and reads the daemon's `mux.target` label
+    // second. A kill landing between the two makes the daemon hang up on it,
+    // and the helper reports that as `backend-unavailable`, recoverable — from
+    // where it stands a closed target and a crashed one look alike. Passed
+    // through, a client would retry a terminal that no longer exists. This is
+    // the order tests/integration/zmx-workspace.test.ts kept losing on CI.
+    const { fake, backend } = harness()
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const inHandshake = deferred()
+    const hangUp = deferred()
+    fake.handshake = { reached: inHandshake.resolve, gate: hangUp.promise }
+
+    const { events, emit } = recorder()
+    const attaching = backend.attachExisting(CONTRACT_A, "racer", emit)
+    await inHandshake.promise // connected, reading the label
+    await backend.close(CONTRACT_A) // the kill lands: the daemon is gone
+    hangUp.resolve()
+
+    const error = await attaching.then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "target-not-found")).toBe(true)
+    expect((error as { recoverable: boolean }).recoverable).toBe(false)
+    expect(events).toEqual([])
+    expect(await backend.exists(CONTRACT_A)).toBe(false)
+  })
+
+  test("an attach the daemon hangs up on with NO close in flight stays a retryable failure", async () => {
+    // The other side of the same line: without a close of ours, a hang-up is
+    // exactly what `backend-unavailable` is for, and it is not dressed up.
+    const { fake, backend } = harness()
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const inHandshake = deferred()
+    const hangUp = deferred()
+    fake.handshake = { reached: inHandshake.resolve, gate: hangUp.promise }
+
+    const attaching = backend.attachExisting(CONTRACT_A, "unlucky", recorder().emit)
+    await inHandshake.promise
+    fake.targets.delete(fake.target(CONTRACT_A)!.socket) // the daemon crashed
+    hangUp.resolve()
+
+    const error = await attaching.then(() => null, (e: unknown) => e)
+    expect(isWorkspaceTerminalError(error, "backend-unavailable")).toBe(true)
+    expect((error as { recoverable: boolean }).recoverable).toBe(true)
+  })
+
   test("a close the broker asked for is not reported to the client as a failure", async () => {
     const { backend } = harness()
     await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
@@ -748,12 +814,14 @@ describe("ZmxWorkspaceBackend", () => {
 
     slow = true
     helper.emitOutput(new Uint8Array(512)) // taken; `emit` blocks on it
-    await Bun.sleep(1) // ...and really has, before anything queues behind it
+    await nextTurn() // ...and really has, before anything queues behind it
     helper.emitOutput(new Uint8Array(512)) // queued: exactly at the cap
+    await nextTurn()
     expect(events.some(event => event.type === "failure")).toBe(false)
-    helper.emitOutput(new Uint8Array(1)) // one byte over, and that is that
+    helper.emitOutput(new Uint8Array(1)) // one byte over...
+    await nextTurn() // ...and still over once the event loop has turned: that is that
     stall.resolve()
-    await Bun.sleep(5)
+    await nextTurn()
 
     const failure = events.find(event => event.type === "failure")
     expect(failure).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
@@ -769,6 +837,29 @@ describe("ZmxWorkspaceBackend", () => {
     expect(other.events.some(event => event.type === "failure")).toBe(false)
     expect(other.events.filter(event => event.type === "output").length).toBeGreaterThan(1)
     expect(await backend.exists(CONTRACT_A)).toBe(true)
+  })
+
+  test("a burst past the cap that a prompt emit takes in the same turn does not drop the viewer", async () => {
+    // THE FALSE DROP. Bun hands a flood over in bursts — several MiB in one
+    // turn of the event loop — and inside that turn the helper's reader takes
+    // a frame per microtask while each delivery is several promise hops long,
+    // so the count runs past the cap although `emit` returns at once. That
+    // viewer is not behind; by the next turn it has had every byte. Dropping it
+    // is what cut the integration suite's FAST readers off mid-flood on CI.
+    const { fake, backend } = harness({ viewerPendingMax: 1024 })
+    await backend.ensure(CONTRACT_A, CONTRACT_ENSURE)
+    const { events, emit } = recorder()
+    await backend.attachExisting(CONTRACT_A, "prompt", emit)
+    const helper = fake.launched.at(-1)!
+    const outputs = () => events.filter(event => event.type === "output").length
+    const before = outputs()
+
+    // 32 KiB — thirty-two times the cap — handed over within one turn.
+    for (let i = 0; i < 64; i++) helper.emitOutput(new Uint8Array(512))
+    await nextTurn()
+
+    expect(events.some(event => event.type === "failure")).toBe(false)
+    expect(outputs()).toBe(before + 64)
   })
 
   test("list reports milliseconds from the daemon's own clock, oldest first", async () => {

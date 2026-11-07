@@ -18,6 +18,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.SettingsKeys
+import dev.supermux.state.liveRepliesOn
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.ThemeDefaults
@@ -139,6 +140,13 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putFilesRevealActive(value: Boolean) =
         settings.putString(SettingsKeys.FILES_REVEAL_ACTIVE, value.toString())
 
+    /** The `/` menu's Recent for [agent]: the command names last picked or sent, newest first. */
+    fun slashRecents(agent: String): Flow<List<String>> =
+        settings.string(SettingsKeys.slashRecents(agent)).map { raw -> raw?.split('\n')?.filter { it.isNotBlank() }.orEmpty() }
+
+    suspend fun putSlashRecents(agent: String, names: List<String>) =
+        settings.putString(SettingsKeys.slashRecents(agent), names.joinToString("\n"))
+
     /** Chat transcript density (web `cmux:chat-detail` parity). Unknown/absent → MEDIUM. */
     val chatDetailLevel: Flow<ChatDetailLevel> =
         settings.string(SettingsKeys.CHAT_DETAIL_LEVEL).map { ChatDetailLevel.parse(it) }
@@ -155,6 +163,18 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putChatDetailLevel(level: ChatDetailLevel) {
         val next = sanitizeSetLevel(level) ?: return
         settings.putString(SettingsKeys.CHAT_DETAIL_LEVEL, next.wire)
+    }
+
+    /** Card #76: "Show replies as they're written" (Settings › Appearance); on unless turned off. */
+    val liveReplies: Flow<Boolean> = settings.string(SettingsKeys.LIVE_REPLIES).map { liveRepliesOn(it) }
+
+    /**
+     * On clears the key rather than writing "true": the default costs this device's settings file nothing, so on
+     * desktop (where two app instances can share one settings.json, last writer wins) only an actual "off" is ever
+     * written.
+     */
+    suspend fun putLiveReplies(on: Boolean) {
+        settings.putString(SettingsKeys.LIVE_REPLIES, if (on) null else "false")
     }
 
     // ── Appearance (cluster E7) ────────────────────────────────────────────────────────────────
@@ -192,6 +212,38 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putDynamicColor(value: Boolean) =
         settings.putString(SettingsKeys.DYNAMIC_COLOR, value.toString())
+
+    /** The assistant overlay (#62, experimental): the default Agent floating over other apps. Off unless turned on. */
+    val assistantOverlay: Flow<Boolean> =
+        settings.string(SettingsKeys.ASSISTANT_OVERLAY).map { it?.toBooleanStrictOrNull() ?: false }
+
+    suspend fun putAssistantOverlay(value: Boolean) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY, value.toString())
+
+    /** The Agent the overlay shows on this device (a session id); null = the default Agent. */
+    val assistantOverlayAgent: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_AGENT)
+
+    suspend fun putAssistantOverlayAgent(sessionId: String?) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_AGENT, sessionId)
+
+    /** Your screen goes with what you say when you hold the overlay to talk; on unless turned off. */
+    val assistantOverlayScreen: Flow<Boolean> =
+        settings.string(SettingsKeys.ASSISTANT_OVERLAY_SCREEN).map { it?.toBooleanStrictOrNull() ?: true }
+
+    suspend fun putAssistantOverlayScreen(value: Boolean) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_SCREEN, value.toString())
+
+    /** The desktop overlay's hold-to-talk key (#62), as stored; null = its default. */
+    val assistantOverlayTalkKey: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_TALK_KEY)
+
+    suspend fun putAssistantOverlayTalkKey(value: String) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_TALK_KEY, value)
+
+    /** Where the desktop overlay's head rests (#62), as written down; null = its usual spot. */
+    val assistantOverlaySpot: Flow<String?> = settings.string(SettingsKeys.ASSISTANT_OVERLAY_SPOT)
+
+    suspend fun putAssistantOverlaySpot(value: String) =
+        settings.putString(SettingsKeys.ASSISTANT_OVERLAY_SPOT, value)
 
     /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
     val textScale: Flow<Float> =

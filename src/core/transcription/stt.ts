@@ -104,6 +104,7 @@ export async function runStt(audioPath: string, opts: RunSttOpts = {}): Promise<
     keyterms: opts.keyterms,
     fromMs: opts.fromMs,
     previousText: opts.previousText,
+    context: opts.context,
     stream: opts.stream,
     endStream: opts.endStream,
     signal: opts.signal,

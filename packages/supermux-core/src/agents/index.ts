@@ -408,8 +408,13 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('OpenCode command is required')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('OpenCode model must be a nonempty string')
   const { model, ...rest } = options
+  // OpenCode's file watcher (@parcel/watcher 2.5.6) starts on the JS main thread at the first prompt. When
+  // inotify_init1 fails (the user's fs.inotify.max_user_instances is used up) its start throws without
+  // signalling, and the main thread waits forever: no model call, no error, every cancel ignored (verified
+  // on 1.18.34, 2026-10-31). ACP sessions don't use its events. A host's own setting is kept.
+  const watcher: Record<string, string> = rest.inheritEnv && process.env.OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER !== undefined ? {} : { OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' }
   // --print-logs is the only place OpenCode reports provider failures (the ACP turn ends as a normal completion).
-  return acp({ ...rest, vendor: 'opencode', contextAdapter: opencodeContext(rest.mcpServers), args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
+  return acp({ ...rest, env: { ...watcher, ...rest.env }, vendor: 'opencode', contextAdapter: opencodeContext(rest.mcpServers), args: ['acp', '--print-logs', '--log-level', 'ERROR'], captureStderr: true, ...(model ? { sessionConfig: { model } } : {}) })
 }
 
 const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])

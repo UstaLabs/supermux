@@ -232,7 +232,7 @@ class SystemSettingsHubTest {
     }
 
     @Test fun rail_switches_from_agents_to_system() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when (req.url.encodedPath) {

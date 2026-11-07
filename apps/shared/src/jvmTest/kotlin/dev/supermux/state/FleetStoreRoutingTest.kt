@@ -37,7 +37,12 @@ class FleetStoreRoutingTest {
         override fun saveAll(hosts: List<PairedHost>) { this.hosts = hosts.toMutableList() }
     }
 
-    private class Fixture(val fleet: FleetStore, val calls: Map<String, MutableList<String>>)
+    private class Fixture(
+        val fleet: FleetStore,
+        val calls: Map<String, MutableList<String>>,
+        /** Archive refreshes, kept apart: every Snapshot fires one in the background. */
+        val archiveCalls: Map<String, MutableList<String>>,
+    )
 
     /** MockEngine answers on a real dispatcher, so wait on wall-clock time, not virtual time. */
     private suspend fun await(what: String, cond: () -> Boolean) {
@@ -52,6 +57,10 @@ class FleetStoreRoutingTest {
 
     private fun fixture(scope: kotlinx.coroutines.CoroutineScope): Fixture {
         val calls = mapOf("a" to mutableListOf<String>(), "b" to mutableListOf<String>())
+        val archiveCalls = mapOf(
+            "a" to java.util.Collections.synchronizedList(mutableListOf<String>()),
+            "b" to java.util.Collections.synchronizedList(mutableListOf<String>()),
+        )
         val store = PairedHostStore(FakePersistence(mutableListOf(hostRecord("a"), hostRecord("b")))) { "rec" }
         val apps = mutableMapOf<String, HostStore>()
         val fleet = FleetStore(
@@ -61,11 +70,16 @@ class FleetStoreRoutingTest {
             appFactory = { url, token, onConn ->
                 val key = url.removePrefix("http://")
                 val http = HttpClient(MockEngine { req ->
-                    // Every Snapshot refreshes the launcher's model catalog in the background; its
-                    // reply lands on the engine's own thread, often after a test cleared `calls`,
-                    // and would read as a stray call to the wrong host. Not routing — skip it.
+                    // Every Snapshot refreshes the launcher's model catalog and the archive lists in
+                    // the background; their replies land on the engine's own thread, often after a
+                    // test cleared `calls`, and would read as stray calls to the wrong host. Not
+                    // routing: the catalog is skipped, the archive refreshes go to `archiveCalls`.
                     if (req.url.encodedPath == "/agents/models") {
                         return@MockEngine respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                    if (req.url.encodedPath == "/archived-sessions" || req.url.encodedPath == "/archived-workspaces") {
+                        archiveCalls.getValue(key) += "${req.method.value} ${req.url.encodedPath}"
+                        return@MockEngine respond("[]", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
                     }
                     calls.getValue(key) += "${req.method.value} ${req.url.encodedPath}"
                     respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
@@ -90,7 +104,7 @@ class FleetStoreRoutingTest {
                 workspaces = listOf(WorkspaceDto(id = "w-b", name = "WB", workdir = "/b")),
             ),
         )
-        return Fixture(fleet, calls)
+        return Fixture(fleet, calls, archiveCalls)
     }
 
     @Test fun perSessionActionHitsTheOwningHostOnly() = runTest(UnconfinedTestDispatcher()) {
@@ -159,6 +173,7 @@ class FleetStoreRoutingTest {
         val f = fixture(this)
         advanceUntilIdle()
         f.calls.values.forEach { it.clear() }
+        f.archiveCalls.values.forEach { it.clear() }
 
         // Suspend + Boolean since cluster F1 (desktop's `HostStore.resume` shape), so a caller can
         // see the refusal instead of the old fire-and-forget launch swallowing it.
@@ -166,9 +181,9 @@ class FleetStoreRoutingTest {
         advanceUntilIdle()
         assertTrue(ok, "a 200 from the owning host must come back as true")
 
-        await("resume must POST then re-pull archived, got ${f.calls.getValue("b")}") {
+        await("resume must POST then re-pull archived, got ${f.calls.getValue("b")} / ${f.archiveCalls.getValue("b")}") {
             f.calls.getValue("b").any { it.contains("/sessions/s-b/resume") } &&
-                f.calls.getValue("b").any { it.contains("/archived-sessions") }
+                f.archiveCalls.getValue("b").any { it.contains("/archived-sessions") }
         }
         assertEquals(emptyList(), f.calls.getValue("a").toList())
         f.fleet.close()
@@ -180,11 +195,41 @@ class FleetStoreRoutingTest {
         f.calls.values.forEach { it.clear() }
 
         f.fleet.setActiveHost("b")
-        f.fleet.saveName("box")
+        f.fleet.revoke("box")
         advanceUntilIdle()
 
         await("active host B should take the host-global call") { f.calls.getValue("b").isNotEmpty() }
         assertEquals(emptyList(), f.calls.getValue("a").toList())
+        f.fleet.close()
+    }
+
+    // The Agents (and the flat list) can mix hosts. Every host that owns one of the dropped rows
+    // gets the WHOLE order, so each one saves its own rows at their place in the merged list.
+    @Test fun reorderingAMixedHostScopeSavesItOnEveryOwningHost() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.reorderWorkspaces(listOf("w-b", "w-a"))
+        advanceUntilIdle()
+
+        await("both hosts own a dropped row, got A=${f.calls.getValue("a")} B=${f.calls.getValue("b")}") {
+            "PATCH /workspaces/reorder" in f.calls.getValue("a") && "PATCH /workspaces/reorder" in f.calls.getValue("b")
+        }
+        assertEquals(mapOf("w-b" to 0, "w-a" to 1), f.fleet.workspaces.value.associate { it.id to it.sortOrder })
+        f.fleet.close()
+    }
+
+    @Test fun reorderingOneHostsRowsLeavesTheOtherHostAlone() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.reorderWorkspaces(listOf("w-b"))
+        advanceUntilIdle()
+
+        await("host B owns w-b, got ${f.calls.getValue("b")}") { "PATCH /workspaces/reorder" in f.calls.getValue("b") }
+        assertEquals(emptyList(), f.calls.getValue("a").toList(), "host A owns none of the dropped rows")
         f.fleet.close()
     }
 }

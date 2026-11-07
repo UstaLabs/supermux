@@ -1,6 +1,7 @@
 import {createInterface} from 'node:readline'
 import {appendFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {spawn} from 'node:child_process'
+import {randomUUID} from 'node:crypto'
 
 const argv = process.argv.slice(2)
 if (process.env.PID_FILE) writeFileSync(process.env.PID_FILE, String(process.pid))
@@ -91,6 +92,13 @@ if (process.env.EXPECT_DEFAULT_DENY !== '0') {
 if (process.env.EXPECT_MODEL && flag('--model') !== process.env.EXPECT_MODEL) fail(15, 'model mismatch')
 if (process.env.EXPECT_EFFORT && flag('--effort') !== process.env.EXPECT_EFFORT) fail(16, 'effort mismatch')
 
+// The real CLI (2.1.308) for a --resume with no conversation file: an error result on stdout, exit 1,
+// before it reads stdin. Claude writes that file only with the first message.
+if (resume === 'never-sent') {
+  send({type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0, session_id: resume, errors: [`No conversation found with session ID: ${resume}`]})
+  process.exit(1)
+}
+
 if (process.env.MODE === 'setup-hang') {
   setInterval(() => {}, 1 << 30)
 } else {
@@ -113,16 +121,23 @@ if (process.env.MODE === 'setup-hang') {
       if (process.env.MODE === 'wrong-resume-early') {
         send(initFrame('ffffffff-ffff-4fff-8fff-ffffffffffff'))
       }
-      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {commands: [], models: [], session_state: 'idle'}}})
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: initializeReply()}})
       initialized = true
       return
     }
     if (!initialized) fail(20, 'not initialized')
+    // The real CLI (2.1.308) answers a second initialize with the live command list; IGNORE_REPEAT_INITIALIZE
+    // plays a CLI that never answers it.
+    if (m.type === 'control_request' && m.request?.subtype === 'initialize') {
+      if (process.env.IGNORE_REPEAT_INITIALIZE === '1') return
+      send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: initializeReply()}})
+      return
+    }
     if (m.type === 'control_request' && ['reload_plugins', 'reload_skills', 'mcp_set_servers'].includes(m.request?.subtype)) {
       // Session context in flight (C1b): record what the driver asked for.
       if (process.env.CONTROL_TRACE) appendFileSync(process.env.CONTROL_TRACE, JSON.stringify(m.request) + '\n')
       const held = m.request.subtype === 'reload_plugins' && m.request.hold_on_cache_impact === true && process.env.HOLD === '1'
-      const response = m.request.subtype === 'mcp_set_servers' ? {added: Object.keys(m.request.servers ?? {}), removed: [], errors: {}} : {plugins: [], ...(m.request.hold_on_cache_impact ? {held, ...(held ? {cache_impact: {tools: 1}} : {})} : {})}
+      const response = m.request.subtype === 'mcp_set_servers' ? {added: Object.keys(m.request.servers ?? {}), removed: [], errors: {}} : {plugins: [], ...(m.request.subtype === 'reload_plugins' ? {commands: commands()} : {}), ...(m.request.hold_on_cache_impact ? {held, ...(held ? {cache_impact: {tools: 1}} : {})} : {})}
       send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response}})
       return
     }
@@ -132,6 +147,15 @@ if (process.env.MODE === 'setup-hang') {
     }
     if (m.type === 'control_request' && m.request?.subtype === 'interrupt') {
       if (process.env.MODE === 'interrupt-hang') return
+      if (process.env.MODE === 'interrupt-error-first') {
+        // Real Claude interrupted mid tool call: the turn's error result can come before the interrupt's reply.
+        if (hanging) {
+          send({type: 'result', subtype: 'error_during_execution', is_error: true, session_id: hanging.session, uuid: hanging.uuid, user_message_uuid: hanging.uuid, stop_reason: null, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use'], duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
+          hanging = undefined
+        }
+        send({type: 'control_response', response: {subtype: 'success', request_id: m.request_id, response: {}}})
+        return
+      }
       if (process.env.MODE === 'interrupt-fail') {
         send({type: 'control_response', response: {subtype: 'error', request_id: m.request_id, error: 'interrupt failed'}})
         if (hanging) {
@@ -207,10 +231,36 @@ if (process.env.MODE === 'setup-hang') {
     const text = typeof content === 'string' ? content : content?.[0]?.text
     const uuid = m.uuid
     turn++
+    if (text === '/clear' || text === '/reset' || text === '/new') { clearConversation(uuid); return }
+    // A /clear that happens only once the RELEASE file exists (while no host is attached), after frames of the old
+    // conversation: a re-attach replays them all, so the reset reaches the driver well after its open() returned.
+    if (text === 'clear-when-released') {
+      const target = {session, uuid}
+      hanging = target
+      const wait = setInterval(() => {
+        if (hanging !== target) { clearInterval(wait); return }
+        if (!existsSync(process.env.RELEASE)) return
+        clearInterval(wait)
+        hanging = undefined
+        for (let i = 0; i < 20; i++) send({type: 'command_lifecycle', session_id: session, uuid: randomUUID()})
+        clearConversation(uuid)
+      }, 10)
+      return
+    }
+    // A conversation_reset after which Claude keeps its session id (no such CLI behaviour is known; the driver must not
+    // stay ready to take the next foreign id for the new conversation).
+    if (text === 'reset-same-id') {
+      const reset = randomUUID()
+      send({type: 'conversation_reset', new_conversation_id: reset, uuid: reset, trigger: 'clear', user_message_uuid: uuid, timestamp: new Date().toISOString(), session_id: session})
+      send({type: 'result', subtype: 'success', is_error: false, session_id: session, uuid, user_message_uuid: uuid, stop_reason: null, result: '', duration_ms: 1, duration_api_ms: 0, num_turns: 0, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
+      return
+    }
     if (turn === 1) {
       const id = process.env.MODE === 'wrong-resume' ? 'ffffffff-ffff-4fff-8fff-ffffffffffff' : session
       send(initFrame(id))
     }
+    // Broker journeys that call the broker's own tools (FIXTURE_MCP=1) in echo mode.
+    if (process.env.MODE === 'echo' && mcp.size && typeof text === 'string' && text.startsWith('mcp-call ')) { hanging = {session, uuid}; void mcpCall(hanging, text); return }
     // Broker UI journeys: the real answer shape, echoing the prompt.
     if (process.env.MODE === 'echo') {
       send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: `Fixture reply: ${text}`}]}})
@@ -218,6 +268,12 @@ if (process.env.MODE === 'setup-hang') {
       return
     }
     if (text === 'disconnect') { process.exit(1) }
+    // Dies mid-turn the way a crash does: a few stderr lines (Bun's panic report), no result, exit 3.
+    if (text === 'crash') {
+      process.stderr.write('panic(main thread): Segmentation fault at address 0x0\noh no: Bun has crashed. This indicates a bug in Bun, not your code.\n')
+      setTimeout(() => process.exit(3), 20)
+      return
+    }
     if (text === 'eof') { process.stdout.end(() => process.exit(0)); return }
     if (text === 'malformed') { process.stdout.write('{bad}\n'); return }
     if (text === 'oversize') { process.stdout.write('x'.repeat(5000)); return }
@@ -282,6 +338,30 @@ if (process.env.MODE === 'setup-hang') {
     send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: 'héllo'}]}})
     finish({session, uuid}, text === 'fail' ? 'failed' : 'end_turn')
   })
+}
+
+/** COMMANDS (JSON) is the command list the CLI reports, as Claude 2.1.308 does in initialize and reload_plugins replies. */
+function commands() {
+  return process.env.COMMANDS ? JSON.parse(process.env.COMMANDS) : []
+}
+
+function initializeReply() {
+  return {commands: commands(), models: [], session_state: 'idle'}
+}
+
+/**
+ * The real CLI (2.1.308) for /clear and its aliases /reset and /new: a new conversation under a new session id,
+ * with no model turn. conversation_reset still carries the old id, and its new_conversation_id is NOT the new
+ * session id; the new id first appears on the SessionStart:clear hook, then system/init and the prompt's empty result.
+ */
+function clearConversation(uuid) {
+  const previous = session
+  session = randomUUID()
+  const reset = randomUUID()
+  send({type: 'conversation_reset', new_conversation_id: reset, uuid: reset, trigger: 'clear', user_message_uuid: uuid, timestamp: new Date().toISOString(), session_id: previous})
+  send({type: 'system', subtype: 'hook_started', hook_id: randomUUID(), hook_name: 'SessionStart:clear', hook_event: 'SessionStart', uuid: randomUUID(), session_id: session})
+  send(initFrame(session))
+  send({type: 'result', subtype: 'success', is_error: false, session_id: session, uuid, user_message_uuid: uuid, stop_reason: null, result: '', duration_ms: 1, duration_api_ms: 0, num_turns: 0, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: []})
 }
 
 function initFrame(id) {

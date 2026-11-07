@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import dev.supermux.session.moveId
 
 /**
@@ -16,9 +17,13 @@ import dev.supermux.session.moveId
  * above SwingPanel) — see [GroupHost] and the Phase 5 plan.
  *
  * Preview model (hybrid browser + IDE feel):
- * - [ghost] follows the pointer once past the click-vs-drag threshold
- * - [liveOrder] reshuffles the origin strip while the pointer stays on it
+ * - [ghost] is where the held tab is drawn once past the click-vs-drag threshold: in its own
+ *   strip's row, following the pointer sideways, while the pointer is on that strip; anywhere
+ *   the pointer takes it otherwise
+ * - [liveOrder] reshuffles the origin strip while the pointer stays on it, a neighbour giving
+ *   way as soon as the held tab's leading edge crosses its middle ([liveInsertIndex])
  * - foreign strips show an insert caret via [hoverStripGroupId]/[hoverInsertIndex]
+ * - [settling] is a tab just let go, eased from where it was drawn into its slot
  */
 class PaneDragController {
     var draggingViewId by mutableStateOf<String?>(null)
@@ -40,6 +45,14 @@ class PaneDragController {
         private set
 
     /**
+     * A tab just let go (or put back by Esc): where it was drawn then. The pane layer draws it there
+     * and eases it into whatever slot the drop gave it, instead of popping it in from its old one.
+     * Cleared by [endSettle], or by the next [begin].
+     */
+    var settling by mutableStateOf<TabSettle?>(null)
+        private set
+
+    /**
      * Live visual order for [liveOrderGroupId] while dragging. Only set for the
      * origin strip while the pointer is over that strip; otherwise the strip
      * falls back to the committed [LayoutNode] order with a dimmed placeholder.
@@ -47,6 +60,13 @@ class PaneDragController {
     var liveOrderGroupId by mutableStateOf<String?>(null)
         private set
     var liveOrder by mutableStateOf<List<String>?>(null)
+        private set
+
+    /**
+     * Set by [abort] (Esc): the drag is over, and the rest of the press that started it does
+     * nothing — not a drop, not a click. Cleared by the next [begin].
+     */
+    var aborted by mutableStateOf(false)
         private set
 
     /** Foreign strip under the pointer (for insert caret). Null when none. */
@@ -64,6 +84,16 @@ class PaneDragController {
     private val tabBounds = mutableStateMapOf<String, Rect>()
     /** Workspace sidebar row bounds in root coords, keyed by workspace id. */
     private val workspaceBounds = mutableStateMapOf<String, Rect>()
+    /**
+     * Panes whose group has no views (a canvas showing nothing), keyed by group id: the canvas,
+     * and the band across its top where a strip would be.
+     */
+    private val emptyPanes = mutableStateMapOf<String, EmptyPane>()
+    /**
+     * Where each tab rests (its slot, not where a slide has it now), by view id, with the group
+     * showing it: where a tab let go eases to. Read off-composition only.
+     */
+    private val slots = HashMap<String, Pair<String, Rect>>()
 
     /** Order of the origin strip at press (frozen for step-math). */
     private var originOrder: List<String> = emptyList()
@@ -74,17 +104,30 @@ class PaneDragController {
      * jitter) — a dead-zone past the midpoint is required for a single swipe.
      */
     private var stickyIndex: Int = 0
-    /** Slot width frozen at press so live reorder doesn't feedback on layout. */
-    private var slotWidth: Float = 100f
+    /** Widths of the origin strip's tabs at press, in [originOrder]: the live reorder's geometry. */
+    private var originWidths: List<Float> = emptyList()
+    /** Root x where the origin strip's first tab started at press. */
+    private var originContentLeft: Float = 0f
     /** Grab point relative to the tab's top-left (keeps the chip under the finger). */
     private var grabOffset: Offset = Offset.Zero
     private var ghostLabel: String = ""
+    /**
+     * How far the origin strip has auto-scrolled since the press. Same-strip reorder is
+     * press-relative pointer math, and a scrolled strip moves the slots under a still pointer.
+     */
+    private var originScroll: Float = 0f
 
     /**
      * Committed index of the dragged tab at press (for pinning its layout slot so
      * pointer math never rides an animated translation).
      */
     val dragOriginIndex: Int get() = fromIndex
+
+    /** Where the pointer holds the dragged tab, from its top-left, in px. */
+    val grab: Offset get() = grabOffset
+
+    /** Label of the dragged tab, as its ghost shows it. */
+    val label: String get() = ghostLabel
 
     val isDragging: Boolean get() = draggingViewId != null && pastThreshold
 
@@ -108,6 +151,17 @@ class PaneDragController {
         tabBounds[tabKey(groupId, viewId)] = bounds
     }
 
+    /**
+     * [groupId] has no views: its whole pane is a canvas a tab can be dropped onto, and the top
+     * [stripHeight] px of it stands in for the strip it does not have.
+     */
+    fun registerEmptyPane(groupId: String, bounds: Rect, stripHeight: Float) {
+        emptyPanes[groupId] = EmptyPane(bounds, stripHeight)
+    }
+
+    /** [groupId]'s strip, in root px, while it is on screen. */
+    fun stripBoundsOf(groupId: String): Rect? = stripBounds[groupId]
+
     fun registerWorkspace(workspaceId: String, bounds: Rect) {
         workspaceBounds[workspaceId] = bounds
     }
@@ -124,6 +178,8 @@ class PaneDragController {
         stripBounds.clear()
         paneBounds.clear()
         tabBounds.clear()
+        emptyPanes.clear()
+        slots.clear()
     }
 
     /** Last known root bounds for a tab, used to seed the drag origin. */
@@ -153,6 +209,8 @@ class PaneDragController {
     fun unregisterGroup(groupId: String) {
         stripBounds.remove(groupId)
         paneBounds.remove(groupId)
+        emptyPanes.remove(groupId)
+        slots.entries.removeAll { it.value.first == groupId }
         val prefix = "$groupId\u0000"
         tabBounds.keys.filter { it.startsWith(prefix) }.forEach { tabBounds.remove(it) }
     }
@@ -175,14 +233,18 @@ class PaneDragController {
         pointerRoot = rootPos
         dragStartRoot = rootPos
         pastThreshold = false
+        aborted = false
+        settling = null
         ghostLabel = label
+        originScroll = 0f
         originOrder = stripOrder.ifEmpty {
             tabsInStrip(groupId).map { it.first }.ifEmpty { listOf(viewId) }
         }
         fromIndex = originOrder.indexOf(viewId).coerceAtLeast(0)
         stickyIndex = fromIndex
-        slotWidth = (bounds?.width ?: tabsInStrip(groupId).map { it.second.width }.average().toFloat())
-            .coerceAtLeast(100f)
+        val heldWidth = bounds?.width ?: DefaultTabWidth
+        originWidths = originOrder.map { id -> tabBounds[tabKey(groupId, id)]?.width ?: heldWidth }
+        originContentLeft = (bounds?.left ?: rootPos.x) - originWidths.take(fromIndex).sum()
         if (bounds != null) {
             grabOffset = Offset(
                 (rootPos.x - bounds.left).coerceIn(0f, bounds.width.coerceAtLeast(1f)),
@@ -221,9 +283,15 @@ class PaneDragController {
         }
         if (!pastThreshold) return
 
-        val nextX = rootPos.x - grabOffset.x
-        val nextY = rootPos.y - grabOffset.y
         val g = ghost
+        val ownStrip = ownStripUnder(rootPos)
+        val held = if (ownStrip != null && g != null) {
+            heldInStrip(ownStrip, rootPos, g.width, g.height)
+        } else {
+            Offset(rootPos.x - grabOffset.x, rootPos.y - grabOffset.y)
+        }
+        val nextX = held.x
+        val nextY = held.y
         // Only write ghost state when it actually changes — every-frame copies
         // recomposed the whole PaneHost and fought the pointer stream.
         if (g == null) {
@@ -261,7 +329,7 @@ class PaneDragController {
             // Slightly outside a pane (edge split release) still counts.
             return paneBounds.entries
                 .minByOrNull { (_, r) -> distanceOutside(r, p) }
-                ?.takeIf { (_, r) -> distanceOutside(r, p) < 48f }
+                ?.takeIf { (_, r) -> distanceOutside(r, p) < PaneEdgeSlop }
                 ?.key
         }
 
@@ -282,9 +350,102 @@ class PaneDragController {
         originOrder = emptyList()
         fromIndex = -1
         stickyIndex = 0
-        slotWidth = 100f
+        originWidths = emptyList()
+        originContentLeft = 0f
         grabOffset = Offset.Zero
         ghostLabel = ""
+        originScroll = 0f
+    }
+
+    /**
+     * Esc: end the drag where it is, and let the rest of its press do nothing — see [aborted].
+     * Returns whether there was a drag to end.
+     */
+    fun abort(): Boolean {
+        if (draggingViewId == null) return false
+        settleFromHere()
+        cancel()
+        aborted = true
+        return true
+    }
+
+    /**
+     * A tab of another window is dragged over this one (live tear-off): drag [viewId] here as if
+     * it came from a strip of none of these groups, so every strip shows where it would go and
+     * every pane its drop zones. Its ghost appears where the pointer holds it — [grab] into a
+     * [tabSize] chip — and is live at once.
+     */
+    fun beginIncoming(viewId: String, rootPos: Offset, label: String, grab: Offset, tabSize: Size) {
+        begin(
+            viewId = viewId,
+            groupId = IncomingGroupId,
+            rootPos = rootPos,
+            stripOrder = listOf(viewId),
+            label = label,
+            bounds = Rect(rootPos - grab, tabSize),
+        )
+        updatePointer(rootPos, rootPos, thresholdPx = 0f)
+    }
+
+    /** Last known root bounds of [viewId]'s tab, in whichever strip shows it. */
+    fun tabBoundsOf(viewId: String): Rect? {
+        val suffix = "\u0000$viewId"
+        return tabBounds.entries.firstOrNull { it.key.endsWith(suffix) }?.value
+    }
+
+    /** [groupId]'s strip and body together — the area its tabs are shown in — in root px. */
+    fun groupAreaOf(groupId: String): Rect? {
+        val pane = paneBounds[groupId]
+        val strip = stripBounds[groupId]
+        return when {
+            pane != null && strip != null -> Rect(
+                minOf(pane.left, strip.left),
+                minOf(pane.top, strip.top),
+                maxOf(pane.right, strip.right),
+                maxOf(pane.bottom, strip.bottom),
+            )
+            else -> pane ?: strip
+        }
+    }
+
+    /**
+     * The group whose empty canvas ([registerEmptyPane]) has [p] where its strip would be — the
+     * band across its top, give or take the strip slop. A tab dragged in from another window
+     * joins an empty canvas there, as it joins a strip; lower down, a window can be dropped on it.
+     */
+    internal fun emptyGroupAt(p: Offset): String? =
+        emptyPanes.entries.firstOrNull { (_, e) -> e.band.withSlop().contains(p) }?.key
+
+    /** The band of [groupId]'s empty canvas where its strip would be, in root px. */
+    internal fun emptyBandOf(groupId: String): Rect? = emptyPanes[groupId]?.band
+
+    /** Whether [groupId] is an empty canvas rather than a group with tabs. */
+    internal fun isEmptyGroup(groupId: String): Boolean = groupId in emptyPanes
+
+    /** The origin strip auto-scrolled by [deltaPx] under the drag; re-run the live preview. */
+    fun originStripScrolled(deltaPx: Float) {
+        if (!isDragging) return
+        originScroll += deltaPx
+        refreshPreview()
+    }
+
+    /**
+     * Pixels to scroll the strip whose on-screen viewport is [viewport] this frame: negative near
+     * its left end, positive near its right end, faster the closer the pointer is, and 0 unless a
+     * drag is live with the pointer on that strip (inside its x-range, within the strip slop).
+     */
+    fun stripAutoScrollStep(viewport: Rect, edgePx: Float, maxStepPx: Float): Float {
+        if (!isDragging || edgePx <= 0f) return 0f
+        val p = pointerRoot
+        if (p.x < viewport.left || p.x > viewport.right) return 0f
+        if (p.y < viewport.top - StripSlop || p.y > viewport.bottom + StripSlop) return 0f
+        val fromLeft = p.x - viewport.left
+        val fromRight = viewport.right - p.x
+        return when {
+            fromLeft < edgePx && fromLeft <= fromRight -> -maxStepPx * (1f - fromLeft / edgePx)
+            fromRight < edgePx -> maxStepPx * (1f - fromRight / edgePx)
+            else -> 0f
+        }
     }
 
     /**
@@ -310,21 +471,22 @@ class PaneDragController {
         // into the pane must fall through to edge zones (bottom-edge split).
         stripUnderPointer(p)?.let { groupId ->
             return if (groupId == origin) {
-                PaneDropTarget.Reorder(groupId, viewId, sameStripRestIndex(p.x))
+                PaneDropTarget.Reorder(groupId, viewId, sameStripIndex())
             } else {
                 PaneDropTarget.MoveToGroup(viewId, groupId, insertIndexInStrip(groupId, p.x))
             }
         }
 
         // Pane edge / centre drop zones (only meaningful while the pane is swapped).
-        // Pointer past a pane's outer edge still counts as that edge — test coords
-        // and real drags often leave the window before release.
+        // A release just past a pane's outer edge still counts as that edge. Only JUST
+        // past it: this used to accept any distance, so every release found the origin
+        // pane, nothing was ever a miss, and a tab dragged off the window never tore out.
         val paneHit = paneBounds.entries
             .firstOrNull { (_, r) -> r.contains(p) }
             ?: paneBounds.entries
                 .filter { (id, _) -> id == origin || paneBounds.size == 1 }
                 .minByOrNull { (_, r) -> distanceOutside(r, p) }
-                ?.takeIf { (_, r) -> distanceOutside(r, p) < Float.POSITIVE_INFINITY }
+                ?.takeIf { (_, r) -> distanceOutside(r, p) < PaneEdgeSlop }
         if (paneHit != null) {
             val (groupId, pane) = paneHit
             val zone = zoneFor(pane, p)
@@ -337,15 +499,43 @@ class PaneDragController {
             }
         }
 
-        // Fall back: same-strip offset reorder.
-        return PaneDropTarget.Reorder(origin, viewId, sameStripRestIndex(p.x))
+        // Off every target: a miss. Desktop tears the tab into a new window (onDragEndMiss).
+        return null
     }
 
     fun finish(): PaneDropTarget? {
         val target = resolveDrop()
+        settleFromHere()
         cancel()
         return target
     }
+
+    /** The held tab, let go where it is drawn now: it settles from there ([settling]). */
+    private fun settleFromHere() {
+        val viewId = draggingViewId ?: return
+        val g = ghost?.takeIf { pastThreshold && it.visible } ?: return
+        // As wide as it is drawn: its slot's width, which it took on as the drag made it active.
+        val width = slotOf(viewId)?.width ?: g.width
+        settling = TabSettle(viewId, g.label, Rect(g.x, g.y, g.x + width, g.y + g.height))
+    }
+
+    /** [settle] has landed (or has nowhere to land here): stop drawing it. */
+    fun endSettle(settle: TabSettle) {
+        if (settling == settle) settling = null
+    }
+
+    /** [viewId]'s tab rests at [bounds] (root px) in [groupId]'s strip. */
+    fun registerSlot(groupId: String, viewId: String, bounds: Rect) {
+        slots[viewId] = groupId to bounds
+    }
+
+    /** [viewId]'s tab left [groupId]'s strip. Ignored when another strip shows it now. */
+    fun unregisterSlot(groupId: String, viewId: String) {
+        if (slots[viewId]?.first == groupId) slots.remove(viewId)
+    }
+
+    /** Where [viewId]'s tab rests now, in whichever strip shows it; null when none does. */
+    internal fun slotOf(viewId: String): Rect? = slots[viewId]?.second
 
     /** Which edge zone (if any) the pointer is over for [groupId]'s pane. */
     fun zoneOver(groupId: String): DropZone? {
@@ -356,25 +546,38 @@ class PaneDragController {
     }
 
     /**
-     * Rest-list insert index for same-strip reorder.
-     *
-     * Uses frozen slot width + press origin (not live tab bounds) so animated
-     * morphs never feed the math. Advances [stickyIndex] only after the pointer
-     * crosses the slot midpoint **plus** a hysteresis band — pure truncation at
-     * the boundary was the "tabs loop while I swipe" bug.
-     *
-     * A 120px drag on a ≥100px slot still crosses 0.7 and lands one step
-     * (PaneHostDragTest).
+     * The held tab's index in its own strip: past each neighbour whose middle its leading edge has
+     * crossed ([liveInsertIndex]). By the tabs' widths as drawn and where the held tab is drawn
+     * ([ghost]), so the order changes exactly when it visibly passes a tab — never by live tab
+     * bounds, which slide under it — with the strip's auto-scroll since press counted in.
      */
-    private fun sameStripRestIndex(pointerX: Float): Int {
-        if (originOrder.isEmpty()) return 0
-        val last = originOrder.lastIndex.coerceAtLeast(0)
-        val raw = fromIndex + (pointerX - dragStartRoot.x) / slotWidth
-        // Midpoint (0.5) + hysteresis (0.2) = must reach 0.7 into the next slot.
-        val band = 0.70f
-        while (raw >= stickyIndex + band && stickyIndex < last) stickyIndex++
-        while (raw <= stickyIndex - band && stickyIndex > 0) stickyIndex--
-        return stickyIndex.coerceIn(0, last)
+    private fun sameStripIndex(): Int {
+        // The tabs' widths as drawn now: the active tab is wider than the rest, and the drag itself
+        // makes the held tab the active one.
+        val origin = originGroupId ?: return stickyIndex
+        val widths = originOrder.mapIndexed { i, id -> tabBounds[tabKey(origin, id)]?.width ?: originWidths.getOrElse(i) { DefaultTabWidth } }
+        val width = widths.getOrNull(fromIndex) ?: return stickyIndex
+        val rest = widths.filterIndexed { i, _ -> i != fromIndex }
+        val left = (ghost?.x ?: (pointerRoot.x - grabOffset.x)) - (originContentLeft - originScroll)
+        stickyIndex = liveInsertIndex(rest, width, stickyIndex, left)
+        return stickyIndex
+    }
+
+    /** The origin strip, while the pointer is on it (within its slop); null anywhere else. */
+    private fun ownStripUnder(p: Offset): Rect? {
+        val origin = originGroupId ?: return null
+        return stripBounds[origin]?.takeIf { stripUnderPointer(p) == origin }
+    }
+
+    /**
+     * Where the held tab ([width] × [height]) is drawn while the pointer is on its own [strip]: in
+     * the strip's row, following the pointer sideways, between where its tabs start and the strip's
+     * far end.
+     */
+    private fun heldInStrip(strip: Rect, p: Offset, width: Float, height: Float): Offset {
+        val minLeft = maxOf(strip.left, originContentLeft - originScroll)
+        val maxLeft = (strip.right - width).coerceAtLeast(minLeft)
+        return Offset((p.x - grabOffset.x).coerceIn(minLeft, maxLeft), strip.top + (strip.height - height) / 2f)
     }
 
     private fun refreshPreview() {
@@ -396,7 +599,7 @@ class PaneDragController {
         val stripId = stripUnderPointer(p)
         if (stripId != null) {
             if (stripId == origin) {
-                val at = sameStripRestIndex(p.x).coerceIn(0, originOrder.lastIndex.coerceAtLeast(0))
+                val at = sameStripIndex().coerceIn(0, originOrder.lastIndex.coerceAtLeast(0))
                 setLive(moveId(originOrder, fromIndex, at))
                 if (hoverStripGroupId != null) hoverStripGroupId = null
             } else {
@@ -414,20 +617,19 @@ class PaneDragController {
         if (hoverStripGroupId != null) hoverStripGroupId = null
     }
 
-    private fun stripUnderPointer(p: Offset): String? {
-        val stripSlop = 24f
+    internal fun stripUnderPointer(p: Offset): String? {
         return stripBounds.entries
             .firstOrNull { (_, r) ->
                 r.contains(p) || (
                     p.x >= r.left && p.x <= r.right &&
-                        p.y >= r.top - stripSlop && p.y <= r.bottom + stripSlop
+                        p.y >= r.top - StripSlop && p.y <= r.bottom + StripSlop
                     )
             }
             ?.key
     }
 
     /** Midpoint insertion index among tabs currently in [groupId] (foreign strip). */
-    private fun insertIndexInStrip(groupId: String, pointerX: Float): Int {
+    internal fun insertIndexInStrip(groupId: String, pointerX: Float): Int {
         val tabs = tabsInStrip(groupId)
         if (tabs.isEmpty()) return 0
         val dragged = draggingViewId
@@ -499,6 +701,16 @@ class PaneDragController {
     private fun tabKey(groupId: String, viewId: String) = "$groupId\u0000$viewId"
 }
 
+private class EmptyPane(val bounds: Rect, stripHeight: Float) {
+    val band = Rect(bounds.left, bounds.top, bounds.right, minOf(bounds.bottom, bounds.top + stripHeight))
+}
+
+/** A strip's rect with the vertical slop a pointer gets on it. */
+private fun Rect.withSlop() = Rect(left, top - StripSlop, right, bottom + StripSlop)
+
+/** Origin group of a [PaneDragController.beginIncoming] drag: none of this window's groups. */
+internal const val IncomingGroupId = "\u0000incoming"
+
 /** Floating tab chip drawn above the layout while a drag is past threshold. */
 data class PaneDragGhost(
     val label: String,
@@ -523,5 +735,17 @@ sealed class PaneDropTarget {
     data class MoveToWorkspace(val viewId: String, val toWorkspaceId: String) : PaneDropTarget()
 }
 
+/** Vertical slop (px) that keeps a slightly-off pointer on a tab strip. */
+private const val StripSlop = 24f
+
+/** How far (px) past a pane's edge a release still counts as that pane's edge zone. */
+private const val PaneEdgeSlop = 48f
+
 /** Click-vs-drag threshold in px. Below this, release is a plain tab select. */
 const val PANE_DRAG_THRESHOLD_PX = 8f
+
+/** A tab let go: [viewId], labelled [label], drawn at [from] (root px) when it was. */
+data class TabSettle(val viewId: String, val label: String, val from: Rect)
+
+/** A tab's width when nothing has measured it yet. */
+private const val DefaultTabWidth = 100f

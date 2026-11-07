@@ -9,7 +9,7 @@
  * into place, and the links made here (a plugin, a skills folder) are new: making one never
  * follows one.
  */
-import { lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs"
+import { lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
 import { mappedPluginDrops, mappedPluginServers, readPlugin, writeSkillsPlugin } from "./plugins.js"
@@ -19,6 +19,7 @@ import type {
 import { reloadOnlyUpdates } from "./update.js"
 import { writeAntigravityMcpConfig, writeAntigravityPlugins, type AntigravityPluginWrapper } from "../environment/antigravity.js"
 import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
+import { files } from "@supermux/platform"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
@@ -50,7 +51,7 @@ function pluginFolder(context: LaunchContext, skills: string[], plugins: string[
   const entries: string[] = []
   plugins.forEach((path, index) => {
     const link = join(folder, `${String(index + 1).padStart(2, "0")}-${basename(path)}`)
-    symlinkSync(path, link)
+    files.linkDirectory(path, link)
     entries.push(link)
   })
   skills.forEach((root, index) => {
@@ -97,14 +98,15 @@ export function editPluginFolder(directory: string, changes: ContextChange[], ma
         const path = join(folder, entry.name)
         rmSync(path, { recursive: true, force: true })
         undo.push(() => {
-          if (entry.kind === "plugins") symlinkSync(entry.path, path)
+          if (entry.kind === "plugins") files.linkDirectory(entry.path, path)
           else writeSkillsPlugin(path, entry.name, entry.path, manifests)
         })
       }
     } else if (change.kind === "plugins") {
       const path = join(folder, `${String(++pluginIndex).padStart(2, "0")}-${basename(change.item)}`)
-      symlinkSync(change.item, path)
-      undo.push(() => rmSync(path, { force: true }))
+      files.linkDirectory(change.item, path)
+      // recursive: Bun on Windows refuses a plain rm of a junction (EFAULT); it still only removes the link.
+      undo.push(() => rmSync(path, { recursive: true, force: true }))
     } else {
       const name = `supermux-skills-${++skillsIndex}`
       const path = writeSkillsPlugin(join(folder, name), name, change.item, manifests)

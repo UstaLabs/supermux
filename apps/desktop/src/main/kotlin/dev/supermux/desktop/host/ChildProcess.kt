@@ -83,19 +83,24 @@ object SystemProcessTable : ProcessTable {
 /** The bundled broker, or a dev `bun … src/main.ts`. */
 fun isBrokerCommand(cmd: String): Boolean = "supermux-broker" in cmd || ("bun" in cmd && "src/main.ts" in cmd)
 
-/** `<stateDir>/desktop-broker.pid`: `pid:startInstantEpochMillis` of the app's broker child. */
+/** `<stateDir>/desktop-broker.pid`: `pid:startInstantEpochMillis:installId` of the app's broker child. */
 class ChildPidFile(private val file: Path) {
-    data class Record(val pid: Long, val startMillis: Long?)
+    /** [owner]: the install id of the copy of the app that started it ([InstallIdentity]); null from before ids. */
+    data class Record(val pid: Long, val startMillis: Long?, val owner: String? = null)
 
     fun read(): Record? = runCatching {
         val parts = Files.readString(file).trim().split(':')
-        Record(parts[0].toLong(), parts.getOrNull(1)?.toLongOrNull())
+        Record(parts[0].toLong(), parts.getOrNull(1)?.toLongOrNull(), parts.getOrNull(2)?.takeIf { it.isNotBlank() })
     }.getOrNull()
 
-    fun write(pid: Long, startMillis: Long?) {
+    fun write(pid: Long, startMillis: Long?, owner: String? = null) {
         runCatching {
             file.parent?.let { Files.createDirectories(it) }
-            Files.writeString(file, if (startMillis != null) "$pid:$startMillis" else "$pid")
+            Files.writeString(file, buildString {
+                append(pid)
+                if (startMillis != null || owner != null) append(':').append(startMillis ?: "")
+                if (owner != null) append(':').append(owner)
+            })
         }
     }
 

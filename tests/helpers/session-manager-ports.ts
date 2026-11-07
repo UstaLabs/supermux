@@ -20,6 +20,14 @@ export type PortSeams = {
   /** collects webChannel broadcast frames. */
   frames?: object[]
   sessionEffort?: SessionManagerPorts["resume"]["sessionEffort"]
+  /** collects forgetReplyTarget calls (session ids). */
+  forgotten?: string[]
+  /** Names handed to commands.remove (the command registry is keyed by session name). */
+  commandsRemoved?: string[]
+  /** collects retireWorkspaceIfEmpty calls (workspace ids). */
+  retired?: string[]
+  /** collects children.archived calls. */
+  archivedChildren?: Array<{ id: string; cascade?: boolean; endedBy?: "parent" | "client" }>
 }
 
 /** Minimal inert ports: the runtime-store tests never cross into a port. */
@@ -34,7 +42,11 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
       syncGitStatus: () => {},
+      forgetReplyTarget: (id) => { seams.forgotten?.push(id) },
+      retireWorkspaceIfEmpty: (id) => { seams.retired?.push(id) },
     },
+    children: { archived: (s, how) => { seams.archivedChildren?.push({ id: s.id, ...how }) } },
+    councils: { isMember: () => false, membership: () => undefined },
     displays: {
       killAllForSession: async () => {},
       start: async () => { throw new Error("unused in tests") },
@@ -43,13 +55,12 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     agentState: { applyEvent: () => {}, clear: () => {}, get: () => ({ phase: seams.phase ?? "idle", since: 0 }) },
     bgTasks: { clear: () => {} },
-    commands: { remove: () => {}, refresh: async () => {} },
-    config: { lookupModels: seams.lookupModels ?? (() => []) },
+    commands: { remove: (name) => { seams.commandsRemoved?.push(name) }, refresh: async () => {} },
+    config: { lookupModels: seams.lookupModels ?? (() => []), agentStatuses: () => [], modelGates: () => [] },
     register: {
       interruptClaudePane: async () => {},
       notifyAgentError: async (_id, _name, errorType, message) => { seams.agentErrors?.push(`${errorType}:${message}`) },
       ensureClaudeTailer: () => {},
-      maybeAutoSendSoulSetup: async () => {},
     },
     outbound: {
       onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }),
@@ -58,12 +69,20 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     orchestration: {
       spawnSession: async () => { throw new Error("unused in tests") },
+      createAgentDeps: () => { throw new Error("unused") },
       refreshTelegramMenu: async () => {},
       wsDto: () => undefined,
       exposedProxyLinksBaseUrl: () => undefined,
       proxyWsPayload: () => ({}),
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
       postBrokerInbound: () => {},
+      delegate: async () => { throw new Error("unused in tests") },
+      council: async () => { throw new Error("unused in tests") },
+      councilRound: async () => { throw new Error("unused in tests") },
+      councilReport: async () => { throw new Error("unused in tests") },
+      councilAdd: () => Promise.reject(new Error("not wired")),
+      councilRemove: () => Promise.reject(new Error("not wired")),
+      councilEnd: () => Promise.reject(new Error("not wired")),
     },
     stores: {
       fileStore: {} as unknown as FileStore,
@@ -85,6 +104,8 @@ export function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
         create: async () => { throw new Error("unused in tests") },
       } as unknown as import("../../src/core/runtime/session-backend").SessionBackend,
       tmuxSession: "mux-test",
+      agentRunning: async () => false,
+      hasScheduledTasks: () => false,
     },
   }
 }

@@ -12,7 +12,6 @@
 // Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
 // without real installs.
 import { spawn as defaultSpawn, type ChildProcess } from "child_process"
-import { homedir } from "os"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
@@ -21,6 +20,8 @@ import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./
 import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
 import { resolveCommand } from "../process/launcher"
 import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
+import { home as userHome } from "../../shared/home"
+import { proc } from "@supermux/platform"
 
 const log = makeLogger("agents/install")
 
@@ -149,7 +150,7 @@ export interface InstallDeps {
   spawn?: InstallSpawnFn
   /** Re-probe whether the agent's binary is on PATH (after the installer ran). */
   isInstalled: (kind: AgentKind) => boolean
-  /** Home dir for resolving per-user bin dirs. Defaults to homedir(). */
+  /** Home dir for resolving per-user bin dirs. Defaults to the user's home (home()). */
   home?: string
   /** Defaults to process.platform. */
   platform?: NodeJS.Platform
@@ -177,23 +178,9 @@ export interface InstallDeps {
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
 export const INSTALL_DEADLINE_MS = 15 * 60_000
 
-/**
- * Kill [child] and its descendants. macOS/Linux: the installer runs in its own process group
- * (spawned detached), so the whole group goes. Windows: `taskkill /T /F`.
- */
+/** Kill [child] and its descendants (proc.killTree): the installer leads its own process group (spawned detached). */
 export function killProcessTree(child: ChildProcess, platform: NodeJS.Platform): void {
-  const pid = child.pid
-  if (!pid) return
-  try {
-    if (platform === "win32") {
-      const kill = defaultSpawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true })
-      kill.on("error", () => {})
-    } else {
-      process.kill(-pid, "SIGKILL")
-    }
-  } catch {
-    try { child.kill("SIGKILL") } catch {}
-  }
+  if (child.pid) proc.killTree(child.pid, { signal: "SIGKILL", platform })
 }
 const EXIT_OUTPUT_GRACE_MS = 2_000
 
@@ -253,7 +240,7 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
   }
 
   const baseEnv = deps.env ?? process.env
-  const home = deps.home ?? homedir()
+  const home = deps.home ?? userHome()
   const hasCommand = deps.hasCommand ?? ((name: string) => resolveCommand([name], installEnv(baseEnv, home, platform), platform) !== null)
   const recipe = installRecipeFor(kind, platform, hasCommand)
   if ("unsupported" in recipe) {

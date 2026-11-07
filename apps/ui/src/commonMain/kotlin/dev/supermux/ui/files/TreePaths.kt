@@ -1,49 +1,50 @@
-// Absolute-path helpers for the Files tree. The tree speaks host paths ("/home/u/p/src/a.kt");
-// everything handed to the workdir-relative editor code goes through [relativeToWorkdir].
+// Absolute-path helpers for the Files tree. The tree speaks the host's own paths ("/home/u/p/src/a.kt",
+// "C:\Users\u\p\src\a.kt", by the rules in dev.supermux.fs.HostPaths); everything handed to the workdir-relative
+// editor code goes through [relativeToWorkdir].
 package dev.supermux.ui.files
 
-private fun trimEnd(p: String): String = if (p.length > 1) p.trimEnd('/') else p
+import dev.supermux.fs.hostIsInside
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.hostParent
+import dev.supermux.fs.hostRelativePath
+import dev.supermux.fs.hostRoot
+import dev.supermux.fs.isDriveSegment
+import dev.supermux.fs.pathLeaf
+import dev.supermux.fs.sameHostPath
 
-fun parentOf(path: String): String? {
-    val p = trimEnd(path)
-    if (p == "/") return null
-    val i = p.lastIndexOf('/')
-    return if (i <= 0) "/" else p.substring(0, i)
+/** [p] without a trailing separator, but a root as it is: `/`, and `C:\` (`C:` alone is the drive's current folder). */
+internal fun trimEnd(p: String): String {
+    if (p.startsWith('/')) return p.trimEnd('/').ifEmpty { "/" }
+    val t = p.trimEnd('/', '\\')
+    return if (t.length == 2 && isDriveSegment(t) && p.length > 2) p.substring(0, 3) else t
 }
 
-fun childOf(dir: String, name: String): String = if (trimEnd(dir) == "/") "/$name" else "${trimEnd(dir)}/$name"
+fun parentOf(path: String): String? = hostParent(path)
 
-fun isWithin(root: String, path: String): Boolean {
-    val r = trimEnd(root)
-    val p = trimEnd(path)
-    return r == "/" || p == r || p.startsWith("$r/")
-}
+fun childOf(dir: String, name: String): String = hostJoin(dir, name)
+
+fun isWithin(root: String, path: String): Boolean = hostIsInside(path, root)
 
 /** Folders from [root] down to [path]'s parent (inclusive of root), or empty if outside root. */
 fun ancestorsWithin(root: String, path: String): List<String> {
-    val r = trimEnd(root)
-    if (!isWithin(r, path) || trimEnd(path) == r) return emptyList()
+    if (!isWithin(root, path) || sameHostPath(path, root)) return emptyList()
     val out = ArrayList<String>()
     var cur = parentOf(path)
-    while (cur != null && isWithin(r, cur)) {
+    while (cur != null && isWithin(root, cur)) {
         out.add(0, cur)
-        if (cur == r) break
+        if (sameHostPath(cur, root)) break
         cur = parentOf(cur)
     }
     return out
 }
 
-/** Workdir-relative form of [path] ("." for the workdir itself), or null when outside it. */
-fun relativeToWorkdir(workdir: String, path: String): String? {
-    val w = trimEnd(workdir)
-    val p = trimEnd(path)
-    return when {
-        p == w -> "."
-        w == "/" -> p.removePrefix("/")
-        p.startsWith("$w/") -> p.substring(w.length + 1)
-        else -> null
-    }
-}
+/**
+ * Workdir-relative form of [path] ("." for the workdir itself), or null when outside it — by the
+ * host's own path rule ([hostRelativePath]), so a Windows workdir spelled `c:\users\me\app` still
+ * owns the `C:\Users\me\app/src/a.kt` the host's search answers with.
+ */
+fun relativeToWorkdir(workdir: String, path: String): String? =
+    hostRelativePath(workdir, path)?.ifEmpty { "." }
 
 /**
  * The editor's key for the absolute [abs]: workdir-relative inside [workdir], [abs] itself outside
@@ -56,7 +57,12 @@ fun editorPathFor(workdir: String, abs: String): String =
 fun editorAbsolutePath(workdir: String, path: String): String =
     if (dev.supermux.ui.isAbsoluteEditorPath(path)) trimEnd(path) else absoluteInWorkdir(workdir, path)
 
-fun displayName(path: String): String = trimEnd(path).substringAfterLast('/').ifEmpty { "/" }
+/** The name the tree shows for [path]: its last segment, or a root (`/`, `C:\`) as it is. */
+fun displayName(path: String): String {
+    val root = hostRoot(path)
+    if (root != null && hostParent(path) == null) return root
+    return pathLeaf(path).ifEmpty { "/" }
+}
 
 /**
  * One open document hit by a rename/delete in the tree: its editor key as the caller gave it
@@ -74,7 +80,7 @@ data class MovedOpenPath(val oldPath: String, val newPath: String?)
 fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Collection<String>): List<MovedOpenPath> {
     val from = trimEnd(oldAbs)
     val to = newAbs?.let(::trimEnd)
-    if (from == "/" || from == to) return emptyList()
+    if (hostParent(from) == null || (to != null && sameHostPath(from, to))) return emptyList()
     val out = ArrayList<MovedOpenPath>()
     val seen = HashSet<String>()
     for (rel in open) {
@@ -84,8 +90,8 @@ fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Co
             if (segs.isEmpty() || segs == listOf(".")) continue
         }
         val abs = editorAbsolutePath(workdir, rel)
-        if (!isWithin(from, abs)) continue
-        val moved = to?.let { it + abs.substring(from.length) }
+        val inside = hostRelativePath(from, abs) ?: continue
+        val moved = to?.let { if (inside.isEmpty()) it else hostJoin(it, inside) }
         out += MovedOpenPath(rel, moved?.let { editorPathFor(workdir, it) })
     }
     return out

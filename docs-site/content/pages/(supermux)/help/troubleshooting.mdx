@@ -1,0 +1,80 @@
+---
+title: Troubleshooting
+description: What the messages mean and what to do about them.
+---
+
+Find the message you're seeing. Quoted text is exactly what supermux shows.
+
+## Installing and starting
+
+**Windows says it protected your PC.** The installer isn't signed yet. Choose **More info**, then **Run anyway**.
+
+**"Couldn't start the local host. Is the broker able to run on this machine?"** The desktop app couldn't start supermux on this computer. Click **Try again**. If it keeps failing, **Show log** opens the log, which is in `~/.mux/state/desktop-host.log`.
+
+**The tray says "supermux can't start".** Same as above: **Show log** shows why.
+
+**"supermux is already running on this computer (set up outside the app)."** supermux was installed from the terminal earlier. Choose **Manage it** to let the app take it over, or **Leave it alone**.
+
+**The server service doesn't start.** On Linux, read the log with `journalctl --user -u supermux -n 50`. On a Mac, `tail -f ~/.mux/state/supermux.err.log`.
+
+**supermux stops when I log out of the server.** Run `loginctl enable-linger $USER` once.
+
+**"Developer tools not installed" or "Git not installed".** Agents work without git, but worktrees, diffs and change tracking need it. Click **Install…**. On Linux, install git with your package manager, for example `sudo apt install git`.
+
+## Pairing
+
+**"Couldn't read a token from that — paste the full pairing link (it contains ?t=…)."** The app couldn't read what you scanned or pasted. On a computer you've already paired, open **Settings ▸ Devices ▸ Add device** and use that link or QR code.
+
+**"That broker rejected the token. Check the host is reachable and the link is current."** The link was revoked, or the computer can't be reached right now. Make a new link, and check the computer is on.
+
+**"The host rejected the pairing — the claim is expired or already used."** The QR code from **Pair a device…** works once, for 10 minutes. Make a new one.
+
+**"Pairing link is invalid or expired. Generate a new one."** The link was revoked. Make a new one in **Settings ▸ Devices**.
+
+**"Pair this browser"** This computer already has paired devices, so a new browser needs a link. Get one from **Settings ▸ Devices ▸ Add device** on a device you've paired, and paste it.
+
+## Connection
+
+**"Can't reach" your computer, with "Is the computer awake and logged in?"** Your computer is asleep, off, or offline. Wake it up. To keep it reachable, turn on **Keep this computer awake** in the desktop app.
+
+**A message stays on "Sending…".** You're offline. It goes out by itself when you're back.
+
+**"Can't reach the broker" in a browser.** The computer that runs supermux may be starting up, asleep or out of reach from this network. Nothing is wrong with the browser. Click **Check again** in a moment.
+
+## Agents and sessions
+
+**"… isn't installed on this computer. Install it in Settings ▸ Providers, then try again."** Install that agent first, in **Settings ▸ Providers**.
+
+**"This is taking longer than expected. Check Settings ▸ Providers for progress."** An agent install is still running. **Settings ▸ Providers** shows how it's going.
+
+**Codex sign-in doesn't finish.** Turn on **Allow device code login** in ChatGPT under **Settings → Security**, then try again.
+
+**"Usage limit reached on … — no other … account is available".** That account is at its limit and there's no other to move to. Add another account in **Settings ▸ Accounts**, or wait for the limit to reset. See [Accounts and usage limits](/providers/accounts).
+
+**A message I sent while the agent was working seems ignored.** It's queued: the agent reads it when its current turn ends. Codex takes it in right away.
+
+**"Not responding"** The agent's program stopped. Your next message starts it again, and the conversation picks up where it was.
+
+**There's no worktree option in the launcher.** Worktrees need the top folder of a git repository. A subfolder, or a folder holding several repositories, runs in place.
+
+**An attachment shows "Retry".** Its upload failed. Tap it to try again, or remove it to send without it. Files over 500 MB are refused.
+
+**I can't drag files onto the chat on my phone.** Drag and drop works on the desktop and in browsers. On a phone, use **+**.
+
+## Notifications
+
+**I don't get notifications.** Check that:
+
+- the session isn't muted,
+- you don't have that chat or the session list open on another device, which keeps every device quiet,
+- notifications are allowed for supermux. On Android 13 and later, the app asks; in a browser, choose **Enable notifications for agent replies**.
+
+## Other
+
+**"This client does not draw … yet" or "Update Supermux to open this view".** Your app is older than supermux on your computer. Update the app.
+
+**"The terminal engine didn't load".** Reload the app, or the browser tab. It usually means the tab was open since before an update.
+
+**The anonymous usage events switch is greyed out.** It was turned off with `MUX_TELEMETRY` or `DO_NOT_TRACK` on that computer, which always wins.
+
+Still stuck? Open an issue on [GitHub](https://github.com/UstaLabs/supermux/issues).

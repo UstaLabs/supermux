@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { TextDecoder } from 'node:util'
 import { connectKeeper, type KeeperConnection } from '../keeper/client.js'
+import { agentExitError } from '../keeper/exit.js'
 import type { KeeperWelcome } from '../keeper/protocol.js'
 
 type Pending = { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -97,7 +98,7 @@ export async function transport(
           if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq, ev.stale)
           else if (ev.type === 'stderr') conn.ack(ev.seq)
         }
-        if (!closed) fail(new Error('Claude process exited'), true)
+        if (!closed) fail(agentExitError('Claude', conn.exitStatus()), true)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         if (closed) return
@@ -113,12 +114,21 @@ export async function transport(
     if (Buffer.byteLength(line) > options.maxFrameBytes) throw new Error('Claude outgoing frame exceeds size limit')
     conn.write(line)
   }
-  function request(body: Record<string, unknown>): Promise<any> {
+  /**
+   * A control request. Unanswered past requestTimeoutMs it fails the session, unless `optional`: then only this
+   * request is rejected (a late answer is dropped), for a request the session can do without.
+   */
+  function request(body: Record<string, unknown>, requestOptions: { optional?: boolean } = {}): Promise<any> {
     if (pending.size >= 128) return Promise.reject(new Error('Too many pending Claude requests'))
     const request_id = randomUUID()
     const method = typeof body.subtype === 'string' ? body.subtype : 'control'
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { fail(new Error(`Claude request timed out: ${method}`)) }, options.requestTimeoutMs)
+      const timer = setTimeout(() => {
+        const error = new Error(`Claude request timed out: ${method}`)
+        if (!requestOptions.optional) { fail(error); return }
+        pending.delete(request_id)
+        reject(error)
+      }, options.requestTimeoutMs)
       pending.set(request_id, { resolve, reject, timer })
       try { write({ type: 'control_request', request_id, request: body }) } catch (error) { clearTimeout(timer); pending.delete(request_id); reject(error) }
     })

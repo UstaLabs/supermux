@@ -15,6 +15,7 @@
 import type { Browser } from "playwright"
 import { launchBrowser, uiFixture } from "./fixture-env"
 import { byTag, openSeededSession, tap, waitForTextWithin } from "./compose-dom"
+import { forceVoiceStreaming } from "./dictation-stream.spec"
 
 const TRANSCRIPT = "hello from transcribe"
 
@@ -42,6 +43,9 @@ export async function main(): Promise<void> {
     // `/sessions/<id>/transcribe` the composer actually calls, with or without
     // `?partial=1` (Stop's final pass). An unstubbed partial reaches the fixture
     // broker, which really transcribes when the host has an STT login.
+    // This journey covers the upload path, which every app falls back to (and which a broker
+    // without `voiceStreaming` gets); the streamed path is dictation-stream.spec.ts.
+    await forceVoiceStreaming(page, false)
     const uploads: Buffer[] = []
     await page.route((url) => url.pathname.endsWith("/transcribe"), (route) => {
       const body = route.request().postDataBuffer()

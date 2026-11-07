@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync, statSync, symlinkSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
+import { files } from "@supermux/platform"
 import { MCP_SERVER_NAME } from "./index.js"
 import type { ContextDrop, ResolvedContext, ResolvedMcpServer } from "./types.js"
 
@@ -120,6 +121,6 @@ export function writeSkillsPlugin(dir: string, name: string, skillsRoot: string,
       ...(manifest === ".cursor-plugin" ? { skills: "./skills/" } : {}),
     }, null, 2) + "\n", () => assertRealDirectory(folder))
   }
-  symlinkSync(skillsRoot, join(wrapper, "skills"))
+  files.linkDirectory(skillsRoot, join(wrapper, "skills"))
   return wrapper
 }

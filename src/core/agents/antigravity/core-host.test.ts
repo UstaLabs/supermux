@@ -5,6 +5,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../../../../packages/supermux-core/src/index.js"
 import type { AntigravityOptions } from "../../../../packages/supermux-core/src/antigravity/index.js"
+import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { createAntigravityCoreHost } from "./core-host"
 
 const dirs: string[] = []
@@ -87,7 +88,7 @@ test("prepare builds the shadow HOME, leaves the real ~/.gemini untouched and ha
   expect(captured).toHaveLength(1)
   expect(captured[0]!.home).toEqual({ shadow, user: userHome })
   expect(captured[0]!.permissions).toEqual({ kind: "antigravity", mode: "plan" })
-  expect(captured[0]!.args).toEqual([])
+  expect(captured[0]!.args).toEqual(["--add-dir", SESSION_INBOX_DIR])
   expect(captured[0]!.env?.HOME).toBe(shadow)
 
   const launched = opens[0]!.sessionContext!

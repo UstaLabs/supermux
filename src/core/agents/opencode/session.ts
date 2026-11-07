@@ -2,30 +2,20 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import type { OpenCodeCommandClient } from "../../slash-commands/types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, OPENCODE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getOpenCodeCoreHost } from "./core-host-provider"
 import type { OpenCodeCoreHost, OpenCodePrepareExtra } from "./core-host"
-import { opencodePluginRoots } from "../../plugins"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
-/** Slash-command discovery context for the opencode provider. */
-export type OpenCodeCommandContext = {
-  /** Live ACP adapter does not expose the HTTP SDK client; disk scan is used. */
-  client?: OpenCodeCommandClient
-  /** Enabled plugin roots for the disk-scan preview / client fallback. */
-  pluginDirs: string[]
-}
-
-export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
-  return {
-    pluginDirs: opencodePluginRoots(ctx.sessionName),
-  }
+/** Slash commands: the list OpenCode pushed over ACP (available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }
 
 function resolveHost(explicit?: OpenCodeCoreHost): OpenCodeCoreHost {
@@ -106,7 +96,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.opencodeHost)
-  const sessionHome = join(STATE_DIR, "agents", "opencode", name)
+  const sessionHome = join(STATE_DIR, "agents", "opencode", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.OpenCode, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -161,6 +151,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)
@@ -193,12 +185,13 @@ export async function resumeOpenCodeSession(
     onOpenCodeSessionId?: (name: string, sid: string) => void
     opencodeHost?: OpenCodeCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; permissionMode?: string; account?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.opencodeHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     extra: prepareExtra({
@@ -216,6 +209,7 @@ export async function resumeOpenCodeSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -287,6 +281,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onOpenCodeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       opencodeHost: ctx.opencodeHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

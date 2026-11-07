@@ -9,7 +9,7 @@ import type {
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
   QuestionRequest, QuestionResponse, PermissionsSpec, PermissionsApplied,
-  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot,
+  ContentBlock, SubagentMessageOptions, SubagentMessageDelivery, SubagentSnapshot, ConversationReset,
 } from "./types.js"
 import { validatePermissionsSpec } from "./permissions.js"
 import type { ContextPatch, RuntimeContextControl, SessionContext, UpdateContextOptions, UpdateContextResult } from "./context/types.js"
@@ -75,6 +75,11 @@ export class Session {
   private subagentsSaving?: Promise<void>
   /** Core holds the queue while it applies a context change (no queued input starts meanwhile). */
   private holds = 0
+  /**
+   * Record saves, one at a time, each built from the record as it is when its turn comes: a save started before a
+   * conversation reset can then never land after the reset's own save with the conversation it replaced.
+   */
+  private recordSaves: Promise<void> = Promise.resolve()
   private stateWaiters: Array<() => void> = []
 
   constructor(
@@ -98,13 +103,16 @@ export class Session {
     return [...this.subagentRegistry.values()].map(sub => ({ ...sub }))
   }
 
-  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number } {
+  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number; turnId?: string } {
+    const turnRunning = this.state === "running" || this.state === "interrupting"
     return {
       ...structuredClone(this.record),
       state: this.state,
       pending: this.queue.length,
       paused: this.paused,
       pendingRequests: this.pendingRequests.size,
+      // The running turn, as its events name it: in step with `state`, unlike the events themselves.
+      ...(turnRunning && this.currentTurnId ? { turnId: this.currentTurnId } : {}),
     }
   }
 
@@ -331,6 +339,8 @@ export class Session {
     this.closing = Promise.resolve().then(async () => {
       if (this.configuring) await this.configuring.catch(() => {})
       await this.runtime.close({ mode })
+      // A resume reads the record next: a conversation reset's save must have landed.
+      await this.recordSaves
     }).then(() => {
       this.seen.clear()
       this.endActivityWaiters(new CoreError("session_closed", "Session is closed"))
@@ -424,9 +434,7 @@ export class Session {
     }
     const next = validatePermissionsSpec(spec)
     const result = await this.runtime.setPermissions(structuredClone(next))
-    const saved: SessionRecord = { ...this.record, permissions: structuredClone(next) }
-    await this.persistRecord(saved)
-    this.record.permissions = structuredClone(next)
+    await this.saveRecord(record => { record.permissions = structuredClone(next) })
     this.emitNormalized({ kind: "permissions-update", spec: structuredClone(next), applied: result.applied }, undefined, false)
     return result
   }
@@ -558,6 +566,36 @@ export class Session {
     for (const body of bodies) this.emitNormalized(body, update)
   }
 
+  /**
+   * A command list the agent reported while this session was opening, which Core passed on raw: only its
+   * commands-update is emitted (state, not turn content). See Core's held updates.
+   */
+  reportHeldCommands(update: AgentUpdate): void {
+    if (this.state === "closed") return
+    for (const body of this.runtime.normalize?.(update) ?? []) if (body.kind === "commands-update") this.emitNormalized(body, update)
+  }
+
+  /**
+   * Core-internal (DriverContext.onConversationReset): the agent went on in a new conversation, so the record follows
+   * it and a resume continues the new one. The session runs it at once (snapshot()); conversation-reset goes out once
+   * it is saved. A failed save emits a warning, not the event (a host that heard of the new id would run ahead of the
+   * record); the keeper still names the id it replaced, so the next re-attach repairs the record. One already
+   * recorded (reported while the session opened) is only reported.
+   */
+  conversationReset(reset: ConversationReset): void {
+    if (this.state === "closed") return
+    const report = () => this.emitNormalized({ kind: "conversation-reset", ...reset }, undefined, false)
+    if (this.record.agentSessionId === reset.agentSessionId) { report(); return }
+    const follow = (record: SessionRecord) => {
+      record.agentSessionId = reset.agentSessionId
+      record.previousAgentSessionId = reset.previousAgentSessionId
+    }
+    follow(this.record)
+    this.saveRecord(follow).then(report, error => {
+      this.emitNormalized({ kind: "warning", source: "core", message: `The session's new conversation ${reset.agentSessionId} could not be saved: ${asError(error).message}` }, undefined, false)
+    }).catch(() => {})
+  }
+
   /** Native activity is independent of owned receipts. Duplicate start for an id is a no-op. */
   reportActivity(notice: ActivityNotice): void {
     if (this.state === "closed" || this.state === "closing" || this.state === "failed") return
@@ -616,17 +654,31 @@ export class Session {
       await this.rollbackConfiguration(previousNative, error)
       throw asError(error)
     }
-    const saved: SessionRecord = { ...this.record }
-    if (Object.keys(requested).length) saved.configuration = structuredClone(requested)
-    else delete saved.configuration
     try {
-      await this.persistRecord(saved)
+      await this.saveRecord(record => {
+        if (Object.keys(requested).length) record.configuration = structuredClone(requested)
+        else delete record.configuration
+      })
     } catch (error) {
       await this.rollbackConfiguration(previousNative, error)
       throw asError(error)
     }
-    if (Object.keys(requested).length) this.record.configuration = structuredClone(requested)
-    else delete this.record.configuration
+  }
+
+  /**
+   * Saves the record with `change` applied, after any save before it, and applies `change` to the record in memory
+   * once saved (a failed save leaves both as they were). The record is copied when this save's turn comes, so it
+   * carries whatever the saves before it changed, and the conversation the session runs now.
+   */
+  private saveRecord(change: (record: SessionRecord) => void): Promise<void> {
+    const save = this.recordSaves.then(async () => {
+      const saved = structuredClone(this.record)
+      change(saved)
+      await this.persistRecord(saved)
+      change(this.record)
+    })
+    this.recordSaves = save.catch(() => {})
+    return save
   }
 
   private async rollbackConfiguration(previousNative: SessionConfiguration, cause: unknown): Promise<void> {

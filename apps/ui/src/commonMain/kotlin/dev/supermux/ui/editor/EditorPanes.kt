@@ -63,11 +63,13 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
+import dev.supermux.ui.chat.LinkSelectionContainer
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
@@ -180,7 +182,11 @@ fun ExplorerPane(
                 view = view,
                 fileSystem = fileSystem,
                 revealActive = revealActive,
-                onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+                onRevealActiveChange = { on ->
+                    // Turned on: reveal the active file now, even one this pane revealed before.
+                    if (on) view.edits.revealed = null
+                    scope.launch { prefs.putFilesRevealActive(on) }
+                },
                 // Creates at the tree's root; the tree below draws the dialog or the in-place row
                 // (it reads view.dialog / view.inlineEdit).
                 onNewEntry = if (fileSystem == null) null else { folder ->
@@ -376,13 +382,17 @@ fun FilePane(
                         if (absPath != null && rawBytes != null) MarkdownFiles(parentOf(absPath), rawBytes) else null
                     }
                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
-                        MarkdownBody(
-                            doc?.content ?: "",
-                            modifier = Modifier.markdownPreviewColumn(),
-                            linkify = true,
-                            onOpenFile = onOpenFile,
-                            document = true,
-                        )
+                        // Selectable and copyable like a chat reply, links still clickable. Inside
+                        // the scroll, so a selection dragged past the edge scrolls with it.
+                        LinkSelectionContainer {
+                            MarkdownBody(
+                                doc?.content ?: "",
+                                modifier = Modifier.markdownPreviewColumn(),
+                                linkify = true,
+                                onOpenFile = onOpenFile,
+                                document = true,
+                            )
+                        }
                     }
                 }
             }
@@ -402,7 +412,7 @@ fun FilePane(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = cs.primary)
                             Text(
-                                path.substringAfterLast('/'),
+                                pathLeaf(path),
                                 color = cs.onSurfaceVariant,
                                 fontSize = 12.sp,
                                 modifier = Modifier.padding(top = Space.sm),
@@ -451,6 +461,8 @@ fun DiffPane(
     diffDocuments: DocumentStore? = null,
     /** A lazy file's base text by blob (repo, sha, force). */
     baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
+    /** Names the review drafts kept through a rotation or a width change (see [DiffView], #89). */
+    retainKey: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -553,6 +565,7 @@ fun DiffPane(
             postComment = onReviewAddComment,
             documents = diffDocuments,
             baseText = baseText,
+            retainKey = retainKey,
         )
         }
     }

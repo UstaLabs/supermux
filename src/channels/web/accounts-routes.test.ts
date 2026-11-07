@@ -128,6 +128,14 @@ test("GET /accounts carries an unavailable mark (reason + since) until it is cle
   expect((await call("GET", "/accounts?agent=claude")).body.accounts[0]).not.toHaveProperty("unavailable")
 })
 
+test("GET /accounts names the code of a mark the host can act on (a sign-in that expired)", async () => {
+  const { call, usage } = setup()
+  await channel!.start()
+  usage.markUnavailable("cursor:system", "Cursor sign-in expired — sign in to Cursor again.", new Date("2026-11-04T10:40:58.000Z"), "account_expired")
+  const cursor = (await call("GET", "/accounts?agent=cursor")).body.accounts[0]
+  expect(cursor.unavailable).toEqual({ reason: "Cursor sign-in expired — sign in to Cursor again.", since: "2026-11-04T10:40:58.000Z", code: "account_expired" })
+})
+
 test("POST /accounts adds an api_key account (secret never returned); DELETE removes it; accounts_changed is broadcast", async () => {
   const { call, frames, registry } = setup()
   await channel!.start()
@@ -226,4 +234,81 @@ test("a cross-origin POST /accounts without a bearer token is refused by the sam
   await channel!.start()
   const res = await cookieLessPost("/accounts", { agent: "codex", method: "api_key", secret: "x" })
   expect(res.status).toBe(403)
+})
+
+test("Auto picks the account with the most room left, and fetches stale usage for the next pick; GET /accounts marks the pick", async () => {
+  const refreshed: string[] = []
+  const { call, usage, registry, accounts } = setup()
+  accounts.setUsageRefresher(async (agent) => { refreshed.push(agent) })
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  await registry.add({ id: "grok-b", agent: "grok", method: "api_key", secret: "k-b" })
+  const inAWeek = new Date(Date.now() + 7 * 86_400_000)
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  usage.set("grok-a", [{ name: "weekly", usedPercent: 80, resetsAt: inAWeek }])
+  usage.set("grok-b", [{ name: "weekly", usedPercent: 50, resetsAt: inAWeek }])
+  expect(await accounts.autoAccount("grok")).toBe("grok-b")
+  expect(refreshed).toEqual(["grok"])
+  await channel!.start()
+  const grok = (await call("GET", "/accounts?agent=grok")).body.accounts
+  expect(grok.filter((a: any) => a.auto).map((a: any) => a.id)).toEqual(["grok-b"])
+  // Nothing better than the system login (or no data at all): undefined, the system account.
+  usage.set("grok-b", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  usage.set("grok-a", [{ name: "weekly", usedPercent: 100, resetsAt: inAWeek }])
+  expect(await accounts.autoAccount("grok")).toBeUndefined()
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+})
+
+test("Auto never picks an account a broker session cannot run on (a Codex subscription)", async () => {
+  const { usage, registry, accounts } = setup()
+  // A subscription keeps its credentials in its home: no secret.
+  await registry.add({ id: "codex-sub", agent: "codex", method: "subscription" })
+  expect((await registry.get("codex-sub"))?.method).toBe("subscription")
+  // A second account it can run on, listed after the subscription: Auto has a real choice to make.
+  await registry.add({ id: "codex-tok", agent: "codex", method: "api_key", secret: "k" })
+  // Whatever the registry accepted, Auto must not return a Codex subscription account.
+  usage.set("codex:system", [{ name: "300m", usedPercent: 100, resetsAt: new Date(Date.now() + 3_600_000) }])
+  const picked = await accounts.autoAccount("codex")
+  const account = picked ? await registry.get(picked) : undefined
+  expect(account?.method).not.toBe("subscription")
+})
+
+test("Auto never blocks a new session: an unreadable account list starts it on the system login", async () => {
+  const { registry, accounts } = setup()
+  mkdirSync(registry.directory, { recursive: true })
+  writeFileSync(join(registry.directory, "accounts.json"), "{not json")
+  await expect(registry.list("claude")).rejects.toMatchObject({ code: "invalid_account_record" })
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+})
+
+test("Auto waits for no usage when the system login is the only account it could pick", async () => {
+  const refreshed: string[] = []
+  const { registry, accounts } = setup()
+  accounts.setUsageRefresher(async (agent) => { refreshed.push(agent) })
+  // Isolated accounts are picked by hand only, Cursor accounts never by the policy.
+  await registry.add({ id: "claude-iso", agent: "claude", method: "api_key", secret: "k", isolated: true })
+  await registry.add({ id: "cursor-key", agent: "cursor", method: "api_key", secret: "k" })
+  expect(await accounts.autoAccount("claude")).toBeUndefined()
+  expect(await accounts.autoAccount("cursor")).toBeUndefined()
+  expect(await accounts.autoAccount("grok")).toBeUndefined()
+  expect(refreshed).toEqual([])
+})
+
+test("Auto never waits for usage (card #75): it picks from what it knows while the refresh runs on", async () => {
+  const { usage, registry, accounts } = setup()
+  let refreshing = 0
+  accounts.setUsageRefresher(() => { refreshing++; return new Promise<void>(() => {}) })
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
+  const picked = await Promise.race([accounts.autoAccount("grok"), Bun.sleep(100).then(() => "still waiting")])
+  expect(picked).toBe("grok-a")
+  expect(refreshing).toBe(1)
+})
+
+test("Auto's background refresh failing is logged, never thrown, and the pick stands", async () => {
+  const { usage, registry, accounts } = setup()
+  accounts.setUsageRefresher(async () => { throw new Error("usage endpoint down") })
+  await registry.add({ id: "grok-a", agent: "grok", method: "api_key", secret: "k-a" })
+  usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
+  expect(await accounts.autoAccount("grok")).toBe("grok-a")
+  await Bun.sleep(0)
 })

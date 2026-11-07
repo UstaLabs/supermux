@@ -22,58 +22,17 @@ afterEach(() => {
   delete process.env.MUX_HOME
 })
 
-test("worker preamble inlines the live domain index (no go-read pointer)", () => {
-  const out = buildMemoryPreamble("worker")
-  expect(out).toContain("ios-webkit: iOS Safari PWA push gotchas")
+test("the memory preamble is the live domain index", () => {
+  expect(buildMemoryPreamble()).toContain("ios-webkit: iOS Safari PWA push gotchas")
 })
 
-test("worker preamble never references soul.md or personal/", () => {
-  const out = buildMemoryPreamble("worker")
-  expect(out).not.toContain("soul.md")
-  expect(out).not.toContain("personal/")
-})
-
-test("main preamble inlines the index, the shared soul and points to personal/", () => {
-  writeFileSync(join(tmp, "soul.md"), "SHARED-SOUL")
-  const out = buildMemoryPreamble("main")
-  expect(out).toContain("ios-webkit: iOS Safari PWA push gotchas")
-  expect(out).toContain("SHARED-SOUL")
-  expect(out).toContain("personal/")
-})
-
-// --- workdir personality files ---
-
-test("a workdir soul.md replaces the shared soul", () => {
+test("the memory preamble never inlines soul.md or focus.md and never names personal/", () => {
   writeFileSync(join(tmp, "soul.md"), "SHARED-SOUL")
   const workdir = join(tmp, "project")
   mkdirSync(workdir, { recursive: true })
-  writeFileSync(join(workdir, "soul.md"), "## Project Soul\nBe helpful.")
-  const out = buildMemoryPreamble("main", workdir)
-  expect(out).toContain("Be helpful.")
+  writeFileSync(join(workdir, "focus.md"), "Ship it.")
+  const out = buildMemoryPreamble()
   expect(out).not.toContain("SHARED-SOUL")
-})
-
-test("worker preamble never injects soul.md even when present in workdir", () => {
-  const workdir = join(tmp, "project")
-  mkdirSync(workdir, { recursive: true })
-  writeFileSync(join(workdir, "soul.md"), "## Project Soul\nBe helpful.")
-  const out = buildMemoryPreamble("worker", workdir)
-  expect(out).not.toContain("Be helpful.")
-  expect(out).not.toContain("soul.md")
-})
-
-test("preamble injects workdir focus.md after the soul", () => {
-  const workdir = join(tmp, "project")
-  mkdirSync(workdir, { recursive: true })
-  writeFileSync(join(workdir, "soul.md"), "## Project Soul\nBe kind.")
-  writeFileSync(join(workdir, "focus.md"), "## Current Focus\nShip it.")
-  expect(buildMemoryPreamble("worker", workdir)).toContain("Ship it.")
-  const out = buildMemoryPreamble("main", workdir)
-  expect(out.indexOf("Be kind.")).toBeLessThan(out.indexOf("Ship it."))
-})
-
-test("preamble omits focus section when workdir focus.md is absent", () => {
-  const workdir = join(tmp, "project")
-  mkdirSync(workdir, { recursive: true })
-  expect(buildMemoryPreamble("worker", workdir)).not.toContain("Current Focus")
+  expect(out).not.toContain("Ship it.")
+  expect(out).not.toContain("personal/")
 })

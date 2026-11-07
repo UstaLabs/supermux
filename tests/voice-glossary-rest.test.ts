@@ -9,7 +9,10 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { DEFAULT_VOICE_CLEANUP_GLOSSARY } from "../src/core/settings/app-config"
 
 const DEV_PATH = `/tmp/devices-voice-glossary-${process.pid}.json`
-const PORT = 18896
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
 let ch: WebChannel
 let token: string
 let store: SettingsStore
@@ -21,12 +24,12 @@ function freshDb() {
   return db
 }
 
-const appConfigEnv = { MUX_PA_NAME: "testpa", MUX_PA_WORKDIR: "", MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
+const appConfigEnv = { MUX_TELEGRAM_BOT_TOKEN: "", MUX_WEB_PUBLIC_URL: "", MUX_WEB_PORT: "" }
 
 const base = (extra: object) => ({
-  port: PORT,
+  port: 0,
   devicesFile: DEV_PATH,
-  publicUrl: "http://127.0.0.1:" + PORT,
+  publicUrl: "http://127.0.0.1",
   staticDir: undefined,
   getSessionsSnapshot: () => [],
   getSessionLog: () => [],
@@ -51,6 +54,7 @@ beforeEach(async () => {
     }),
   )
   await ch.start()
+  PORT = ch.boundPort
 })
 
 afterEach(async () => {
@@ -58,7 +62,7 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: `http://127.0.0.1:${PORT}`, "content-type": "application/json" })
+const auth = () => ({ Cookie: `cmux_token=${token}`, Origin: "http://127.0.0.1", "content-type": "application/json" })
 
 test("GET /config/voice-glossary returns the default-seeded glossary", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/config/voice-glossary`, { headers: auth() })
@@ -105,7 +109,7 @@ test("PUT /config/voice-glossary cross-origin → 403", async () => {
 test("PUT /config/voice-glossary requires auth", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/config/voice-glossary`, {
     method: "PUT",
-    headers: { Origin: `http://127.0.0.1:${PORT}`, "content-type": "application/json" },
+    headers: { Origin: "http://127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ glossary: ["X"] }),
   })
   expect(res.status).toBe(401)

@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs"
 import { stat } from "node:fs/promises"
-import { isAbsolute, join, relative, resolve, sep } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
@@ -11,9 +11,9 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
-import { defaultLoginRunner, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
+import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
 import {
   contextDrops, contextFingerprint, isContextEmpty, isEmptyContext, isHostEntry, joinInstructions, mergeContexts, noContextCapabilities, normalizeContext, normalizeContextUpdate, normalizePolicy,
@@ -22,6 +22,7 @@ import {
 import { isHostMcpServer } from "./mcp/brand.js"
 import { BRIDGE_ENV, McpHost, bridgeEntry, type HostLookup } from "./mcp/host.js"
 import { KeeperUnconfirmed } from "./keeper/client.js"
+import { msSince, perfMark } from "./perf-marks.js"
 import type { HostMcpServer, ToolChange } from "./mcp/server.js"
 import { applyChanges, changeKey, normalizePatch, normalizeUpdateOptions, patchChanges, planChanges, reloadOnlyUpdates } from "./context/update.js"
 import type {
@@ -31,8 +32,9 @@ import type {
 import type { Account, AccountUnavailable, AddAccountOptions, LoginHandle, LoginOptions, UsageWindow } from "./accounts/types.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, AuthProfile, CoreEvent, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
-  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec,
+  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions, PermissionsSpec, ConversationReset,
 } from "./types.js"
+import { paths } from "@supermux/platform"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
 
@@ -71,12 +73,18 @@ export class Core {
   /** Sessions that hit a limit (or whose account was refused) and switch accounts once their current turn ends. */
   private readonly switchQueue = new Map<string, "limit" | "unavailable">()
   private readonly switching = new Set<string>()
-  /** The continuation after a switch, per reason (one host prompt serves both when given). */
-  private readonly continuePrompts: { limit: string; unavailable: string } | undefined
+  /** Sessions whose limit (or refused-account) switch is running. `switching` also holds token refreshes and context reloads. */
+  private readonly limitSwitching = new Set<string>()
+  /** The continuation after a switch, per reason (one host prompt serves both when given), and what the default adds after background work hit the limit. */
+  private readonly continuePrompts: { limit: string; unavailable: string; background: string } | undefined
   /** Sessions in a turn, whose current turn saw a full window, and whose last turn ended on a limit. */
   private readonly inTurn = new Set<string>()
   private readonly turnLimited = new Set<string>()
   private readonly lastTurnLimited = new Set<string>()
+  /** Sessions whose current turn the agent started on its own (native activity, e.g. a subagent's notification). */
+  private readonly nativeTurn = new Set<string>()
+  /** Sessions whose limit was hit by background work (outside a host turn): the continuation mentions subagents. */
+  private readonly backgroundLimited = new Set<string>()
   /** Sessions whose current turn was refused by the agent's API (account unavailable). */
   private readonly turnRefused = new Set<string>()
   /** Token-account sessions: timer to reopen before the access token expires, and sessions due for it. */
@@ -129,12 +137,13 @@ export class Core {
     if (accounts.continueAfterSwitch !== undefined && typeof accounts.continueAfterSwitch !== "boolean") throw new TypeError("accounts.continueAfterSwitch must be a boolean")
     if (accounts.continuePrompt !== undefined && (typeof accounts.continuePrompt !== "string" || !accounts.continuePrompt.trim())) throw new TypeError("accounts.continuePrompt must be a nonempty string")
     this.continuePrompts = accounts.continueAfterSwitch === false ? undefined
-      : accounts.continuePrompt !== undefined ? { limit: accounts.continuePrompt, unavailable: accounts.continuePrompt }
-      : { limit: DEFAULT_CONTINUE_PROMPT, unavailable: DEFAULT_UNAVAILABLE_CONTINUE_PROMPT }
+      : accounts.continuePrompt !== undefined ? { limit: accounts.continuePrompt, unavailable: accounts.continuePrompt, background: "" }
+      : { limit: DEFAULT_CONTINUE_PROMPT, unavailable: DEFAULT_UNAVAILABLE_CONTINUE_PROMPT, background: BACKGROUND_CONTINUE_SUFFIX }
     const login = accounts.login
     if (login !== undefined && (!login || typeof login !== "object")) throw new TypeError("accounts.login must be an object")
     if (login?.timeoutMs !== undefined) requirePositiveSafeInteger(login.timeoutMs, "accounts.login.timeoutMs")
     if (login?.runner !== undefined && typeof login.runner !== "function") throw new TypeError("accounts.login.runner must be a function")
+    if (login?.schedule !== undefined && typeof login.schedule !== "function") throw new TypeError("accounts.login.schedule must be a function")
     if (accounts.fetch !== undefined && typeof accounts.fetch !== "function") throw new TypeError("accounts.fetch must be a function")
     if (accounts.registry !== undefined) {
       if (!(accounts.registry instanceof AccountRegistry)) throw new TypeError("accounts.registry must be an AccountRegistry")
@@ -396,6 +405,21 @@ export class Core {
       const candidates = (await this.registry.list(agent)).filter(account => !exclude.includes(account.id))
       return pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined)
     }),
+    /**
+     * True when a limit (or refused-account) switch is queued or running for the session and another
+     * account is available to move it to: the session carries on there (with the continuation prompt
+     * when its turn hit the limit). Whether a switch is pending is read at the call, so call it when the
+     * turn ends. False for a session on an isolated or Cursor account, or with an authProfile.
+     */
+    willSwitch: (sessionId: string): Promise<boolean> => {
+      const pending = this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId)
+      const record = this.live.get(sessionId)?.snapshot()
+      if (!pending || !record || record.authProfile !== undefined) return Promise.resolve(false)
+      return this.operation(async () => {
+        await this.ready()
+        return (await this.switchTarget(record.agent, record.account))?.next !== undefined
+      })
+    },
     /** Latest rate-limit windows seen for an account (persisted across restarts while unexpired). */
     usage: (id: string): UsageWindow[] | undefined => {
       const windows = this.usage.get(id)
@@ -571,6 +595,8 @@ export class Core {
   /** Usage bookkeeping, the limit switch, its continuation and token refresh reopens. Never throws (it runs as an observer). */
   private observeAccounts(event: CoreEvent): void {
     if (event.type === "message.started") {
+      // A host turn starts running right after the session does: it is not a native one.
+      this.nativeTurn.delete(event.sessionId)
       this.inTurn.add(event.sessionId)
       this.turnLimited.delete(event.sessionId)
       this.turnRefused.delete(event.sessionId)
@@ -585,6 +611,11 @@ export class Core {
       else this.lastTurnLimited.delete(event.sessionId)
       // A turn that went through proves the account works again (e.g. the user picked it by hand).
       if (result.status === "completed" && !refused) this.accountWorks(event.sessionId)
+      // The agent's API refused the turn for its account (an HTTP status on the error).
+      if (result.status === "failed") {
+        const status = accountHttpStatus(result.error)
+        if (status !== undefined) this.accountRefusedTurn(event.sessionId, status, result.error)
+      }
     } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
@@ -606,15 +637,34 @@ export class Core {
       const accountId = record.account ?? systemAccountId(record.agent)
       this.usage.set(accountId, windows)
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
+      // No turn runs, so background work (a subagent) hit the limit: the work it stopped continues after the switch.
+      else if (limited(windows)) { this.lastTurnLimited.add(event.sessionId); this.backgroundLimited.add(event.sessionId) }
       if (limited(windows) && this.autoSwitch()) {
         if (!this.switchQueue.has(event.sessionId)) this.switchQueue.set(event.sessionId, "limit")
         void this.limitSwitch(event.sessionId)
       }
     } else if (event.type === "session.stateChanged") {
+      const id = event.sessionId
+      // Turns the agent starts on its own (background work finished) count like host turns.
+      if (event.state === "running" && !this.inTurn.has(id)) {
+        this.nativeTurn.add(id)
+        this.inTurn.add(id)
+        this.turnLimited.delete(id)
+        this.turnRefused.delete(id)
+      } else if (event.state !== "running" && event.state !== "interrupting") this.endNativeTurn(id)
       if (event.state === "closed" && !this.restoring.has(event.sessionId)) this.forgetTurns(event.sessionId)
       if (this.switchQueue.has(event.sessionId)) void this.limitSwitch(event.sessionId)
       if (this.refreshDue.has(event.sessionId)) void this.refreshSession(event.sessionId)
     }
+  }
+
+  /** Ends the session's native turn, if one runs: a limit or refusal it saw is continued after the switch, like a host turn's. */
+  private endNativeTurn(id: string): void {
+    if (!this.nativeTurn.delete(id)) return
+    this.inTurn.delete(id)
+    const limitedTurn = this.turnLimited.delete(id)
+    if (this.turnRefused.delete(id) || limitedTurn) this.lastTurnLimited.add(id)
+    if (limitedTurn) this.backgroundLimited.add(id)
   }
 
   /** Clears the unavailable mark of the session's account after a turn completed on it. */
@@ -625,15 +675,63 @@ export class Core {
     if (this.usage.clearUnavailable(account)) this.events.emit({ type: "account.available", sessionId: id, agent: record.agent, account })
   }
 
+  /**
+   * A turn the agent's API refused for its account, where the status is about the whole login (the
+   * adapter's `httpAccountErrors`). 402 (out of credits) counts as a full window for BALANCE_RETRY_MS,
+   * unless the account's usage already says full (a host's provider fetch, with the real reset), so the
+   * limit switch moves the session on; 401/403 marks the account unavailable, like a driver's
+   * `account_unavailable` error. The turn has ended: the queued switch runs once the session is idle.
+   */
+  private accountRefusedTurn(id: string, status: 401 | 402 | 403, error: Error): void {
+    const record = this.live.get(id)?.snapshot()
+    if (!record || record.authProfile !== undefined) return
+    if (!adapterFor(record.agent).httpAccountErrors) return
+    const account = record.account ?? systemAccountId(record.agent)
+    if (status === 402) {
+      if (!limited(this.usage.get(account) ?? [])) {
+        this.usage.set(account, [{ name: BALANCE_WINDOW, usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
+      }
+      if (this.autoSwitch()) {
+        if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
+        void this.limitSwitch(id)
+      }
+      return
+    }
+    const detail = (error as { data?: { message?: unknown } | null }).data?.message
+    const reason = typeof detail === "string" && detail.trim() ? detail.trim() : error.message
+    if (this.usage.markUnavailable(account, reason)) {
+      this.events.emit({ type: "account.unavailable", sessionId: id, agent: record.agent, account, reason })
+    }
+    if (this.autoSwitch()) {
+      this.switchQueue.set(id, "unavailable")
+      void this.limitSwitch(id)
+    }
+  }
+
   private forgetTurns(id: string): void {
     this.inTurn.delete(id)
     this.turnLimited.delete(id)
     this.turnRefused.delete(id)
     this.lastTurnLimited.delete(id)
+    this.nativeTurn.delete(id)
+    this.backgroundLimited.delete(id)
     const timer = this.refreshTimers.get(id)
     if (timer) clearTimeout(timer)
     this.refreshTimers.delete(id)
     this.refreshDue.delete(id)
+  }
+
+  /**
+   * Where a limit (or refused-account) switch would move a session on `account` (absent: the system
+   * account): the policy's pick among the agent's other accounts, `next` undefined when none is left.
+   * Undefined when the session's own account is never switched (isolated, Cursor).
+   */
+  private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
+    const from = account ?? systemAccountId(agent)
+    const current = await this.registry.get(from)
+    if (!current || !switchable(current)) return undefined
+    const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
+    return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
   }
 
   /** Runs a queued limit (or unavailable-account) switch once the session's current turn has ended (never mid-turn). */
@@ -643,17 +741,20 @@ export class Core {
     const state = live?.snapshot().state
     if (!live || state === "closing" || state === "closed") { this.switchQueue.delete(id); return }
     if (state === "running" || state === "interrupting") return
+    // The session can be idle before its state event reaches this observer.
+    this.endNativeTurn(id)
     const reason = this.switchQueue.get(id) ?? "limit"
     this.switchQueue.delete(id)
     this.switching.add(id)
+    this.limitSwitching.add(id)
     try {
       const record = live.snapshot()
       const queued = record.pending > 0
-      const from = record.account ?? systemAccountId(record.agent)
-      const current = await this.registry.get(from)
-      if (!current || !switchable(current)) return
-      const candidates = (await this.registry.list(record.agent)).filter(account => account.id !== from)
-      const next = pickAccount(candidates, account => this.usage.get(account), Date.now(), account => this.usage.unavailable(account) !== undefined)
+      // Read before the switch reopens the agent, which stops subagents still running.
+      const background = this.backgroundLimited.delete(id) || live.subagents().some(sub => sub.status === "running")
+      const target = await this.switchTarget(record.agent, record.account)
+      if (!target) return
+      const { from, next } = target
       if (!next) {
         this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
         return
@@ -662,14 +763,18 @@ export class Core {
       // The turn that hit the limit (or was refused) continues once on the new account, unless the host queued input itself.
       if (this.continuePrompts !== undefined && !queued && this.lastTurnLimited.delete(id)) {
         try {
-          await session.send({ content: [{ type: "text", text: this.continuePrompts[reason] }], whenBusy: "reject" })
+          const prompt = this.continuePrompts[reason] + (background && this.continuePrompts.background ? ` ${this.continuePrompts.background}` : "")
+          await session.send({ content: [{ type: "text", text: prompt }], whenBusy: "reject" })
         } catch (error) {
           if (!(error instanceof CoreError && error.code === "session_busy")) throw error
         }
       }
     } catch (error) {
       try { this.options.onObserverError?.(asError(error)) } catch { /* reporting cannot own control */ }
-    } finally { this.switching.delete(id) }
+    } finally {
+      this.switching.delete(id)
+      this.limitSwitching.delete(id)
+    }
   }
 
   /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
@@ -721,8 +826,6 @@ export class Core {
     this.driver(input.agent)
     const kind = adapterFor(input.agent).kind
     if (kind !== "claude" && kind !== "codex" && kind !== "grok" && kind !== "cursor" && kind !== "antigravity") throw new CoreError("unsupported_operation", `${input.agent} has no guided login (use accounts.add with an API key)`)
-    // agy's login needs a pseudo-terminal (`script`), which Windows does not have.
-    if (kind === "antigravity" && process.platform === "win32") throw new CoreError("unsupported_operation", "The guided Antigravity login needs a pseudo-terminal, which Windows does not have (sign in with agy in a terminal, or use an API key)")
     const as = input.as ?? "subscription"
     if (as !== "subscription" && as !== "token") throw new CoreError("invalid_input", "as must be subscription or token")
     if (as === "token" && kind !== "codex") throw new CoreError("unsupported_operation", "Only Codex logins can become token accounts")
@@ -741,6 +844,7 @@ export class Core {
       command,
       runner: config.runner ?? defaultLoginRunner,
       timeoutMs: config.timeoutMs ?? LOGIN_TIMEOUT_MS,
+      schedule: config.schedule ?? defaultLoginSchedule,
       precheck: async () => {
         await this.ready()
         if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
@@ -764,7 +868,7 @@ export class Core {
   }
 
   private async openSession(
-    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string },
+    input: CreateOptions & { id: string; createdAt: string; lineage?: SessionRecord["lineage"]; configuration?: SessionConfiguration; createdInstructions?: string; previousAgentSessionId?: string },
     resumeId?: string,
     forkFrom?: ForkSource,
     originalRecord?: SessionRecord,
@@ -777,7 +881,9 @@ export class Core {
     const profile = input.account !== undefined ? await this.accountProfile(input.agent, input.account) : this.profile(input.agent, input.authProfile)
     // Resolved (and refused under policy "error") before anything launches.
     const launch = forkFrom ? "fork" : resumeId ? "resume" : "create"
+    const contextStarted = performance.now()
     const prepared = await this.prepareContext(driver, input, launch)
+    perfMark(input.id, "core.context", { ms: msSince(contextStarted), launch })
     let session: Session | undefined
     let failed: Error | undefined
     let runtime: AgentRuntime | undefined
@@ -797,6 +903,17 @@ export class Core {
     const early: Array<{ update: AgentUpdate; normalize: boolean } | { activity: ActivityNotice }> = []
     /** Index just past the last buffered turn content. */
     let afterUpdate = 0
+    /**
+     * The last command list the agent reported while opening (Claude's initialize reply, an ACP push during
+     * session/new). It is state, not turn content, so it is normalized once the Session exists even when its
+     * raw update went out unnormalized.
+     */
+    let heldCommands: AgentUpdate | undefined
+    /**
+     * A new conversation the agent went on in while opening (a re-attach replaying a /clear, or a record one /clear
+     * behind its process): the record is made with it, and the Session reports it once it exists.
+     */
+    let openingReset: ConversationReset | undefined
     let earlyBytes = 0
     let holding = true
     let attachSession!: (value: Session | null) => void
@@ -850,6 +967,7 @@ export class Core {
         onUpdate: update => {
           if (session) session.update(update)
           else if (!discarded) {
+            if (carriesCommands(update)) heldCommands = update
             if (holding) {
               earlyBytes += jsonBytes(update.value)
               if (earlyBytes > EARLY_UPDATE_BYTES) {
@@ -865,6 +983,12 @@ export class Core {
           }
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
+        onConversationReset: reset => {
+          const copied = copyConversationReset(reset)
+          if (!copied || discarded) return
+          if (session) session.conversationReset(copied)
+          else openingReset = copied
+        },
         requestPermission: async (request, signal) => {
           if (discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
           const attached = session ?? await Promise.race([
@@ -895,7 +1019,10 @@ export class Core {
       })
       this.assertOpen()
       if (failed) throw failed
-      if (resumeId && runtime.agentSessionId !== resumeId) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      // Only a new conversation the agent itself reported (openingReset) may replace the one resumed.
+      const reset = openingReset?.agentSessionId === runtime.agentSessionId ? openingReset : undefined
+      if (resumeId && runtime.agentSessionId !== resumeId && !reset) throw new CoreError("resume_identity_changed", "Agent returned a different conversation while resuming")
+      const previousAgentSessionId = reset ? reset.previousAgentSessionId : input.previousAgentSessionId
       if (forkFrom && runtime.agentSessionId === forkFrom.agentSessionId) throw new CoreError("fork_identity_unchanged", "Agent reused the source conversation instead of forking")
       if (nonemptyConfiguration(input.configuration) && (!runtime.capabilities.configure || !runtime.configure)) {
         throw new UnsupportedOperation("configure", driver.id)
@@ -903,6 +1030,7 @@ export class Core {
       const record: SessionRecord = {
         version: 1, id: input.id, agent: input.agent, cwd: input.cwd,
         createdAt: input.createdAt, agentSessionId: runtime.agentSessionId,
+        ...(previousAgentSessionId ? { previousAgentSessionId } : {}),
         ...(input.authProfile ? { authProfile: input.authProfile } : {}),
         ...(input.account ? { account: input.account } : {}),
         ...(input.lineage ? { lineage: {...input.lineage} } : {}),
@@ -946,9 +1074,15 @@ export class Core {
       // Before session.created/resumed, in arrival order (see `early`).
       for (const item of early.splice(0)) {
         if ("activity" in item) session.reportActivity(item.activity)
-        else if (item.normalize) session.update(item.update)
+        else if (item.normalize) {
+          session.update(item.update)
+          if (item.update === heldCommands) heldCommands = undefined
+        }
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
+      if (heldCommands) session.reportHeldCommands(heldCommands)
+      // The latest one: a replay can report it after open() returned, while the record was being saved.
+      if (openingReset) session.conversationReset(openingReset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -1138,7 +1272,10 @@ export class Core {
     const persist = async (context: SessionContext) => {
       // Re-read: other fields (permissions, configuration) may have been saved meanwhile.
       const { context: _context, ...rest } = await this.store.get(id) ?? record
-      const saved: SessionRecord = { ...rest, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
+      // A conversation reset's own save may not have landed yet: the live session names the conversation it runs.
+      const running = this.live.get(id)?.snapshot()
+      const identity = running ? { agentSessionId: running.agentSessionId, ...(running.previousAgentSessionId ? { previousAgentSessionId: running.previousAgentSessionId } : {}) } : {}
+      const saved: SessionRecord = { ...rest, ...identity, ...(!isContextEmpty(context) ? { context: structuredClone(context) } : {}) }
       await this.store.put(saved)
       const current = this.live.get(id)
       if (current && current.snapshot().state !== "closed") current.setContextRecord(saved.context)
@@ -1471,8 +1608,7 @@ function realOrResolved(path: string): string {
 
 /** Whether `inner` is `outer` or inside it. */
 function within(inner: string, outer: string): boolean {
-  const way = relative(outer, inner)
-  return way === "" || (way !== ".." && !way.startsWith(`..${sep}`) && !isAbsolute(way))
+  return paths.isInside(inner, outer)
 }
 
 /** `next` (no instructions) with the session's own instructions from `current` kept (informational; launches use createdInstructions). */
@@ -1481,9 +1617,12 @@ function keepInstructions(current: SessionContext | undefined, next: SessionCont
 }
 
 const DEFAULT_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit and you are now on another account."
+const BACKGROUND_CONTINUE_SUFFIX = "Background subagents may have stopped on the limit or the switch: check them and resume or restart any unfinished work."
 const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn failed because its account was refused (login or subscription problem) and you are now on another account."
 /** A turn whose stop reason names a limit ended because of it. */
 const LIMIT_STOP_REASON = /limit|quota/i
+/** An out-of-credits account (HTTP 402) counts as full this long, unless fresher usage says otherwise first. */
+const BALANCE_RETRY_MS = 60 * 60_000
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000
@@ -1495,6 +1634,26 @@ const MAX_TIMER_MS = 2 ** 31 - 1
  * supermux() defaults) would be held as parsed objects and normalized in one synchronous burst.
  */
 const EARLY_UPDATE_BYTES = 4 * 1024 * 1024
+
+/**
+ * An update that carries the agent's command list: an ACP `available_commands_update`, or Claude's
+ * `commands_changed` push or a control reply listing `commands` (initialize, reload_plugins).
+ */
+function carriesCommands(update: AgentUpdate): boolean {
+  const value = update.value as { sessionUpdate?: unknown; type?: unknown; subtype?: unknown; response?: { response?: { commands?: unknown } } } | null | undefined
+  if (!value || typeof value !== "object") return false
+  if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
+  if (value.type === "system") return value.subtype === "commands_changed"
+  return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
+
+/** A driver's ConversationReset, copied; undefined unless both ids are nonempty strings. */
+function copyConversationReset(reset: ConversationReset | null | undefined): ConversationReset | undefined {
+  if (!reset || typeof reset !== "object") return
+  const { agentSessionId, previousAgentSessionId, trigger } = reset
+  if (typeof agentSessionId !== "string" || !agentSessionId || typeof previousAgentSessionId !== "string" || !previousAgentSessionId) return
+  return { agentSessionId, previousAgentSessionId, ...(typeof trigger === "string" && trigger ? { trigger } : {}) }
+}
 
 /** An update's size as JSON; one that cannot be measured counts as too big to hold. */
 function jsonBytes(value: unknown): number {

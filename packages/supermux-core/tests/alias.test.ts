@@ -19,8 +19,19 @@ test("LIBRARY_VERSION, the version the drivers announce to their agents, is the 
 })
 
 test("the core package rebuilds dist when it is packed, so a publish from a clean checkout cannot ship without it", () => {
-  // node, not rm: the same line runs on Windows too.
-  expect(read("supermux-core/package.json").scripts.prepack).toBe(`node -e "require('fs').rmSync('dist',{recursive:true,force:true})" && tsc -p tsconfig.json`)
+  // node, not rm: the same line runs on Windows too. @supermux/platform is built first and carried into
+  // dist/vendor/platform (it is never published itself: e2e/standalone.e2e.mjs).
+  expect(read("supermux-core/package.json").scripts.prepack).toBe(
+    `node -e "require('fs').rmSync('dist',{recursive:true,force:true})" && tsc -p ../platform/tsconfig.json && tsc -p tsconfig.json && node scripts/vendor-platform.mjs`,
+  )
+})
+
+test("the published core never depends on @supermux/platform: it carries it", () => {
+  const pkg = read("supermux-core/package.json")
+  for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+    expect(Object.keys(pkg[field] ?? {})).not.toContain("@supermux/platform")
+  }
+  expect(pkg.scripts.build).toEndWith("node scripts/vendor-platform.mjs")
 })
 
 test("every published package carries the repository's license", () => {

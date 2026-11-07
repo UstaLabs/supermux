@@ -1,12 +1,17 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
+import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { timingSafeEqual } from "node:crypto"
+import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
 import { makeLogger } from "../../shared/log"
+import { FrameStats, LoopLag, lapTimer, perfPath, type PerfLog } from "../../core/perf/perf-log"
 import { home } from "../../shared/home"
+import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
 import { tmpdir } from "os"
-import { join, sep } from "path"
+import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
@@ -56,6 +61,9 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { auditPushTargets } from "../../core/push/audit"
+import { PushRegistrationWatch } from "../../core/push/registration-watch"
+import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -90,12 +98,12 @@ const RATE_LIMIT_MAX = 16
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 
-// Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
+// Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
 // brute-forcer mint a fresh rate-limit bucket per guess just by varying one header.
 //
-// Loopback is the default trust set because that is where frpc/nginx forward from. It does
+// Loopback is the default trust set because that is where the relay tunnel/nginx forward from. It does
 // mean a LOCAL process can still spoof the header — which is acceptable: anything running
 // as this user can simply read the device token out of the state dir, so the limiter was
 // never a boundary against it. The boundary that matters is remote traffic, which arrives
@@ -111,17 +119,25 @@ const rateLimitBucket = new WeakMap<Request, string>()
 
 // Set per request in classifyPeer: a loopback socket peer with NO proxy-declared client AND a
 // loopback Host header (a DNS-rebinding page reaches us from loopback but carries its own domain).
-// frpc (relay) and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
+// The relay tunnel and nginx forward from loopback but always add X-Forwarded-For, so relay traffic
 // never counts as local.
 const directLoopback = new WeakMap<Request, boolean>()
 /** The /ws heartbeat; a socket with no pong for 60 s is closed. */
 const HEARTBEAT_MS = 30_000
+/** Card #54 tracing: how often the event-loop lag probe ticks, and how often frame stats are written. */
+const PERF_LAG_TICK_MS = 500
+const PERF_STATS_MS = 60_000
 /** Close code that asks a client to reconnect and resubscribe (a fresh snapshot), e.g. after a wake. */
 export const WS_CLOSE_RESYNC = 4000
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"])
 
 function clientIp(req: Request): string {
   return rateLimitBucket.get(req) ?? "unknown"
+}
+
+/** An app-minted message id (`web-<uuid>`): the broker logs and dedupes the message under it. Anything else is ignored. */
+function clientMessageIdOf(value: unknown): string | undefined {
+  return typeof value === "string" && /^web-[A-Za-z0-9._:-]{1,120}$/.test(value) ? value : undefined
 }
 
 // Auth-failure rate-limit state is now per-WebChannel-instance (see the
@@ -227,7 +243,7 @@ function newTerminalViewerId(): string {
   return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; _termDrain?: { promise: Promise<void>; resolve: () => void } }
+type WSData = { deviceName: string; openedAt: number; surface?: Surface; lastPongAt?: number; terminal?: true; terminalKind?: "scratch" | "agent"; terminalSession?: string; terminalId?: string; terminalViewerId?: string; terminalAgentTarget?: string; terminalIntent?: import("../../core/terminal/manager").TerminalAttachIntent; terminalRevision?: 1 | 2; terminalRevisionError?: string; _termLane?: TerminalFrameLane; display?: true; scrcpy?: true; displayStreamId?: string; dictation?: { id: string; sessionId?: string }; _dictation?: ReturnType<NonNullable<WebChannelOpts["openDictationStream"]>>; _termDrain?: { promise: Promise<void>; resolve: () => void }; perfTrace?: string }
 
 export interface SessionSnapshot {
   id?: string
@@ -242,6 +258,8 @@ export interface SessionSnapshot {
   capabilities?: import("../../core/agents/capabilities").SessionCapabilities
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
+  /** An Agent's avatar content hash (FORMAT.md); fetch GET /agents/<id>/avatar when it changes. */
+  avatar?: string
   model?: string
   permissionMode?: string
   session_branch?: string
@@ -258,6 +276,10 @@ export interface ArchivedSessionSnapshot {
   model?: string
   killed_at?: string
   repo_root?: string
+  /** "personal_assistant" for an archived Agent (the sidebar's Agents ▸ Archived fold). */
+  role?: "personal_assistant" | "worker"
+  /** An archived Agent's avatar content hash (GET /agents/<id>/avatar). */
+  avatar?: string
 }
 
 /** Accounts over HTTP (GET/POST /accounts, /accounts/login…, POST /sessions/:id/account,
@@ -279,7 +301,7 @@ export interface WebChannelOpts {
   port: number
   devicesFile: string
   /** Peers allowed to declare the real client via X-Forwarded-For / CF-Connecting-IP.
-   *  Defaults to loopback (where frpc/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
+   *  Defaults to loopback (where the relay tunnel/nginx forward from). See DEFAULT_TRUSTED_PROXY_PEERS. */
   trustedProxyPeers?: string[]
   publicUrl: string
   staticDir?: string
@@ -287,10 +309,20 @@ export interface WebChannelOpts {
   getSessionsSnapshot: () => SessionSnapshot[]
   /** Newest `limit` entries (the store's default when omitted), oldest first. */
   getSessionLog: (name: string, limit?: number) => unknown[]
+  /**
+   * Fill in what a log's attachments say about their files (displayed size, a clip's length, a
+   * phone's poster) before the log goes out — reading, once, the header of any older file that was
+   * stored before those existed. In place. Absent in tests that do not care.
+   */
+  enrichAttachments?: (entries: unknown[]) => Promise<void>
   getSessionActivity?: (name: string) => unknown[]
   getSessionBgTasks?: (name: string) => unknown[]
   /** Latest view of each subagent of a session (snapshot `subagents`; live `subagent_update`). */
   getSessionSubagents?: (id: string) => unknown[]
+  /** The councils a session called (snapshot `councils`; live `council_update`). */
+  getSessionCouncils?: (id: string) => unknown[]
+  /** POST /councils/:id/end: the user's Stop council (design 2026-10-31 §3). */
+  endCouncil?: (councilId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
   /** POST /sessions/:id/subagents/:subagentId/message and …/stop. */
   messageSubagent?: (sessionId: string, subagentId: string, text: string) => Promise<{ ok: true; via?: "direct" | "relay" } | { ok: false; status: number; error: string }>
   stopSubagent?: (sessionId: string, subagentId: string) => Promise<{ ok: true } | { ok: false; status: number; error: string }>
@@ -333,7 +365,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; account?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; /** Card #75: the app's own id for the first message (`web-<uuid>`). */ firstMessageId?: string; device?: string; /** Card #75: the app's session-start trace (`x-mux-trace: S…/<req>`). */ perfTrace?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; permissionMode?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
@@ -356,12 +388,14 @@ export interface WebChannelOpts {
     => import("../../core/workspace/dto").WorkspaceDto
   archiveWorkspace?: (id: string) => Promise<void>
   restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
-  listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  /** `slim`: rows without views/layout (no views query per workspace) — the app's lazy fetch, card #54. */
+  listArchivedWorkspaces?: (opts?: { slim?: boolean }) => ArchivedWorkspaceRow[]
   // Persistent project catalog (plan 2026-09-21). Mutations throw
   // ProjectNotFoundError (→ 404), ProjectConflictError (→ 409) or Error (→ 400).
   listProjectCatalog?: () => unknown[]
   /** workspaceId → projectId over active AND archived workspaces. */
-  getProjectMembership?: () => Record<string, string>
+  /** `includeArchived: false` leaves archived workspaces out (a `lazyArchived` snapshot, card #54). */
+  getProjectMembership?: (opts?: { includeArchived?: boolean }) => Record<string, string>
   createProject?: (name: string) => unknown
   renameProject?: (id: string, name: string) => unknown
   reorderProjects?: (ids: string[]) => void
@@ -399,7 +433,23 @@ export interface WebChannelOpts {
   dictationEdit?: (input: { text: string; newWords: string }) => Promise<{ text: string | null }>
   /** What the dictation client needs to pick a default mode: is the codex (ChatGPT login) STT
    *  usable, and does the configured engine answer fast enough for live partial passes. */
-  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean }
+  voiceCaps?: () => { codexAvailable: boolean; livePartials: boolean; streaming?: boolean }
+  /**
+   * A streamed dictation (`/transcribe/stream`): the app sends raw 16 kHz mono s16le audio as
+   * binary frames while it records, plus `{type:"edit"|"stop"|"cancel"}` JSON; the broker hears
+   * the pauses and sends `{type:"text"|"final"|"done"|"error"}` back through [send], and calls
+   * [close] when it is finished with the socket.
+   */
+  openDictationStream?: (input: {
+    dictationId: string
+    sessionId?: string
+    send: (event: object) => void
+    close: () => void
+  }) => {
+    audio: (bytes: Uint8Array) => void
+    control: (msg: { type?: unknown; text?: unknown; seq?: unknown }) => void
+    closed: () => void
+  }
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
    * iterable of audio chunks (streamed NDJSON: play first while later synth).
@@ -425,14 +475,30 @@ export interface WebChannelOpts {
     start: (input: { text: string; engine?: string; lang?: string }) => { id: string } | { error: string; status: 400 | 503 }
     open: (id: string) => ReadableStream<Uint8Array> | null
   }
-  spawnPA?: (args: { name: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string }>
+  /** The one Agent create path. Refusals throw with `status` + `code` (name_invalid, name_taken, agent_not_installed, provider_invalid). */
+  createAgent?: (args: { name: string; provider?: AgentKind; model?: string; reasoningLevel?: string }) => Promise<{ id: string; name: string; workdir: string; provider: AgentKind }>
   listPAs?: () => SessionSnapshot[]
-  updatePA?: (name: string, patch: { model?: string; reasoningLevel?: string }) => Promise<{ ok: boolean; error?: string }>
+  /** An Agent's avatar file changed: tell the clients (agent_avatar_changed). */
+  agentAvatarChanged?: (id: string) => void
+  /** [key] is an Agent id (new clients) or name (old clients). */
+  updatePA?: (key: string, patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string }) => Promise<{ ok: boolean; error?: string; status?: number; code?: string }>
   proxyBaseDomain?: string
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
   internalSecret?: string
+  /**
+   * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
+   * carrying it in `x-supermux-stop-token` stops the broker gracefully: the desktop app's stop on Windows, where every
+   * external stop is otherwise TerminateProcess.
+   */
+  stopToken?: string
+  onStopRequest?: () => void
+  /**
+   * With [stopToken]: POST /internal/restart restarts the broker under whatever runs it (update/apply.ts
+   * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
+   */
+  onRestartRequest?: () => boolean
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -449,6 +515,12 @@ export interface WebChannelOpts {
   updateProxy?: (domain: string, isPublic: boolean) => { domain: string; sessionName: string; port: number; createdAt: string; isPublic: boolean }
   terminalManager?: import("../../core/terminal/manager").TerminalManager
   getSessionWorkdir?: (name: string) => string | undefined
+  /**
+   * Card #75: resolves once a folder the broker is making exists (a session born asleep has its
+   * worktree checked out on its first wake), at once for any other path. The files routes, folder
+   * subscriptions and terminals wait on it instead of failing with a missing folder.
+   */
+  folderReady?: (path: string) => Promise<void>
   /** Resolve a claude session's tmux "session:window" target (for kind=agent
    * terminals). Returns undefined for non-claude/unknown sessions. When this opt
    * is absent, all kind=agent requests return 404 (the feature is opt-in). */
@@ -501,8 +573,6 @@ export interface WebChannelOpts {
     method: "auto" | "code"
   }>
   finishOpenCodeOAuth?: (providerId: string, method: number, code: string) => Promise<void>
-  getSoul?: () => Promise<string> | string
-  setSoul?: (content: string) => Promise<void> | void
   getExposure?: () => { exposureMode: string; publicUrl: string; snippets: import("../../core/settings/exposure").ExposureSnippets }
   validateExposure?: () => Promise<{ reachable: boolean; status?: number; error?: string }>
   getForgeConnections?: () => import("../../core/forge/types").ForgeConnection[]
@@ -526,16 +596,40 @@ export interface WebChannelOpts {
   claimStore?: import("./pair-claim").ClaimStore
   mintDeviceToken?: (name: string) => { token: string; name: string }
   getRelayUrl?: () => string | undefined
+  /**
+   * Load-time tracing (card #54, `core/perf/perf-log.ts`). While it is on, the snapshot carries
+   * `perf: true` (the apps then ship their own timings as `client_logs` with category "perf"),
+   * every API response and the snapshot record what they cost under the caller's trace id, and
+   * broadcasts are counted per frame type. Off: nothing on the wire changes.
+   */
+  perf?: PerfLog
+}
+
+/** What [WebChannel.json] put in a response body, for the perf trace (set on the Response). */
+const PERF_BYTES = Symbol("perfBytes")
+/** The JSON text itself, so a big answer can be gzipped on the way out ([WebChannel.gzipped]). */
+const PERF_TEXT = Symbol("perfText")
+/** JSON answers this long or longer are gzipped for a client that accepts it (card #54). */
+const GZIP_MIN_CHARS = 8_192
+
+/** An archived workspace as listed: the full DTO, or (slim) the DTO without views and layout. */
+export type ArchivedWorkspaceRow = Omit<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout"> &
+  Partial<Pick<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout">>
+
+/** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
+/** Card #62: client frames an older broker doesn't know, which this one takes; listed in every snapshot (`accepts`). */
+const ACCEPTED_OPTIONAL_FRAMES = ["live"]
+
+export const WEB_CAPABILITIES: ChannelCapabilities = {
+  multiplexesSessions: false,
+  supportsReactions: false,
+  supportsEdit: false,
+  supportsAttachments: true,
 }
 
 export class WebChannel implements Channel {
   readonly name = "web"
-  readonly capabilities: ChannelCapabilities = {
-    multiplexesSessions: false,
-    supportsReactions: false,
-    supportsEdit: false,
-    supportsAttachments: true,
-  }
+  readonly capabilities = WEB_CAPABILITIES
 
   private server?: ReturnType<typeof Bun.serve>
   private heartbeatTimer?: NodeJS.Timeout
@@ -543,6 +637,7 @@ export class WebChannel implements Channel {
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
+  private readonly pushWatch?: PushRegistrationWatch
   private readonly vapidPublicKey?: string
   private readonly relayUrl?: string
   private readonly getHostInfo?: () => import("./host-route").HostInfo
@@ -553,10 +648,24 @@ export class WebChannel implements Channel {
   /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
   private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
+  /** Card #76: replies being written, for the apps that asked (`subscribe.streams`). */
+  private readonly live = new LiveReplies()
+  private readonly liveSockets = new WeakMap<import("bun").ServerWebSocket<WSData>, LiveSocket>()
+  /** Card #76: the chats a socket shows, as its last viewing frame said. Their live text follows them. */
+  private readonly liveShown = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
+  /** Card #62: the chats a socket asked live text for without showing them (`live`: the assistant overlay's Agent). */
+  private readonly livePinned = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
   private readonly clientLogRing: StoredClientLogEntry[] = []
+  /** Card #54: broadcasts per frame type, the event loop's lateness, who asked for each request. */
+  private readonly frameStats = new FrameStats()
+  private readonly loopLag = new LoopLag(PERF_LAG_TICK_MS)
+  private perfTimers: Array<ReturnType<typeof setInterval>> = []
+  private readonly perfReqDevice = new WeakMap<Request, string>()
+  /** Extra fields a route adds to its request's `http` perf event (where its time went). */
+  private readonly perfNotes = new WeakMap<Request, Record<string, unknown>>()
   // Per-instance auth-failure rate-limit buckets, keyed by client IP. Instance
   // (not module) scope keeps concurrent channels — e.g. the many WebChannels a
   // single `bun test` process spins up, all seeing clientIp() === "unknown" —
@@ -568,6 +677,7 @@ export class WebChannel implements Channel {
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
+    if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
     this.vapidPublicKey = opts.vapidPublicKey
     this.relayUrl = opts.relayUrl
     this.getHostInfo = opts.getHostInfo
@@ -643,6 +753,7 @@ export class WebChannel implements Channel {
       const dev = this.store.verify(token)
       if (dev) {
         this.store.touch(token)
+        if (this.opts.perf) this.perfReqDevice.set(req, dev.name)
         return { ok: true, device: { name: dev.name, token } }
       }
     }
@@ -664,8 +775,13 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
+    auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
+    if (this.opts.perf) {
+      this.perfTimers.push(setInterval(() => this.loopLag.tick(), PERF_LAG_TICK_MS), setInterval(() => this.flushPerfStats(), PERF_STATS_MS))
+      for (const t of this.perfTimers) (t as { unref?: () => void }).unref?.()
+    }
     log.info("web channel listening", { port: this.boundPort })
   }
 
@@ -678,7 +794,7 @@ export class WebChannel implements Channel {
       // See SERVE_IDLE_TIMEOUT_SECONDS above: without this, any response slower than Bun's
       // 10s default gets its connection dropped mid-flight.
       idleTimeout: SERVE_IDLE_TIMEOUT_SECONDS,
-      fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
+      fetch: (req, server) => this.serveTraced(req, server),
       websocket: {
         // Negotiated per-connection (clients that don't support it are unaffected).
         // Terminal + control-channel JSON are highly compressible; the heavy win
@@ -710,6 +826,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsOpen(ws); return }
           if (ws.data.display) { this.onDisplayWsOpen(ws); return }
+          if (ws.data.dictation) { this.onDictationWsOpen(ws); return }
           if (ws.data.terminal) {
             void this.onTerminalWsOpen(ws)
             return
@@ -724,6 +841,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsMessage(ws, msg); return }
           if (ws.data.display) { this.onDisplayWsMessage(ws, msg); return }
+          if (ws.data.dictation) { this.onDictationWsMessage(ws, msg); return }
           if (ws.data.terminal) {
             this.onTerminalWsMessage(ws, msg)
             return
@@ -738,6 +856,7 @@ export class WebChannel implements Channel {
           }
           if (ws.data.scrcpy) { this.onScrcpyWsClose(ws); return }
           if (ws.data.display) { this.onDisplayWsClose(ws); return }
+          if (ws.data.dictation) { this.onDictationWsClose(ws); return }
           if (ws.data.terminal) {
             this.onTerminalWsClose(ws)
             return
@@ -754,8 +873,11 @@ export class WebChannel implements Channel {
   }
 
   async stop(): Promise<void> {
+    this.live.stop()
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
     this.heartbeatTimer = undefined
+    for (const t of this.perfTimers.splice(0)) clearInterval(t)
+    this.opts.perf?.flush()
     this.fss.close()
     // Force-close active/keep-alive connections (the `true`). A graceful stop
     // leaves idle keep-alive sockets open, so a stopped channel keeps serving on
@@ -789,9 +911,118 @@ export class WebChannel implements Channel {
     return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
   }
 
+  private liveSocket(ws: import("bun").ServerWebSocket<WSData>): LiveSocket {
+    let socket = this.liveSockets.get(ws)
+    if (!socket) {
+      socket = { send: (json) => { ws.send(json) }, bufferedAmount: () => ws.getBufferedAmount() }
+      this.liveSockets.set(ws, socket)
+    }
+    return socket
+  }
+
+  /** Card #76: the chats this socket shows, for live text (an app that never asked has no live socket). */
+  private watchLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    this.liveShown.set(ws, sessions)
+    this.rewatchLive(ws)
+  }
+
+  /** Card #62: chats this socket wants live text for without showing them. Presence, read and push are untouched. */
+  private pinLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    this.livePinned.set(ws, sessions)
+    this.rewatchLive(ws)
+  }
+
+  /** Live text follows the chats shown and the chats pinned alike. */
+  private rewatchLive(ws: import("bun").ServerWebSocket<WSData>): void {
+    const socket = this.liveSockets.get(ws)
+    if (socket) this.live.watch(socket, [...(this.liveShown.get(ws) ?? []), ...(this.livePinned.get(ws) ?? [])])
+  }
+
+  /** Card #76: more of a reply (or thinking) being written in `session`. */
+  liveAppend(session: string, stream: string, kind: LiveKind, text: string): void {
+    this.live.append(session, stream, kind, text)
+  }
+
+  /** Card #76: a live stream ended; `final` = its stored form follows with the same id. */
+  liveClose(stream: string, final: boolean): void {
+    this.live.close(stream, final)
+  }
+
+  /** Card #76: the session's turn ended; anything still streaming there is dropped. */
+  liveEndSession(session: string): void {
+    this.live.endSession(session)
+  }
+
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+    if (this.opts.perf?.enabled()) this.frameStats.add(String((frame as { type?: unknown }).type), json.length, this.wsConnections.size)
+  }
+
+  /**
+   * Card #54: write the frames broadcast since the last call (per type: frames, bytes, socket
+   * sends) and how late the event loop ran, as one `ws.frames` event. Every minute while tracing.
+   */
+  flushPerfStats(): void {
+    const perf = this.opts.perf
+    if (!perf?.enabled()) {
+      this.frameStats.take()
+      this.loopLag.take()
+      return
+    }
+    perf.record({ event: "ws.frames", periodMs: PERF_STATS_MS, clients: this.wsConnections.size, frames: this.frameStats.take(), loopLag: this.loopLag.take() })
+  }
+
+  /**
+   * A JSON answer of [GZIP_MIN_CHARS] or more, gzipped for a client that accepts it (card #54: a
+   * chat open's history and extras and the archive list crossed the relay at 4–5× their gzipped
+   * size). Anything else — small, already encoded, not JSON from [json] — passes through.
+   */
+  private gzipped(req: Request, res: Response): Response {
+    const text = (res as unknown as Record<symbol, unknown>)[PERF_TEXT]
+    if (typeof text !== "string" || text.length < GZIP_MIN_CHARS) return res
+    if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "") || res.headers.has("content-encoding")) return res
+    const body = Bun.gzipSync(text, { level: 4 })
+    const headers = new Headers(res.headers)
+    headers.set("content-encoding", "gzip")
+    headers.append("vary", "accept-encoding")
+    const out = new Response(body, { status: res.status, statusText: res.statusText, headers })
+    ;(out as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    return out
+  }
+
+  /**
+   * Every HTTP request goes through here. With tracing on, an API response records how long the
+   * broker took to build it (to the Response; the transfer is not in it), its size, and the
+   * caller's `x-mux-trace: <trace>/<req>` header, and tells the caller in `server-timing`.
+   */
+  private async serveTraced(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
+    const perf = this.opts.perf?.enabled() ? this.opts.perf : undefined
+    const t0 = perf ? performance.now() : 0
+    const routed = await this.routeRequestOrUpgrade(req, server)
+    if (!routed) return routed
+    const res = this.gzipped(req, routed)
+    if (!perf) return res
+    const path = new URL(req.url).pathname
+    if (!isApiPath(path)) return res
+    const ms = Math.round((performance.now() - t0) * 10) / 10
+    try { res.headers.set("server-timing", `app;dur=${ms}`) } catch { /* immutable (proxied) headers */ }
+    const [trace, reqId] = (req.headers.get("x-mux-trace") ?? "").split("/")
+    perf.record({
+      event: "http",
+      trace: trace || undefined,
+      req: reqId || undefined,
+      method: req.method,
+      path,
+      route: perfPath(path),
+      status: res.status,
+      bytes: (res as unknown as Record<symbol, number | undefined>)[PERF_BYTES],
+      gzipBytes: res === routed ? undefined : Number(res.headers.get("content-length")) || undefined,
+      ms,
+      device: this.perfReqDevice.get(req),
+      ...this.perfNotes.get(req),
+    })
+    return res
   }
 
   /**
@@ -826,6 +1057,7 @@ export class WebChannel implements Channel {
   broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) if (c.ws !== except) c.ws.send(json)
+    if (this.opts.perf?.enabled()) this.frameStats.add(String((frame as { type?: unknown }).type), json.length, Math.max(0, this.wsConnections.size - 1))
   }
 
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
@@ -852,7 +1084,9 @@ export class WebChannel implements Channel {
       }
     }
     if (url.pathname === "/ws") {
+      const authStart = performance.now()
       const auth = this.authenticate(req)
+      const authMs = Math.round((performance.now() - authStart) * 10) / 10
       if (!auth.ok) return this.authFailureResponse(auth)
       // Same rule as /ws/term: a cookie-authenticated socket must come from the app's own origin, so a
       // proxied page on `<slug>.<base>` (which gets the `Domain=.<base>` cookie) can't open it and, e.g.,
@@ -864,9 +1098,14 @@ export class WebChannel implements Channel {
       }
       const dev = auth.device
       const client = parseClientInfo(url.searchParams)
-      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now(), surface: client.surface } as WSData })
+      // Card #54: the app's launch trace id, so the broker's half of its startup joins it.
+      const perfTrace = url.searchParams.get("trace")?.slice(0, 40) || undefined
+      const upgraded = server.upgrade(req, { data: { deviceName: dev.name, openedAt: Date.now(), surface: client.surface, perfTrace } as WSData })
       if (upgraded) {
         this.noteClientConnected(dev, client)
+        if (this.opts.perf?.enabled()) {
+          this.opts.perf.record({ event: "ws.upgrade", trace: perfTrace, req: url.searchParams.get("req")?.slice(0, 40) || undefined, device: dev.name, surface: client.surface, authMs })
+        }
         return undefined  // 101 returned by Bun automatically
       }
       return new Response("upgrade failed", { status: 500 })
@@ -992,6 +1231,23 @@ export class WebChannel implements Channel {
       }
       return new Response("upgrade failed", { status: 500 })
     }
+    if (url.pathname === "/transcribe/stream") {
+      const auth = this.authenticate(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const dev = auth.device
+      if (!this.opts.openDictationStream) return new Response("not configured", { status: 503 })
+      const dictationId = (url.searchParams.get("dictationId") ?? "").trim()
+      if (!dictationId || dictationId.length > 100) return new Response("dictationId required", { status: 400 })
+      const sessionId = url.searchParams.get("session")?.trim() || undefined
+      const upgraded = server.upgrade(req, {
+        data: { deviceName: dev.name, openedAt: Date.now(), dictation: { id: dictationId, ...(sessionId ? { sessionId } : {}) } } as WSData,
+      })
+      if (upgraded) {
+        this.recordFeature(featureForUpgrade(url.pathname), dev.token)
+        return undefined
+      }
+      return new Response("upgrade failed", { status: 500 })
+    }
     if (url.pathname === "/ws/display") {
       const id = url.searchParams.get("id") ?? ""
       const auth = this.authenticate(req)
@@ -1085,6 +1341,7 @@ export class WebChannel implements Channel {
 
   private onWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     this.wsConnections.add({ ws, deviceName: ws.data.deviceName })
+    this.pushWatch?.connected(ws.data.deviceName, ws.data.surface)
   }
 
   // Lazily create the per-connection LSP bridge, stored on ws.data so its
@@ -1105,6 +1362,8 @@ export class WebChannel implements Channel {
 
   private onWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
     this.fss.dropSocket(ws)
+    const liveSocket = this.liveSockets.get(ws)
+    if (liveSocket) this.live.leave(liveSocket)
     ;((ws.data as any)?._lsp as LspConnection | undefined)?.dispose()
     for (const c of this.wsConnections) {
       if (c.ws === ws) { this.wsConnections.delete(c); break }
@@ -1152,6 +1411,8 @@ export class WebChannel implements Channel {
     if (!workdir) { await refuse("target-not-found", false, "session not found"); return }
 
     await lane.ready()
+    // A session born asleep gets its folder on its first wake: its terminal waits for it (card #75).
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1212,6 +1473,7 @@ export class WebChannel implements Channel {
       try { ws.close(1011, "terminal reset failed") } catch {}
       return
     }
+    await this.opts.folderReady?.(workdir)
     let result: Awaited<ReturnType<typeof tm.attach>>
     try {
       result = await tm.attach({
@@ -1351,6 +1613,41 @@ export class WebChannel implements Channel {
       ws.data.terminalViewerId)
   }
 
+  // A streamed dictation: binary frames are mic audio, text frames are JSON control messages.
+  private onDictationWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
+    const d = ws.data.dictation!
+    try {
+      ws.data._dictation = this.opts.openDictationStream!({
+        dictationId: d.id,
+        ...(d.sessionId ? { sessionId: d.sessionId } : {}),
+        send: (event) => { try { ws.send(JSON.stringify(event)) } catch { /* socket gone */ } },
+        close: () => { try { ws.close() } catch { /* already closed */ } },
+      })
+    } catch (err: any) {
+      log.warn("dictation_stream_open_failed", { dictationId: d.id, err: err?.message ?? String(err) })
+      try { ws.send(JSON.stringify({ type: "error", message: "dictation stream unavailable", fatal: true })) } catch { /* gone */ }
+      ws.close(1011, "dictation stream unavailable")
+    }
+  }
+
+  private onDictationWsMessage(ws: import("bun").ServerWebSocket<WSData>, msg: string | Buffer): void {
+    const h = ws.data._dictation
+    if (!h) return
+    if (typeof msg === "string") {
+      let m: unknown
+      try { m = JSON.parse(msg) } catch { return }
+      if (m && typeof m === "object") h.control(m as { type?: unknown; text?: unknown; seq?: unknown })
+      return
+    }
+    h.audio(new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength))
+  }
+
+  private onDictationWsClose(ws: import("bun").ServerWebSocket<WSData>): void {
+    const h = ws.data._dictation
+    ws.data._dictation = undefined
+    h?.closed()
+  }
+
   private onDisplayWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     const id = ws.data.displayStreamId!
     const port = this.opts.getDisplayPort?.(id)
@@ -1480,11 +1777,17 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "subscribe") {
+      // Card #54: each phase of the build is timed; with tracing on the total, the phases and the
+      // size land in the perf log under the app's trace id (`trace`/`req` on the subscribe).
+      const perf = this.opts.perf?.enabled() ? this.opts.perf : undefined
+      const laps = lapTimer()
       const sessions = this.opts.getSessionsSnapshot()
+      laps.lap("sessions")
       const logs: Record<string, unknown[]> = {}
       const activity: Record<string, unknown[]> = {}
       const bgTasks: Record<string, unknown[]> = {}
       const subagents: Record<string, unknown[]> = {}
+      const councils: Record<string, unknown[]> = {}
       const agentState: Record<string, unknown> = {}
       const commands: Record<string, unknown[]> = {}
       const commandsResolved: Record<string, boolean> = {}
@@ -1500,6 +1803,17 @@ export class WebChannel implements Channel {
       // GET /sessions/:id/chat-extras when the chat opens. `partialExtras` names those sessions.
       const trimExtras = logTail !== undefined && frame.trimExtras === true
       const partialExtras: string[] = []
+      // `slimSubagents` (with `trimExtras`, card #54): a chat not on screen gets only its RUNNING
+      // subagents — the sidebar shows a running count — and its full list over chat-extras when
+      // opened. Finished ones carried up to 8,000-char prompts and results: ~860 KB of 2.3 MB.
+      const slimSubagents = trimExtras && frame.slimSubagents === true
+      // `lazyArchived` (card #54): no archived workspaces (or their project links) here; the app
+      // fetches `/archived-workspaces?slim=1` after the snapshot, off its first screen's path.
+      const lazyArchived = frame.lazyArchived === true
+      // Card #76: `streams: 1` asks for replies while they are written (reply_stream frames) for the chats
+      // this socket shows. Old apps never ask, so they never get them.
+      const liveSocket = typeof frame.streams === "number" && frame.streams >= 1 ? this.liveSocket(ws) : undefined
+      if (liveSocket) this.live.join(liveSocket)
       for (const s of sessions) {
         const sessionKey = s.id ?? s.name
         if (logTail !== undefined && !fullLogs.has(sessionKey)) {
@@ -1511,7 +1825,11 @@ export class WebChannel implements Channel {
         }
         bgTasks[sessionKey] = this.opts.getSessionBgTasks?.(sessionKey) ?? []
         // Small and needed by the session list (running badges), so never trimmed.
-        subagents[sessionKey] = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        const sessionSubagents = this.opts.getSessionSubagents?.(sessionKey) ?? []
+        subagents[sessionKey] = slimSubagents && !fullLogs.has(sessionKey)
+          ? sessionSubagents.filter((s) => (s as { status?: unknown }).status === "running")
+          : sessionSubagents
+        councils[sessionKey] = this.opts.getSessionCouncils?.(sessionKey) ?? []
         agentState[sessionKey] = this.opts.getSessionAgentState?.(sessionKey)
         if (trimExtras && !fullLogs.has(sessionKey)) {
           partialExtras.push(sessionKey)
@@ -1521,18 +1839,24 @@ export class WebChannel implements Channel {
           commandsResolved[sessionKey] = this.opts.getSessionCommandsResolved?.(sessionKey) ?? false
         }
       }
+      laps.lap("perSession")
+      await this.opts.enrichAttachments?.(Object.values(logs).flat())
+      laps.lap("attachments")
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
+      laps.lap("workspaces")
       // `slimArchived`: an archived workspace's views and layout are only needed once it is
       // restored, and restoring sends the full record (`workspace_added`). ~40% of the list.
-      const archivedWorkspaces = (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
+      const archivedWorkspaces = lazyArchived ? undefined : (this.opts.listArchivedWorkspaces?.() ?? []).map((w) => {
         if (frame.slimArchived !== true) return w
         const { views: _views, layout: _layout, ...rest } = w as Record<string, unknown>
         return rest
       })
+      laps.lap("archivedWorkspaces")
       const projects = this.opts.listProjectCatalog?.() ?? []
-      const projectMembership = this.opts.getProjectMembership?.() ?? {}
+      const projectMembership = this.opts.getProjectMembership?.(lazyArchived ? { includeArchived: false } : undefined) ?? {}
+      laps.lap("projects")
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
@@ -1542,16 +1866,54 @@ export class WebChannel implements Channel {
         requests[sessionKey] = this.opts.getSessionRequests?.(sessionKey) ?? []
       }
       const permissionModes = permissionCatalog()
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, subagents, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}) }))
+      laps.lap("rest")
+      // Card #62: the optional frames this broker takes. An older one answers a frame it doesn't know with an
+      // error, which an app would show, so an app sends one of these only to a broker that lists it here.
+      const accepts = ACCEPTED_OPTIONAL_FRAMES
+      const snapshot = { type: "snapshot", accepts, sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
+      const text = JSON.stringify(snapshot)
+      laps.lap("stringify")
+      const sent = ws.send(text)
+      laps.lap("send")
       // Right after the snapshot, so every (re)connect learns whether this computer can run agents.
       const requirements = this.opts.getHostRequirements?.()
       if (requirements) ws.send(JSON.stringify({ type: "host_requirements", requirements }))
       const keepAwake = this.opts.getKeepAwake?.()
       if (keepAwake) ws.send(JSON.stringify({ type: "keep_awake", keepAwake }))
+      if (perf) {
+        // After the send, so measuring what the bytes are made of never delays the app.
+        const keyBytes = Object.fromEntries(Object.entries(snapshot).map(([k, v]) => [k, JSON.stringify(v)?.length ?? 0]))
+        perf.record({
+          event: "snapshot.built",
+          trace: (typeof frame.trace === "string" ? frame.trace.slice(0, 40) : undefined) ?? ws.data.perfTrace,
+          req: typeof frame.req === "string" ? frame.req.slice(0, 40) : undefined,
+          device: ws.data.deviceName,
+          surface: ws.data.surface,
+          sessions: sessions.length,
+          workspaces: workspaces.length,
+          archivedWorkspaces: archivedWorkspaces?.length ?? "lazy",
+          trimmed: logTail !== undefined,
+          bytes: text.length,
+          sent,
+          ms: laps.total(),
+          laps: laps.laps,
+          keyBytes,
+        })
+      }
       return
     }
     if (frame.type === "ping") {
       ws.send(JSON.stringify({ type: "pong" }))
+      return
+    }
+    // Card #62: `live` asks for these chats' live text without showing them: the assistant overlay floats its
+    // Agent's reply over other apps as it is written. It replaces the last such set. Unlike `viewing` it is
+    // presence for nothing (the overlay is not a chat on screen), so nothing is read and pushes still go out.
+    if (frame.type === "live") {
+      const sessions = Array.isArray(frame.sessions)
+        ? frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
+        : []
+      this.pinLive(ws, sessions)
       return
     }
     if (frame.type === "viewing") {
@@ -1566,6 +1928,7 @@ export class WebChannel implements Channel {
       if (Array.isArray(frame.sessions)) {
         const many = frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
         this.opts.viewingTracker?.setSessions(ws.data.deviceName, many, visible)
+        this.watchLive(ws, visible ? many : [])
         if (visible) for (const s of many) this.opts.markRead?.(s)
         return
       }
@@ -1575,6 +1938,7 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
+      this.watchLive(ws, session === null ? [] : visible ? [session] : (this.liveShown.get(ws) ?? []).filter((s) => s !== session))
       // A visible device sitting on an exact session has read it up to its
       // newest message. (Sitting on the list, session===null, does not count.)
       if (visible && typeof session === "string") this.opts.markRead?.(session)
@@ -1626,10 +1990,7 @@ export class WebChannel implements Channel {
         return
       }
 
-      const clientMessageId = typeof frame.client_message_id === "string"
-        && /^web-[A-Za-z0-9._:-]{1,120}$/.test(frame.client_message_id)
-        ? frame.client_message_id
-        : undefined
+      const clientMessageId = clientMessageIdOf(frame.client_message_id)
 
       const msg: InboundMessage = {
         channel: "web",
@@ -1679,7 +2040,9 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "fs_sub" && typeof frame.path === "string") {
-      void this.fss.subscribe(ws, frame.path, typeof frame.since === "string" ? frame.since : undefined)
+      const path = frame.path
+      const since = typeof frame.since === "string" ? frame.since : undefined
+      void (this.opts.folderReady?.(path) ?? Promise.resolve()).then(() => this.fss.subscribe(ws, path, since))
       return
     }
     if (frame.type === "fs_unsub" && typeof frame.path === "string") {
@@ -1901,11 +2264,15 @@ export class WebChannel implements Channel {
   /** `/settings/config` plus the live voice capabilities, which are probed, not stored. */
   private withVoiceCaps(cfg: Record<string, unknown>): Record<string, unknown> {
     const caps = this.opts.voiceCaps?.()
-    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials } : cfg
+    return caps ? { ...cfg, voiceCodexAvailable: caps.codexAvailable, voiceLivePartials: caps.livePartials, voiceStreaming: caps.streaming === true && this.opts.openDictationStream !== undefined } : cfg
   }
 
   private json(body: unknown, status = 200): Response {
-    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+    const text = JSON.stringify(body)
+    const res = new Response(text, { status, headers: { "content-type": "application/json" } })
+    ;(res as unknown as Record<symbol, unknown>)[PERF_BYTES] = text.length
+    ;(res as unknown as Record<symbol, unknown>)[PERF_TEXT] = text
+    return res
   }
 
   /** [json], gzipped when the client accepts it and the body is big enough to be worth it. */
@@ -2041,6 +2408,10 @@ export class WebChannel implements Channel {
       const e = raw as Record<string, unknown>
       const category = String(e.category ?? "client")
       const event = String(e.event ?? "log")
+      if (category === "perf") {
+        this.ingestPerfEntry(device, event, e, meta)
+        continue
+      }
       const stored: StoredClientLogEntry = {
         ts: Number(e.ts) || serverTs,
         category,
@@ -2060,6 +2431,31 @@ export class WebChannel implements Channel {
       })
     }
     while (this.clientLogRing.length > MAX_CLIENT_LOG_RING) this.clientLogRing.shift()
+  }
+
+  /**
+   * Card #54: an app's own timing. `ts` is the app's ms-since-launch when it happened and
+   * `meta.t` the same clock when the batch was sent, so the event is placed `meta.t - ts` before
+   * the batch arrived here (off by the batch's one-way latency, a small frame's).
+   */
+  private ingestPerfEntry(device: string, event: string, e: Record<string, unknown>, meta?: Record<string, unknown>): void {
+    const perf = this.opts.perf
+    if (!perf?.enabled()) return
+    const t = Number(e.ts)
+    const sentAt = Number(meta?.t)
+    const lag = Number.isFinite(t) && Number.isFinite(sentAt) ? Math.max(0, sentAt - t) : 0
+    const data = e.data && typeof e.data === "object" ? (e.data as Record<string, unknown>) : {}
+    perf.record({
+      ...data,
+      event,
+      src: "client",
+      ts: Math.round(perf.now() - lag),
+      t: Number.isFinite(t) ? t : undefined,
+      device,
+      surface: typeof meta?.surface === "string" ? meta.surface : undefined,
+      launch: typeof meta?.launch === "string" ? meta.launch : undefined,
+      version: typeof meta?.version === "string" ? meta.version : undefined,
+    })
   }
 
   private async handleProxyRoute(
@@ -2157,6 +2553,32 @@ export class WebChannel implements Channel {
       const authResult = this.requireAuth(req)
       if (!authResult.ok) return new Response("unauthorized", { status: 401 })
       return Response.json(this.lastClientFrames)
+    }
+
+    // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    const stopTokenGiven = (kind: string): boolean => {
+      const given = req.headers.get("x-supermux-stop-token") ?? ""
+      const expected = this.opts.stopToken ?? ""
+      const ok = expected !== "" && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+      if (!ok) log.warn(`${kind}_request_rejected`, { hasToken: given !== "" })
+      return ok
+    }
+    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("stop")) return new Response("forbidden", { status: 403 })
+      log.info("stop_request_accepted")
+      const stop = this.opts.onStopRequest
+      setTimeout(() => stop(), 0) // after this response has gone out
+      return new Response("stopping", { status: 202 })
+    }
+    if (path === "/internal/restart" && this.opts.stopToken && this.opts.onRestartRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("restart")) return new Response("forbidden", { status: 403 })
+      // restartService schedules the restart a moment later, so this answer still goes out.
+      if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
+      log.info("restart_request_accepted")
+      return new Response("restarting", { status: 202 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
@@ -2425,6 +2847,7 @@ export class WebChannel implements Channel {
       if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
         return new Response("platform + routingToken + pubkey required", { status: 400 })
       this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      this.pushWatch?.registered(auth.device.name, platform)
       return this.json({ ok: true })
     }
 
@@ -2433,6 +2856,20 @@ export class WebChannel implements Channel {
       if (!this.deviceTokenStore) return new Response("push not configured", { status: 503 })
       this.deviceTokenStore.remove(auth.device.name)
       return this.json({ ok: true })
+    }
+
+    // The poster a phone made of a clip it sent: both are this device's own uploads. A refusal reads
+    // like an unknown id, so probing someone else's file ids learns nothing.
+    if (method === "POST" && /^\/files\/[^/]+\/poster$/.test(path)) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      if (!this.fileStore) return new Response("file store not mounted", { status: 500 })
+      const clip = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => null) as { poster_file_id?: unknown } | null
+      const poster = typeof body?.poster_file_id === "string" ? body.poster_file_id : ""
+      if (!poster) return new Response("poster_file_id required", { status: 400 })
+      const linked = await this.fileStore.setPoster(clip, poster, auth.device.name)
+      return linked ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 })
     }
 
     if (method === "GET" && path.startsWith("/files/")) {
@@ -2513,10 +2950,14 @@ export class WebChannel implements Channel {
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
     // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
+    // `relayUrl` is the connectivity relay when one is on (the desktop pairs phones with it) and
+    // the push relay otherwise, which older phone apps read. `pushRelayUrl` is always the push
+    // relay: with the connectivity relay on, phones registering at `relayUrl` reached this broker
+    // and got a 404, so no phone could receive push (card #86).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
       const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
-      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl }, 200)
+      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl, pushRelayUrl: this.relayUrl }, 200)
       return this.json(a.throttled ? { error: "rate limited" } : { paired: false }, this.authFailureStatus(a))
     }
 
@@ -2773,17 +3214,9 @@ export class WebChannel implements Channel {
       return this.json(await this.opts.validateExposure())
     }
 
-    // ── Settings: soul (identity) ───────────────────────────────────────────
-    if (method === "GET" && path === "/settings/soul") {
-      if (!this.opts.getSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await this.opts.getSoul()
-      return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
-    }
-    if (method === "PUT" && path === "/settings/soul") {
-      if (!this.opts.setSoul) return this.json({ error: "soul unavailable" }, 503)
-      const content = await req.text()
-      await this.opts.setSoul(content)
-      return this.json({ ok: true })
+    // ── Settings: soul (retired, spec §6) ───────────────────────────────────
+    if (path === "/settings/soul") {
+      return this.json({ error: "soul.md is retired: each agent has its own memory in ~/.mux/agent-memory/<id>.md" }, 410)
     }
     // ── Settings: web editor (LSP servers, etc.) ─────────────────────────────
     if (method === "GET" && path === "/settings/editor") {
@@ -2821,6 +3254,25 @@ export class WebChannel implements Channel {
       return this.json(catalog)
     }
 
+    // An Agent's avatar JSON (core/agents/avatar). 404 when it has none (the client draws its default).
+    const avatarMatch = method === "GET" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    // PUT: set an Agent's avatar from a client (the sidebar's "Change character…").
+    const avatarPut = method === "PUT" ? /^\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path) : null
+    if (avatarPut) {
+      const id = avatarPut[1]!
+      const agent = this.opts.getSessionsSnapshot?.().find((s) => s.id === id)
+      if (!agent || agent.role !== "personal_assistant") return this.json({ error: "not an agent" }, 404)
+      const check = checkAvatar(await req.text())
+      if (!check.ok) return this.json({ error: "invalid avatar", errors: check.errors }, 400)
+      writeAvatar(id, check.text!)
+      this.opts.agentAvatarChanged?.(id)
+      return this.json({ ok: true })
+    }
+    if (avatarMatch) {
+      const text = readAvatar(avatarMatch[1]!)
+      if (text == null || !checkAvatar(text).ok) return this.json({ error: "no avatar" }, 404)
+      return new Response(text, { headers: { "content-type": "application/json", "cache-control": "no-cache" } })
+    }
     if (method === "GET" && path === "/agents/status") {
       const statuses = this.opts.getAgentStatuses?.()
       if (!statuses) return this.json({ error: "agent detection unavailable" }, 503)
@@ -3174,6 +3626,7 @@ export class WebChannel implements Channel {
     if (path === "/fs/list" || path === "/fs/stat" || path === "/fs/read" || path === "/fs/raw" || path === "/fs/write" || path === "/fs/search" || path === "/fs/ops") {
       const p = url.searchParams.get("path") ?? ""
       try {
+        await this.opts.folderReady?.(p)
         if (method === "GET" && path === "/fs/list") return this.json(await this.fss.list(p))
         if (method === "GET" && path === "/fs/stat") return this.json(await this.fss.stat(p))
         if (method === "GET" && path === "/fs/read") {
@@ -3255,10 +3708,16 @@ export class WebChannel implements Channel {
       // What an open chat needs beyond its messages; the snapshot leaves these out for chats
       // that were not on screen (`trimExtras`).
       const id = decodeURIComponent(path.split("/")[2]!)
+      const activity = this.opts.getSessionActivity?.(id) ?? []
+      const commands = this.opts.getSessionCommands?.(id) ?? []
+      // The full subagent list, finished ones included: a `slimSubagents` snapshot sent only running ones.
+      const subagents = this.opts.getSessionSubagents?.(id) ?? []
+      if (this.opts.perf) this.perfNotes.set(req, { activity: activity.length, commands: commands.length, subagents: subagents.length })
       return this.json({
-        activity: this.opts.getSessionActivity?.(id) ?? [],
-        commands: this.opts.getSessionCommands?.(id) ?? [],
+        activity,
+        commands,
         commandsResolved: this.opts.getSessionCommandsResolved?.(id) ?? false,
+        subagents,
       })
     }
     if (method === "GET" && path === "/search/messages") {
@@ -3273,7 +3732,15 @@ export class WebChannel implements Channel {
     }
     if (method === "GET" && path.startsWith("/sessions/") && path.endsWith("/messages")) {
       const id = decodeURIComponent(path.split("/")[2]!)
-      return this.json(this.opts.getSessionLog(id))
+      const t0 = performance.now()
+      const log = this.opts.getSessionLog(id)
+      const t1 = performance.now()
+      await this.opts.enrichAttachments?.(log)
+      if (this.opts.perf) {
+        const round = (ms: number) => Math.round(ms * 10) / 10
+        this.perfNotes.set(req, { count: log.length, logMs: round(t1 - t0), enrichMs: round(performance.now() - t1) })
+      }
+      return this.json(log)
     }
     if (method === "POST" && path.startsWith("/sessions/") && path.endsWith("/mute")) {
       const id = decodeURIComponent(path.split("/")[2]!)
@@ -3303,6 +3770,14 @@ export class WebChannel implements Channel {
         }
         if (!this.opts.stopSubagent) return this.json({ error: "not configured" }, 503)
         const result = await this.opts.stopSubagent(id, subagentId)
+        return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
+      }
+    }
+    {
+      const end = method === "POST" ? path.match(/^\/councils\/([^/]+)\/end$/) : null
+      if (end) {
+        if (!this.opts.endCouncil) return this.json({ error: "not configured" }, 503)
+        const result = await this.opts.endCouncil(decodeURIComponent(end[1]!))
         return result.ok ? this.json(result) : this.json({ ok: false, error: result.error }, result.status)
       }
     }
@@ -3566,7 +4041,9 @@ export class WebChannel implements Channel {
       const active = this.opts.getSessionsSnapshot().map((s) => s.repo_root ?? s.workdir)
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
       const projects = uniqueKnownWorkdirs([...active, ...archived], home())
-        .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        .filter((p) => !paths.isInside(p, wtRoot))
+        // The mux home and agent folders are supermux's own, not projects to pick.
+        .filter((p) => !isMuxInternalPath(p))
         .map((p) => ({ path: p }))
       return this.json({ projects })
     }
@@ -3697,7 +4174,9 @@ export class WebChannel implements Channel {
           viewId,
           firstMessage,
           firstAttachments,
+          firstMessageId: clientMessageIdOf(body.client_message_id),
           device: auth.device.name,
+          perfTrace: (req.headers.get("x-mux-trace") ?? "").split("/")[0] || undefined,
         })
         return this.json(result)
       } catch (err: any) {
@@ -3789,7 +4268,8 @@ export class WebChannel implements Channel {
       return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
     }
     if (method === "GET" && path === "/archived-workspaces") {
-      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.() ?? [] })
+      const slim = url.searchParams.get("slim") === "1"
+      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.(slim ? { slim: true } : undefined) ?? [] })
     }
     if (method === "POST" && path === "/workspaces") {
       if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
@@ -3958,6 +4438,8 @@ export class WebChannel implements Channel {
         await this.opts.renameSession(id, newName)
         return this.json({ ok: true })
       } catch (err: any) {
+        // An Agent name refusal (CreateAgentError: name_invalid / name_taken) keeps its status and code.
+        if (err?.code && typeof err?.status === "number") return this.json({ error: err.message, code: err.code }, err.status)
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
     }
@@ -4294,54 +4776,53 @@ export class WebChannel implements Channel {
       }
     }
 
-    // ── PA CRUD routes ──────────────────────────────────────────────────────
-    if (method === "POST" && path === "/api/pas") {
+    // ── Agent CRUD (/api/pas kept for old clients; /api/agents is the new name) ──
+    const agentsBase = path === "/api/agents" || path.startsWith("/api/agents/") ? "/api/agents"
+      : path === "/api/pas" || path.startsWith("/api/pas/") ? "/api/pas" : undefined
+    if (agentsBase && method === "POST" && path === agentsBase) {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const name = body.name as string | undefined
-      if (!name || !name.trim()) return this.json({ error: "name required" }, 400)
-      if (!this.opts.spawnPA) return this.json({ error: "not configured" }, 503)
-      const agent = body.agent as AgentKind | undefined
-      if (agent != null && !isAgentKind(agent)) {
-        return this.json({ error: `unknown agent: ${String(agent)}` }, 400)
-      }
-      const workdir = join(home(), ".mux", "workspace", name.trim())
-      try {
-        mkdirSync(workdir, { recursive: true })
-      } catch (err: any) {
-        return this.json({ error: err?.message ?? String(err) }, 500)
-      }
-      const focusText = body.focusText as string | undefined
-      if (focusText != null) {
-        try { writeFileSync(join(workdir, "focus.md"), focusText, "utf8") } catch {}
+      if (!this.opts.createAgent) return this.json({ error: "not configured" }, 503)
+      // `provider` is the new key; `agent` stays for old clients.
+      const provider = (body.provider ?? body.agent) as AgentKind | undefined
+      if (provider != null && !isAgentKind(provider)) {
+        return this.json({ code: "provider_invalid", error: `unknown provider: ${String(provider)}` }, 400)
       }
       try {
-        const result = await this.opts.spawnPA({
-          name: name.trim(),
-          workdir,
-          agent,
+        const r = await this.opts.createAgent({
+          name: typeof body.name === "string" ? body.name : "",
+          provider,
           model: body.model as string | undefined,
           reasoningLevel: body.reasoningLevel as string | undefined,
         })
-        return this.json(result)
+        // The avatar picked in the create dialog's gallery (FORMAT.md). Invalid → the Agent keeps
+        // the generated default; creating it never fails over its look.
+        if (body.avatar != null) {
+          const check = checkAvatar(body.avatar)
+          if (check.ok) { writeAvatar(r.id, check.text!); this.opts.agentAvatarChanged?.(r.id) }
+        }
+        return this.json({ id: r.id, name: r.name, workdir: r.workdir, agent: r.provider, provider: r.provider, model: body.model, reasoningLevel: body.reasoningLevel })
       } catch (err: any) {
         const status = typeof err?.status === "number" ? err.status : 500
         return this.json({ ...(err?.code ? { code: err.code } : {}), ...(err?.agent ? { agent: err.agent } : {}), error: err?.message ?? String(err) }, status)
       }
     }
-    if (method === "GET" && path === "/api/pas") {
+    if (agentsBase && method === "GET" && path === agentsBase) {
       const pas = this.opts.listPAs?.() ?? this.opts.getSessionsSnapshot?.().filter((s) => s.role === "personal_assistant") ?? []
-      return this.json({ pas })
+      return this.json({ pas, agents: pas })
     }
-    if (method === "PATCH" && path.match(/^\/api\/pas\/[^/]+$/)) {
-      const name = decodeURIComponent(path.slice("/api/pas/".length))
+    if (agentsBase && method === "PATCH" && path.startsWith(`${agentsBase}/`) && path.length > agentsBase.length + 1 && !path.slice(agentsBase.length + 1).includes("/")) {
+      // The segment is an Agent id (new clients) or name (old clients); updateAgent resolves both.
+      const key = decodeURIComponent(path.slice(agentsBase.length + 1))
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
-      const patch: { model?: string; reasoningLevel?: string } = {}
+      const patch: { model?: string; reasoningLevel?: string; isDefault?: true; name?: string } = {}
       if (typeof body.model === "string") patch.model = body.model
       if (typeof body.reasoningLevel === "string") patch.reasoningLevel = body.reasoningLevel
+      if (body.isDefault === true) patch.isDefault = true
+      if (typeof body.name === "string") patch.name = body.name
       if (!this.opts.updatePA) return this.json({ error: "not configured" }, 503)
       try {
-        const result = await this.opts.updatePA(name, patch)
-        if (!result.ok) return this.json({ error: result.error ?? "update failed" }, 400)
+        const result = await this.opts.updatePA(key, patch)
+        if (!result.ok) return this.json({ ...(result.code ? { code: result.code } : {}), error: result.error ?? "update failed" }, result.status ?? 400)
         return this.json({ ok: true })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
@@ -4417,6 +4898,31 @@ export class WebChannel implements Channel {
       try { body = await req.json() } catch { return this.json({ error: "invalid json" }, 400) }
       this.ingestClientLogs(auth.device.name, body?.entries ?? [], body?.meta)
       return this.json({ ok: true, count: (body?.entries ?? []).length })
+    }
+
+    // Card #54: the load-time trace. GET reads the in-memory ring (`?trace=&since=&limit=`), PUT
+    // `{enabled}` turns tracing on or off (the same flag `bun scripts/perf-timeline.ts on` writes).
+    if (path === "/debug/perf" && (method === "GET" || method === "PUT")) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      const perf = this.opts.perf
+      if (!perf) return this.json({ error: "tracing unavailable" }, 503)
+      if (method === "PUT") {
+        const body = await req.json().catch(() => ({})) as { enabled?: unknown }
+        if (typeof body.enabled !== "boolean") return this.json({ error: "enabled must be true or false" }, 400)
+        perf.setEnabled(body.enabled)
+        return this.json({ enabled: perf.enabled() })
+      }
+      const since = Number(url.searchParams.get("since") ?? "")
+      const limit = Number(url.searchParams.get("limit") ?? "")
+      return this.json({
+        enabled: perf.enabled(),
+        events: perf.events({
+          trace: url.searchParams.get("trace") ?? undefined,
+          since: Number.isFinite(since) && since > 0 ? since : undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : 2_000,
+        }),
+      })
     }
 
     if (method === "GET" && path === "/debug/client-logs") {

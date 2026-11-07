@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -145,7 +146,9 @@ fun WorkspaceRow(
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val elevation by animateDpAsState(if (isDragging) 6.dp else 0.dp, label = "workspace-drag-elevation")
-    val suspended = sessionStatus != null && sessionStatus != "active"
+    // A suspended session whose agent is working is being woken (card #75): "starting", and not dimmed.
+    val waking = sessionStatus == "suspended" && working
+    val suspended = !waking && sessionStatus != null && sessionStatus != "active"
     val branch = w.branch?.takeIf { it.isNotBlank() }
     val twoLine = branch != null || host != null
 
@@ -162,6 +165,7 @@ fun WorkspaceRow(
         else -> cs.onSurfaceVariant
     }
     val trailing = when {
+        waking -> "starting"
         suspended -> sessionStatus.orEmpty()
         projectTag != null -> projectTag
         working -> ""
@@ -248,12 +252,15 @@ fun WorkspaceRow(
                                 )
                                 if (trailing.isNotEmpty()) {
                                     Spacer(Modifier.width(8.dp))
+                                    // Capped: a long project tag would otherwise push the ⋮ off the row.
                                     Text(
                                         trailing,
                                         color = cs.onSurfaceVariant.copy(alpha = 0.6f),
                                         fontFamily = MonoFontFamily,
                                         fontSize = 10.5.sp,
                                         maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 112.dp),
                                     )
                                 }
                                 // Where the right-click menu is inert (touch, Android in Pointer
@@ -367,7 +374,7 @@ internal fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, 
     }
 }
 
-/** The status view's section label ("Ready for you", "Working", "Everything else") + count. */
+/** The status view's section label ("Active", "Everything else") + count. */
 @Composable
 internal fun StatusSectionLabel(title: String, count: Int?, accent: Boolean = false) {
     val cs = MaterialTheme.colorScheme

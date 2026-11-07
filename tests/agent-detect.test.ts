@@ -66,15 +66,15 @@ test("detectAgent accepts Cursor's own `agent` when it resolves outside .grok", 
   expect(detectAgent("cursor", probes, PATHS).installed).toBe(true)
 })
 
-test("authCredPath uses native Windows credential roots", () => {
+// Cursor keeps its credential under %APPDATA%; opencode uses its XDG folders on Windows too (Windows 11, opencode 1.19.5).
+test("authCredPath uses each agent's own Windows credential root", () => {
   const paths = {
     home: "C:\\Users\\u",
     appData: "C:\\Users\\u\\AppData\\Roaming",
-    localAppData: "C:\\Users\\u\\AppData\\Local",
     platform: "win32" as const,
   }
   expect(authCredPath("cursor", paths)).toBe("C:\\Users\\u\\AppData\\Roaming\\cursor\\auth.json")
-  expect(authCredPath("opencode", paths)).toBe("C:\\Users\\u\\AppData\\Local\\opencode\\auth.json")
+  expect(authCredPath("opencode", paths)).toBe("C:\\Users\\u\\.local\\share\\opencode\\auth.json")
   expect(authCredPath("codex", paths)).toBe("C:\\Users\\u\\.codex\\auth.json")
   expect(authCredPath("grok", paths)).toBe("C:\\Users\\u\\.grok\\auth.json")
 })

@@ -115,7 +115,7 @@ test("unauthenticated probes of public /host do not consume the brute-force budg
 // Security: clientIp() trusted X-Forwarded-For from ANY caller, so a brute-forcer defeated
 // the limiter entirely by varying one header — each guess minted a fresh bucket. Only a peer
 // we actually sit behind may name the client. `trustedProxyPeers: []` models a caller that
-// is not our proxy (the real deployment trusts loopback, where frpc/nginx forward from).
+// is not our proxy (the real deployment trusts loopback, where the relay tunnel/nginx forward from).
 test("X-Forwarded-For from an untrusted peer cannot bypass the limiter", async () => {
   const made = makeChannel({ trustedProxyPeers: [] })
   channel = made.channel; await channel.start()

@@ -10,6 +10,12 @@ export interface AttachmentRef {
   mime?: string
   size?: number
   name?: string
+  /** The DISPLAYED size and a clip's length, from the file's header (FileStore). */
+  width?: number
+  height?: number
+  duration_ms?: number
+  /** The picture the sending phone made of a clip — its own file, kept alive with this message. */
+  poster_file_id?: string
 }
 
 export interface Message {
@@ -29,6 +35,18 @@ export interface Message {
   error?: boolean
   /** Set on the user's line to a subagent ("↪ to <subagent>: <text>"): which subagent it went to. */
   subagent_id?: string
+  /** Set on an inbox message delivered to this session: the sending session's id. */
+  from_session_id?: string
+  /** The sender's display name when it sent the message (kept in the inbox file): a session's name, "supermux", or a council's name. */
+  from_session_name?: string
+  /** The sending session's agent kind, when the sender is a session. */
+  from_agent?: string
+  /** A council's forwarded report in the caller's log (spec §5.1): which council, round and member letter. */
+  council_id?: string
+  council_round?: number
+  council_letter?: string
+  /** Card #76: the live stream this reply replaces in the app. Sent with the live frame only; never stored. */
+  stream?: string
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -56,9 +74,12 @@ export class MessageStore {
   }
 
   append(sessionId: string, entry: Message): void {
+    // Each attachment carries what its file's header said (size, length, poster), read when the
+    // file was stored. In place: the channels send this same `entry` right after the append.
+    if (this.fileStore && entry.attachments?.length) entry.attachments = this.fileStore.withMediaMeta(entry.attachments)
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error, subagent_id, from_session_id, from_session_name, from_agent, council_id, council_round, council_letter)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -74,6 +95,12 @@ export class MessageStore {
       entry.reactions ? JSON.stringify(entry.reactions) : null,
       entry.error ? 1 : 0,
       entry.subagent_id ?? null,
+      entry.from_session_id ?? null,
+      entry.from_session_name ?? null,
+      entry.from_agent ?? null,
+      entry.council_id ?? null,
+      entry.council_round ?? null,
+      entry.council_letter ?? null,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -82,9 +109,9 @@ export class MessageStore {
     // UPDATE has already landed by the time the promise settles, so .catch()
     // is just promise-rejection bookkeeping, not an ordering concern.
     if (this.fileStore && entry.attachments?.length) {
-      for (const a of entry.attachments) {
-        this.fileStore.bumpRef(a.file_id).catch((err) =>
-          log.error("messages_bumpref_failed", { file_id: a.file_id, err: err?.message ?? String(err) }),
+      for (const file_id of referencedFiles(entry.attachments)) {
+        this.fileStore.bumpRef(file_id).catch((err) =>
+          log.error("messages_bumpref_failed", { file_id, err: err?.message ?? String(err) }),
         )
       }
     }
@@ -105,6 +132,18 @@ export class MessageStore {
       ) ORDER BY ts ASC, _rowid ASC
     `).all(sessionId, limit) as any[]
     return rows.map(rowToMessage)
+  }
+
+  /** The session's newest assistant reply text: not an error, not blank (a delegated child's last message, spec §3). */
+  lastReply(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT text FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { text: string } | null
+    return row?.text
   }
 
   update(sessionId: string, entry_id: string, patch: { text?: string; edited_at?: string }): boolean {
@@ -159,8 +198,7 @@ export class MessageStore {
       for (const row of rows) {
         if (!row.attachments) continue
         try {
-          const arr = JSON.parse(row.attachments) as AttachmentRef[]
-          for (const a of arr) if (a?.file_id) referencedFileIds.push(a.file_id)
+          referencedFileIds.push(...referencedFiles(JSON.parse(row.attachments) as AttachmentRef[]))
         } catch (err: any) {
           log.warn("messages_remove_parse_attachments_failed", { sessionId, err: err?.message ?? String(err) })
         }
@@ -184,6 +222,42 @@ export class MessageStore {
     return rows.map((r) => r.session_id)
   }
 
+  /** ISO timestamp of the newest reply lastReply() would return, if any. */
+  lastReplyAt(sessionId: string): string | undefined {
+    const row = this.db.prepare(`
+      SELECT ts FROM messages
+       WHERE session_id = ? AND direction = 'outbound' AND op = 'reply' AND error = 0
+         AND trim(coalesce(text, '')) <> ''
+       ORDER BY ts DESC, rowid DESC
+       LIMIT 1
+    `).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
+  /** ISO timestamp of the newest message the user sent the session (web, telegram), if any. */
+  lastUserInbound(sessionId: string): string | undefined {
+    const row = this.db.prepare(
+      "SELECT ts FROM messages WHERE session_id = ? AND direction = 'inbound' AND channel IN ('web', 'telegram') ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId) as { ts: string } | null
+    return row?.ts ?? undefined
+  }
+
+  /** The texts of the newest messages the user typed or dictated, in any session, newest first.
+   *  Broker-made inbound rows (broker-*, review-*, greet-*) are not the user's words and are left out. */
+  recentUserTexts(limit: number): string[] {
+    const rows = this.db.prepare(`
+      SELECT text FROM messages
+       WHERE direction = 'inbound' AND channel IN ('web', 'telegram')
+         AND trim(coalesce(text, '')) <> ''
+         AND coalesce(message_id, '') NOT LIKE 'broker-%'
+         AND coalesce(message_id, '') NOT LIKE 'review-%'
+         AND coalesce(message_id, '') NOT LIKE 'greet-%'
+       ORDER BY ts DESC, rowid DESC
+       LIMIT ?
+    `).all(limit) as Array<{ text: string }>
+    return rows.map((r) => r.text)
+  }
+
   /** ISO timestamp of the newest message in a session, or null if it has none. */
   newestTs(sessionId: string): string | null {
     const row = this.db.prepare(
@@ -191,6 +265,11 @@ export class MessageStore {
     ).get(sessionId) as { ts: string } | undefined
     return row?.ts ?? null
   }
+}
+
+/** Every file a message keeps alive: each attachment's own, and a clip's poster. */
+function referencedFiles(atts: readonly AttachmentRef[]): string[] {
+  return atts.flatMap((a) => [a?.file_id, a?.poster_file_id].filter((id): id is string => typeof id === "string" && id.length > 0))
 }
 
 function rowToMessage(row: any): Message {
@@ -208,5 +287,11 @@ function rowToMessage(row: any): Message {
     reactions: row.reactions ? JSON.parse(row.reactions) : undefined,
     error: row.error ? true : undefined,
     subagent_id: row.subagent_id ?? undefined,
+    from_session_id: row.from_session_id ?? undefined,
+    from_session_name: row.from_session_name ?? undefined,
+    from_agent: row.from_agent ?? undefined,
+    council_id: row.council_id ?? undefined,
+    council_round: row.council_round ?? undefined,
+    council_letter: row.council_letter ?? undefined,
   }
 }

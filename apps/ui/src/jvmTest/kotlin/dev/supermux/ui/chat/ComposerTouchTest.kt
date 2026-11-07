@@ -7,8 +7,12 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
@@ -175,6 +179,31 @@ class ComposerTouchTest {
         assertEquals("", draft)
     }
 
+    // Tab picks like Enter in the `/` menu, and a command that takes arguments leaves its hint,
+    // dimmed, after the caret until the text changes (#56).
+    @Test fun tab_picks_and_the_argument_hint_shows_until_the_text_changes() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        setPlatformContent(touch()) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                commands = listOf(
+                    SlashCommand(id = "agent:loop", name = "loop", family = "agent", argumentHint = "[interval] [prompt]"),
+                ),
+            )
+        }
+        onNodeWithTag("composer-input").performTextInput("/lo")
+        waitForIdle()
+        onNodeWithTag("chat_slash_item_loop").assertIsDisplayed()
+        onNodeWithTag("composer-input").performKeyInput { pressKey(Key.Tab) }
+        waitForIdle()
+        assertEquals("/loop ", draft)
+        onNodeWithText("[interval] [prompt]", substring = true, useUnmergedTree = true).assertExists()
+        onNodeWithTag("composer-input").performTextInput("5m")
+        waitForIdle()
+        onNodeWithText("[interval] [prompt]", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
     @Test fun an_unresolved_command_set_shows_the_loading_hint() = runComposeUiTest {
         setPlatformContent(touch()) {
             Composer(
@@ -222,6 +251,9 @@ class ComposerTouchTest {
                 ),
             )
         }
+        // The menu floats over the chat only while the field has focus (#56).
+        onNodeWithTag("composer-input").requestFocus()
+        waitForIdle()
         onNodeWithTag("chat_slash_item_review").assertIsDisplayed()
         onNodeWithTag("chat_slash_item_stop").assertDoesNotExist()
     }

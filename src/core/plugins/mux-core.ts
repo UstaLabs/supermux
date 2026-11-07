@@ -33,112 +33,6 @@ export const MuxPlugin = async () => {
 };
 `
 
-export const MUX_SOUL_SKILL = `---
-name: soul
-description: Set up or revise the personal assistant's soul.md identity through a PA-only conversation.
----
-
-# mux:soul - PA Identity Setup
-
-Use this skill only in the personal-assistant session. It is PA-only because it may read and write \`~/.mux/soul.md\`, which workers must not read or modify.
-
-## Guardrail
-
-Before doing anything, check whether this session is the personal assistant. If the session context says this is a worker, refuse briefly and tell the user to run \`/mux:soul\` in their personal assistant session.
-
-## Opening
-
-Say that you can set up the PA identity now or skip it for later. Ask the user whether they want to continue or skip.
-
-If they skip, write:
-
-\`~/.mux/state/soul-setup.json\`
-
-with:
-
-\`{ "status": "skipped", "updatedAt": "<current ISO timestamp>" }\`
-
-Then stop.
-
-## Interview
-
-If they continue, ask one question at a time. Cover only durable identity information:
-
-- PA identity: name, role, preferred vibe.
-- Communication style: concise vs detailed, direct vs warm, humor level, amount of pushback.
-- Decision behavior: how to handle uncertainty, disagreement, weak ideas, and tradeoffs.
-- User preferences: what to call the user, timezone if useful, stable preferences.
-- Boundaries: what requires confirmation, especially external actions or personal data.
-- What to avoid: filler phrases, corporate tone, verbosity, sycophancy, and pet phrases.
-- Optional stable context: recurring projects or responsibilities.
-
-Do not put project-specific rules, commands, ports, file paths, or repo workflow into \`soul.md\`; those belong in project \`AGENTS.md\`.
-
-## Write
-
-After the interview, write \`~/.mux/soul.md\` directly. Keep it concise. Use sections:
-
-- Identity
-- Communication Style
-- Decision Behavior
-- Boundaries
-- User Preferences
-- Avoid
-
-Then write \`~/.mux/state/soul-setup.json\` with:
-
-\`{ "status": "completed", "updatedAt": "<current ISO timestamp>" }\`
-
-Tell the user that \`soul.md\` was updated.
-`
-
-export const MUX_NEW_PERSONAL_AGENT_SKILL = `---
-name: new-personal-agent
-description: Create a new personal assistant by talking to the existing PA. PA-only.
----
-
-# mux:new-personal-agent - Conversational PA Creation
-
-Use this skill only in the personal-assistant session. It is PA-only because it spawns new PAs and writes session identity files, which workers must not do.
-
-## Guardrail
-
-Before doing anything, check whether this session is the personal assistant and has \`can_orchestrate\`. If the session context says this is a worker, refuse briefly and tell the user to run \`/mux:new-personal-agent\` in their personal assistant session.
-
-## Name Check
-
-If the user provides a name, verify it is not already in use by an existing session (check the session registry). If it is, tell the user and stop. If no name is provided, ask for one.
-
-## Conversation Flow
-
-Ask one question at a time:
-
-1. **Agent backend:** Which agent should the new PA use? (claude / codex / cursor / opencode / grok / antigravity)
-2. **Model:** Which model? (skip if the user doesn't care or if the backend doesn't require one)
-3. **Focus / specialization:** What should this PA focus on? (optional — skip if none)
-4. **Soul:** Should the new PA have its own \`soul.md\` in its workspace, or inherit the shared \`~/.mux/soul.md\`?
-   - If "override", run a short interview about personality (same areas as \`mux:soul\`: identity, communication style, decision behavior, boundaries, user preferences, avoid). Then write \`<workdir>/soul.md\` directly.
-   - If "inherit", do not write a \`soul.md\`; the new PA will pick up the shared soul at runtime.
-
-## File Writes
-
-- \`<workdir>/focus.md\` — if the user provided a focus in step 3.
-- \`<workdir>/soul.md\` — if the user chose "override" (after the personality interview).
-- No file = inherit shared soul.
-
-The workdir for the new PA is \`~/.mux/workspace/<name>\`.
-
-## Spawn
-
-After writing the files, spawn the new PA by calling the \`spawn_session\` orchestration tool with:
-- \`workdir\`: \`~/.mux/workspace/<name>\`
-- \`name\`: the chosen name
-- \`agent\`: the chosen backend
-- \`chat_id\`: the current chat id (so the user's chat auto-switches to the new PA)
-
-Then tell the user the new PA is ready and active.
-`
-
 function json(obj: unknown): string {
   return JSON.stringify(obj, null, 2) + "\n"
 }
@@ -157,12 +51,18 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
   changed = writeIfChanged(join(pluginDir, ".codex-plugin", "plugin.json"), json({ ...MANIFEST, skills: "./skills/" })) || changed
   changed = writeIfChanged(join(pluginDir, ".cursor-plugin", "plugin.json"), json({ ...MANIFEST, displayName: "mux", skills: "./skills/" })) || changed
   changed = writeIfChanged(join(pluginDir, ".opencode", "plugins", "mux.js"), MUX_OPENCODE_PLUGIN) || changed
-  changed = writeIfChanged(join(pluginDir, "skills", "soul", "SKILL.md"), MUX_SOUL_SKILL) || changed
-  changed = writeIfChanged(join(pluginDir, "skills", "new-personal-agent", "SKILL.md"), MUX_NEW_PERSONAL_AGENT_SKILL) || changed
+  // The manifests point at ./skills/, so the directory must exist even with no first-party skill in it.
+  mkdirSync(join(pluginDir, "skills"), { recursive: true })
   // Instructions (incl. the reply rule) now reach every agent through the Core session
   // context; the SessionStart hook + reply-conventions skill that used to inject them are
-  // removed from installs that still have them.
-  for (const stale of [join(pluginDir, "hooks"), join(pluginDir, "skills", "reply-conventions")]) {
+  // removed from installs that still have them. The soul and new-personal-agent skills are
+  // retired with soul.md (Agents keep their own memory; `create_agent` creates one).
+  for (const stale of [
+    join(pluginDir, "hooks"),
+    join(pluginDir, "skills", "reply-conventions"),
+    join(pluginDir, "skills", "soul"),
+    join(pluginDir, "skills", "new-personal-agent"),
+  ]) {
     if (existsSync(stale)) { rmSync(stale, { recursive: true, force: true }); changed = true }
   }
   return changed
@@ -175,8 +75,8 @@ const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode", "g
  * Ensure the mux-core plugin is REGISTERED + enabled in the plugins registry
  * (~/.mux/plugins.json). `ensureMuxCoreSkills` only writes the plugin *files* —
  * without an enabled registry entry, `loadPluginsForSpawn` returns [] and a
- * fresh install spawns sessions with ZERO plugins (no `/mux:soul`, no mux
- * skills). Run at boot alongside ensureMuxCoreSkills.
+ * fresh install spawns sessions with ZERO plugins (no mux skills). Run at
+ * boot alongside ensureMuxCoreSkills.
  *
  * Idempotent + non-destructive: if a `mux-core` entry already exists it is left
  * exactly as-is (an explicitly-disabled plugin is never re-enabled). A malformed
@@ -204,6 +104,3 @@ export function ensureMuxCoreRegistered(opts: { file?: string; pluginsDir?: stri
   savePluginsRegistry(reg, { file: opts.file, pluginsDir })
   return true
 }
-
-/** @deprecated use ensureMuxCoreSkills */
-export const ensureMuxCoreSoulSkill = ensureMuxCoreSkills

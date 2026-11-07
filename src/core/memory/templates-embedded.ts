@@ -7,7 +7,6 @@ import conventions from "./templates/conventions.md.tmpl" with { type: "text" }
 import domain from "./templates/domain.md.tmpl" with { type: "text" }
 import identity from "./templates/identity.md.tmpl" with { type: "text" }
 import preferences from "./templates/preferences.md.tmpl" with { type: "text" }
-import soul from "./templates/soul.md.tmpl" with { type: "text" }
 
 export const TEMPLATES: Record<string, string> = {
   "agents.md.tmpl": agents,
@@ -15,5 +14,4 @@ export const TEMPLATES: Record<string, string> = {
   "domain.md.tmpl": domain,
   "identity.md.tmpl": identity,
   "preferences.md.tmpl": preferences,
-  "soul.md.tmpl": soul,
 }

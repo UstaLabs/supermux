@@ -1,5 +1,23 @@
 import { test, expect } from "bun:test"
-import { extractFirstUrl, realRun, which } from "./run"
+import { mkdtempSync, rmSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { delimiter, join } from "path"
+import { extractFirstUrl, realRun, realStartDetached, realStopTree, which } from "./run"
+import { readFileSync } from "fs"
+
+/** A command named [name] in a new folder put at the front of PATH after start, as main.ts adds the agent bin folders. */
+function onPathAfterStart(name: string): () => void {
+  const dir = mkdtempSync(join(tmpdir(), "mux-late-bin-"))
+  if (process.platform === "win32") writeFileSync(join(dir, `${name}.cmd`), "@echo off\r\n")
+  else writeFileSync(join(dir, name), "#!/bin/sh\n", { mode: 0o755 })
+  const before = process.env.PATH
+  process.env.PATH = `${dir}${delimiter}${before ?? ""}`
+  return () => {
+    if (before === undefined) delete process.env.PATH
+    else process.env.PATH = before
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 /** Run `fn` while capturing everything written to process.stdout (restored after). */
 async function captureStdout(fn: () => Promise<void>): Promise<string> {
@@ -64,4 +82,45 @@ test("extractFirstUrl returns undefined when there is no url", () => {
 
 test("which returns false for a nonsense binary", () => {
   expect(which("definitely-not-a-real-bin-xyz-9000")).toBe(false)
+})
+
+// Bun.which without a PATH searches the PATH the process started with: a tunnel CLI in a folder main.ts added (under
+// launchd's bare PATH, /opt/homebrew/bin, say) was reported missing.
+test("which finds a binary in a folder added to PATH after start", () => {
+  const restore = onPathAfterStart("mux-late-tunnel-cli")
+  try {
+    expect(which("mux-late-tunnel-cli")).toBe(true)
+  } finally { restore() }
+})
+
+// Bun.spawn without `env` passes the environment the process started with: a variable set since (main.ts loads .env
+// into process.env, and adds the agent bin folders to PATH) never reached the tunnel CLI.
+test("realRun gives the child the environment as it is now", async () => {
+  process.env.MUX_LATE_TUNNEL_VAR = "set-after-start"
+  try {
+    const r = await realRun([process.execPath, "-e", "console.log(process.env.MUX_LATE_TUNNEL_VAR ?? 'missing')"])
+    expect(r.stdout.trim()).toBe("set-after-start")
+  } finally {
+    delete process.env.MUX_LATE_TUNNEL_VAR
+  }
+})
+
+// The quick and random tunnels were started with `sh -c "nohup ... & echo $!"` and stopped with `kill $(cat pidfile)`:
+// neither works on Windows, which has no sh. A tunnel CLI is started detached instead, its output going to a log.
+test("realStartDetached starts a child that writes its output to the log; realStopTree ends it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mux-detached-"))
+  const log = join(dir, "tunnel.log")
+  const pid = realStartDetached([process.execPath, "-e", "console.log('tunnel up'); setInterval(() => {}, 1000)"], log)
+  try {
+    expect(pid).toBeGreaterThan(0)
+    let text = ""
+    for (let i = 0; i < 50 && !text.includes("tunnel up"); i++) { await Bun.sleep(100); text = readFileSync(log, "utf8") }
+    expect(text).toContain("tunnel up")
+  } finally {
+    realStopTree(pid)
+  }
+  let alive = true
+  for (let i = 0; i < 50 && alive; i++) { await Bun.sleep(100); try { process.kill(pid, 0) } catch { alive = false } }
+  expect(alive).toBe(false)
+  rmSync(dir, { recursive: true, force: true })
 })

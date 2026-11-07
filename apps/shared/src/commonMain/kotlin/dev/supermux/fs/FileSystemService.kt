@@ -40,23 +40,14 @@ val DirState.snapshotOrPrevious: DirSnapshot?
 fun interface DirSubscription { fun close() }
 
 /**
- * An absolute path in the broker's normalised form (its fs_dir / fs_gone / fs_err echo this):
- * `//` collapsed, `.` dropped, `..` resolved (never above "/"), no trailing slash except "/".
- * A relative path is returned with the same clean-up but no leading slash.
+ * A path in the broker's normalised form (its fs_dir / fs_gone / fs_err echo this): separators collapsed into the
+ * host's own (a Windows broker answers `C:\…\src` for `C:\…/src`), `.` dropped, `..` resolved (never above the root),
+ * no trailing separator but at a root ([normalizeHostPath]). A relative path gets the same clean-up, "." for nothing.
  */
-fun normalizeFsPath(path: String): String {
-    val abs = path.startsWith("/")
-    val out = ArrayList<String>()
-    for (part in path.split('/')) {
-        when (part) {
-            "", "." -> {}
-            ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeAt(out.size - 1) else if (!abs) out += part
-            else -> out += part
-        }
-    }
-    val joined = out.joinToString("/")
-    return if (abs) "/$joined" else joined.ifEmpty { "." }
-}
+fun normalizeFsPath(path: String): String = normalizeHostPath(path).ifEmpty { "." }
+
+/** [DirState.Failed]'s code for a folder whose `fs_sub` the host never answered: an error with Retry, not a spinner. */
+const val NO_ANSWER = "NO_ANSWER"
 
 class FileSystemService(
     private val api: BrokerApi,
@@ -66,6 +57,8 @@ class FileSystemService(
     private val maxCached: Int = 1_000,
     private val goneRetryBaseMs: Long = 2_000,
     private val goneRetryAttempts: Int = 4,
+    /** How long a folder may wait for the host's answer to its `fs_sub` before it shows [NO_ANSWER] instead of Loading. */
+    private val answerTimeoutMs: Long = 20_000,
 ) {
     private class Slot(val state: MutableStateFlow<DirState>) {
         var refs = 0
@@ -74,6 +67,7 @@ class FileSystemService(
         var used = 0L
         var goneRetry: Job? = null  // a pending re-subscribe of a Gone folder
         var goneAttempts = 0
+        var answerWatch: Job? = null // armed by every fs_sub, disarmed by any answer for this folder
     }
 
     private val lock = SynchronizedObject()
@@ -124,7 +118,7 @@ class FileSystemService(
             if (s.state.value != DirState.Gone && (cached == null || s.state.value is DirState.Failed)) {
                 s.state.value = DirState.Loading(cached)
             }
-            outbox.trySend(ClientFrame.FsSub(path, since = cached?.version))
+            askLocked(path, s, since = cached?.version)
         }
         var closed = false
         return DirSubscription {
@@ -144,7 +138,7 @@ class FileSystemService(
             // cleared `subscribed`); marking it now lets the last release send the fs_unsub.
             s.subscribed = true
             if (s.state.value != DirState.Gone) s.state.value = DirState.Loading(s.state.value.snapshotOrPrevious)
-            outbox.trySend(ClientFrame.FsSub(path))
+            askLocked(path, s)
         }
     }
 
@@ -171,6 +165,7 @@ class FileSystemService(
             when (frame) {
                 is ServerFrame.FsDir -> {
                     val s = slots[normalizeFsPath(frame.path)] ?: return
+                    s.answerWatch?.cancel(); s.answerWatch = null
                     // A reply means the broker holds a sub for us, even if a stale fs_err for an
                     // older sub cleared the flag in between; without this, the last release would
                     // skip the fs_unsub and leak it on the broker.
@@ -196,6 +191,7 @@ class FileSystemService(
                 is ServerFrame.FsGone -> {
                     val path = normalizeFsPath(frame.path)
                     val s = slots[path] ?: return
+                    s.answerWatch?.cancel(); s.answerWatch = null
                     s.subscribed = false
                     s.state.value = DirState.Gone
                     s.goneAttempts = 0
@@ -204,6 +200,7 @@ class FileSystemService(
                 is ServerFrame.FsErr -> {
                     val path = normalizeFsPath(frame.path)
                     val s = slots[path] ?: return
+                    s.answerWatch?.cancel(); s.answerWatch = null
                     s.subscribed = false
                     if (s.state.value == DirState.Gone && (frame.code == "ENOENT" || frame.code == "ENOTDIR")) {
                         scheduleGoneRetryLocked(path, s) // still not back: stay Gone, try again later
@@ -227,7 +224,7 @@ class FileSystemService(
             for ((path, s) in slots) {
                 if (s.refs > 0) {
                     s.subscribed = true
-                    outbox.trySend(ClientFrame.FsSub(path, since = s.state.value.snapshotOrPrevious?.version))
+                    askLocked(path, s, since = s.state.value.snapshotOrPrevious?.version)
                 } else if (s.subscribed) {
                     s.grace?.cancel(); s.grace = null
                     s.subscribed = false
@@ -254,7 +251,28 @@ class FileSystemService(
                 s.goneRetry = null
                 if (s.refs <= 0 || s.subscribed || s.state.value != DirState.Gone) return@synchronized
                 s.subscribed = true
-                outbox.trySend(ClientFrame.FsSub(path))
+                askLocked(path, s)
+            }
+        }
+    }
+
+    /**
+     * Send `fs_sub` for [path] and wait [answerTimeoutMs] for the host's answer. A folder still Loading by then shows
+     * [NO_ANSWER] instead of spinning forever (an answer the client could not match, a host that dropped the request).
+     * Like an `fs_err` it is then unsubscribed, so the tree's Retry asks again; an answer that comes late still wins.
+     */
+    private fun askLocked(path: String, s: Slot, since: String? = null) {
+        outbox.trySend(ClientFrame.FsSub(path, since = since))
+        s.answerWatch?.cancel()
+        s.answerWatch = scope.launch {
+            delay(answerTimeoutMs)
+            synchronized(lock) {
+                if (s.answerWatch?.let { it === coroutineContext[Job] } != true) return@synchronized
+                s.answerWatch = null
+                val loading = s.state.value as? DirState.Loading ?: return@synchronized
+                if (s.refs <= 0) return@synchronized
+                s.subscribed = false
+                s.state.value = DirState.Failed(NO_ANSWER, "the host did not answer for this folder", loading.previous)
             }
         }
     }

@@ -67,3 +67,73 @@ test("onDelivered does NOT fire when delivery isn't ready", async () => {
   await deliverInbound(h.deps, "s1", "hi", { message_id: "m1" })
   expect(h.delivered).toEqual([])
 })
+
+test("onAccepted fires once per hand-over, before adapter.send: not for a deduped retry, not without an adapter", async () => {
+  const order: string[] = []
+  const accepted: Array<{ id: string; meta: any }> = []
+  const seen = new RecentInboundIds(50)
+  const deps = {
+    getAdapter: () => ({ kind: "x", send: async (text: string) => { order.push(`send:${text}`) } }),
+    seen,
+    onAccepted: (id: string, meta: any) => { accepted.push({ id, meta }); order.push("accepted") },
+  }
+  await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  await deliverInbound({ ...deps, getAdapter: () => undefined }, "s1", "x", { message_id: "m2" })
+  expect(order).toEqual(["accepted", "send:hi"])
+  expect(accepted).toEqual([{ id: "s1", meta: { message_id: "m1" } }])
+})
+
+test("onAccepted says whether the adapter steers the input into its running turn", async () => {
+  const seen = new RecentInboundIds(50)
+  const accepted: unknown[] = []
+  const deps = {
+    getAdapter: () => ({ kind: "codex", send: async () => {}, willSteer: (meta: any) => !meta?.busy }),
+    seen,
+    onAccepted: (_id: string, _meta: any, how: { steered: boolean }) => { accepted.push(how) },
+  }
+  await deliverInbound(deps, "s1", "a", {})
+  await deliverInbound(deps, "s1", "b", { busy: "queue" })
+  await deliverInbound({ ...deps, getAdapter: () => ({ kind: "x", send: async () => {} }) }, "s1", "c", {})
+  expect(accepted).toEqual([{ steered: true }, { steered: false }, { steered: false }])
+})
+
+test("a throwing onAccepted never loses the message", async () => {
+  const sends: string[] = []
+  const deps = {
+    getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text) } }),
+    seen: new RecentInboundIds(50),
+    onAccepted: () => { throw new Error("boom") },
+  }
+  const r = await deliverInbound(deps, "s1", "hi", { message_id: "m1" })
+  expect(r).toEqual({ ok: true })
+  expect(sends).toEqual(["hi"])
+})
+
+// Card #75: a core adapter's send() resolves when its TURN ends, so an id marked only after it
+// left a whole turn in which the same message, re-sent, was delivered again.
+test("a re-send while the first hand-over's turn is still running is deduped (marked at hand-over)", async () => {
+  const sends: string[] = []
+  let endTurn!: () => void
+  const turn = new Promise<void>((resolve) => { endTurn = resolve })
+  const seen = new RecentInboundIds(50)
+  const deps = { getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text); await turn } }), seen }
+  const first = deliverInbound(deps, "s1", "hi", { message_id: "web-1" })
+  await Bun.sleep(0)
+  expect(await deliverInbound(deps, "s1", "hi", { message_id: "web-1" })).toEqual({ ok: true, deduped: true })
+  endTurn()
+  expect(await first).toEqual({ ok: true })
+  expect(sends).toEqual(["hi"])
+})
+
+test("a hand-over that throws leaves the id unmarked, so the sender's retry goes through", async () => {
+  let fail = true
+  const sends: string[] = []
+  const seen = new RecentInboundIds(50)
+  const deps = { getAdapter: () => ({ kind: "x", send: async (text: string) => { sends.push(text); if (fail) throw new Error("agent gone") } }), seen }
+  await expect(deliverInbound(deps, "s1", "hi", { message_id: "web-2" })).rejects.toThrow("agent gone")
+  expect(seen.has("s1", "web-2")).toBe(false)
+  fail = false
+  expect(await deliverInbound(deps, "s1", "hi", { message_id: "web-2" })).toEqual({ ok: true })
+  expect(sends).toEqual(["hi", "hi"])
+})

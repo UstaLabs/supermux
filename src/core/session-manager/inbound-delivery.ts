@@ -1,13 +1,21 @@
 import type { RecentInboundIds } from "./recent-inbound-ids"
+import { makeLogger } from "../../shared/log"
+
+const log = makeLogger("inbound-delivery")
 
 export type InboundDeliveryDeps = {
-  getAdapter: (sessionId: string) => { kind: string; send: (text: string, meta?: any) => Promise<void> } | undefined
+  getAdapter: (sessionId: string) => { kind: string; send: (text: string, meta?: any) => Promise<void>; willSteer?: (meta?: any) => boolean } | undefined
   seen: RecentInboundIds
   // Fired after a turn is successfully handed off (incl. an idempotent re-send). The broker
   // uses it to re-broadcast the session's CURRENT agent_state so every client can clear its
   // local "Sending…" bubble even if the turn-start hook is later dropped. It must NOT change
   // agent state — delivery stays a pure reflector; this only re-emits existing truth.
   onDelivered?: (sessionId: string) => void
+  /**
+   * The input is being handed to the adapter now (not a deduped retry, the adapter is there): fired before
+   * send. `steered`: the adapter steers it into the turn running now instead of starting a turn.
+   */
+  onAccepted?: (sessionId: string, meta: any, how: { steered: boolean }) => void
 }
 
 export type InboundDeliveryResult =
@@ -37,9 +45,22 @@ export async function deliverInbound(
 
   const adapter = deps.getAdapter(sessionId)
   if (!adapter) return { ok: false, reason: "adapter_not_ready" }
-  await adapter.send(text, meta)
-
+  // An observer: a hook that throws never costs the message.
+  try {
+    deps.onAccepted?.(sessionId, meta, { steered: adapter.willSteer?.(meta) ?? false })
+  } catch (err) {
+    log.warn("inbound_on_accepted_failed", { session: sessionId, err: err instanceof Error ? err.message : String(err) })
+  }
+  // Marked at hand-over, not when send() returns: a core adapter's send() resolves when the TURN
+  // ends, and the same message re-sent during that turn must not start another (card #75). A
+  // hand-over that throws is unmarked, so the sender's retry still goes through.
   if (messageId) deps.seen.mark(sessionId, messageId)
+  try {
+    await adapter.send(text, meta)
+  } catch (err) {
+    if (messageId) deps.seen.unmark(sessionId, messageId)
+    throw err
+  }
   deps.onDelivered?.(sessionId)
   return { ok: true }
 }

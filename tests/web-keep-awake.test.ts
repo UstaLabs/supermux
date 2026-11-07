@@ -8,7 +8,13 @@ import type { KeepAwakeState } from "../src/core/power/keep-awake"
 import type { KeepAwakeSettings } from "../src/core/settings/keep-awake-config"
 
 const DEV_PATH = `/tmp/devices-keep-awake-${process.pid}.json`
-const PORT = 18824
+// Port 0: the OS picks a free port, read back once the channel listens. A fixed one collides with
+// whatever else holds it (another run, a listener a crashed test left behind) and fails for no
+// reason of the code under test.
+let PORT = 0
+let base = ""
+/** The app's own origin: the configured public URL (the CSRF rule compares Origin with it). */
+const ORIGIN = "http://127.0.0.1"
 let ch: WebChannel
 let token: string
 let state: KeepAwakeState
@@ -21,9 +27,9 @@ beforeEach(async () => {
   state = { enabled: true, onBattery: true, active: true, supported: true }
   setCalls = []
   ch = new WebChannel({
-    port: PORT,
+    port: 0,
     devicesFile: DEV_PATH,
-    publicUrl: "http://127.0.0.1:" + PORT,
+    publicUrl: ORIGIN,
     staticDir: undefined,
     getSessionsSnapshot: () => [],
     getSessionLog: () => [],
@@ -38,6 +44,8 @@ beforeEach(async () => {
     },
   } as any)
   await ch.start()
+  PORT = ch.boundPort
+  base = `http://127.0.0.1:${PORT}`
 })
 
 afterEach(async () => {
@@ -45,9 +53,8 @@ afterEach(async () => {
   if (existsSync(DEV_PATH)) unlinkSync(DEV_PATH)
 })
 
-const base = `http://127.0.0.1:${PORT}`
-const authed = () => ({ Cookie: `cmux_token=${token}`, Origin: base, "content-type": "application/json" })
-/** The same request as it arrives through the relay (frpc adds X-Forwarded-For). */
+const authed = () => ({ Cookie: `cmux_token=${token}`, Origin: ORIGIN, "content-type": "application/json" })
+/** The same request as it arrives through the relay (frps adds X-Forwarded-For). */
 const relayed = () => ({ ...authed(), "x-forwarded-for": "203.0.113.9" })
 
 // ── GET /settings/keep-awake ────────────────────────────────────────────────────────────────
@@ -89,7 +96,7 @@ test("PUT from loopback with a foreign Host (DNS rebinding) is refused", async (
 })
 
 test("PUT needs auth and the same-origin CSRF rule", async () => {
-  let res = await fetch(`${base}/settings/keep-awake`, { method: "PUT", headers: { Origin: base, "content-type": "application/json" }, body: "{\"enabled\":true}" })
+  let res = await fetch(`${base}/settings/keep-awake`, { method: "PUT", headers: { Origin: ORIGIN, "content-type": "application/json" }, body: "{\"enabled\":true}" })
   expect(res.status).toBe(401)
   res = await fetch(`${base}/settings/keep-awake`, {
     method: "PUT", headers: { ...authed(), Origin: "https://evil.com" }, body: "{\"enabled\":true}",

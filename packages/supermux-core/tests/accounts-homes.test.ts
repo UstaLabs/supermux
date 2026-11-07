@@ -82,3 +82,12 @@ test("ids are validated", async () => {
   await expect(ensureHome(base, { id: "../escape", agent: "claude" })).rejects.toMatchObject({ code: "invalid_account_id" })
   await expect(ensureHome(base, { id: "ok", agent: "../claude" })).rejects.toMatchObject({ code: "invalid_input" })
 })
+
+// The guard against linking an account home into the shared history root was `home.startsWith(root + "/")`: never
+// true with Windows' `\`, and false when the home IS the root. Both are refused now (paths.isInside).
+test("the shared history root may not be the account home itself", async () => {
+  const base = await scratch()
+  const homes = join(base, "homes")
+  const root = join(homes, "claude", "work")
+  await expect(ensureHome(homes, { id: "work", agent: "claude" }, claudeLayout({ claudeRoot: root }))).rejects.toMatchObject({ code: "invalid_options" })
+})

@@ -76,11 +76,14 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -124,6 +127,8 @@ internal fun normalizeInstallState(state: String?): String = when (state?.lowerc
 }
 
 internal fun statusLabel(status: AgentInstallStatus): String = when {
+    // The CLI still has its credential file, but the provider refused the login: sign in again.
+    status.signInExpired -> "Sign-in expired — sign in again"
     status.authed -> "Authenticated"
     !status.installed -> "Not installed"
     status.kind == "opencode" -> "Ready · free tier"
@@ -257,7 +262,7 @@ fun AgentSettingsScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Agents", color = cs.onSurface) },
+                    title = { Text("Providers", color = cs.onSurface) },
                     navigationIcon = {
                         IconButton(
                             onClick = onBack,
@@ -432,13 +437,18 @@ private fun AgentRow(
     // LocalPointerAvailable, NOT LocalInputMode — a phone with a Bluetooth keyboard is still a
     // thumb. With a pointer this is desktop's original 12dp, unchanged.
     val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
-    var expanded by remember(status.kind) { mutableStateOf(!status.authed) }
+    // Open or not, and the code pasted from the sign-in page, kept for the page on display (#89):
+    // a rotation emptied the code while its login went on on the host, and closed an authorized
+    // agent's row with the OpenCode provider steps inside it. The login itself resumes from the
+    // broker below.
+    val row = rememberRetainedOnPage("agents:row:${status.kind}") { AgentRowForm(expanded = !status.authed) }
+    var expanded by row::expanded
 
     var loginActive by remember(status.kind) { mutableStateOf(false) }
     var login by remember(status.kind) { mutableStateOf<AgentLoginState?>(null) }
     var loginStartFailed by remember(status.kind) { mutableStateOf(false) }
     var loginTimedOut by remember(status.kind) { mutableStateOf(false) }
-    var codeValue by remember(status.kind) { mutableStateOf("") }
+    var codeValue by row::code
     var install by remember(status.kind) { mutableStateOf<AgentInstallJob?>(null) }
     var installActive by remember(status.kind) { mutableStateOf(false) }
     var installRequestFailed by remember(status.kind) { mutableStateOf(false) }
@@ -896,26 +906,22 @@ private fun ApiKeyField(
     onSaved: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var value by remember { mutableStateOf("") }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // The key being pasted, and its save, kept for the page on display (#89); see [SecretForm].
+    val form = rememberRetainedOnPage("agents:key:$kind") { SecretForm() }
+    val saves = rememberRetainedScope()
+    var value by form::value
+    val saving = form.saving
+    val error = form.error
 
     fun submit() {
         val v = value.trim()
-        if (v.isEmpty() || saving) return
-        saving = true
-        error = null
-        scope.launch {
-            val ok = onSave(v)
-            saving = false
-            if (ok) {
-                value = ""
-                onSaved()
-            } else {
-                error = "Couldn't save — check the connection and try again."
-            }
-        }
+        if (v.isEmpty() || form.saving) return
+        form.save(saves, "Couldn't save — check the connection and try again.") { onSave(v) }
+    }
+    LaunchedEffect(form, form.saved) {
+        if (!form.saved) return@LaunchedEffect
+        form.saved = false
+        onSaved()
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
@@ -943,7 +949,7 @@ private fun ApiKeyField(
         ) {
             SecretField(
                 value = value,
-                onValueChange = { value = it; error = null },
+                onValueChange = { value = it; form.error = null },
                 placeholder = if (kind == "claude") "oauth_token_…" else "sk-…",
                 modifier = Modifier.weight(1f).testTag("agent_secret_$kind"),
                 onSubmit = ::submit,
@@ -1254,26 +1260,22 @@ private fun OpenCodeZenKeyRow(
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var keyValue by remember { mutableStateOf("") }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // Kept for the page on display, with its save (#89); see [SecretForm].
+    val form = rememberRetainedOnPage("agents:opencode-zen") { SecretForm() }
+    val saves = rememberRetainedScope()
+    var keyValue by form::value
+    val saving = form.saving
+    val error = form.error
 
     fun submit() {
         val k = keyValue.trim()
-        if (k.isEmpty() || saving) return
-        saving = true
-        error = null
-        scope.launch {
-            val ok = setKey("opencode", k)
-            saving = false
-            if (ok) {
-                keyValue = ""
-                onChanged()
-            } else {
-                error = "Couldn't save key — check the connection and try again."
-            }
-        }
+        if (k.isEmpty() || form.saving) return
+        form.save(saves, "Couldn't save key — check the connection and try again.") { setKey("opencode", k) }
+    }
+    LaunchedEffect(form, form.saved) {
+        if (!form.saved) return@LaunchedEffect
+        form.saved = false
+        onChanged()
     }
 
     Column(
@@ -1307,7 +1309,7 @@ private fun OpenCodeZenKeyRow(
         ) {
             SecretField(
                 value = keyValue,
-                onValueChange = { keyValue = it; error = null },
+                onValueChange = { keyValue = it; form.error = null },
                 placeholder = "OpenCode key (Zen + Go)",
                 modifier = Modifier.weight(1f).testTag("opencode_zen_key_field"),
                 onSubmit = ::submit,
@@ -1341,35 +1343,29 @@ private fun OpenCodeProviderRow(
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-
-    var keyValue by remember { mutableStateOf("") }
-    var saving by remember { mutableStateOf(false) }
-    var saveError by remember { mutableStateOf<String?>(null) }
-    var oauthUrl by remember { mutableStateOf<String?>(null) }
-    var oauthMethodIndex by remember { mutableStateOf<Int?>(null) }
-    var oauthCode by remember { mutableStateOf("") }
-    var finishing by remember { mutableStateOf(false) }
-    var oauthError by remember { mutableStateOf<String?>(null) }
+    // The browser sign-in's "paste the code" step, a key being pasted, and the calls behind them,
+    // kept for the page on display (#89). A rotation dropped the step while the user was in the
+    // browser getting the code, and the code only finishes the sign-in it was started for, so
+    // the next "Login via browser" began again from zero. The calls run on the fleet's scope and
+    // land here; the screen on display opens the browser and reloads.
+    val form = rememberRetainedOnPage("agents:opencode:${provider.id}") { OpenCodeProviderForm() }
+    val scope = rememberRetainedScope()
+    var keyValue by form.key::value
+    val saving = form.key.saving
+    val saveError = form.key.error
+    var oauthUrl by form::oauthUrl
+    var oauthMethodIndex by form::oauthMethodIndex
+    var oauthCode by form::oauthCode
+    var finishing by form::finishing
+    var oauthError by form::oauthError
 
     val oauthMethod = provider.methods.firstOrNull { it.type == "oauth" }
     val apiMethod = provider.methods.firstOrNull { it.type == "api" }
 
     fun submitKey() {
         val k = keyValue.trim()
-        if (k.isEmpty() || saving) return
-        saving = true
-        saveError = null
-        scope.launch {
-            val ok = setKey(provider.id, k)
-            saving = false
-            if (ok) {
-                keyValue = ""
-                onChanged()
-            } else {
-                saveError = "Couldn't save key — check the connection and try again."
-            }
-        }
+        if (k.isEmpty() || form.key.saving) return
+        form.key.save(scope, "Couldn't save key — check the connection and try again.") { setKey(provider.id, k) }
     }
 
     fun finishOauth() {
@@ -1380,16 +1376,27 @@ private fun OpenCodeProviderRow(
         oauthError = null
         scope.launch {
             val ok = finishOAuth(provider.id, mi, c)
-            finishing = false
+            form.finishing = false
             if (ok) {
-                oauthUrl = null
-                oauthMethodIndex = null
-                oauthCode = ""
-                onChanged()
+                form.oauthUrl = null
+                form.oauthMethodIndex = null
+                form.oauthCode = ""
+                form.authorized = true
             } else {
-                oauthError = "Couldn't finish authorization — check the code and try again."
+                form.oauthError = "Couldn't finish authorization — check the code and try again."
             }
         }
+    }
+    LaunchedEffect(form, form.key.saved, form.authorized) {
+        if (!form.key.saved && !form.authorized) return@LaunchedEffect
+        form.key.saved = false
+        form.authorized = false
+        onChanged()
+    }
+    LaunchedEffect(form, form.openUrl) {
+        val url = form.openUrl ?: return@LaunchedEffect
+        form.openUrl = null
+        platform.openUrl(url)
     }
 
     Column(
@@ -1478,11 +1485,11 @@ private fun OpenCodeProviderRow(
                         val start = startOAuth(provider.id, oauthMethod.index)
                         val url = start?.url
                         if (!url.isNullOrEmpty()) {
-                            oauthMethodIndex = oauthMethod.index
-                            oauthUrl = url
-                            platform.openUrl(url)
+                            form.oauthMethodIndex = oauthMethod.index
+                            form.oauthUrl = url
+                            form.openUrl = url
                         } else {
-                            oauthError = "Couldn't start browser login."
+                            form.oauthError = "Couldn't start browser login."
                         }
                     }
                 }) { Text("Login via browser", color = cs.primary) }
@@ -1494,7 +1501,7 @@ private fun OpenCodeProviderRow(
                 ) {
                     SecretField(
                         value = keyValue,
-                        onValueChange = { keyValue = it; saveError = null },
+                        onValueChange = { keyValue = it; form.key.error = null },
                         placeholder = apiMethod.label.ifEmpty { "API key" },
                         modifier = Modifier
                             .weight(1f)
@@ -1527,4 +1534,52 @@ private fun OpenCodeProviderRow(
             }
         }
     }
+}
+
+/** An agent row, kept for the page on display (`rememberRetainedOnPage`, #89): open or not, and the login code. */
+private class AgentRowForm(expanded: Boolean) {
+    var expanded by mutableStateOf(expanded)
+    var code by mutableStateOf("")
+}
+
+/**
+ * A key being pasted and its save, kept for the page on display (`rememberRetainedOnPage`, #89):
+ * a rotation emptied the field, and a save in flight was cut off with no answer shown. The save
+ * runs on the fleet's scope; [saved] tells the screen on display to reload. In memory only.
+ */
+private class SecretForm {
+    var value by mutableStateOf("")
+    var saving by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var saved by mutableStateOf(false)
+
+    fun save(scope: CoroutineScope, failure: String, call: suspend () -> Boolean) {
+        saving = true
+        error = null
+        scope.launch {
+            val ok = call()
+            saving = false
+            if (ok) {
+                value = ""
+                saved = true
+            } else {
+                error = failure
+            }
+        }
+    }
+}
+
+/** One OpenCode provider's sign-in, kept for the page on display (`rememberRetainedOnPage`, #89). */
+private class OpenCodeProviderForm {
+    val key = SecretForm()
+    /** The browser sign-in under way: its link, and the method it was started for. */
+    var oauthUrl by mutableStateOf<String?>(null)
+    var oauthMethodIndex by mutableStateOf<Int?>(null)
+    var oauthCode by mutableStateOf("")
+    var finishing by mutableStateOf(false)
+    var oauthError by mutableStateOf<String?>(null)
+    /** A link just minted, for the screen on display to open in the browser. */
+    var openUrl by mutableStateOf<String?>(null)
+    /** The code finished the sign-in: the screen on display reloads the providers. */
+    var authorized by mutableStateOf(false)
 }

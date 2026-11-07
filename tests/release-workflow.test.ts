@@ -54,7 +54,7 @@ test("Windows release validates the broker and desktop before packaging", () => 
   expect(windowsEnd).toBeGreaterThan(windowsStart)
 
   const setupBun = position("oven-sh/setup-bun@v2")
-  position('bun-version: "1.3.14"')
+  position('bun-version: "1.4.4"')
   const bunInstall = position("bun install")
   const bunTests = position("bun test")
   const typecheck = position("bun run typecheck")
@@ -72,12 +72,12 @@ test("Windows release stages and inspects the complete native host image", () =>
   position("../scripts/stage-desktop-binaries.sh windows-x64")
   position("Get-Item desktop/resources/windows-x64/supermux-broker.exe")
   position("Get-Item desktop/resources/windows-x64/mux-sessiond.exe")
-  position("Get-Item desktop/resources/windows-x64/frpc.exe")
   position(":desktop:createDistributable")
   position("desktop/build/compose/binaries/main/app")
   position("supermux-broker.exe")
   position("mux-sessiond.exe")
-  position("frpc.exe")
+  // The relay tunnel runs inside the broker; no frpc is fetched, staged or packaged.
+  expect(workflow).not.toContain("frpc")
 })
 
 test("Windows release preserves stable MSI and checksum names", () => {
@@ -308,7 +308,7 @@ test("everything that publishes waits on the tag's channel + branch guard", () =
 
 test("an alpha tag is a GitHub pre-release, so releases/latest keeps pointing at stable", () => {
   expect(releaseJob).toContain('if [ "$CHANNEL" = "alpha" ]; then prerelease=(--prerelease); fi')
-  expect(releaseJob).toContain('gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}"')
+  expect(releaseJob).toContain('gh release create "${GITHUB_REF_NAME}" --generate-notes "${notes[@]}" "${prerelease[@]}"')
   // The rerun path uploads into an existing release and must not leave it promoted.
   expect(releaseJob).toContain('gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false')
 })
@@ -341,4 +341,29 @@ test("every desktop installer is built with the tag as the app's version", () =>
   expect(packaging.length).toBe(4)
   expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(4)
   expect(publishJob).toContain('CLIENT_DESKTOP_VERSION="$V"')
+})
+
+// ci.yml's windows lane runs the suite, the ConPTY smoke and the standard-user smoke on the Bun the Windows release
+// builds with: if the two drift, the lane stops testing what ships.
+test("the Windows CI lane pins the same Bun as the Windows release", () => {
+  const ci = readFileSync(resolve(import.meta.dir, "..", ".github", "workflows", "ci.yml"), "utf8")
+  const lane = ci.slice(ci.indexOf("\n  windows:"))
+  const laneBun = lane.match(/bun-version:\s*"([^"]+)"/)?.[1]
+  expect(laneBun, "the windows lane in ci.yml pins no bun-version").toBeDefined()
+  position(`bun-version: "${laneBun}"`)
+})
+
+test("a release attaches its iOS build to the internal TestFlight group only; external review is opt-in", () => {
+  const job = workflow.slice(workflow.indexOf("  assign-testflight:"))
+  expect(job).toContain("TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}")
+  expect(job).not.toMatch(/TESTFLIGHT_GROUP: "[^"]*Developer Beta/)
+})
+
+test("every CI run tests the Windows desktop host and broker seams, with the release job's own commands", () => {
+  const job = ci.slice(ci.indexOf("  windows-desktop:"), ci.indexOf("  kotlin:\n"))
+  expect(job).toContain("runs-on: windows-latest")
+  const hostTests = "./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --tests 'dev.supermux.desktop.platform.ScreenWatchTest'"
+  expect(job).toContain(hostTests)
+  expect(workflow).toContain(hostTests)
+  for (const f of ["tests/windows-staging.test.ts", "src/core/sessiond/session-store.test.ts", "src/core/process/launcher.test.ts"]) expect(job).toContain(f)
 })

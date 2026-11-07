@@ -1,0 +1,368 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/*
+ * supermux colours. Dark is the app's own palette and supermux.dev's page tones
+ * (apps/shared/.../ui/Theme.kt and the site's style.css); light is the app's light palette.
+ */
+@theme {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --color-fd-background: oklch(0.99 0.003 105);
+  --color-fd-foreground: oklch(0.19 0.008 130);
+  --color-fd-muted: oklch(0.955 0.006 115);
+  --color-fd-muted-foreground: oklch(0.47 0.014 130);
+  --color-fd-popover: oklch(0.995 0.004 105);
+  --color-fd-popover-foreground: oklch(0.19 0.008 130);
+  --color-fd-card: oklch(0.975 0.005 110);
+  --color-fd-card-foreground: oklch(0.19 0.008 130);
+  --color-fd-border: oklch(0.885 0.01 110);
+  --color-fd-primary: oklch(0.49 0.105 185);
+  --color-fd-primary-foreground: oklch(0.985 0.01 180);
+  --color-fd-secondary: oklch(0.945 0.007 115);
+  --color-fd-secondary-foreground: oklch(0.19 0.008 130);
+  --color-fd-accent: oklch(0.925 0.007 115);
+  --color-fd-accent-foreground: oklch(0.19 0.008 130);
+  --color-fd-ring: oklch(0.49 0.105 185 / 0.45);
+  --color-fd-overlay: oklch(0.2 0.01 130 / 0.25);
+}
+
+.dark {
+  --color-fd-background: oklch(0.115 0.008 130);
+  --color-fd-foreground: oklch(0.94 0.008 120);
+  --color-fd-muted: oklch(0.155 0.008 130);
+  --color-fd-muted-foreground: oklch(0.7 0.016 125);
+  --color-fd-popover: oklch(0.155 0.008 130);
+  --color-fd-popover-foreground: oklch(0.94 0.008 120);
+  --color-fd-card: oklch(0.14 0.008 130);
+  --color-fd-card-foreground: oklch(0.94 0.008 120);
+  --color-fd-border: oklch(0.25 0.009 130);
+  --color-fd-primary: oklch(0.72 0.105 180);
+  --color-fd-primary-foreground: oklch(0.13 0.018 170);
+  --color-fd-secondary: oklch(0.18 0.008 130);
+  --color-fd-secondary-foreground: oklch(0.94 0.008 120);
+  --color-fd-accent: oklch(0.2 0.008 130);
+  --color-fd-accent-foreground: oklch(0.94 0.008 120);
+  --color-fd-ring: oklch(0.72 0.105 180 / 0.5);
+  --color-fd-overlay: oklch(0 0 0 / 0.5);
+}
+
+.dark #nd-sidebar {
+  --color-fd-muted: oklch(0.17 0.008 130);
+  --color-fd-secondary: oklch(0.19 0.008 130);
+  --color-fd-muted-foreground: oklch(0.72 0.014 125);
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--color-fd-primary) 35%, transparent);
+}
+
+:focus-visible {
+  outline-color: var(--color-fd-primary);
+}
+
+/* The navbar brand, after supermux.dev's header */
+.sm-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.sm-brand-mark {
+  width: 22px;
+  height: 22px;
+  color: var(--color-fd-primary);
+}
+.sm-brand-name {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: -0.2px;
+  color: var(--color-fd-foreground);
+}
+.sm-brand-tag {
+  font: 500 11.5px/1 var(--font-mono);
+  color: var(--color-fd-muted-foreground);
+  border: 1px solid var(--color-fd-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+/* Headings: the site's tight, calm type */
+.prose :where(h1, h2, h3, h4) {
+  letter-spacing: -0.025em;
+  font-weight: 600;
+}
+h1 {
+  letter-spacing: -0.035em;
+}
+.prose :where(h2) {
+  margin-top: 2.4em;
+}
+
+/* Bullets are the site's teal dots */
+.prose :where(ul > li)::marker {
+  color: var(--color-fd-primary);
+}
+
+.prose :where(a):not(:where(.not-prose, .not-prose *)) {
+  text-decoration-color: color-mix(in oklch, var(--color-fd-primary) 55%, transparent);
+  text-underline-offset: 3px;
+}
+.prose :where(a):not(:where(.not-prose, .not-prose *)):hover {
+  text-decoration-color: var(--color-fd-primary);
+}
+
+.prose :where(strong) {
+  font-weight: 600;
+}
+
+/* Keyboard keys */
+.sm-kbd {
+  display: inline-flex;
+  align-items: center;
+  min-width: 1.6em;
+  justify-content: center;
+  padding: 1px 6px;
+  border: 1px solid var(--color-fd-border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--color-fd-muted);
+  font: 500 0.8em/1.5 var(--font-mono);
+  color: var(--color-fd-foreground);
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+/* The six agents */
+.sm-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 1.5em 0;
+}
+@media (max-width: 640px) {
+  .sm-agent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.sm-agent-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 12px;
+  background: var(--color-fd-card);
+}
+.sm-agent-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+.sm-agent-logo {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-fd-foreground);
+  vertical-align: -0.2em;
+}
+.sm-agent-logo svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Screenshots and recordings */
+.prose :where(img):not(:where(.not-prose, .not-prose *, .sm-agent-logo)) {
+  border-radius: 12px;
+  border: 1px solid var(--color-fd-border);
+}
+
+/* Draft-only review notes (<Check>) */
+.sm-check {
+  margin: 1.25em 0;
+  padding: 10px 14px;
+  border: 1px dashed oklch(0.78 0.12 75);
+  border-radius: 10px;
+  background: color-mix(in oklch, oklch(0.78 0.12 75) 10%, transparent);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.sm-check-label {
+  display: block;
+  margin-bottom: 2px;
+  font: 600 11px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: oklch(0.62 0.13 75);
+}
+.dark .sm-check-label {
+  color: oklch(0.8 0.12 75);
+}
+
+/* Agent characters */
+.sm-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 1.5em 0;
+}
+.sm-avatar-states {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 1.5em 0;
+  max-width: 460px;
+}
+@media (max-width: 640px) {
+  .sm-avatar-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.sm-avatar-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 6px 10px;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 12px;
+  background: var(--color-fd-card);
+}
+.sm-avatar-cell img {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.sm-avatar-cell figcaption {
+  font-size: 13px;
+  color: var(--color-fd-muted-foreground);
+}
+
+/* Introduction: how supermux fits together */
+.sm-diagram {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.3fr);
+  align-items: center;
+  gap: 14px;
+  margin: 1.75em 0;
+  padding: 20px;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 14px;
+  background: var(--color-fd-card);
+}
+.sm-diagram-col,
+.sm-diagram-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sm-diagram-label {
+  font: 500 11px/1.4 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-fd-muted-foreground);
+}
+.sm-diagram-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 10px;
+  background: var(--color-fd-background);
+  font-size: 14px;
+}
+.sm-diagram-link {
+  position: relative;
+  width: 64px;
+  height: 1px;
+  background: var(--color-fd-primary);
+}
+.sm-diagram-link::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: -4px;
+  border: 4.5px solid transparent;
+  border-left: 7px solid var(--color-fd-primary);
+  border-right: 0;
+}
+.sm-diagram-link span {
+  position: absolute;
+  left: 50%;
+  top: -20px;
+  transform: translateX(-50%);
+  font: 500 11px/1 var(--font-mono);
+  color: var(--color-fd-muted-foreground);
+}
+.sm-diagram-host {
+  padding: 14px;
+  border: 1px solid color-mix(in oklch, var(--color-fd-primary) 45%, var(--color-fd-border));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--color-fd-primary) 6%, var(--color-fd-background));
+}
+.sm-diagram-core {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.sm-diagram-mark {
+  width: 20px;
+  height: 20px;
+  color: var(--color-fd-primary);
+}
+.sm-diagram-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sm-diagram-agent {
+  display: inline-flex;
+  padding: 7px;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 8px;
+  background: var(--color-fd-card);
+}
+.sm-diagram-note {
+  font-size: 12.5px;
+  color: var(--color-fd-muted-foreground);
+}
+@media (max-width: 640px) {
+  .sm-diagram {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sm-diagram-link {
+    width: 1px;
+    height: 36px;
+    justify-self: center;
+  }
+  .sm-diagram-link::after {
+    right: -4px;
+    top: auto;
+    bottom: -1px;
+    border: 4.5px solid transparent;
+    border-top: 7px solid var(--color-fd-primary);
+    border-bottom: 0;
+  }
+  .sm-diagram-link span {
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}

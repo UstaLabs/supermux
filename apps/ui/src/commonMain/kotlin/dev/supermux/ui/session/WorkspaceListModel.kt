@@ -111,7 +111,7 @@ fun deriveWorkspaceRow(
     val unread = chatIds.any { sid ->
         sessionListShowsUnread(
             active = sid == selectedSessionId,
-            working = agentState[sid]?.working == true,
+            working = agentState[sid]?.busy == true,
             lastMessageTs = lastBySession[sid]?.ts,
             lastReadAt = lastRead[sid],
         )

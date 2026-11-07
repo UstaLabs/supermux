@@ -1,21 +1,20 @@
 // src/core/forge/cloned.ts
-import { execFileSync } from "child_process"
 import { existsSync, readdirSync, statSync, rmSync } from "fs"
-import { dirname, join, resolve, relative, isAbsolute } from "path"
+import { dirname, join, resolve } from "path"
 import { ForgeError } from "./types"
+import { files, paths } from "@supermux/platform"
 
 export interface ClonedRepo {
   path: string; host: string; owner: string; name: string; fullName: string; sizeBytes: number
 }
 
 export function isInsideRoot(root: string, target: string): boolean {
-  const rel = relative(resolve(root), resolve(target))
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
+  return paths.isStrictlyInside(resolve(target), resolve(root))
 }
 
+/** du where the OS has one, a walk on Windows (which has none: every repo read 0 bytes there). */
 function dirSize(dir: string): number {
-  try { return parseInt(execFileSync("du", ["-sk", dir], { encoding: "utf8" }).split(/\s+/)[0] ?? "0", 10) * 1024 }
-  catch { return 0 }
+  return files.folderSize(dir)
 }
 
 export function scanCloned(root: string): ClonedRepo[] {

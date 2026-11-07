@@ -1,5 +1,11 @@
 package dev.supermux.session
 
+import dev.supermux.fs.hostPathSegments
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.isDriveSegment
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.pathLeaf
+import dev.supermux.fs.sameHostSegments
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.SessionInfo
 
@@ -47,7 +53,7 @@ enum class SectionKey {
     }
 }
 
-/** Sentinel key for the pinned Personal Assistants group (never a real path). */
+/** Sentinel key for the pinned Agents group (never a real path). */
 const val PA_GROUP_KEY = "__pas__"
 
 private val SECTION_ORDER = listOf(SectionKey.IN_PROGRESS, SectionKey.DRAFT, SectionKey.SETTLED)
@@ -149,7 +155,7 @@ fun buildTaskSections(
 fun projectLabel(session: SessionInfo, home: String?): String {
     val path = session.repo_root ?: session.workdir
     val label = formatWorkdir(path, home)
-    val leaf = label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+    val leaf = pathLeaf(label).ifEmpty { label }
     return if (leaf == "~" || leaf == "…") "home" else leaf.removePrefix("…")
 }
 
@@ -197,7 +203,7 @@ fun groupSessions(
     if (pas.isNotEmpty()) {
         result.add(
             SessionGroup(
-                label = "Personal Assistants",
+                label = "Agents",
                 workdir = PA_GROUP_KEY,
                 sessions = sessionsByUserOrder(pas),
                 sections = emptyList(),
@@ -213,30 +219,22 @@ fun groupSessions(
  *  - `~` for home itself, `~/leaf` one level under home
  *  - `…/parent/leaf` when deeper (whether under home or not)
  *  - `parent/leaf` for a shallow two-segment absolute path; a single segment is unchanged
+ *
+ * A Windows host's path (`C:\Users\me\x`) keeps its own `\` and its drive counts as the root,
+ * so `D:\a\b` shortens like `/a/b`.
  */
 fun formatWorkdir(workdir: String, home: String?): String {
     val h = if (!home.isNullOrEmpty()) home else inferHomeDir(workdir)
-    if (!h.isNullOrEmpty() && workdir == h) return "~"
-    val segments = workdir.split("/").filter { it.isNotEmpty() }
+    val homeSegments = h?.takeIf { it.isNotEmpty() }?.let(::hostPathSegments)
+    val all = hostPathSegments(workdir)
+    val windows = isWindowsHostPath(workdir)
+    if (homeSegments != null && sameHostSegments(all, homeSegments, windows)) return "~"
+    val segments = if (all.firstOrNull()?.let(::isDriveSegment) == true) all.drop(1) else all
     if (segments.size <= 1) return workdir
+    val sep = if ('\\' in workdir) '\\' else '/'
     val leaf = segments[segments.size - 1]
     val parent = segments[segments.size - 2]
-    val parentPath = "/" + segments.dropLast(1).joinToString("/")
-    if (!h.isNullOrEmpty() && parentPath == h) return "~/$leaf"
-    val base = "$parent/$leaf"
-    return if (segments.size > 2) "…/$base" else base
-}
-
-/**
- * Compiled once. [inferHomeDir] runs per session row per sidebar render (via [projectLabel] and
- * [formatWorkdir]); compiling the pattern inside the function made every one of those pay for a
- * fresh regex.
- */
-private val HOME_DIR_RE = Regex("^(/(?:home|Users)/[^/]+)")
-
-/** Best-effort home dir (/home/<user> or /Users/<user>) when none was supplied. */
-fun inferHomeDir(workdir: String?): String? {
-    val probe = workdir ?: ""
-    val m = HOME_DIR_RE.find(probe)
-    return m?.groupValues?.getOrNull(1)
+    if (homeSegments != null && sameHostSegments(all.dropLast(1), homeSegments, windows)) return "~$sep$leaf"
+    val base = "$parent$sep$leaf"
+    return if (segments.size > 2) "…$sep$base" else base
 }

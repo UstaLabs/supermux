@@ -9,6 +9,15 @@ describe("login output parsers", () => {
     expect(parseCursorLoginUrl(output)).toBe(url)
   })
 
+  test("extracts Claude's URL from Windows ConPTY output, where the hyperlink ends with ESC \\", () => {
+    // Shape captured from claude.exe under Bun's ConPTY on Windows 11 (2026-11-02), state shortened.
+    const url = "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=PoSd4v"
+    const output = `\x1b[?9001h\x1b[?1004h\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;claude\x07\x1b[?25hOpening browser to sign in…\r\n`
+      + `If the browser didn't open, visit: \x1b[94m\x1b]8;id=12220-1;${url}\x1b\\${url}\x1b[m\x1b]8;;\x1b\\\r\nPaste code here if prompted > `
+
+    expect(parseCursorLoginUrl(output)).toBe(url)
+  })
+
   test("extracts colorized Codex device auth", () => {
     expect(parseCodexDeviceAuth("\x1b[94mhttps://auth.example/device\x1b[0m code ABCD-EFGH")).toEqual({
       url: "https://auth.example/device",
@@ -21,6 +30,14 @@ describe("login output parsers", () => {
 
   test("extracts agy's Google OAuth URL from its print-mode login prompt", () => {
     const output = `Authentication required. Please visit the URL to log in:\r\n  ${AGY_URL}\r\n\r\nWaiting for authentication (timeout 60s)...\r\nOr, paste the authorization code here and press Enter:\r\n`
+    expect(parseAntigravityLoginUrl(output)).toBe(AGY_URL)
+  })
+
+  test("agy under a Windows ConPTY: the cursor move after the URL ends it, the next line is not glued on", () => {
+    // Shape captured from agy 1.5.0 under the broker's ConPTY on Windows 11 (2026-11-04): ConPTY draws the
+    // blank line after the URL as a cursor move (ESC[5;1H), and the URL used to end in "…stateWaiting".
+    const output = `Authentication required. Please visit the URL to log in:\r\n  ${AGY_URL}\x1b[5;1HWaiting for authentication (timeout 60s)...\r\n`
+      + `\x1b]0;C:\\Users\\Tester\\AppData\\Local\\agy\\bin\\agy.exe\x07\x1b[?25hOr, paste the authorization code here and press Enter:\r\n`
     expect(parseAntigravityLoginUrl(output)).toBe(AGY_URL)
   })
 

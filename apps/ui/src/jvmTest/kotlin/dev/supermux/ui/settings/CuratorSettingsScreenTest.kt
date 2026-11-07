@@ -46,9 +46,10 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 /**
  * The shared [CuratorSettingsScreen] (cluster E4).
  *
- * The desktop half of this suite is the one E3 split out of `AssistantSettingsScreenTest`, moved
- * here by name; the rest is new — the load error/retry, the agent switch that clears the model, and
- * the Compact branch Android contributed (neither host tested any of it before).
+ * The desktop half of this suite is the one E3 split out of the old assistant settings test (since
+ * deleted), moved here by name; the rest is new — the load error/retry, the agent switch that
+ * clears the model, and the Compact branch Android contributed (neither host tested any of it
+ * before).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class CuratorSettingsScreenTest {

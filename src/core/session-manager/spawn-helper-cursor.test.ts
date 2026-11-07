@@ -3,6 +3,7 @@ import { join } from "path"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { AgentKind } from "../../shared/agents"
+import { SESSION_INBOX_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
@@ -111,7 +112,7 @@ describe("Cursor spawn", () => {
     })
     expect(reg.get(result.session_id)?.permissionMode).toBe("ask")
     expect(child.cursorCalls).toHaveLength(1)
-    expect(child.cursorCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent" })
+    expect(child.cursorCalls[0]?.options.permissions).toEqual({ kind: "acp", policy: "ask", nativeMode: "agent", readableRoots: [SESSION_INBOX_DIR] })
     expect(child.cursorCalls[0]?.options.mode).toBe("agent")
     expect(child.opens).toHaveLength(1)
   })

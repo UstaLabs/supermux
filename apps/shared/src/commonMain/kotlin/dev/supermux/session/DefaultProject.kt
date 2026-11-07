@@ -1,5 +1,9 @@
 package dev.supermux.session
 
+import dev.supermux.fs.hostIsInside
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.sameHostPath
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
 
 /**
@@ -106,5 +110,34 @@ fun formatAgoShort(nowMs: Long, thenMs: Long): String {
         sec < 86_400L -> "${sec / 3_600}h"
         sec < 86_400L * 14 -> "${sec / 86_400}d"
         else -> "${sec / (86_400L * 7)}w"
+    }
+}
+
+/**
+ * Supermux's own folders, which the project picker leaves out: the broker's mux home (where the
+ * home agent runs) and every agent's folder under `<mux home>/workspace/`. [muxHome] comes from
+ * the broker in the host's own path form, and is compared by the host's rules (a Windows host's
+ * `\`, and its letter case). Null (an older broker) hides nothing.
+ */
+fun isMuxInternalPath(path: String, muxHome: String?): Boolean {
+    if (muxHome.isNullOrBlank()) return false
+    if (sameHostPath(path, muxHome)) return true
+    val workspace = hostJoin(muxHome, "workspace")
+    return hostIsInside(path, workspace) && !sameHostPath(path, workspace)
+}
+
+/**
+ * [catalog] without its [isMuxInternalPath] locations; a project left with none (it only ever
+ * pointed at supermux's own folders) is dropped. A project that never had a location stays.
+ */
+fun withoutMuxInternal(catalog: List<ProjectDto>, muxHome: String?): List<ProjectDto> {
+    if (muxHome.isNullOrBlank()) return catalog
+    return catalog.mapNotNull { p ->
+        val kept = p.locations.filterNot { isMuxInternalPath(it.path, muxHome) }
+        when {
+            kept.size == p.locations.size -> p
+            kept.isEmpty() -> null
+            else -> p.copy(locations = kept)
+        }
     }
 }

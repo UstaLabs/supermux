@@ -37,7 +37,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.supermux.android.chat.SessionChatFallback
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.PairingHolder
+import dev.supermux.android.pairing.androidDeviceName
 import dev.supermux.android.push.AndroidPushRegistrar
+import dev.supermux.android.overlay.AssistantOverlayService
 import dev.supermux.android.push.SupermuxMessagingService
 import dev.supermux.android.session.readGroupByProject
 import dev.supermux.android.session.readLegacyCollapsedPaths
@@ -94,15 +96,34 @@ internal fun launchOrder(paired: Boolean): List<LaunchStep> = buildList {
     if (paired) add(LaunchStep.CreateViewModel)
 }
 
+/**
+ * The pair link to hand to the connect page: the intent's [data], unless it is the link already
+ * [handedOver] (#89). An Android recreation delivers the same intent again, and the connect page
+ * validating it a second time replaced the trust dialog the user had open, or a link they had
+ * pasted since. [handedOver] is saved with the activity and cleared by a new delivery, so tapping
+ * the same link again still applies it.
+ */
+internal fun pairLinkToApply(data: String?, handedOver: String?): String? =
+    data?.takeIf { it.isNotBlank() && it != handedOver }
+
 class MainActivity : ComponentActivity() {
     // Current launch/deep-link intent, surfaced to Compose. Seeded in onCreate; updated by
     // onNewIntent so a supermux://pair link delivered while foregrounded re-enters pairing.
     private val intentState = mutableStateOf<android.content.Intent?>(null)
 
+    // The pair link the connect page already took (see [pairLinkToApply]), in the saved state.
+    private var handedOverPairLink: String? = null
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+        handedOverPairLink = null
         setIntent(intent)
         intentState.value = intent
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(HANDED_OVER_PAIR_LINK, handedOverPairLink)
     }
 
     @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalComposeUiApi::class)
@@ -113,6 +134,7 @@ class MainActivity : ComponentActivity() {
         )
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        handedOverPairLink = savedInstanceState?.getString(HANDED_OVER_PAIR_LINK)
         StartupTrace.mark("activity.superOnCreate")
         SecureTokenStoreContext.init(applicationContext)
         // Native push: ensure the notification channel exists and ask for POST_NOTIFICATIONS
@@ -191,9 +213,12 @@ class MainActivity : ComponentActivity() {
                 }
                 // Deep-link intake: parse supermux://pair (or a pasted https pair URL) from the
                 // current intent. Recomputed when onNewIntent swaps the intent in.
+                // Once per delivery (#89): keyed on the intent alone, so marking it handed over
+                // below does not take the link away from the page that is applying it.
                 val currentIntent by intentState
                 val deepLink: PairUrl? = remember(currentIntent) {
-                    currentIntent?.data?.toString()?.let { PairUrl.parse(it, store.loadBaseUrl()) }
+                    pairLinkToApply(currentIntent?.data?.toString(), handedOverPairLink)
+                        ?.let { PairUrl.parse(it, store.loadBaseUrl()) }
                 }
 
                 if (!paired) {
@@ -205,6 +230,7 @@ class MainActivity : ComponentActivity() {
                         pairing = pairing,
                         onPaired = { paired = true },
                         initialDeepLink = deepLink,
+                        onDeepLinkApplied = { handedOverPairLink = currentIntent?.data?.toString() },
                     )
                     return@AndroidTheme
                 }
@@ -259,6 +285,14 @@ class MainActivity : ComponentActivity() {
                     }
                     lifecycleOwner.lifecycle.addObserver(obs)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+
+                // The assistant overlay (#62): started and stopped from its Appearance switch, and
+                // re-started each time the app comes to the front, because only a service started
+                // while the app is on screen may use the mic for hold-to-talk later.
+                val overlayOn by vm.uiPrefs.assistantOverlay.collectAsStateWithLifecycle(false)
+                LaunchedEffect(overlayOn, appVisible) {
+                    if (appVisible) AssistantOverlayService.sync(this@MainActivity, overlayOn)
                 }
 
                 val workspaces by vm.fleet.workspaces.collectAsStateWithLifecycle()
@@ -323,7 +357,7 @@ class MainActivity : ComponentActivity() {
                         val next = if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK
                         themeScope.launch { themeUiPrefs.putAppearance(next) }
                     },
-                    defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
+                    defaultDeviceName = androidDeviceName(),
                     groupByProject = groupByProject,
                     onGroupByProjectChange = { value ->
                         groupByProject = value
@@ -348,3 +382,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/** [MainActivity]'s saved-state key for the pair link already handed over. */
+private const val HANDED_OVER_PAIR_LINK = "handedOverPairLink"

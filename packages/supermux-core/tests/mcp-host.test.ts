@@ -466,6 +466,64 @@ test("reconnect: host unavailable while down, then the bridge replays initialize
   void second
 })
 
+/**
+ * The host answered a ping through the bridge. While the bridge is down it answers "host unavailable" itself, and a ping
+ * written just before it saw its old host go away gets that answer too, when it does.
+ */
+const answered = (client: BridgeClient) => client.request("ping").then(response => response.error === undefined)
+
+test("reconnect: the bridge tells the agent (tools/list_changed) when the new host lists other tools than the agent got, and stays quiet when they are the same", async () => {
+  const state = scratch()
+  const first = await startHost(state, [orders()])
+  const client = await bridge(first, "orders")
+  expect((await client.initialize()).result.capabilities.tools).toEqual({ listChanged: true })
+  await client.request("tools/list")
+  await first.close()
+  // A restarted host with the same tools: nothing.
+  const second = await startHost(state, [orders()])
+  await until(() => answered(client), 10_000, "reconnect")
+  await client.request("ping")
+  expect(client.notifications("notifications/tools/list_changed")).toHaveLength(0)
+  await second.close()
+  // One with a tool more: one list_changed, and the agent re-lists the new set.
+  const changed = orders()
+  changed.add("cancel", tool({ description: "Cancel an order", run: () => "cancelled" }))
+  await startHost(state, [changed])
+  await until(() => client.notifications("notifications/tools/list_changed").length === 1, 10_000, "list_changed")
+  expect((await client.request("tools/list")).result.tools.map((entry: any) => entry.name)).toContain("cancel")
+  expect(client.notifications("notifications/tools/list_changed")).toHaveLength(1)
+})
+
+test("reconnect: no list_changed when the agent never listed tools, or when its server did not declare tools.listChanged", async () => {
+  const state = scratch()
+  let extra = false
+  const server = mcpServer({
+    name: "fixed",
+    create: () => {
+      const sdk = new McpServer({ name: "fixed", version: "1.0.0" }, { capabilities: { tools: { listChanged: false } } })
+      sdk.registerTool("a", { description: "a", inputSchema: z.object({}) }, async () => ({ content: [] }))
+      if (extra) sdk.registerTool("b", { description: "b", inputSchema: z.object({}) }, async () => ({ content: [] }))
+      return sdk
+    },
+  })
+  const first = await startHost(state, [server, orders()])
+  const fixed = await bridge(first, "fixed"), quiet = await bridge(first, "orders")
+  expect((await fixed.initialize()).result.capabilities.tools).toEqual({ listChanged: false })
+  await fixed.request("tools/list")
+  await quiet.initialize()
+  await first.close()
+  extra = true
+  const changed = orders()
+  changed.add("cancel", tool({ description: "Cancel an order", run: () => "cancelled" }))
+  await startHost(state, [server, changed])
+  for (const client of [fixed, quiet]) {
+    await until(() => answered(client), 10_000, "reconnect")
+    await client.request("ping")
+    expect(client.notifications("notifications/tools/list_changed")).toHaveLength(0)
+  }
+  expect((await fixed.request("tools/list")).result.tools.map((entry: any) => entry.name)).toEqual(["a", "b"])
+})
+
 test("reconnect replay, byte level: initialize (original params) then notifications/initialized before anything else", async () => {
   const dir = scratch()
   const path = join(dir, "fake.sock")
@@ -510,4 +568,44 @@ test("reconnect replay, byte level: initialize (original params) then notificati
   for (const socket of sockets) socket.destroy()
   await new Promise<void>(resolve => fake.close(() => resolve()))
   expect(existsSync(path)).toBe(false)
+})
+
+test("a request the host never answered gets host unavailable when its connection closes; one the agent cancelled gets nothing", async () => {
+  const dir = scratch()
+  const path = join(dir, "fake.sock")
+  const seen: Array<Record<string, any>> = []
+  const sockets: Socket[] = []
+  // A host that answers initialize and leaves every other request unanswered.
+  const fake = createServer(socket => {
+    sockets.push(socket)
+    let buffer = ""
+    let greeted = false
+    socket.on("data", chunk => {
+      buffer += chunk.toString()
+      for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
+        const message = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1)
+        seen.push(message)
+        if (!greeted) { greeted = true; socket.write(JSON.stringify({ ok: true }) + "\n"); continue }
+        if (message.method === "initialize") socket.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fake", version: "1" } } }) + "\n")
+      }
+    })
+    socket.on("error", () => {})
+  })
+  await new Promise<void>(resolve => fake.listen(path, resolve))
+  const client = new BridgeClient({ socket: path, session: "s1", server: "orders", token: "t".repeat(64) })
+  clients.push(client)
+  await client.initialize()
+  const call = client.request("tools/call", { name: "lookup", arguments: {} })
+  client.send({ jsonrpc: "2.0", id: "cancelled", method: "tools/call", params: { name: "lookup", arguments: {} } })
+  client.notify("notifications/cancelled", { requestId: "cancelled", reason: "user" })
+  await until(() => seen.some(message => message.method === "notifications/cancelled"), 5000, "both calls at the host")
+  // The host goes away with both calls unanswered (and takes no new connection).
+  const closed = new Promise<void>(resolve => fake.close(() => resolve()))
+  sockets[0]!.destroy()
+  expect((await call).error).toEqual({ code: -32000, message: "host unavailable" })
+  // Down, the bridge answers a request at once, and it writes its answers in order: this one comes after any other.
+  await client.request("ping")
+  // One answer per request: the initialize (from the host), the call and the ping; none for the cancelled call.
+  expect(client.received.map(message => [message.id, message.error?.message ?? "answered"])).toEqual([[1, "answered"], [2, "host unavailable"], [3, "host unavailable"]])
+  await closed
 })

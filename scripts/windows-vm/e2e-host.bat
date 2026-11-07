@@ -4,6 +4,8 @@ set REPORT=C:\Windows\Temp\e2e-full.txt
 set MUX_HOME=C:\Windows\Temp\supermux-e2e-home
 set MUX_STATE_DIR=%MUX_HOME%\state
 set MUX_WEB_PORT=18791
+REM A test boot is not an install: no telemetry (TELEMETRY.md).
+set DO_NOT_TRACK=1
 set MUX_WEB_PUBLIC_URL=http://127.0.0.1:18791
 set MUX_SESSIOND_PATH=C:\tools\run-sessiond.cmd
 set BUN=C:\tools\bun-x64-baseline\bun-windows-x64-baseline\bun.exe

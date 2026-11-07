@@ -80,7 +80,7 @@ class SessionListScreenTouchTest {
         onNodeWithText("Archive").assertIsDisplayed().performClick()
         onNodeWithText("Archive workspace?").assertIsDisplayed()
         assertEquals(null, archived)
-        onNodeWithText("This archives \"solo\" and ends its agents. This can't be undone.")
+        onNodeWithText("This archives \"solo\" and stops its sessions. This can't be undone.")
             .assertIsDisplayed()
     }
 

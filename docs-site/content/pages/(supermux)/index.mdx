@@ -1,0 +1,48 @@
+---
+title: Introduction
+description: supermux runs Claude Code, Codex, and other coding agents on your own computer or server, many sessions at once, and lets you work with them from your desktop or phone.
+---
+
+supermux is the open-source workspace for coding agents. It runs the agents you already use on a computer you own, as many sessions as you like, and lets you work with them from your desktop, your phone or a browser.
+
+![A supermux workspace: Claude Code, Codex, Grok and Antigravity working side by side, each in its own git worktree](/images/app/workspace.gif)
+
+<AgentGrid />
+
+## Why people use it
+
+- **Run many sessions at once:** start as many agents as you need, each in its own git worktree, and get notified when one has something for you.
+- **Let agents run agents:** ask one agent to hand work to others, put a question to several models at once, or keep an eye on your other sessions. See [Orchestration](/orchestration).
+- **Share one memory:** what one agent learns is there for the next, whichever agent runs it.
+- **Work from anywhere:** the same workspace, with chat, a code editor, a terminal and your ports, on desktop, phone and browser.
+- **Keep going at a usage limit:** add several accounts per agent, and let a session move to another one when it runs out.
+- **Use your own plans:** supermux is free and open source (MIT), and runs on the subscriptions you already have. There's no supermux account.
+
+## How it fits together
+
+<HostDiagram />
+
+- **Your computer** runs supermux and the agents. It can be your laptop, a desktop at home or a server. The app calls it a host.
+- **Your devices** pair with it once, with a QR code. No accounts.
+- **Your code** stays on that computer. Your agents talk to their own providers, as they would if you ran them yourself.
+
+Away from home, your devices reach your computer through the supermux relay, or through your own VPN. See [Reach your computer from anywhere](/devices/remote-access).
+
+## Get started
+
+<Cards>
+  <Card title="Install on your computer" href="/getting-started/install">
+    The desktop app for Mac, Windows and Linux.
+  </Card>
+  <Card title="Install on a server" href="/getting-started/server">
+    One command for an always-on Linux box or Mac.
+  </Card>
+  <Card title="Pair your devices" href="/getting-started/pair-devices">
+    Your phone, a browser, another computer.
+  </Card>
+  <Card title="Your first session" href="/getting-started/first-session">
+    Pick a folder, choose an agent, send a message.
+  </Card>
+</Cards>
+
+Building your own app on these agents? See [supermux core](/core), the library supermux runs on.

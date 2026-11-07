@@ -8,6 +8,24 @@ const MIN_HOURS = 1 / 60
  */
 export const ACCOUNT_UNAVAILABLE_ERROR = "account_unavailable"
 
+/** The window Core records as full on an account the agent's API refused for lack of credits (HTTP 402). */
+export const BALANCE_WINDOW = "balance"
+
+/**
+ * An HTTP status the agent's API answered a turn with that is about the account itself, read from the
+ * turn's error: an ACP JSON-RPC error carries it in `data.http_status` (Grok: 402 "usage balance
+ * exhausted"), also through `cause`. 402: out of credits; 401/403: the account refused. Undefined otherwise.
+ */
+export function accountHttpStatus(error: unknown): 401 | 402 | 403 | undefined {
+  const seen = new Set<unknown>()
+  for (let e = error; typeof e === "object" && e !== null && !seen.has(e); e = (e as { cause?: unknown }).cause) {
+    seen.add(e)
+    const status = (e as { data?: { http_status?: unknown } | null }).data?.http_status
+    if (status === 401 || status === 402 || status === 403) return status
+  }
+  return undefined
+}
+
 /** A window whose reset time has passed no longer counts as used. */
 function effectiveUsed(window: UsageWindow, now: number): number {
   return window.resetsAt && window.resetsAt.getTime() <= now ? 0 : window.usedPercent

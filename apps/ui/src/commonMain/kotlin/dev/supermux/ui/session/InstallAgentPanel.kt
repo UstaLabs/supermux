@@ -1,5 +1,5 @@
 // "Choose an agent": the launcher's panel for a project with no agent to run it. One card per agent,
-// installed in place through the broker's install jobs (the same ones Settings ▸ Agents runs).
+// installed in place through the broker's install jobs (the same ones Settings ▸ Providers runs).
 package dev.supermux.ui.session
 
 import androidx.compose.foundation.background
@@ -116,7 +116,7 @@ fun InstallAgentPanel(
                 }
             }
             if (polls++ >= INSTALL_MAX_POLLS) {
-                installs[kind] = CardInstall.Failed("This is taking longer than expected. Check Settings ▸ Agents for progress.")
+                installs[kind] = CardInstall.Failed("This is taking longer than expected. Check Settings ▸ Providers for progress.")
                 return
             }
             delay(INSTALL_POLL_MS)
@@ -206,7 +206,7 @@ fun InstallAgentPanel(
                 }
                 Spacer(Modifier.height(Space.sm))
                 Text(
-                    "You can add or sign in to agents later in Settings ▸ Agents.",
+                    "You can add or sign in to providers later in Settings ▸ Providers.",
                     color = cs.onSurfaceVariant.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelMedium,
                     textAlign = TextAlign.Center,

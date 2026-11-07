@@ -5,7 +5,8 @@ export type AgentStateFrame = {
   session: string
   state: "idle" | "working" | "dead"
   working: boolean
-  detail: "thinking" | "running" | null
+  /** "starting": a session that was not up is being woken (card #75); computed, never stored. */
+  detail: "thinking" | "running" | "starting" | null
   tool?: string
   since: number
   workingSince?: number
@@ -15,7 +16,14 @@ export type AgentStateFrame = {
   phase: "idle" | "thinking" | "running" | "stalled"  // legacy alias for pre-clients-plan clients
 }
 
-export function toAgentStateFrame(session: string, st: AgentState, bgOpen = 0): AgentStateFrame {
+/**
+ * `startingSince`: when the session's chain began waking it (SessionChain.wakingSince). While a wake is
+ * in flight the session shows as starting, whatever the store holds; older clients see it working.
+ */
+export function toAgentStateFrame(session: string, st: AgentState, bgOpen = 0, startingSince?: number): AgentStateFrame {
+  if (startingSince !== undefined) {
+    return { type: "agent_state", session, state: "working", working: true, detail: "starting", tool: undefined, since: startingSince, workingSince: startingSince, waiting: false, bgOpen, phase: "thinking" }
+  }
   const working = st.phase === "thinking" || st.phase === "running"
   const state = st.phase === "idle" ? "idle" : st.phase === "dead" ? "dead" : "working"
   const detail = working ? (st.phase as "thinking" | "running") : null

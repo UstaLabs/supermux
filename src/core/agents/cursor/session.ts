@@ -1,19 +1,26 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, CURSOR_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getCursorCoreHost } from "./core-host-provider"
 import type { CursorCoreHost, CursorPrepareExtra } from "./core-host"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/cursor/session")
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+
+/** Slash commands: the list Cursor pushed over ACP (available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
+}
+
 
 function resolveHost(explicit?: CursorCoreHost): CursorCoreHost {
   return explicit ?? getCursorCoreHost()
@@ -93,7 +100,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.cursorHost)
-  const sessionHome = join(STATE_DIR, "agents", "cursor", name)
+  const sessionHome = join(STATE_DIR, "agents", "cursor", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Cursor, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -148,6 +155,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)
@@ -180,12 +189,16 @@ export async function resumeCursorSession(
     onCursorSessionId?: (name: string, sid: string) => void
     cursorHost?: CursorCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; freshAfterUnloadable?: boolean },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; freshAfterUnloadable?: boolean; account?: string; permissionMode?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.cursorHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
+  // The row's mode, as spawn launches it (card #75: a new session starts through resume). Without it
+  // the host falls back to Cursor's default, "force", which auto-approves every tool.
+  const permissionMode = resolvePermissionMode(AgentKind.Cursor, session.permissionMode)
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     extra: prepareExtra({
@@ -195,6 +208,7 @@ export async function resumeCursorSession(
       workdir: session.workdir,
       nativeSessionId: initialSessionId,
       model: session.model,
+      permissionMode,
     }),
   })
   let adapter: CoreAdapter | undefined
@@ -202,6 +216,7 @@ export async function resumeCursorSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -222,6 +237,7 @@ export async function resumeCursorSession(
       initialSessionId,
       persistSessionId: persistNativeId(deps.onCursorSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
+      permissionMode,
     })
     if (initialSessionId) await adapter.resume()
     else await adapter.start()
@@ -285,6 +301,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onCursorSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       cursorHost: ctx.cursorHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

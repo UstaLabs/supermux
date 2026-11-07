@@ -73,7 +73,7 @@ class AppearanceHubTest {
     }
 
     @Test fun the_rail_offers_appearance_and_opens_the_shared_screen() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
                 TestAppShell(app(), ui)
@@ -91,7 +91,7 @@ class AppearanceHubTest {
     }
 
     @Test fun the_rail_offers_check_for_updates() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
                 TestAppShell(app(), ui)

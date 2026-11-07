@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.sample
+import dev.supermux.ui.perf.PerfPanelHost
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -55,6 +58,8 @@ import dev.supermux.ui.chat.fetchImageBytesWithPolicy
 import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
+import dev.supermux.desktop.platform.ScreenWatch
+import dev.supermux.desktop.platform.screenProbe
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.BackgroundQuitNotice
 import dev.supermux.desktop.host.FleetFacts
@@ -133,27 +138,24 @@ import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
 import dev.supermux.desktop.shell.macTitleBarDragRegion
-import dev.supermux.desktop.shell.DesktopWindowDragChrome
-import dev.supermux.ui.shell.LocalWindowDragChrome
 import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
+import dev.supermux.desktop.shell.DesktopTearOff
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
-import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.ui.shell.windows.extraWindowTitle
-import dev.supermux.desktop.shell.LocalMacWindowChrome
-import dev.supermux.desktop.shell.MacTrafficLightsWidth
-import dev.supermux.desktop.shell.rememberMacWindowChrome
-import dev.supermux.desktop.shell.ChromeOs
+import dev.supermux.ui.shell.RAIL_WIDTH
 import dev.supermux.desktop.shell.DesktopMenuBar
 import dev.supermux.desktop.shell.LinuxSidebarChrome
 import dev.supermux.desktop.shell.LinuxTitleBarHeight
 import dev.supermux.desktop.shell.LinuxWindowChrome
 import dev.supermux.desktop.shell.LinuxWindowChromeOverlay
-import dev.supermux.desktop.shell.LocalWindowChromeInsets
+import dev.supermux.desktop.shell.ProvideDesktopWindowChrome
+import dev.supermux.desktop.shell.desktopWindowTitle
+import dev.supermux.desktop.shell.rememberDesktopWindowChrome
 import dev.supermux.desktop.shell.MainMenuEntry
 import dev.supermux.desktop.shell.MainMenuGroup
 import dev.supermux.desktop.shell.MainMenuState
@@ -165,12 +167,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import dev.supermux.desktop.shell.MenuShortcut
-import dev.supermux.desktop.shell.chromeInsets
-import dev.supermux.desktop.shell.rememberLinuxWindowChrome
-import dev.supermux.desktop.shell.rememberWindowsWindowChrome
-import androidx.compose.ui.graphics.luminance
 import dev.supermux.desktop.shell.WindowsTitleBarHeight
-import dev.supermux.desktop.shell.WindowsCaptionButtonsFallbackWidth
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -203,8 +200,10 @@ private val desktopDeps: HostStoreDeps by lazy {
         clientInfo = dev.supermux.net.ClientInfo(
             surface = "desktop",
             version = dev.supermux.desktop.update.DESKTOP_APP_VERSION,
-            os = System.getProperty("os.name").orEmpty().lowercase().let {
-                when { "mac" in it -> "macos"; "win" in it -> "windows"; else -> "linux" }
+            os = when (dev.supermux.desktop.platform.DesktopOs.current) {
+                dev.supermux.desktop.platform.DesktopOs.MACOS -> "macos"
+                dev.supermux.desktop.platform.DesktopOs.WINDOWS -> "windows"
+                dev.supermux.desktop.platform.DesktopOs.LINUX -> "linux"
             },
         ),
     )
@@ -224,6 +223,9 @@ private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : Pai
     override fun loadBaseUrl(): String? = this@asPairingStore.loadBaseUrl()
     override fun saveBaseUrl(url: String) = this@asPairingStore.saveBaseUrl(url)
 }
+
+/** This computer's name on a host it pairs with: onboarding and Add host both offer it. */
+private fun desktopDeviceName(): String = DesktopHostBootstrap.defaultHostName()
 
 /**
  * Desktop's legacy `intro-seen` marker file (contents = the intro version), read ONCE so
@@ -288,7 +290,7 @@ private val desktopBindTts: (
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
-//   SM_SETTINGS=1                 — open the Settings hub on Agents (File ▸ "Settings…"'s SAME
+//   SM_SETTINGS=1                 — open the Settings hub on Providers (File ▸ "Settings…"'s SAME
 //                                  ui.openSettings()) on start, loading real app.agentStatuses()
 //                                  (GET /agents/status, read-only) from the active host          [main]
 //   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
@@ -304,10 +306,6 @@ private val desktopBindTts: (
 //   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
 //                                  on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
-//   SM_ASSISTANT=1                — open the Settings hub on Assistant via ui.openSettings(Assistant)
-//                                  on start, loading real app.assistantLoad() + curatorSettings()
-//                                  (GET /settings/config, /settings/soul, /settings/curator,
-//                                  read-only). Never saves or runs curator. Off by default.      [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
 //                                  /settings/config, /config/voice-glossary, read-only). Never
@@ -368,6 +366,20 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
+    // The hostname lookup can stall ~5 s on macOS: start it now, off the UI thread, so the supervisor and the pairing
+    // screens find it done (#29).
+    DesktopHostBootstrap.prefetchHostName()
+    // Card #54: the launch trace starts here; SUPERMUX_PERF=1 also opens the Load Timings panel
+    // and prints every trace event as it happens.
+    run {
+        val perfOn = System.getenv("SUPERMUX_PERF") == "1"
+        dev.supermux.util.PerfTrace.echo = perfOn
+        if (perfOn) dev.supermux.util.PerfTrace.panelVisible.value = true
+        dev.supermux.util.PerfTrace.milestone(
+            "process.start",
+            "uptimeMs" to java.lang.management.ManagementFactory.getRuntimeMXBean().uptime,
+        )
+    }
     // Let Compose paint over the Swing interop children. Must be set before the
     // first Compose window: the flag is read through a memoizing `lazy`, so
     // setting it later is silently ignored.
@@ -509,6 +521,11 @@ fun main() {
         // Same, for the fleet: the tray reads this computer's session count and the remote host.
         var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
 
+        // Card #86 part 2: a locked screen or sleeping displays are nobody reading, focused window or not.
+        val screenWatch = remember { ScreenWatch(screenProbe()) }
+        LaunchedEffect(screenWatch) { screenWatch.run() }
+        val screenSeen by screenWatch.seen.collectAsState()
+
         // ── Hosting lifecycle (spec: HostSupervisor, Tray, D3) ──
         // The supervisor starts, updates or adopts the local broker on EVERY launch, paired or not.
         // The wizard's own ensure() is serialised with this one by the supervisor.
@@ -539,7 +556,9 @@ fun main() {
         val fleetFacts by remember(pairedFleet) {
             pairedFleet?.hostingFacts(supervisor.hostId, supervisor.prefs.map { it.port }) ?: flowOf(FleetFacts.EMPTY)
         }.collectAsState(FleetFacts.EMPTY)
-        var windowVisible by remember { mutableStateOf(true) }
+        // Dev: SM_START_HIDDEN=1 starts in the tray with the main window closed, as the assistant
+        // overlay is used (and measured: what it costs with nothing else drawing).
+        var windowVisible by remember { mutableStateOf(System.getenv("SM_START_HIDDEN") != "1") }
         var confirmQuit by remember { mutableStateOf<String?>(null) }
         var quitting by remember { mutableStateOf(false) }
         val trayModel = if (quitting) {
@@ -662,8 +681,12 @@ fun main() {
             }
         }
         val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
-        // The extra OS windows, and the shared shell's view of them (cluster G8).
-        val desktopWindows = remember { RegistryShellWindows() }
+        // The extra OS windows, and the shared shell's view of them (cluster G8). Live tear-off is
+        // bound to the registry here, while composing, so that every window's panes — composed
+        // further down this same pass — already find it.
+        val desktopWindows = remember {
+            RegistryShellWindows().also { DesktopWindowHostController.bindRegistry(it.registry) }
+        }
         // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
         // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
         // file is drained ONCE here and then only carries the window bounds. Synchronous for the
@@ -762,8 +785,8 @@ fun main() {
                     val layoutSync = bind.ws.layoutSync
                     tearOutTabLive(
                         desktopWindows.registry, layoutSync.tree, viewId, bind.current.id,
-                    ) { next ->
-                        layoutSync.edit { next }
+                    ) { transform ->
+                        layoutSync.edit(transform)
                         layoutSync.tree
                     }
                     Unit
@@ -808,11 +831,15 @@ fun main() {
                         TrayToggle.BACKGROUND -> supervisor.setBackground(on)
                         TrayToggle.KEEP_AWAKE -> keepAwakeControls.setEnabled(on)
                         TrayToggle.LID_CLOSED -> keepAwakeControls.setLidClosed(on)
+                        TrayToggle.ASSISTANT -> desktopUiPrefs.putAssistantOverlay(on)
                     }
                 }
             },
         )
         val trayPowerShown = if (quitting) TrayPower.NONE else trayPower
+        // #62: the assistant overlay's switch, in the menu bar too (where the overlay can float, once paired).
+        val overlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
+        val trayAssistant = if (dev.supermux.desktop.overlay.desktopOverlaySupported && pairedFleet != null && !quitting) overlayOn else null
         fun onTrayIconClick() {
             windowVisible = true
             // Best-effort "bring the app forward": un-minimizing is portable; actually
@@ -845,7 +872,11 @@ fun main() {
             // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
             val trayIcon = when {
                 isMacOs() -> remember { TrayIcons.painter(mac = true) }
-                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
+                isWindowsOs() -> {
+                    // Off the UI thread, and read again every 30 s: a light/dark switch repaints the glyph.
+                    val light by remember { TrayIcons.taskbarIsLight() }.collectAsState(initial = false)
+                    remember(light) { TrayIcons.painter(mac = false, darkGlyph = light) }
+                }
                 else -> painterResource(TrayIcons.COLOUR)
             }
             Tray(
@@ -860,6 +891,7 @@ fun main() {
                         power = trayPowerShown,
                         dispatcher = trayDispatcher,
                         dot = !isWindowsOs(),
+                        assistant = trayAssistant,
                     )
                 },
             )
@@ -882,18 +914,15 @@ fun main() {
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
             onCloseRequest = { if (trayAvailable) windowVisible = false else requestQuit() },
             visible = windowVisible,
-            // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
-            // title still paints centred over our own UI on runtimes that ignore
-            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text — on
-            // Linux even with the custom chrome: an undecorated window has no title bar to paint
-            // it in, and GNOME's overview and Alt+Tab caption the window with it.
-            title = if (isMacOs()) "" else "supermux",
+            // Empty on macOS, under the chrome's band (DesktopWindowChrome.kt).
+            title = desktopWindowTitle("supermux"),
             icon = painterResource("supermux-icon.png"),
             state = windowState,
             // Linux custom chrome: no system frame; our band, buttons and edge handles replace it.
             undecorated = linuxMoveResize != null,
         ) {
             if (shuttingDown) return@Window
+            dev.supermux.util.PerfTrace.firstMilestone("desktop.window.composing")
 
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
             // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
@@ -906,23 +935,23 @@ fun main() {
             // titlebarAppearsTransparent + hidden title — where the band drag (and the tab-drag
             // collision) remains, since stock AWT has no hit-test hook. AppShell leaves a left
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
-            // No-ops off macOS, but gated anyway to keep it obvious.
-            val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
-            val linuxChrome = linuxMoveResize?.let { rememberLinuxWindowChrome(window, it) }
+            // Every window wears this chrome, the extra windows too (DesktopWindowChrome.kt).
+            val chrome = rememberDesktopWindowChrome(window, linuxMoveResize)
+            val macChrome = chrome.mac
+            val linuxChrome = chrome.linux
             // Windows: JBR custom title bar, content edge to edge, Windows' own caption buttons
             // kept (WindowsWindowChrome.kt). Null: the normal frame and menu bar.
-            val windowsChrome = if (isWindowsOs()) rememberWindowsWindowChrome(window, dark = true) else null
+            val windowsChrome = chrome.windows
             // The band's drag regions under the custom chrome (Linux or Windows).
-            val bandRegions = linuxChrome?.regions ?: windowsChrome?.regions
+            val bandRegions = chrome.bandRegions
             // Every chrome's registry (macOS's too): the whole window's top band drags with it.
-            val chromeRegions = macChrome?.regions ?: bandRegions
+            val chromeRegions = chrome.regions
             if (isMacOs()) LaunchedEffect(window) { installMacTrackpadMagnify(window.rootPane) }
-            if (isMacOs() && macChrome?.titleBar == null) {
-                LaunchedEffect(window) {
-                    window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
-                    window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
-                    window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
-                }
+            // Live tear-off: a tab dragged out of another window can land in this one.
+            DisposableEffect(window) {
+                val mainHostId = desktopWindows.registry.main().id
+                DesktopTearOff.register(mainHostId, window)
+                onDispose { DesktopTearOff.unregister(mainHostId, window) }
             }
             // Paired flag + shell UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
@@ -949,6 +978,7 @@ fun main() {
             // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
             // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
             // button in the sidebar band.
+            val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
                     "File",
@@ -975,7 +1005,6 @@ fun main() {
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
                         MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
-                        MainMenuEntry.Action("Personal Assistants…") { ui.openPersonalAssistants() },
                         MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
@@ -1007,6 +1036,10 @@ fun main() {
                         MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
                             ui.sidebarCollapsed = !ui.sidebarCollapsed
                         },
+                        // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
+                        MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
+                            dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
+                        },
                     ),
                 ),
             )
@@ -1018,22 +1051,10 @@ fun main() {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
-              // The band's drag regions for the whole window (the wizard too), and under the Linux
-              // and Windows custom chrome the controls' room.
-              // Windows: the native caption buttons follow the app theme (light or dark).
-              windowsChrome?.let { wc ->
-                  val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-                  LaunchedEffect(wc, dark) { wc.setDark(dark) }
-              }
-              CompositionLocalProvider(
-                  LocalMacWindowChrome provides chromeRegions,
-                  LocalWindowDragChrome provides DesktopWindowDragChrome,
-                  LocalWindowChromeInsets provides chromeInsets(
-                      ChromeOs.of(),
-                      customChrome = linuxChrome != null || windowsChrome != null,
-                      windowsCaptionButtons = windowsChrome?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
-                  ),
-              ) {
+              // The band's drag regions for the whole window (the wizard too), the controls' room
+              // (here beside the sidebar's own controls), and the OS's controls for a full-window
+              // overlay (the chat's media viewer lays its top bar in their band, clear of them).
+              ProvideDesktopWindowChrome(chrome, sidebarControls = true) {
               Box(
                   Modifier
                       .fillMaxSize()
@@ -1082,7 +1103,12 @@ fun main() {
                         )
                     } else {
                         val pairing = remember {
-                            PairingState(store.asPairingStore(), scope, httpFactory = { cioHttpFactory()(null) })
+                            PairingState(
+                                store.asPairingStore(),
+                                scope,
+                                httpFactory = { cioHttpFactory()(null) },
+                                deviceName = desktopDeviceName(),
+                            )
                         }
                         DisposableEffect(Unit) { onDispose { pairing.close() } }
                         OnboardingScreen(pairing, onPaired = {
@@ -1094,12 +1120,15 @@ fun main() {
                     }
                 } else {
                     val scope = rememberCoroutineScope()
+                    // Card #54: last launch's sessions/workspaces, drawn before the socket opens.
+                    val desktopSnapshots = remember { DesktopHostStores.snapshots() }
                     // The multi-host fleet: one connection per paired host, merged into AppShell.
                     val fleet = remember {
                         FleetStore(
                             hostStore,
                             scope,
                             desktopDeps,
+                            snapshots = desktopSnapshots,
                             appFactory = { url, token, onConn ->
                                 HostStore(
                                     url, token, scope, desktopDeps,
@@ -1112,6 +1141,8 @@ fun main() {
                         )
                     }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
+                    // Keep that cache current: at most every 20 s while the lists change, off the UI thread.
+                    LaunchedEffect(fleet) { keepDesktopSnapshots(fleet, desktopSnapshots) }
                     // Published up to the tray (session count, the remote host's name/reachability).
                     DisposableEffect(fleet) {
                         pairedFleet = fleet
@@ -1722,8 +1753,8 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Agents)
-                            println("[settings] opened the Settings hub (Agents)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers)
+                            println("[settings] opened the Settings hub (Providers)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
@@ -1807,25 +1838,6 @@ fun main() {
                                     "mode=${st?.mode ?: "-"} state=${st?.state ?: "-"} " +
                                     "commit=${st?.commit?.take(8) ?: "-"} " +
                                     "lastChecked=${st?.lastChecked ?: "-"}",
-                            )
-                        }
-                    }
-
-                    // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
-                    // opens Assistant (Identity: soul). Read-only — never saves.
-                    val assistantHook = System.getenv("SM_ASSISTANT") == "1"
-                    if (assistantHook) {
-                        LaunchedEffect(app) {
-                            delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Assistant)
-                            println("[assistant] opened the Settings hub (Assistant)")
-                            val pair = app.assistantLoad()
-                            val curator = app.curatorSettings()
-                            println(
-                                "[assistant] paName=${pair?.first ?: "(load failed)"} " +
-                                    "soulChars=${pair?.second?.length ?: "null"} " +
-                                    "curatorEnabled=${curator?.config?.enabled ?: "(load failed)"} " +
-                                    "nextRun=${curator?.nextRun ?: "—"}",
                             )
                         }
                     }
@@ -1953,9 +1965,6 @@ fun main() {
                         }
                     }
 
-                    // macChrome (JBR title-bar hit test) scoped to the shell only: the drag-region
-                    // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
-                    // onboarding have no chrome in the title-bar band. Null provider = no-op.
                     CompositionLocalProvider(
                         // Settings ▸ Hosting reads the app-wide supervisor (null where the app does not host).
                         LocalHostSupervisor provides supervisor.takeIf { hostsNatively },
@@ -1963,16 +1972,14 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
-                        LocalMacWindowChrome provides (macChrome?.regions ?: bandRegions),
-                        LocalMacTrafficLightsInset provides (
-                            macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
-                        ),
                     ) {
+                        // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
+                        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
                         SupermuxApp(
                             fleet = fleet,
                             ui = ui,
                             notify = notificationController,
-                            appForeground = LocalWindowInfo.current.isWindowFocused,
+                            appForeground = LocalWindowInfo.current.isWindowFocused && screenSeen,
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
                             // sessions. The one genuine per-host choice left in the shell.
                             sessionListMode = SessionListMode.Workspaces,
@@ -1999,7 +2006,7 @@ fun main() {
                                     Box(
                                         Modifier
                                             .align(Alignment.TopStart)
-                                            .width(if (collapsed) 64.dp else sidebarWidth)
+                                            .width(if (collapsed) RAIL_WIDTH else sidebarWidth)
                                             .height(LinuxTitleBarHeight)
                                             .macTitleBarDragRegion("sidebar-band"),
                                     )
@@ -2007,23 +2014,26 @@ fun main() {
                                         menu = mainMenu,
                                         menuState = mainMenuState,
                                         collapsed = collapsed,
-                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        onToggle = { ui.sidebarCollapsed = !collapsed },
                                         modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
                                     )
                                 }
-                                if (isMacOs() && !collapsed) {
-                                    // Native window-drag handle: the empty sidebar band under the
-                                    // traffic lights. Layout-only Box (draws nothing, no pointer
-                                    // input); the toggle punches itself out.
+                                if (isMacOs()) {
+                                    // Native window-drag handle: the empty band under the traffic
+                                    // lights. Layout-only Box (draws nothing, no pointer input);
+                                    // the toggle punches itself out. Collapsed, the tab strip's
+                                    // own drag region takes over past the rail.
                                     Box(
                                         Modifier
                                             .align(Alignment.TopStart)
-                                            .width(sidebarWidth)
+                                            .width(if (collapsed) RAIL_WIDTH else sidebarWidth)
                                             .height(MacTitleBarHeight)
                                             .macTitleBarDragRegion("sidebar-band"),
                                     )
+                                    // The same toggle in both states, in the same place (#57).
                                     MacSidebarToggle(
-                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        collapsed = collapsed,
+                                        onToggle = { ui.sidebarCollapsed = !collapsed },
                                         modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
                                     )
                                 }
@@ -2041,10 +2051,7 @@ fun main() {
                             autoSelect = System.getenv("SM_AUTOSELECT") == "1",
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
-                            defaultDeviceName = remember {
-                                runCatching { java.net.InetAddress.getLocalHost().hostName }
-                                    .getOrNull()?.ifBlank { null } ?: "Desktop host"
-                            },
+                            defaultDeviceName = remember { desktopDeviceName() },
                             settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
                             settingsSection = { section, scope ->
                                 DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
@@ -2063,6 +2070,8 @@ fun main() {
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
                         )
+                        PerfPanelHost()
+                        }
                     }
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
@@ -2101,7 +2110,7 @@ fun main() {
                   onQuit = { confirmQuit = null; quitNow() },
                   onCancelQuit = { cancelQuit() },
               )
-              } // CompositionLocalProvider (Linux chrome)
+              } // ProvideDesktopWindowChrome
             }
             } // ProvideDesktopAdaptiveLocals
 
@@ -2171,7 +2180,8 @@ fun main() {
                     snapshotFlow {
                         extraState.position to extraState.size
                     }.collect { (pos, size) ->
-                        if (pos is WindowPosition.Absolute) {
+                        // A window following a tab drag settles its bounds once, when it ends.
+                        if (pos is WindowPosition.Absolute && !DesktopTearOff.isFollowing(host.id)) {
                             desktopWindows.registry.updateBounds(
                                 host.id,
                                 WindowBounds(
@@ -2186,27 +2196,70 @@ fun main() {
                 }
                 Window(
                     onCloseRequest = { DesktopWindowHostController.release(host.id) },
-                    title = extraBind?.let {
-                        extraWindowTitle(
-                            it.current.name,
-                            ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
-                            it.ws.viewsById,
-                            it.sessionNames,
-                        )
-                    } ?: "supermux",
+                    // Hidden while a tab it carries is dragged over another window (live tear-off).
+                    visible = host.id !in DesktopTearOff.hidden,
+                    title = desktopWindowTitle(
+                        extraBind?.let {
+                            extraWindowTitle(
+                                it.current.name,
+                                ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
+                                it.ws.viewsById,
+                                it.sessionNames,
+                            )
+                        } ?: "supermux",
+                    ),
                     icon = painterResource("supermux-icon.png"),
                     state = extraState,
+                    // The main window's chrome, not the system's title bar: on Linux that means no frame.
+                    undecorated = linuxMoveResize != null,
                 ) {
+                        // The main window's chrome, minus the sidebar's controls: the top-left strip
+                        // leaves room for the traffic lights, the top-right one for the window
+                        // buttons, and the band drags the window (DesktopWindowChrome.kt).
+                        val chrome = rememberDesktopWindowChrome(window, linuxMoveResize)
+                        // Live tear-off finds, moves and hides this window by its host id.
+                        DisposableEffect(host.id, window) {
+                            DesktopTearOff.register(host.id, window)
+                            onDispose { DesktopTearOff.unregister(host.id, window) }
+                        }
                         ProvideDesktopAdaptiveLocals {
                             DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
-                                if (extraBind != null) {
-                                    DetachedWorkspaceWindow(host, extraBind, ui)
+                                ProvideDesktopWindowChrome(chrome, sidebarControls = false) {
+                                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                                        if (extraBind != null) {
+                                            DetachedWorkspaceWindow(host, extraBind, ui)
+                                        }
+                                        // Last, so the buttons and edge handles sit over the panes.
+                                        chrome.linux?.let { LinuxWindowChromeOverlay(it) }
+                                    }
                                 }
                             }
                         }
                 }
             }
         }
+        }
+
+        // #62: the assistant overlay, the Agent floating over every app, while its switch is on.
+        // Here, beside the main window and not inside it: a window's content recomposes only on its
+        // own frames, and a window hidden in the tray draws none, so the overlay would never show
+        // its head or bubble while supermux sits in the tray.
+        val assistantOverlayOn by desktopUiPrefs.assistantOverlay.collectAsState(false)
+        val overlayFleet = pairedFleet
+        if (!shuttingDown && assistantOverlayOn && overlayFleet != null && dev.supermux.desktop.overlay.desktopOverlaySupported) {
+            dev.supermux.desktop.overlay.DesktopAssistantOverlay(
+                overlayFleet,
+                desktopUiPrefs,
+                themed = { content ->
+                    ProvideDesktopAdaptiveLocals {
+                        DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) { content() }
+                    }
+                },
+                onOpenInApp = { id ->
+                    ui.selectedId = id
+                    showWindow()
+                },
+            )
         }
         }
     } finally {
@@ -2310,3 +2363,44 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
 /** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
 internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
     if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null
+
+/**
+ * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's
+ * offline cache, so the next launch draws its sidebar before the socket opens. Sampled (at most one
+ * write per 20 s while things change) and written off the UI thread.
+ */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
+private suspend fun keepDesktopSnapshots(fleet: FleetStore, cache: dev.supermux.host.HostSnapshotStore) {
+    combine(fleet.sessions, fleet.workspaces, fleet.projects) { s, w, p -> Triple(s, w, p) }
+        .sample(20_000)
+        .collect { (sessions, workspaces, projects) ->
+            // Not while the archived rows are loading: the cache needs them to leave out archived-only projects.
+            if (sessions.isEmpty() || fleet.archivedPending.value) return@collect
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val owners = fleet.sessionHost.value
+                val wsOwners = fleet.workspaceHost.value
+                val tails = fleet.messages.value
+                // The live sidebar hides a project whose workspaces are all archived; the cache has no
+                // archived rows to tell, so it leaves those projects out instead of drawing them empty.
+                val liveProjects = workspaces.mapNotNull { it.projectId }.toSet()
+                val archivedOnly = fleet.archivedWorkspaces.value.mapNotNull { it.projectId }.toSet() - liveProjects
+                val now = System.currentTimeMillis()
+                synchronized(cache) {
+                    for (host in fleet.store.list()) {
+                        val mine = sessions.filter { owners[it.id] == host.recordId }
+                        if (mine.isEmpty()) continue
+                        cache.replace(
+                            host.recordId,
+                            mine,
+                            now,
+                            host.version,
+                            workspaces = workspaces.filter { wsOwners[it.id] == host.recordId },
+                            projects = projects.filter { it.hostId == host.recordId && it.project.id !in archivedOnly }.map { it.project },
+                            lastMessages = mine.mapNotNull { s -> tails[s.id]?.lastOrNull()?.let { s.id to it } }.toMap(),
+                        )
+                    }
+                }
+            }
+        }
+}
+

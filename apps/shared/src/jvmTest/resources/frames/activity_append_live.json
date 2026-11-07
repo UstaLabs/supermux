@@ -1,0 +1,12 @@
+{
+  "type": "activity_append",
+  "session": "550e8400-e29b-41d4-a716-446655440000",
+  "event": {
+    "ts": "2026-11-05T09:29:58.000Z",
+    "kind": "reasoning",
+    "title": "Thinking",
+    "detail": "Planning the table.",
+    "stream": "t7c1aa04be92",
+    "seq": 7
+  }
+}

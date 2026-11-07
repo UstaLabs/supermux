@@ -11,8 +11,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import dev.supermux.state.FleetStore
+import dev.supermux.state.LiveReply
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** [ChatState] collected off a [FleetStore] for one session. */
 @Composable
@@ -25,6 +28,11 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val commandsResolved by fleet.commandsResolved.collectAsState()
     val bgTasks by fleet.bgTasks.collectAsState()
     val subagents by fleet.subagents.collectAsState()
+    val councils by fleet.councils.collectAsState()
+    val sessions by fleet.sessions.collectAsState()
+    // Card #76: the reply being written, from the host that owns the chat (as the one-host form reads it).
+    val liveMap by (remember(fleet, sessionId) { fleet.appFor(sessionId) }?.liveReplies ?: NoLiveReplies).collectAsState()
+    val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     // Gate the holder READ on the capability: a host built without a WalkthroughSeam has none.
     val walkthrough = if (LocalPlatform.current.caps.walkthrough) {
         fleet.walkthroughState<WalkthroughState>(sessionId)
@@ -42,8 +50,15 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         walkthroughUnread = walkthrough?.unreadReplies ?: 0,
         walkthroughUnreadStepId = walkthrough?.unreadStepId,
         subagents = subagents[sessionId].orEmpty(),
+        councils = councils[sessionId].orEmpty(),
+        councilActivity = councilActivityOf(councils[sessionId].orEmpty(), agentState, activity),
+        listedSessions = listedSessions,
+        live = liveMap[sessionId].orEmpty(),
     )
 }
+
+/** A chat whose host isn't known yet has nothing being written. */
+private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStateFlow(emptyMap())
 
 /** [ChatActions] wired to a [FleetStore] for one session. */
 @Composable
@@ -71,6 +86,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
                 loadVoiceCaps = { fleet.voiceConfig(sessionId)?.toVoiceCaps() },
                 checkEdit = { text, newWords -> fleet.transcribeEdit(sessionId, text, newWords) },
                 transcribeWarm = { id -> fleet.transcribeWarm(sessionId, id) },
+                openDictationStream = { id, session -> fleet.openDictationStream(sessionId, id, session) },
                 gitFetch = { fleet.gitFetch(sessionId) },
                 gitPull = { fleet.gitPull(sessionId) },
                 gitPush = { fleet.gitPush(sessionId) },
@@ -89,6 +105,8 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             setPermissionMode = { fleet.setPermissionMode(sessionId, it) },
             messageSubagent = { id, text -> fleet.messageSubagent(sessionId, id, text) },
             stopSubagent = { id -> fleet.stopSubagent(sessionId, id) },
+            // A council lives on the caller's host: route by the caller.
+            endCouncil = { id -> fleet.appFor(sessionId)?.endCouncil(id) },
             accounts = fleet.appFor(sessionId)?.accounts ?: kotlinx.coroutines.flow.flowOf(null),
             ensureAccounts = { fleet.appFor(sessionId)?.ensureAccounts() },
             setAccount = { id ->

@@ -28,7 +28,8 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BlobText
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
-import dev.supermux.util.StartupTrace
+import dev.supermux.util.PerfTrace
+import dev.supermux.util.perfClientLogs
 import dev.supermux.net.ChunkSource
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.media.RangeDownload
@@ -132,12 +133,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -195,10 +199,14 @@ class HostStore(
     internal val projectionsActive: Boolean get() = projectionJob.isActive
 
     private val http = deps.httpFactory(null)
+    /** Card #76: the user's "Show replies as they're written" (on unless turned off), as the next subscribe sends it. */
+    private val liveRepliesWanted = MutableStateFlow(true)
     val client = BrokerClient(
         baseUrl, token, http,
         onConnectionChange = onConnectionChange,
-        subscribeFrame = { subscribeFrameJson(viewingSessionIds) },
+        subscribeFrame = { req ->
+            subscribeFrameJson(viewingSessionIds, trace = PerfTrace.launchId, req = req, streams = liveRepliesWanted.value && deps.clientInfo?.surface in LIVE_REPLY_SURFACES)
+        },
         clientInfo = deps.clientInfo,
     )
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
@@ -231,6 +239,11 @@ class HostStore(
     // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
     private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
     private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
+    // Session starts (card #75): POST /sessions answers once the worktree is made and the agent is up,
+    // and CIO's 15 s default cut that short on desktop and Android. Its own client where the platform's
+    // deadline is too short ([SESSION_START_TIMEOUT_MS]); elsewhere [api].
+    private val httpStart = lazy { SESSION_START_TIMEOUT_MS?.let { deps.httpFactory(it) } }
+    private val apiStart by lazy { apiOverride ?: httpStart.value?.let { BrokerApi(baseUrl, token, it) } ?: api }
 
     /** This host's record id in the fleet, set by [FleetStore] when it dials; null = no media cache. */
     @Volatile private var mediaHost: String? = null
@@ -287,11 +300,17 @@ class HostStore(
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
     /** Session ids of chats currently on screen (one per visible group), or empty. */
-    private var viewingSessionIds: List<String> = emptyList()
+    @Volatile private var viewingSessionIds: List<String> = emptyList()
     /** True when the window is foregrounded on the session list (no chat selected). */
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
+    /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
+    @Volatile private var livePinned: List<String> = emptyList()
+    /** The optional frames the broker said it takes (its last snapshot's `accepts`): nothing until it says. */
+    @Volatile private var brokerAccepts: Set<String> = emptySet()
+    /** A broker answered "unknown frame type" on this store already: said once in the log, never to the user. */
+    @Volatile private var unknownFrameLogged = false
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
@@ -302,6 +321,9 @@ class HostStore(
         _state.map { it.sessions }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val workspaces: StateFlow<List<WorkspaceDto>> =
         _state.map { it.workspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
+    /** See [HostState.archivedPending]. */
+    val archivedPending: StateFlow<Boolean> =
+        _state.map { it.archivedPending }.stateIn(projectionScope, SharingStarted.Eagerly, false)
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> =
         _state.map { it.archivedWorkspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val messages: StateFlow<Map<String, List<LogEntry>>> =
@@ -316,8 +338,13 @@ class HostStore(
         _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val permissionModes: StateFlow<Map<String, List<dev.supermux.proto.PermissionModeInfo>>> =
         _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val muxHome: StateFlow<String?> =
+        _state.map { it.muxHome }.stateIn(projectionScope, SharingStarted.Eagerly, null)
+    /** The broker host's home folder: each host's own, where `inferHomeDir` guesses one from a path. */
+    val homeDir: StateFlow<String?> =
+        _state.map { it.homeDir }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val agentState: StateFlow<Map<String, AgentStatus>> =
-        _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.agentStateWithAgents() }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
         _state.map { it.agentErrors }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
@@ -325,12 +352,21 @@ class HostStore(
     /** Session id → subagents (running + recent finished), ordered by start. */
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> =
         _state.map { it.subagents }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Caller session id → the councils it called (spec §5), ordered by creation. */
+    val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> =
+        _state.map { it.councils }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Card #76: session → its live reply / thinking (only the chats on screen get any). */
+    val liveReplies: StateFlow<Map<String, List<LiveReply>>> =
+        _state.map { it.live }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     /** Chat messages written while the socket was down, in order; sent after the next snapshot. */
     private val outbox = MutableStateFlow<List<ClientFrame.Send>>(emptyList())
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
         _state.map { it.commands }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    /** Sessions whose chat holds its whole history page and extras (card #54's "fully shown"). */
+    val loadedChats: StateFlow<Set<String>> =
+        _state.map { it.completeLogs intersect it.completeExtras }.stateIn(projectionScope, SharingStarted.Eagerly, emptySet())
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
         _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
@@ -476,16 +512,57 @@ class HostStore(
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
     val accountLogins: SharedFlow<AccountLoginStateDto> = _accountLogins.asSharedFlow()
 
+    private val _agentsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every `agents_changed` frame: the Agent list is stale, reload it. */
+    val agentsChanged: SharedFlow<Unit> = _agentsChanged.asSharedFlow()
+
+    private val _resynced = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    /** Every snapshot (= connect or reconnect): anything fetched before it may be stale. */
+    val resynced: SharedFlow<Unit> = _resynced.asSharedFlow()
+
+    /** Reload the Agent list: on `agents_changed`, and after a reconnect (frames sent while the
+     *  socket was down are lost, so a change made then would otherwise never show). */
+    val agentsReload: Flow<Unit> = merge(agentsChanged, resynced)
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
     init {
-        StartupTrace.mark("host.init")
+        PerfTrace.milestone("host.init", "host" to baseUrl)
         attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
-            stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
-            stateScope.launch { client.run() }
+            // The socket opens only once this collector listens: `frames` keeps no replay, so a
+            // snapshot that arrived while the caller's (UI) thread was still busy — before it first
+            // ran this coroutine — was dropped, and the app showed no sessions until a reconnect
+            // (card #76; HostStoreStartupRaceTest).
+            stateScope.launch {
+                client.frames
+                    // Off the UI thread: on the caller's (UI) dispatcher the connect waited for the
+                    // first, heavy frame to finish (~0.9 s at launch on desktop, card #54), and every
+                    // frame — the 2.3 MB snapshot included — was decoded there. Frames still reduce
+                    // in [stateScope].
+                    .onSubscription {
+                        stateScope.launch(Dispatchers.Default) {
+                            // The first subscribe already carries the stored choice: a device that turned live
+                            // replies off never asks for them, not even once before a resubscribe.
+                            liveRepliesWanted.value = liveRepliesOn(deps.settings.string(SettingsKeys.LIVE_REPLIES).first())
+                            client.run()
+                        }
+                    }
+                    .collect { guarded("reduce") { reduce(it) } }
+            }
+            // Card #76: turning live replies on or off in Settings applies at once: the socket reconnects and its
+            // subscribe asks (or no longer asks); the snapshot that follows carries live text only if it asked.
+            stateScope.launch {
+                deps.settings.string(SettingsKeys.LIVE_REPLIES).collect { stored ->
+                    val on = liveRepliesOn(stored)
+                    if (on != liveRepliesWanted.value) {
+                        liveRepliesWanted.value = on
+                        client.resubscribe()
+                    }
+                }
+            }
             ensureViewingHeartbeat()
         }
     }
@@ -534,33 +611,120 @@ class HostStore(
 
     /** Fold one inbound frame into HostState plus side effects. Public for reducer tests. */
     fun reduce(frame: ServerFrame) {
-        val start = StartupTrace.elapsedMs()
+        val start = PerfTrace.elapsedMicros()
         _state.update { reduceHostFrame(it, frame) }
+        val micros = PerfTrace.elapsedMicros() - start
+        PerfTrace.countReduce(frame::class.simpleName ?: "?", micros)
+        if (PerfTrace.startActive) markStartFrame(frame)
         if (frame is ServerFrame.Snapshot) {
-            StartupTrace.mark("state.snapshot.reduced", "ms=${StartupTrace.elapsedMs() - start} sessions=${frame.sessions.size}")
+            PerfTrace.milestone(
+                "state.snapshot.reduced",
+                "ms" to micros / 1000,
+                "sessions" to frame.sessions.size,
+                "workspaces" to frame.workspaces.size,
+                "archivedWorkspaces" to frame.archivedWorkspaces.size,
+                "host" to baseUrl,
+            )
         }
         onFrameEffects(frame)
+    }
+
+    /** Card #75: the first frames of the session a launcher Send is creating, under its start trace. */
+    private fun markStartFrame(frame: ServerFrame) {
+        when (frame) {
+            is ServerFrame.SessionAdded -> PerfTrace.startTraceFor(frame.session.id, frame.session.workdir, frame.session.repo_root)
+                ?.let { PerfTrace.once("start.session_added", "session" to frame.session.id, trace = it) }
+            is ServerFrame.MessageAppend -> PerfTrace.startTraceFor(frame.session)?.let { trace ->
+                when {
+                    frame.entry.direction.startsWith("in") -> PerfTrace.once("start.message.echoed", trace = trace)
+                    frame.entry.direction == "outbound" && frame.entry.op == "reply" ->
+                        PerfTrace.once("start.reply.arrived", "chars" to frame.entry.text?.length, trace = trace)
+                }
+            }
+            is ServerFrame.AgentState -> if (frame.working) {
+                // Card #75: "starting" is the session being woken; the agent is working once it says so.
+                val mark = if (frame.detail == "starting") "start.agent.starting" else "start.agent.working"
+                PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once(mark, "detail" to frame.detail, trace = it) }
+            }
+            is ServerFrame.ActivityAppend -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.activity", trace = it) }
+            is ServerFrame.CommandsChanged -> PerfTrace.startTraceFor(frame.session)?.let { PerfTrace.once("start.commands", "count" to frame.commands.size, trace = it) }
+            else -> {}
+        }
+    }
+
+    // ── Load-time trace shipping (card #54) ─────────────────────────────────────────────────────
+    // A broker with tracing on says so in its snapshot; from then on this host gets every trace
+    // event the app records (launch, chat opens, requests, per-type frame stats), every 2 s.
+
+    private var perfJob: Job? = null
+    private var perfCursor = 0L
+
+    private fun setPerfShipping(on: Boolean) {
+        PerfTrace.setShipping(baseUrl, on)
+        if (!on) {
+            perfJob?.cancel()
+            perfJob = null
+            return
+        }
+        if (perfJob?.isActive == true) return
+        perfJob = stateScope.launch {
+            var ticks = 0
+            while (isActive) {
+                if (++ticks % PERF_STATS_EVERY == 0) {
+                    PerfTrace.takeStats()?.let { stats -> PerfTrace.event("client.stats", *stats.toList().toTypedArray()) }
+                }
+                shipPerf()
+                delay(PERF_SHIP_MS)
+            }
+        }
+    }
+
+    private suspend fun shipPerf() {
+        while (true) {
+            val events = PerfTrace.since(perfCursor, max = 300)
+            if (events.isEmpty()) return
+            val meta = mapOf(
+                "t" to PerfTrace.elapsedMs(),
+                "launch" to PerfTrace.launchId,
+                "surface" to deps.clientInfo?.surface,
+                "version" to deps.clientInfo?.version,
+                "host" to baseUrl,
+            )
+            if (!trySendFrame(perfClientLogs(events, meta))) return
+            perfCursor = events.last().seq
+        }
     }
 
     private fun onFrameEffects(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Snapshot -> {
+                setPerfShipping(frame.perf)
                 _onboarded.value = frame.onboarded
                 noChangesRoute = false
                 lastSentViewing = null
                 sendViewingIfChanged()
+                brokerAccepts = frame.accepts.toSet()
+                // The broker keeps live pins per socket: a new socket is told again (if it takes them at all).
+                if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
+                // Anything may have been archived or resumed while we were away (card #54: this
+                // replaced the shell's refetch on every change to the live list).
+                refreshArchived("snapshot")
+                if (frame.archivedLazy) refreshArchivedWorkspaces()
                 fileSystem.onReconnect()
                 flushOutbox()
+                _resynced.tryEmit(Unit)
             }
             is ServerFrame.FsDir, is ServerFrame.FsGone, is ServerFrame.FsErr -> fileSystem.onFrame(frame)
             ServerFrame.AgentModelsChanged -> refreshAgentModels()
             is ServerFrame.SessionRemoved -> {
                 walkthroughs.remove(frame.id)
-                refreshArchived()
+                refreshArchived("session_removed")
             }
+            // A resumed session leaves the archive.
+            is ServerFrame.SessionAdded -> if (_archivedSessions.value.any { it.id == frame.session.id }) refreshArchived("resumed")
             is ServerFrame.MessageAppend -> {
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
@@ -577,11 +741,17 @@ class HostStore(
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
+            ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
             is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
+            // An older broker didn't know a frame this app sent: said once in the log (the reducer shows the user nothing).
+            is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
+                unknownFrameLogged = true
+                println("[HostStore] the broker answered \"$UNKNOWN_FRAME_TYPE\": it is older than this app; carrying on without it")
+            }
             else -> {}
         }
     }
@@ -693,6 +863,26 @@ class HostStore(
     }
 
     /**
+     * Card #62: ask for [sessionIds]' live text without claiming they are on screen. The assistant overlay floats an
+     * Agent's reply over other apps as it is written; unlike [updateViewing] this is presence for nothing, so nothing
+     * is read and pushes still go out. Replaces the last set, and is sent again on every reconnect. Only an app that
+     * asked for live replies (Settings) gets any; an older broker ignores it.
+     */
+    fun pinLive(sessionIds: Collection<String>) {
+        val next = sessionIds.distinct()
+        if (next == livePinned) return
+        livePinned = next
+        sendLivePins()
+    }
+
+    private fun sendLivePins() {
+        // An older broker answers `live` with "unknown frame type": it gets none, and the overlay shows stored replies.
+        if (LIVE_FRAME !in brokerAccepts) return
+        val frame = ClientFrame.Live(livePinned)
+        stateScope.launch { runApi("live pins") { sendFrame(frame) } }
+    }
+
+    /**
      * Re-send the last viewing frame(s) verbatim, without changing any state.
      *
      * The broker forgets a device's viewing entry 5 minutes after it last heard about it
@@ -737,12 +927,13 @@ class HostStore(
     private fun nowIso(): String = deps.nowIso()
 
     /** Append an optimistic outbound bubble so the user's message shows instantly, before the
-     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in the
-     *  MessageAppend reducer. Only echoes when there is text (attachments-only stay quiet). */
-    fun appendLocalEcho(sessionId: String, text: String) {
+     *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Replaced in the
+     *  MessageAppend reducer by the broker's copy of the message sent as [clientMessageId] (card #75).
+     *  Only echoes when there is text (attachments-only stay quiet). */
+    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
-            id = "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = clientMessageId?.let(::localEchoId) ?: "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
@@ -774,7 +965,7 @@ class HostStore(
         val queuedSessions = queued.map { it.session }.toSet()
         _pendingSend.update { it intersect queuedSessions }
         if (queued.isEmpty()) return
-        queued.forEach { appendLocalEcho(it.session, it.args.text.trim()) }
+        queued.forEach { appendLocalEcho(it.session, it.args.text.trim(), it.clientMessageId) }
         stateScope.launch { queued.forEach { deliverOrQueue(it) } }
     }
 
@@ -783,9 +974,12 @@ class HostStore(
      *  after the reconnect snapshot. */
     fun sendMessage(sessionId: String, text: String, attachments: List<String> = emptyList()) {
         if (text.isBlank() && attachments.isEmpty()) return
-        appendLocalEcho(sessionId, text.trim())
+        // Card #75: one id for this message wherever it goes: the frame, a retry after a reconnect,
+        // the broker's log and dedupe, and the local copy the broker's copy replaces.
+        val clientMessageId = newClientMessageId()
+        appendLocalEcho(sessionId, text.trim(), clientMessageId)
         markPendingSend(sessionId)
-        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }))
+        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }), clientMessageId = clientMessageId)
         stateScope.launch { deliverOrQueue(frame) }
     }
 
@@ -816,7 +1010,7 @@ class HostStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         stateScope.launch {
             runApi("spawn") {
-                api.spawn(
+                apiStart.spawn(
                     SpawnRequest(
                         workdir = workdir.trim(),
                         name = name?.trim()?.ifBlank { null },
@@ -827,10 +1021,6 @@ class HostStore(
                 )
             }
         }
-    }
-
-    fun saveName(n: String) {
-        stateScope.launch { runApi("saveName") { api.putConfig(n) } }
     }
 
     fun setActiveView(workspaceId: String, viewId: String) {
@@ -846,8 +1036,25 @@ class HostStore(
         }
     }
 
-    fun refreshArchived() {
-        stateScope.launch {
+    private var archivedJob: Job? = null
+    private var archivedWorkspacesJob: Job? = null
+
+    /** GET /archived-workspaces?slim=1 after a `lazyArchived` snapshot (card #54). */
+    private fun refreshArchivedWorkspaces() {
+        archivedWorkspacesJob?.cancel()
+        archivedWorkspacesJob = stateScope.launch {
+            val rows = runApi("archivedWorkspaces") { api.listArchivedWorkspaces(slim = true) }
+            // A failed fetch must not hide empty projects for good: stop waiting either way.
+            _state.update { it.copy(archivedWorkspaces = rows ?: it.archivedWorkspaces, archivedPending = false) }
+            PerfTrace.event("archived.workspaces.loaded", "rows" to (rows?.size ?: -1), "host" to baseUrl)
+        }
+    }
+
+    /** GET /archived-sessions; a newer refresh supersedes one still in flight. */
+    fun refreshArchived(reason: String = "asked") {
+        PerfTrace.event("archived.refresh", "reason" to reason, "host" to baseUrl)
+        archivedJob?.cancel()
+        archivedJob = stateScope.launch {
             _archivedSessions.value = runApi("archived") { api.archived() } ?: emptyList()
         }
     }
@@ -916,6 +1123,11 @@ class HostStore(
             runApi("kill") { api.kill(id) }
             onDone()
         }
+    }
+
+    /** Stop council: the broker ends the council and stops its members (a `council_update` follows). */
+    fun endCouncil(id: String) {
+        stateScope.launch { runApi("endCouncil") { api.endCouncil(id) } }
     }
 
     // ── Git ops + proxies (M4c; mirrors AppViewModel.gitFetch/gitPush/gitPull/gitPublish:566-569
@@ -1068,33 +1280,8 @@ class HostStore(
         }
     }
 
-    // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
-    // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel
-    // assistantLoad/assistantSave/curatorSettings/saveCurator/runCuratorNow.
-
-    /**
-     * Load PA name + soul.md together.
-     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
-     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
-     */
-    suspend fun assistantLoad(): Pair<String, String>? {
-        val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
-        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
-        return cfg.paName to soul
-    }
-
-    /**
-     * PUT /settings/config {paName} then PUT /settings/soul.
-     * Returns null on full success; a human-readable error when either write fails
-     * (config failure is reported before soul is attempted).
-     */
-    suspend fun assistantSave(paName: String, soul: String): String? {
-        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
-        if (!configOk) return "Couldn't save PA name — check connection and try again"
-        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
-        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
-        return null
-    }
+    // ── Curator (desktop-parity Task 5) ─────────────────────────────────────────────────────────
+    // Backs the Curator section. Mirrors AppViewModel curatorSettings/saveCurator/runCuratorNow.
 
     /** GET /settings/curator. Null on failure. */
     suspend fun curatorSettings(): CuratorSettingsResponse? =
@@ -1674,7 +1861,7 @@ class HostStore(
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
-        api.spawn(
+        apiStart.spawn(
             dev.supermux.net.SpawnRequest(
                 workdir = workdir,
                 name = name?.ifBlank { null },
@@ -1745,20 +1932,66 @@ class HostStore(
         val st = _state.value
         if (chatLoaded(st, sessionId)) return
         if (sessionId in logFetches.getAndUpdate { it + sessionId }) return
-        val start = StartupTrace.elapsedMs()
+        // Card #54: a fetch the user's chat open caused runs under that open's trace; the rest
+        // (the startup prefetch, a reconnect) under the launch's.
+        val chatTrace = PerfTrace.chatTrace(sessionId)
+        val trace = chatTrace ?: PerfTrace.launchId
+        val needLogs = sessionId !in st.completeLogs
+        val needExtras = sessionId !in st.completeExtras
+        val kind = if (chatTrace != null) "open" else "prefetch"
+        PerfTrace.event("chat.fetch", "session" to sessionId, "logs" to needLogs, "extras" to needExtras, "kind" to kind, trace = trace)
+        val start = PerfTrace.elapsedMs()
         try {
             coroutineScope {
-                if (sessionId !in st.completeLogs) launch { loadFullLog(sessionId) }
-                if (sessionId !in st.completeExtras) launch { loadExtras(sessionId) }
+                if (needLogs) launch { loadFullLog(sessionId, trace) }
+                if (needExtras) launch { loadExtras(sessionId, trace) }
             }
         } finally {
             logFetches.update { it - sessionId }
-            StartupTrace.mark("chat.loaded", "session=${sessionId.take(8)} ms=${StartupTrace.elapsedMs() - start}")
+            val now = _state.value
+            PerfTrace.event(
+                "chat.loaded",
+                "session" to sessionId,
+                "kind" to kind,
+                "ms" to PerfTrace.elapsedMs() - start,
+                "messages" to (now.messages[sessionId]?.size ?: 0),
+                "activity" to (now.activity[sessionId]?.size ?: 0),
+                trace = trace,
+            )
         }
     }
 
-    private suspend fun loadFullLog(sessionId: String) {
-        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId) } ?: return
+    /**
+     * Card #54: draw this host's last-known sessions, workspaces and projects before its socket
+     * opens (the desktop has nothing else to show for the ~5 s a launch takes). Only into an empty,
+     * not-yet-synced store; the first live snapshot replaces every part of it.
+     */
+    fun seedFromCache(snap: dev.supermux.host.HostSnapshot) {
+        var seeded = false
+        _state.update { st ->
+            if (client.sync.synced || st.sessions.isNotEmpty() || st.workspaces.isNotEmpty()) {
+                st
+            } else {
+                seeded = true
+                st.copy(
+                    sessions = snap.sessions,
+                    workspaces = snap.workspaces,
+                    projects = snap.projects,
+                    projectCatalogKnown = snap.projects.isNotEmpty(),
+                    messages = snap.lastMessages.mapValues { listOf(it.value) },
+                )
+            }
+        }
+        if (seeded) {
+            PerfTrace.milestone("cache.seeded", "sessions" to snap.sessions.size, "workspaces" to snap.workspaces.size, "host" to baseUrl)
+        }
+    }
+
+    /** Has this session's chat everything it shows (history page + activity/commands)? */
+    fun chatLoaded(sessionId: String): Boolean = chatLoaded(_state.value, sessionId)
+
+    private suspend fun loadFullLog(sessionId: String, trace: String? = null) {
+        val fetched = runApi("loadFullLog") { api.archivedLogs(sessionId, trace) } ?: return
         // Live MessageAppends / optimistic sends may have landed while the fetch was in flight.
         _state.update {
             it.copy(
@@ -1768,14 +2001,18 @@ class HostStore(
         }
     }
 
-    private suspend fun loadExtras(sessionId: String) {
-        val fetched = runApi("loadExtras") { api.chatExtras(sessionId) } ?: return
+    private suspend fun loadExtras(sessionId: String, trace: String? = null) {
+        val fetched = runApi("loadExtras") { api.chatExtras(sessionId, trace) } ?: return
         _state.update {
             it.copy(
                 activity = it.activity +
                     (sessionId to mergeFetchedActivity(fetched.activity, it.activity[sessionId].orEmpty())),
                 commands = it.commands + (sessionId to fetched.commands),
                 commandsResolved = it.commandsResolved + (sessionId to fetched.commandsResolved),
+                // A `slimSubagents` snapshot sent only the running ones; null from an older broker.
+                subagents = fetched.subagents?.let { full ->
+                    it.subagents + (sessionId to mergeFetchedSubagents(full, it.subagents[sessionId].orEmpty()))
+                } ?: it.subagents,
                 completeExtras = it.completeExtras + sessionId,
             )
         }
@@ -1835,15 +2072,24 @@ class HostStore(
     suspend fun redeemClaudeReset(): ClaudeResetResult? =
         runApi("redeemClaudeReset") { api.redeemClaudeReset() }
 
-    suspend fun personalAssistants(): List<PADto> =
-        runApi("personalAssistants") { api.listPAs() } ?: emptyList()
+    /** GET /api/pas. A refusal or transport failure is a [AccountResult.Failed], never an empty list. */
+    suspend fun listAgents(): AccountResult<List<PADto>> = accountCall { api.listPAs() }
 
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        runApi("createPersonalAssistant") { api.createPA(name, agent, focusText = focus); true } ?: false
+    /** POST /api/pas. [model] null = the provider's default. */
+    suspend fun createAgent(name: String, provider: String, model: String?, avatar: String? = null, effort: String? = null): AccountResult<Unit> =
+        accountCall { api.createPA(name, provider, model, avatar, effort) }
 
-    suspend fun killPersonalAssistant(id: String) {
-        runApi("killPersonalAssistant") { api.kill(id); true }
-    }
+    /** PUT /agents/<id>/avatar — the sidebar's "Change character…". */
+    suspend fun setAgentAvatar(id: String, json: String): AccountResult<Unit> = accountCall { api.putAgentAvatar(id, json) }
+
+    /** DELETE /sessions/<id> for an Agent. */
+    suspend fun killAgent(id: String): AccountResult<Unit> = accountCall { api.kill(id) }
+
+    /** PATCH /api/pas/<id> {isDefault:true}. */
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> = accountCall { api.updatePA(id, isDefault = true) }
+
+    /** PATCH /api/pas/<id> {name}. The Agent keeps its folder and memory (keyed by id). */
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> = accountCall { api.updatePA(id, name = name) }
 
     // ── Agents settings (desktop-parity Task 1) ───────────────────────────────────────────
     // Backs the Agents section of the Settings hub. Mirrors AppViewModel.agent* +
@@ -2361,6 +2607,21 @@ class HostStore(
     suspend fun transcribeEdit(text: String, newWords: String): String? =
         runApi("transcribeEdit") { apiDictate.transcribeEdit(text, newWords) }?.text
 
+    /**
+     * Live dictation as a stream (`/transcribe/stream`, see [dev.supermux.net.DictationStreamClient]):
+     * runs [session] with the open socket and closes it when [session] returns. THROWS when the
+     * socket cannot be opened or breaks — the dictation then falls back to uploading its recording.
+     */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) = dev.supermux.net.DictationStreamClient(baseUrl, token, http).open(dictationId, sessionId, session)
+
+    /** The phone's poster for a clip it just uploaded (POST /files/<clip>/poster). False on any failure. */
+    suspend fun linkPoster(clipFileId: String, posterFileId: String): Boolean =
+        runApi("linkPoster") { api.linkPoster(clipFileId, posterFileId) } ?: false
+
     /** GET /files/<id> — raw attachment bytes for chat media download / open. Null on any failure. */
     suspend fun fileBytes(fileId: String): ByteArray? =
         runApi("fileBytes") {
@@ -2428,7 +2689,7 @@ class HostStore(
         firstMessage: String? = null,
         viewId: String? = null,
         permissionMode: String? = null,
-        /** Account id for [agent] (GET /accounts); null = its system account. */
+        /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
@@ -2465,24 +2726,34 @@ class HostStore(
         /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
         viewId: String? = null,
         permissionMode: String? = null,
-        /** Account id for [agent] (GET /accounts); null = its system account. */
+        /** Account id for [agent] (GET /accounts); null = Auto (the broker picks the account with the most room left). */
         account: String? = null,
     ): String {
+        // Card #75: the launcher's Send began a start trace; its requests and frames join it.
+        val startTrace = PerfTrace.pendingStart()
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
+        var t = PerfTrace.elapsedMs()
         val validation = runCatching { api.validatePath(workdir) }.getOrNull()
             ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
+        if (startTrace != null) {
+            PerfTrace.event("start.validated", "ms" to PerfTrace.elapsedMs() - t, trace = startTrace)
+            if (!resolvedPath.isNullOrBlank()) PerfTrace.startResolved(startTrace, resolvedPath)
+        }
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
         }
         // Before the spawn: the broker delivers them with the first turn (see the KDoc).
+        t = PerfTrace.elapsedMs()
         val attachmentIds = staged.mapNotNull { s ->
             uploadResumable(LAUNCHER_UPLOAD_SESSION, s.source, s.name, s.mime, s.kind) { _, _ -> }
         }
+        if (startTrace != null && staged.isNotEmpty()) PerfTrace.event("start.uploaded", "ms" to PerfTrace.elapsedMs() - t, "files" to attachmentIds.size, trace = startTrace)
+        t = PerfTrace.elapsedMs()
         val resp = try {
-            api.spawn(
+            apiStart.spawn(
                 SpawnRequest(
                     workdir = resolvedPath,
                     name = name?.ifBlank { null },
@@ -2499,13 +2770,23 @@ class HostStore(
                     inheritFrom = inheritFrom?.ifBlank { null },
                     firstMessage = (firstMessage ?: text).ifBlank { null },
                     firstAttachments = attachmentIds.ifEmpty { null },
+                    clientMessageId = if ((firstMessage ?: text).isNotBlank() || attachmentIds.isNotEmpty()) newClientMessageId() else null,
                 ),
+                trace = startTrace,
             )
-        } catch (t: Throwable) {
-            remapSpawnFailure(t)
+        } catch (e: Throwable) {
+            if (startTrace != null) {
+                PerfTrace.event("start.failed", "ms" to PerfTrace.elapsedMs() - t, "error" to e.message?.take(200), trace = startTrace)
+                PerfTrace.endStart(startTrace)
+            }
+            remapSpawnFailure(e)
         }
-        return resolveSpawnId(resp, _state.value.sessions)
-            ?: throw IllegalStateException("Session created but id not available yet")
+        val id = resolveSpawnId(resp, _state.value.sessions)
+        if (startTrace != null) {
+            PerfTrace.event("start.response", "ms" to PerfTrace.elapsedMs() - t, "session" to id, trace = startTrace)
+            if (id != null) PerfTrace.bindStart(startTrace, id)
+        }
+        return id ?: throw IllegalStateException("Session created but id not available yet")
     }
 
     /**
@@ -2557,7 +2838,7 @@ class HostStore(
      *  name match when the broker returns a blank id). Throws on a broker refusal so the caller can
      *  surface it via [remapSpawnFailure] — unlike the fire-and-forget [spawn]. */
     suspend fun spawnRequest(request: SpawnRequest): String? =
-        resolveSpawnId(api.spawn(request), _state.value.sessions)
+        resolveSpawnId(apiStart.spawn(request), _state.value.sessions)
 
     /** On-device-STT path: JSON draft → cleaned text (long-timeout dictation client). */
     suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse? =
@@ -2597,6 +2878,7 @@ class HostStore(
         if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
         if (httpSpeak.isInitialized()) httpSpeak.value.close()
         if (httpMedia.isInitialized()) httpMedia.value.close()
+        if (httpStart.isInitialized()) httpStart.value?.close()
     }
 
     private companion object {
@@ -2619,6 +2901,13 @@ internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): S
     if (resp.id.isNotBlank()) resp.id
     else sessions.firstOrNull { it.name == resp.name }?.id
 
+/** Card #54: trace events go to a tracing broker this often; per-type stats every Nth time. */
+/** Card #62: the `live` frame's name, as a broker lists it in its snapshot's `accepts`. */
+private const val LIVE_FRAME = "live"
+
+private const val PERF_SHIP_MS = 2_000L
+private const val PERF_STATS_EVERY = 15
+
 /** How many recent sessions [HostStore] prefetches after a trimmed snapshot, and after how long. */
 private const val PREFETCH_SESSIONS = 4
 private const val PREFETCH_DELAY_MS = 1_000L
@@ -2632,11 +2921,27 @@ internal const val SNAPSHOT_LOG_TAIL = 1
  * archived workspaces without their views/layout. A broker that predates these fields ignores
  * them and sends everything.
  */
-internal fun subscribeFrameJson(fullLogs: Collection<String>): String = buildJsonObject {
+/**
+ * Card #76: the surfaces that ask for live replies. Desktop first; Android, iOS and the web client joined once each
+ * had been checked (the ink edge, and its reduced-motion fallback) on the emulator, the simulator and a browser.
+ */
+internal val LIVE_REPLY_SURFACES = setOf("desktop", "android", "ios", "web")
+
+internal fun subscribeFrameJson(fullLogs: Collection<String>, trace: String? = null, req: String? = null, streams: Boolean = false): String = buildJsonObject {
     put("type", "subscribe")
+    // Card #54: the launch's trace and this connection's request, so the broker records its
+    // snapshot build under them (ignored by a broker that does not trace).
+    if (trace != null) put("trace", trace)
+    if (req != null) put("req", req)
     put("logTail", SNAPSHOT_LOG_TAIL)
     put("fullLogs", JsonArray(fullLogs.distinct().map(::JsonPrimitive)))
     // Activity + slash commands only for [fullLogs] too; archived workspaces without views/layout.
     put("trimExtras", true)
     put("slimArchived", true)
+    // Card #54: only running subagents for chats not on screen (the rest come with chat-extras),
+    // and no archived workspaces (fetched right after the snapshot, off the first screen's path).
+    put("slimSubagents", true)
+    put("lazyArchived", true)
+    // Card #76: replies while they are written (reply_stream frames), for the chats on screen.
+    if (streams) put("streams", 1)
 }.toString()

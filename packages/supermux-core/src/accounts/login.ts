@@ -1,15 +1,16 @@
 import { spawn } from "node:child_process"
-import { accessSync, constants } from "node:fs"
-import { access, lstat, mkdir, readdir, readFile, rm, chmod, symlink, writeFile } from "node:fs/promises"
+import { access, lstat, mkdir, readdir, readFile, rm, rmdir, chmod, symlink, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
 import { CoreError, asError } from "../errors.js"
 import { readAntigravityIdentity } from "./adapters/antigravity.js"
+import { antigravityUpdaterEnv } from "../antigravity/updater.js"
 import { readClaudeIdentity } from "./adapters/claude.js"
 import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
+import { files, proc } from "@supermux/platform"
 
 export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
@@ -30,9 +31,13 @@ const URLS_RE = new RegExp(URL_RE.source, "g")
 const CODE_RE = /\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+// A Windows ConPTY draws line breaks and runs of blanks as cursor moves (ESC[5;1H, ESC[3C), not as
+// characters: keep them as a line break or a space, or the next line's text runs into a URL.
+const CURSOR_LINE_RE = /\x1b\[[0-9;]*[ABEFHfd]/g
+const CURSOR_COLUMN_RE = /\x1b\[[0-9;]*[CGX]/g
 
 export function stripAnsi(text: string): string {
-  return text.replace(OSC_RE, "").replace(ANSI_RE, "")
+  return text.replace(OSC_RE, "").replace(CURSOR_LINE_RE, "\n").replace(CURSOR_COLUMN_RE, " ").replace(ANSI_RE, "")
 }
 
 /** Device-code logins (codex, grok): a URL and an `XXXX-XXXX` code, once both have appeared. */
@@ -65,6 +70,18 @@ export function parseAntigravityLoginUrl(output: string): string | undefined {
   return prompt !== undefined ? urls[0] : undefined
 }
 
+/**
+ * Types a pasted code into a login CLI's terminal as a person does: the code, then Enter as its own input.
+ * Enter is "\r", what a keyboard sends: a POSIX pty turns it into the "\n" a line read waits for, and a
+ * Windows ConPTY takes only "\r" as the Enter key (agy never saw a code that ended in "\n").
+ * [open]: false once the login is over, so a late Enter is not typed into nothing.
+ */
+export function typeLoginCode(write: (data: string) => void, code: string, open: () => boolean = () => true): void {
+  write(code.trim())
+  const enter = setTimeout(() => { if (open()) write("\r") }, ENTER_DELAY_MS)
+  enter.unref?.()
+}
+
 /** How long agy waits for the pasted code after printing its URL ("Waiting for authentication (timeout 60s)"). */
 export const ANTIGRAVITY_CODE_WINDOW_MS = 60_000
 
@@ -89,6 +106,16 @@ export async function removeAntigravityLoginLeftovers(directory: string): Promis
 /** No-op stand-ins for the browser openers agy calls (xdg-open on Linux, open on macOS): the login URL is opened by the user's client, never on the broker host. */
 const BROWSER_OPENERS = ["xdg-open", "open"]
 
+/**
+ * Removes a symlink or junction itself, never what it points at (the link to the login directory
+ * must go before the recursive rm of its parent). Does not trust lstat to call a junction a link:
+ * unlink, else rmdir, which takes a junction but refuses a real non-empty directory. Absent is fine.
+ */
+export async function unlinkLink(path: string): Promise<void> {
+  try { await lstat(path) } catch { return }
+  try { await unlink(path) } catch { await rmdir(path).catch(() => {}) }
+}
+
 /** What one agent's login looks like. */
 type Plan = {
   spawn: LoginSpawn
@@ -111,14 +138,12 @@ function quote(arg: string): string {
   return `'${arg.replace(/'/g, `'\\''`)}'`
 }
 
-/** First of `names` found executable on PATH (absolute names are taken as is). */
+/** First of `names` found as a command on PATH (on Windows a .exe, .cmd or .ps1 too); absolute names are taken as is. */
 export function findCommand(names: string[], env: Record<string, string | undefined> = process.env): string | undefined {
   for (const name of names) {
     if (isAbsolute(name)) return name
-    for (const dir of (env.PATH ?? "").split(delimiter)) {
-      if (!dir) continue
-      try { accessSync(join(dir, name), constants.X_OK); return join(dir, name) } catch { /* next */ }
-    }
+    const found = proc.resolve([name], env)
+    if (found) return found
   }
   return undefined
 }
@@ -129,7 +154,7 @@ export function loginEnv(extra: Record<string, string>): Record<string, string> 
   return { ...env, ...extra }
 }
 
-export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string): Plan {
+export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string, platform: NodeJS.Platform = process.platform): Plan {
   switch (kind) {
     case "claude": return {
       spawn: { command, args: ["auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], env: loginEnv({ CLAUDE_CONFIG_DIR: directory }), cwd: directory, pty: true },
@@ -168,7 +193,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
       return {
         spawn: {
           command, args: ["-p=Reply with the single word OK."], cwd: directory, pty: true,
-          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(process.platform === "win32" ? { USERPROFILE: home } : {}) }),
+          env: loginEnv({ HOME: home, PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter), ...(platform === "win32" ? { USERPROFILE: home } : {}), ...antigravityUpdaterEnv(platform) }),
         },
         parse: output => { const url = parseAntigravityLoginUrl(output); return url ? { url } : undefined },
         needsCode: true,
@@ -179,11 +204,14 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
         userWindowMs: ANTIGRAVITY_CODE_WINDOW_MS,
         prepare: async dir => {
           await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
-          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), "dir")
+          // A junction needs no privilege on Windows (a "dir" symlink needs Developer Mode or admin).
+          files.linkDirectory(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
-          for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+          // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
+          if (process.platform !== "win32") for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
         },
         finalize: async dir => {
+          await unlinkLink(join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await rm(join(dir, ".login-home"), { recursive: true, force: true })
           await removeAntigravityLoginLeftovers(dir)
         },
@@ -194,7 +222,8 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
 
 /**
  * The command line that gives `spawn` a pseudo-terminal through `script` (util-linux on Linux,
- * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`.
+ * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`: the default
+ * runner gives it a ConPTY through Bun instead (spawnConptyLogin).
  */
 export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform = process.platform): { command: string; args: string[] } {
   const shell = `stty cols 600; exec ${[spawn.command, ...spawn.args].map(quote).join(" ")}`
@@ -216,8 +245,77 @@ export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform
   return { command: "script", args: ["-qec", shell, "/dev/null"] }
 }
 
-/** Default runner: its own process group (killed as a whole); PTY logins go through `script`. */
+/** The part of Bun's spawn API the ConPTY runner uses (Bun 1.3.14+: `terminal` is a ConPTY on Windows). */
+type BunTerminalSpawn = (argv: string[], options: {
+  cwd: string; env: Record<string, string>; windowsHide: boolean; windowsVerbatimArguments: boolean
+  terminal: { cols: number; rows: number; data(terminal: unknown, data: Uint8Array): void }
+}) => { pid: number; exited: Promise<number | null>; kill(): void; terminal?: { write(data: string): number; close(): void } }
+
+/** Wide enough that Claude's ~400-char OAuth URL never wraps. */
+const CONPTY_COLS = 600
+const CONPTY_ROWS = 50
+
+/**
+ * The argv that starts the resolved `command` on Windows, by the broker launcher's one rule (proc.windowsLaunch): an
+ * .exe directly, a .cmd/.bat shim (npm installs) through cmd.exe with every word escaped and delayed expansion off, a
+ * .ps1 through PowerShell. Any character passes, so a user named "Ana!" (the .cmd path holds the "!") can sign in.
+ */
+export function windowsLoginArgv(resolved: string, args: string[], env: Record<string, string | undefined> = process.env): string[] {
+  const launch = proc.windowsLaunch(resolved, args, { env })
+  return [launch.command, ...launch.args]
+}
+
+/**
+ * Windows PTY logins: Bun's `terminal` spawn option is a ConPTY (a POSIX pty elsewhere, which is how the
+ * tests run it). Not under Bun (plain Node) there is
+ * no pseudo-terminal to give the CLI. Kill takes the whole tree (taskkill /T) since a .cmd shim's
+ * cmd.exe is the root, not the CLI. Shared with the broker's agent login (src/main.ts spawnLoginProc).
+ */
+export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "env" | "cwd">): LoginProcess {
+  const bun = (globalThis as { Bun?: { spawn: BunTerminalSpawn; which(command: string, options: { PATH?: string }): string | null } }).Bun
+  if (!bun) throw new CoreError("unsupported_operation", "A guided login on Windows needs a pseudo-terminal, which only the Bun runtime provides here")
+  const resolved = bun.which(input.command, { PATH: input.env.PATH ?? input.env.Path }) ?? input.command
+  const output: Array<(chunk: string) => void> = []
+  const exits: Array<(code: number | null) => void> = []
+  let exited: { code: number | null } | undefined
+  const exit = (code: number | null) => {
+    if (exited) return
+    exited = { code }
+    for (const listener of exits) listener(code)
+  }
+  const decoder = new TextDecoder()
+  const emit = (chunk: string) => { for (const listener of output) listener(chunk) }
+  let child: ReturnType<BunTerminalSpawn>
+  try {
+    const launch = proc.windowsLaunch(resolved, input.args, { env: input.env })
+    child = bun.spawn([launch.command, ...launch.args], {
+      // cmd.exe's /s /c line is already escaped: Bun must not quote it again. PowerShell's arguments it quotes.
+      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments === true,
+      terminal: { cols: CONPTY_COLS, rows: CONPTY_ROWS, data: (_terminal, data) => emit(decoder.decode(data, { stream: true })) },
+    })
+  } catch (error) {
+    if (error instanceof CoreError) throw error
+    throw new CoreError("login_failed", `${input.command}: ${asError(error).message}`)
+  }
+  const terminal = child.terminal
+  child.exited.then(code => {
+    try { terminal?.close() } catch { /* already closed */ }
+    exit(code)
+  }, () => exit(null))
+  return {
+    onOutput: listener => { output.push(listener) },
+    onExit: listener => { if (exited) listener(exited.code); else exits.push(listener) },
+    write: data => { try { terminal?.write(data) } catch { /* closed */ } },
+    kill: () => {
+      if (exited) return
+      proc.killTree(child.pid)
+    },
+  }
+}
+
+/** Default runner: its own process group (killed as a whole); PTY logins go through `script`, or a ConPTY on Windows. */
 export const defaultLoginRunner: LoginRunner = input => {
+  if (input.pty && process.platform === "win32") return spawnConptyLogin(input)
   const { command, args } = input.pty ? ptyCommand(input) : input
   const child = spawn(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
   const output: Array<(chunk: string) => void> = []
@@ -237,12 +335,13 @@ export const defaultLoginRunner: LoginRunner = input => {
     for (const listener of output) listener(`${command}: ${error.message}\n`)
     exit(null)
   })
-  child.on("exit", code => exit(code))
+  // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
+  // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
+  child.on("close", code => exit(code))
+  // The CLI and what it started: its group (spawned detached), or on Windows its tree.
   const signal = (name: NodeJS.Signals) => {
-    try {
-      if (child.pid && process.platform !== "win32") process.kill(-child.pid, name)
-      else child.kill(name)
-    } catch { /* already gone */ }
+    if (child.pid) proc.killTree(child.pid, { signal: name })
+    else try { child.kill(name) } catch { /* already gone */ }
   }
   return {
     onOutput: listener => { output.push(listener) },
@@ -257,6 +356,13 @@ export const defaultLoginRunner: LoginRunner = input => {
   }
 }
 
+/** The login timeout's default scheduler (see LoginConfig.schedule): a timer that does not keep the process alive. */
+export function defaultLoginSchedule(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms)
+  timer.unref?.()
+  return () => clearTimeout(timer)
+}
+
 export type LoginDeps = {
   kind: LoginKind
   options: LoginOptions
@@ -265,6 +371,8 @@ export type LoginDeps = {
   command: string
   runner: LoginRunner
   timeoutMs: number
+  /** Starts the timeout (fire after timeoutMs), returns what stops it. */
+  schedule: (fire: () => void, ms: number) => () => void
   /** Fails early (e.g. account_exists for a taken id) before any process starts. */
   precheck(): Promise<void>
   /** Promotes a verified login: rename into a home (subscription) or move tokens to the vault (token). */
@@ -282,7 +390,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
   let proc: LoginProcess | undefined
   let directory: string | undefined
   let finished = false
-  let timer: ReturnType<typeof setTimeout> | undefined
+  let stopTimeout: (() => void) | undefined
   let exited: Promise<void> = Promise.resolve()
   let output = ""
   let resolveDone!: (account: Account) => void
@@ -296,7 +404,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
     for (const listener of listeners) { try { listener(snapshot) } catch { /* listeners cannot break the login */ } }
   }
   const cleanup = async () => {
-    if (timer) clearTimeout(timer)
+    stopTimeout?.()
     proc?.kill()
     await Promise.race([exited, new Promise(resolve => { const t = setTimeout(resolve, KILL_GRACE_MS + 1000); t.unref?.() })])
     if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {})
@@ -345,8 +453,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
     const child = deps.runner(plan.spawn)
     proc = child
     exited = new Promise(resolve => child.onExit(() => resolve()))
-    timer = setTimeout(() => fail(new CoreError("login_timeout", `Login did not finish within ${Math.round(deps.timeoutMs / 1000)} s`)), deps.timeoutMs)
-    timer.unref?.()
+    stopTimeout = deps.schedule(() => fail(new CoreError("login_timeout", `Login did not finish within ${Math.round(deps.timeoutMs / 1000)} s`)), deps.timeoutMs)
     child.onOutput(chunk => {
       if (finished) return
       output = (output + chunk).slice(-OUTPUT_LIMIT)
@@ -362,7 +469,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
         return
       }
       if (finished) return
-      if (timer) clearTimeout(timer)
+      stopTimeout?.()
       verify(dir, plan).then(account => {
         if (finished) return
         finished = true
@@ -384,9 +491,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       if (typeof text !== "string" || !text.trim()) throw new CoreError("invalid_input", "code must be a nonempty string")
       if (!state.needsCode || state.phase !== "awaiting_user" || !proc) throw new CoreError("invalid_input", "This login is not waiting for a code")
       const child = proc
-      child.write(text.trim())
-      const enter = setTimeout(() => { if (!finished) child.write("\r") }, ENTER_DELAY_MS)
-      enter.unref?.()
+      typeLoginCode(data => child.write(data), text, () => !finished)
     },
     /** No effect once the login is verifying (the process has exited and the account is being saved). */
     cancel() { if (state.phase !== "verifying") fail(new CoreError("login_cancelled", "Login cancelled"), "cancelled") },

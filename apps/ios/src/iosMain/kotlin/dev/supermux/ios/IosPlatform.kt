@@ -143,7 +143,7 @@ class IosPlatform(
      */
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> =
         awaitCallback<List<IosPickedFile>> { done -> bridge.pickFiles(kind.wire, done) }
-            .map { it.toPickedFile() }
+            .map { it.toPickedFileWithPoster() }
 
     /** `UIImagePickerController(.camera)` in still mode, through the bridge. Null = backed out. */
     override suspend fun captureImage(requester: String): PickedFile? =
@@ -151,7 +151,7 @@ class IosPlatform(
 
     /** The same, in video mode. */
     override suspend fun captureVideo(requester: String): PickedFile? =
-        awaitCallback<IosPickedFile?> { done -> bridge.captureVideo(done) }?.toPickedFile()
+        awaitCallback<IosPickedFile?> { done -> bridge.captureVideo(done) }?.toPickedFileWithPoster()
 
     override val haptics: Haptics = IosHaptics()
 

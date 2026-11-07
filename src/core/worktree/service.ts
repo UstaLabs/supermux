@@ -8,8 +8,9 @@
 // Worktrees whose repository is gone are summarized as one `orphans` group, not listed.
 import { realpathSync } from "fs"
 import { realpath } from "fs/promises"
-import { basename, dirname, join, resolve, sep } from "path"
+import { basename, dirname, join, relative, resolve, sep } from "path"
 import { makeLogger } from "../../shared/log"
+import { paths } from "@supermux/platform"
 import {
   canonRows, canonicalizer, deleteWorktrees, listWorktrees, ownersOf, pool, resolveId, slugEntries, summarizeWorktree,
   worktreeChanges, worktreeSize, REPO_GONE,
@@ -81,8 +82,8 @@ export class WorktreeService {
   idForWorkdir(workdir: string): string | undefined {
     const root = canonSync(this.deps.root)
     const target = canonSync(workdir)
-    if (target !== root && !target.startsWith(root + sep)) return undefined
-    const rel = target === root ? "" : target.slice(root.length + 1)
+    if (!paths.isInside(target, root)) return undefined
+    const rel = relative(root, target)
     if (!rel) return undefined
     const parts = rel.split(sep)
     return parts.length >= 2 && parts[0] && parts[1] ? `${parts[0]}/${parts[1]}` : undefined

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { authCredPath, detectAgent, hasStoredCredential } from "./detect"
+import { applySignInExpiry, authCredPath, detectAgent, hasStoredCredential } from "./detect"
 
 const paths = { home: "/home/u" }
 
@@ -18,6 +18,15 @@ test("grok detects installed+authed from binary and auth file", () => {
     authed: true,
     capabilities: { supportsDeviceLogin: true, acceptsPastedKey: false, usableWithoutAuth: false },
   })
+})
+
+// opencode uses XDG folders on every OS. On Windows 11 (opencode 1.19.5) it made %USERPROFILE%\.local\share\opencode
+// and never %LOCALAPPDATA%\opencode, which is where the broker used to look for a Windows user's credential.
+test("opencode's credential is in its XDG data folder on every OS, Windows included", () => {
+  expect(authCredPath("opencode", paths)).toBe("/home/u/.local/share/opencode/auth.json")
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  expect(authCredPath("opencode", win)).toBe("C:\\Users\\u\\.local\\share\\opencode\\auth.json")
+  expect(authCredPath("opencode", { ...win, xdgDataHome: "D:\\xdg" })).toBe("D:\\xdg\\opencode\\auth.json")
 })
 
 test("antigravity cred path is agy's OAuth token under ~/.gemini/antigravity-cli", () => {
@@ -46,9 +55,16 @@ test("antigravity counts a stored Gemini API key as authed", () => {
   }
   expect(detectAgent("antigravity", probes, paths).authed).toBe(true)
   expect(detectAgent("antigravity", { hasBinary: () => true, fileExists: () => false }, paths).authed).toBe(false)
-  expect(detectAgent("antigravity", probes, { ...paths, platform: "win32" }).capabilities.supportsDeviceLogin).toBe(false)
+  expect(detectAgent("antigravity", probes, { ...paths, platform: "win32" }).capabilities.supportsDeviceLogin).toBe(true)
   expect(hasStoredCredential("antigravity", { geminiApiKey: "k" })).toBe(true)
   expect(hasStoredCredential("antigravity", { geminiApiKey: "" })).toBe(false)
+})
+
+test("antigravity on Windows: agy's login in Credential Manager counts as authed with no token file", () => {
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  const probes = { hasBinary: (b: string) => b === "agy", fileExists: () => false, antigravityKeyring: () => true }
+  expect(detectAgent("antigravity", probes, win).authed).toBe(true)
+  expect(detectAgent("antigravity", { ...probes, antigravityKeyring: () => false }, win).authed).toBe(false)
 })
 
 test("detectAgent always carries kind-derived auth capabilities", () => {
@@ -75,4 +91,18 @@ test("grok's own `agent` binary does not make cursor look installed", () => {
   expect(detectAgent("cursor", probes, paths).installed).toBe(false)
   expect(detectAgent("grok", probes, paths).installed).toBe(true)
   expect(detectAgent("cursor", { hasBinary: (b: string) => b === "cursor-agent", fileExists: () => false }, paths).installed).toBe(true)
+})
+
+// The credential file outlives the login: cursor-agent keeps an expired auth.json, so "file exists" said
+// Ready while Cursor refused every request. The provider's refusal (the system account's sign-in mark) wins.
+test("a login its provider refused reads as signed out with signInExpired, whatever file is on disk", () => {
+  const probes = { hasBinary: (b: string) => b === "cursor-agent" || b === "claude", fileExists: () => true }
+  const statuses = [detectAgent("cursor", probes, paths), detectAgent("claude", probes, paths), detectAgent("grok", probes, paths)]
+  const result = applySignInExpiry(statuses, (kind) => kind === "cursor" || kind === "grok")
+  expect(result.map((s) => [s.kind, s.installed, s.authed, s.signInExpired ?? false])).toEqual([
+    ["cursor", true, false, true],
+    ["claude", true, true, false],
+    // Not installed, so never "authed": nothing to sign in again to.
+    ["grok", false, false, false],
+  ])
 })

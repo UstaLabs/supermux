@@ -6,8 +6,9 @@
  * (O_CREAT | O_EXCL, 0600) and renamed into place, so an existing name is never opened for writing.
  */
 import { randomBytes } from "node:crypto"
-import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from "node:fs"
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeSync, type Stats } from "node:fs"
 import { join } from "node:path"
+import { files } from "@supermux/platform"
 import { CoreError } from "./errors.js"
 
 /** Windows has no O_NOFOLLOW (nor keepers): there the lstat checks remain. */
@@ -55,16 +56,17 @@ export function realStateDirectory(path: string): string {
 export function assertNoLinksIn(dir: string): void {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
-    let info: Stats
-    try { info = lstatSync(path) } catch (error) { if (code(error) === "ENOENT") continue; throw error }
+    // A Windows AF_UNIX socket (a keeper's) cannot be stat'ed; a link or junction can.
+    const info = files.lstatEntry(path)
+    if (info === undefined || info === "socket") continue
     if (info.isSymbolicLink()) throw refuse(path, LINK)
     if (!mine(info)) throw refuse(path, "it belongs to another user")
   }
 }
 
-/** Whether `path` names anything (a link included), without following it. */
+/** Whether `path` names anything (a link included, or a Windows socket file), without following it. */
 export function present(path: string): boolean {
-  try { lstatSync(path); return true } catch (error) { if (code(error) === "ENOENT") return false; throw error }
+  return files.lstatEntry(path) !== undefined
 }
 
 /** A new 0600 file of this user's at `path`, open with `flags`: never an existing file, never through a link. */
@@ -104,7 +106,7 @@ export function writePrivateFile(path: string, body: string | Buffer, verify?: (
   try {
     try { writeAll(fd, body) } finally { closeSync(fd) }
     verify?.()
-    renameSync(staging, path)
+    files.replaceSync(staging, path)
   } catch (error) {
     try { unlinkSync(staging) } catch { /* already gone */ }
     throw error

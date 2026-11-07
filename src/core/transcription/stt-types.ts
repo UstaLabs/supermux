@@ -32,6 +32,12 @@ export interface SttTranscribeOpts {
    */
   previousText?: string
   /**
+   * What was said before this audio, which the file does NOT contain (a streamed dictation's
+   * earlier sentences). Like `previousText` it is given to the model as context, but it implies
+   * no offset: the whole file is transcribed.
+   */
+  context?: string
+  /**
    * The live dictation this pass belongs to (the client's id for one recording). Engines with
    * `warm` keep a connection open per dictation and reuse it for every pass; others ignore it.
    */

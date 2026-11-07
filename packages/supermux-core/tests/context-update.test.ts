@@ -67,7 +67,7 @@ function fakeDriver(id: string, support: DriverContextSupport | undefined): Fake
     id,
     ...(support ? { context: support } : {}),
     async open(context) {
-      fake.opened.push(structuredClone({ ...context, signal: undefined, onUpdate: undefined, onExit: undefined, requestPermission: undefined, requestAnswers: undefined, onActivity: undefined }) as never)
+      fake.opened.push(structuredClone({ ...context, signal: undefined, onUpdate: undefined, onExit: undefined, requestPermission: undefined, requestAnswers: undefined, onActivity: undefined, onConversationReset: undefined }) as never)
       n++
       const control: RuntimeContextControl = {
         live: change => change.kind !== "plugins",
@@ -104,6 +104,14 @@ function core(state: string, drivers: AgentDriver[], extra: { context?: SessionC
 
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }], whenBusy: "queue" as const })
 const tick = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms))
+/** Resolves once [check] holds; the limit only turns an event that never comes into a clear failure. */
+async function until(check: () => boolean | Promise<boolean>, what: string, ms = 10_000) {
+  const start = Date.now()
+  while (!(await check())) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await tick(10)
+  }
+}
 
 // ------------------------------------------------------------ validation
 
@@ -217,12 +225,16 @@ test("reload waits for the running turn (never cancels it); queued input runs af
   const update = session.updateContext({ plugins: { add: [f.pluginA] } })
   const queued = await session.send(text("queued"))
   let settled = false
-  void update.then(() => { settled = true })
+  // Only observes: `update` itself is awaited below. If an expect fails first, closing the core
+  // rejects it, and that rejection is not this test's error.
+  void update.then(() => { settled = true }, () => {})
+  // The record already carries the change while the turn runs: the update stores it (after
+  // checking the new paths on disk) and only then waits for the turn.
+  await until(async () => (await c.sessions.get("s1"))!.context !== undefined, "the update to store the record")
   await tick(80)
   expect(settled).toBe(false)
   expect(fake.opened).toHaveLength(1)
   expect(fake.interrupts).toBe(0)
-  // The record already carries the change while the turn runs.
   expect((await c.sessions.get("s1"))!.context).toEqual({ plugins: [f.pluginA] })
   fake.blockPrompts = false
   fake.releasePrompt()

@@ -63,7 +63,6 @@ import dev.supermux.terminal.compose.TerminalSearchState
 import dev.supermux.terminal.compose.TerminalZoom
 import dev.supermux.terminal.compose.rememberTerminalAccessories
 import dev.supermux.terminal.compose.rememberTerminalClipboard
-import dev.supermux.terminal.compose.rememberTerminalSearchState
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
@@ -143,7 +142,8 @@ class GhosttyTerminalViewFactory(
     override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
         val client = rememberLazyTerminalClient(connect)
         val accessories = rememberTerminalAccessories()
-        val search = rememberTerminalSearchState()
+        // Its bar, query and case toggle outlive this composition when the pane names its terminal (#89).
+        val search = rememberRetainedTerminalSearch()
         // The bar's presses become KEYS, not bytes: Ghostty owns the encoding (see
         // TerminalKeySink.semantic), so an armed Ctrl is applied exactly once, by the same encoder
         // that handles the physical keyboard and the IME. Paste and Find are not keys at all: they

@@ -16,6 +16,8 @@ export interface LoginSpawnCommand {
   cwd?: string
   /** Called once after the child exits (or fails to spawn): removes what the descriptor created. */
   cleanup?: () => void
+  /** Windows: run cmd+args under a ConPTY (supermux-core's spawnConptyLogin) — there is no `script`. */
+  conpty?: boolean
 }
 
 /** Per-kind device-login spawn descriptors, one `loginSpawnCommand()` leaf per
@@ -36,16 +38,20 @@ export function shQuote(s: string): string {
 
 /** Claude's browser login needs a pseudo-terminal (it reads the pasted code from it). */
 export function claudeLoginSpawnCommand(platform = process.platform): LoginSpawnCommand {
-  return ptyLoginSpawnCommand("stty cols 600; exec claude auth login", "supermux-claude", platform)
+  return ptyLoginSpawnCommand("claude", ["auth", "login"], "supermux-claude", platform)
 }
 
 /**
- * Runs [shellCommand] under a pseudo-terminal. `script` has incompatible
- * command-line syntaxes on macOS (BSD) and Linux (util-linux), so keep the
- * platform split explicit instead of relying on the Linux-only `-c` flag.
+ * Runs [command] [args] under a pseudo-terminal, 600 columns wide so a long
+ * OAuth URL never wraps. `script` has incompatible command-line syntaxes on
+ * macOS (BSD) and Linux (util-linux), so keep the platform split explicit
+ * instead of relying on the Linux-only `-c` flag. Windows has no `script`:
+ * the descriptor asks the spawner for a ConPTY instead.
  * [label] names the wrapper's argv[0]s (`<label>-script`, `<label>-login`).
  */
-export function ptyLoginSpawnCommand(shellCommand: string, label: string, platform = process.platform): LoginSpawnCommand {
+export function ptyLoginSpawnCommand(command: string, args: string[], label: string, platform = process.platform): LoginSpawnCommand {
+  if (platform === "win32") return { cmd: command, args, conpty: true }
+  const shellCommand = `stty cols 600; exec ${[command, ...args].map(shQuote).join(" ")}`
   if (platform === "darwin") {
     return {
       cmd: "/bin/sh",

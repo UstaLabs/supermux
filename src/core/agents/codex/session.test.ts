@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { applyConfig, commandContext, resumeCodexSession, spawn } from "./session"
+import { applyConfig, commandContext, resumeCodexSession, resume, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createCodexCoreHost, type CodexCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -231,7 +231,7 @@ describe("codex core spawn/resume dialect", () => {
     expect(launched.instructions).toBeTruthy()
   })
 
-  test("command/args reach the driver factory: app-server only (policy per process by the core, plugins as context), without -c model", async () => {
+  test("command/args reach the driver factory: app-server plus the reasoning-summary switch (policy per process by the core, plugins as context), without -c model", async () => {
     process.env.OPENAI_API_KEY = "test-key"
     const child = fakeChildFactory({ nativeId: "n1" })
     const host = await makeHost(child.factory)
@@ -251,7 +251,8 @@ describe("codex core spawn/resume dialect", () => {
       effort: "high",
     })
     const args = child.codexCalls[0]?.options.args ?? []
-    expect(args).toEqual(["app-server"])
+    // Card #76: reasoning summaries are a process flag (MUX_CODEX_REASONING_SUMMARY, default "auto").
+    expect(args).toEqual(["app-server", "-c", 'model_reasoning_summary="auto"'])
     expect(child.codexCalls[0]?.options.approvalPolicy).toBe("never")
     expect(child.codexCalls[0]?.options.sandbox).toBe("danger-full-access")
     expect(args.join(" ")).not.toContain("model=")
@@ -432,4 +433,28 @@ describe("codex core spawn/resume dialect", () => {
     const rpc = { request: async <T = unknown>(_m?: string, _p?: unknown): Promise<T> => ({} as T), onNotification: () => {} }
     expect(commandContext({ sessionName: "cx", adapter: { rpc } })).toBe(rpc)
   })
+})
+
+// Card #75: a session is born asleep and its first start is a resume of a row that never ran.
+test("codex: resume of a never-started row starts fresh under the row's account", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const accounts: unknown[] = []
+    const register = host.register.bind(host)
+    host.register = ((r: Parameters<typeof register>[0]) => {
+      accounts.push(r.account)
+      const { account: _skip, ...rest } = r
+      return register(rest)
+    }) as typeof host.register
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-born-"))
+    dirs.push(workdir)
+    const { adapter } = await resume(
+      { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, codexHost: host },
+      { id: "born-asleep", workdir, agent_home: join(workdir, ".home"), account: "acc-codex" } as never,
+      "born-asleep",
+    )
+    expect(accounts).toEqual(["acc-codex"])
+    expect(child.opens.at(-1)?.resumeId).toBeUndefined()
+    await adapter.stop()
 })

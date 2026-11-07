@@ -1,0 +1,66 @@
+---
+title: Multiple accounts
+description: Give sessions different logins, and keep a long job going when one account runs out.
+---
+
+This guide adds a second Claude Code account, runs a session on it, and turns on the automatic switch. The ideas are explained in [Accounts](/core/concepts/accounts).
+
+## 1. Turn on switching
+
+```ts
+const core = supermux({
+  stateDirectory,
+  agents: { claude: {}, codex: {} },
+  accounts: { autoSwitch: true },
+})
+```
+
+## 2. Add an account
+
+With a long-lived token from `claude setup-token`:
+
+```ts
+const work = await core.accounts.add({ agent: "claude", method: "token", secret: token, label: "Work" })
+```
+
+Or with a guided sign-in:
+
+```ts
+const login = core.accounts.login({ agent: "claude" })
+login.on(state => {
+  if (state.url) show(`Open ${state.url}`)
+  if (state.needsCode) askForCode().then(code => login.submitCode(code))
+})
+const work = await login.done
+```
+
+Codex and Grok Build show a device code to enter on the page (`state.code`). Claude Code and Antigravity give you a code to paste back (`state.needsCode`).
+
+## 3. Run a session on it
+
+```ts
+const session = await core.sessions.create({ id: "nightly-refactor", agent: "claude", cwd, account: work.id })
+```
+
+## 4. Watch the switches
+
+```ts
+core.subscribe(e => {
+  if (e.type === "account.switched") log(`${e.sessionId}: ${e.from} → ${e.to} (${e.reason})`)
+  if (e.type === "account.exhausted") log(`${e.sessionId}: no ${e.agent} account has room left`)
+  if (e.type === "account.unavailable") log(`${e.account} was refused: ${e.reason}`)
+})
+```
+
+When the session's account hits a usage limit, it moves to the best other Claude account once the turn ends, and continues where it stopped.
+
+## 5. Switch by hand
+
+```ts
+const next = await core.accounts.pick("claude", [work.id]) // the best account other than work
+if (next) await core.sessions.resume("nightly-refactor", { account: next.id })
+```
+
+<Callout title="A detached session keeps its old login">
+A session that's running behind its keeper keeps the environment it started with when you re-attach. To move it to another account, re-attach, close it with `{ mode: "shutdown" }`, then resume it with the account.
+</Callout>

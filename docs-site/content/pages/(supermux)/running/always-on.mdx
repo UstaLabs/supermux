@@ -1,0 +1,52 @@
+---
+title: Always on
+description: Keep your agents running through closed laptops, dropped connections and reboots, and know where your data lives.
+---
+
+Agents are most useful when they keep working while you're away. Here's what keeps them going.
+
+## Sessions outlive the app
+
+Your sessions run on the computer that hosts them, not in the app you're looking at. Closing the app, locking your phone or losing the connection doesn't stop them.
+
+If that computer restarts, your sessions come back stopped, with their history. Each one picks up where it was on your next message. [Agents](/agents-that-stay) start again by themselves.
+
+## Start with the computer
+
+- **Desktop app**: **Keep running in the background** (on by default) starts supermux when you log in.
+- **Linux server**: the installer sets up a user service that also runs while you're logged out.
+- **Mac server**: the installer sets up a LaunchAgent, which starts when you log in. Turn on Automatic Login for a Mac without a keyboard.
+
+## Stay awake
+
+A sleeping computer can't run agents. In the desktop app, **Keep this computer awake** is on by default. On a server it's off, because servers usually don't sleep. See [Desktop app](/devices/desktop#keep-this-computer-awake).
+
+## Restart supermux
+
+**Settings ▸ System ▸ Restart broker** restarts supermux on the computer you've picked. Your apps reconnect when it's back. It works when supermux runs as a service, which is the default.
+
+## Where your data lives
+
+Everything supermux keeps is in `~/.mux` on the computer that runs your agents:
+
+| Folder | What's in it |
+|---|---|
+| `~/.mux/state/` | Settings, the list of paired devices, session history. |
+| `~/.mux/worktrees/` | Worktrees for sessions that work in git repositories. |
+| `~/.mux/domains/` | The shared [memory](/agents-that-stay/memory). |
+| `~/.mux/workspace/` | Your Agents' home folders. |
+| `~/.mux/agent-memory/` | Each Agent's own memory and character. |
+
+Each agent's own sign-in stays in that agent's usual folder, like `~/.claude` or `~/.codex`.
+
+## Disk space
+
+supermux doesn't delete work behind your back. Worktrees stay until you remove them: tick **Also delete worktree** when you archive a workspace, or clean up in **Settings ▸ Worktrees**.
+
+**Settings ▸ Storage** is about the app on your device: the pictures, videos and files it has cached. **Clear** frees that space; it doesn't touch anything on your computer.
+
+## Docker notes
+
+- The web app is on port 8787, and your projects go in `./workspace`.
+- supermux's data and Claude Code's sign-in are kept in Docker volumes, so they survive updates.
+- The relay isn't set up. Add your own address, or the relay, to reach it from outside.

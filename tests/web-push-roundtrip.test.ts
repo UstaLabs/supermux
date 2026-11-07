@@ -53,7 +53,7 @@ test("extractPreview returns kind placeholder when text empty", () => {
 const fanArgs = () => ({
   sessionId: "ana-id",
   devices: () => store.all().map((s) => s.device),
-  anyPresent: () => false,
+  presentOn: () => [],
 })
 
 test("firePushForReply fans out to subscribed devices on unmuted sessions", async () => {

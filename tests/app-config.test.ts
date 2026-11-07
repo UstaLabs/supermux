@@ -3,32 +3,30 @@ import { parseAppConfig, defaultAppConfig, resolveAppConfig, sanitizeAppConfigPa
 
 test("parseAppConfig fills defaults from empty input", () => {
   const c = parseAppConfig(undefined)
-  expect(c.paName).toBe(defaultAppConfig.paName)
+  expect(c.webPublicUrl).toBe(defaultAppConfig.webPublicUrl)
   expect(c.telegramBotToken).toBe("")
   expect(c.exposureMode).toBe("local")
   expect(c.onboarded).toBe(false)
-  expect(parseAppConfig(null).paName).toBe("assistant")
+  expect(parseAppConfig(null).exposureMode).toBe("local")
 })
 
 test("parseAppConfig coerces and clamps known fields, ignores junk", () => {
-  const c = parseAppConfig({ paName: "ana", exposureMode: "weird", onboarded: 1, bogus: true })
-  expect(c.paName).toBe("ana")
+  const c = parseAppConfig({ webPublicUrl: "https://a.example", exposureMode: "weird", onboarded: 1, bogus: true })
+  expect(c.webPublicUrl).toBe("https://a.example")
   expect(c.exposureMode).toBe("local") // invalid enum → safe default
   expect(c.onboarded).toBe(true)
   expect((c as any).bogus).toBeUndefined()
 })
 
 test("parseAppConfig uses base for unspecified fields", () => {
-  const base = { ...defaultAppConfig, paName: "kept", onboarded: true }
-  const c = parseAppConfig({ paWorkdir: "/w" }, base)
-  expect(c.paName).toBe("kept")
+  const base = { ...defaultAppConfig, webPort: "1234", onboarded: true }
+  const c = parseAppConfig({ wildcardBaseDomain: "w.example" }, base)
+  expect(c.webPort).toBe("1234")
   expect(c.onboarded).toBe(true)
-  expect(c.paWorkdir).toBe("/w")
+  expect(c.wildcardBaseDomain).toBe("w.example")
 })
 
 const ENV = {
-  MUX_PA_NAME: "envpa",
-  MUX_PA_WORKDIR: "/env/wd",
   MUX_TELEGRAM_BOT_TOKEN: "111:env",
   MUX_WEB_PUBLIC_URL: "http://localhost:8787",
   MUX_WEB_PORT: "8787",
@@ -36,17 +34,15 @@ const ENV = {
 
 test("resolve: env seeds defaults when store empty", () => {
   const c = resolveAppConfig({}, ENV)
-  expect(c.paName).toBe("envpa")
-  expect(c.paWorkdir).toBe("/env/wd")
   expect(c.telegramBotToken).toBe("111:env")
   expect(c.webPublicUrl).toBe("http://localhost:8787")
 })
 
 test("resolve: stored non-empty value wins over env", () => {
-  const c = resolveAppConfig({ paName: "storepa", telegramBotToken: "222:store" }, ENV)
-  expect(c.paName).toBe("storepa")
+  const c = resolveAppConfig({ webPort: "9000", telegramBotToken: "222:store" }, ENV)
+  expect(c.webPort).toBe("9000")
   expect(c.telegramBotToken).toBe("222:store")
-  expect(c.paWorkdir).toBe("/env/wd") // not stored → env
+  expect(c.webPublicUrl).toBe("http://localhost:8787") // not stored → env
 })
 
 test("resolve: empty string in store does NOT override env (treated as unset)", () => {
@@ -56,7 +52,7 @@ test("resolve: empty string in store does NOT override env (treated as unset)", 
 
 test("resolve: falls back to built-in default when neither store nor env set", () => {
   const c = resolveAppConfig({}, {})
-  expect(c.paName).toBe("assistant")
+  expect(c.webPublicUrl).toBe("")
   expect(c.exposureMode).toBe("local")
 })
 
@@ -66,9 +62,17 @@ test("resolve: onboarded comes only from store (no env), default false", () => {
 })
 
 test("sanitizeAppConfigPatch keeps only present known keys, no defaults", () => {
-  const p = sanitizeAppConfigPatch({ paName: "x", bogus: 1, exposureMode: "weird" })
-  expect(p).toEqual({ paName: "x" }) // unknown dropped, invalid enum dropped, nothing defaulted
+  const p = sanitizeAppConfigPatch({ webPort: "x", bogus: 1, exposureMode: "weird" })
+  expect(p).toEqual({ webPort: "x" }) // unknown dropped, invalid enum dropped, nothing defaulted
   expect("onboarded" in p).toBe(false)
+})
+
+test("paName and paWorkdir are gone; a stored value is ignored", () => {
+  const cfg = resolveAppConfig({ paName: "old", paWorkdir: "/x" } as any, { MUX_PA_NAME: "env", MUX_PA_WORKDIR: "/env" } as any)
+  expect("paName" in cfg).toBe(false)
+  expect("paWorkdir" in cfg).toBe(false)
+  expect(sanitizeAppConfigPatch({ paName: "x", paWorkdir: "/w" })).toEqual({})
+  expect("paName" in parseAppConfig({ paName: "x" })).toBe(false)
 })
 
 test("sanitizeAppConfigPatch coerces onboarded + validates enum", () => {
@@ -85,10 +89,10 @@ test("credential fields default to empty and round-trip through parse/sanitize",
 })
 
 test("redactAppConfig strips every secret and adds *Configured booleans", () => {
-  const cfg = { ...defaultAppConfig, telegramBotToken: "t", claudeOauthToken: "c", anthropicApiKey: "", codexApiKey: "k", cursorApiKey: "", paName: "ana" }
+  const cfg = { ...defaultAppConfig, telegramBotToken: "t", claudeOauthToken: "c", anthropicApiKey: "", codexApiKey: "k", cursorApiKey: "", webPublicUrl: "https://a.example" }
   const r = redactAppConfig(cfg) as Record<string, unknown>
   for (const f of SECRET_FIELDS) expect(r[f]).toBeUndefined()
-  expect(r.paName).toBe("ana")
+  expect(r.webPublicUrl).toBe("https://a.example")
   expect(r.telegramConfigured).toBe(true)
   expect(r.claudeConfigured).toBe(true)
   expect(r.anthropicConfigured).toBe(false)

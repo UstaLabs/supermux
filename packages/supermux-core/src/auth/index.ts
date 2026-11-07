@@ -1,9 +1,10 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { AgentDriver, AgentRuntime, CloseOptions, DriverContext } from '../types.js'
 import { requireCloseMode } from '../types.js'
+import { files } from '@supermux/platform'
 
 export type AuthLease = { env: Record<string, string>; release(): Promise<void> }
 export type AuthProvider = { prepare(context: DriverContext): Promise<AuthLease>; close(): Promise<void> }
@@ -103,7 +104,7 @@ async function atomicWrite(path: string, data: Buffer): Promise<void> {
   try {
     const file = await open(temp, 'wx', 0o600)
     try { await file.writeFile(data); await file.sync() } finally { await file.close() }
-    await rename(temp, path)
+    await files.replace(temp, path)
   } finally { await rm(temp, {force:true}) }
 }
 

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, statSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { prepareOpenCodeEnvironment } from "../src/environment/index.js"
+import { readableFolderPattern } from "../src/environment/opencode.js"
 import type { OpenCodeEnvironmentSpec, McpServerSpec } from "../src/environment/index.js"
 
 const dirs: string[] = []
@@ -177,4 +178,75 @@ test("permissions object writes OpenCode policy only when a tool is not allow", 
     const denied = JSON.parse(readFileSync(join(dir, "cfg", "opencode", "opencode.json"), "utf8"))
     expect(denied.permission).toEqual({ edit: "deny", bash: "deny", webfetch: "allow" })
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+const INBOX = "/home/u/.mux/session_inboxes"
+
+async function renderedConfig(over: Partial<OpenCodeEnvironmentSpec>): Promise<any> {
+  const sessionHome = home()
+  const configHome = join(sessionHome, "config")
+  await prepareOpenCodeEnvironment(spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome, ...over }))
+  return JSON.parse(readFileSync(join(configHome, "opencode", "opencode.json"), "utf8"))
+}
+
+test("readableDirs allow OpenCode's external_directory ask for each folder, with no catch-all entry", async () => {
+  // Every tool allowed: the block holds only the folder rule (nothing else changes OpenCode's defaults).
+  const open = await renderedConfig({ readableDirs: [INBOX] })
+  expect(open.permission).toEqual({ external_directory: { [`${INBOX}/*`]: "allow" } })
+
+  // Asked tools: the three keys keep their place, the folder rule follows them.
+  const asked = await renderedConfig({ permissions: { edit: "ask", bash: "ask", webfetch: "ask" }, readableDirs: [INBOX, "/data/other/"] })
+  expect(Object.keys(asked.permission)).toEqual(["edit", "bash", "webfetch", "external_directory"])
+  expect(asked.permission.external_directory).toEqual({ [`${INBOX}/*`]: "allow", "/data/other/*": "allow" })
+
+  // OpenCode's last matching rule wins: a "*" entry would cancel its built-in temp and skill allowances.
+  for (const cfg of [open, asked]) {
+    expect(Object.keys(cfg.permission.external_directory).some(pattern => pattern === "*" || pattern === "/*")).toBe(false)
+    expect(Object.values(cfg.permission.external_directory).every(action => action === "allow")).toBe(true)
+  }
+})
+
+test("without readableDirs (absent or empty) the permission block is what it was", async () => {
+  expect((await renderedConfig({})).permission).toBeUndefined()
+  expect((await renderedConfig({ readableDirs: [] })).permission).toBeUndefined()
+  expect((await renderedConfig({ permissions: { edit: "ask", bash: "ask", webfetch: "ask" }, readableDirs: [] })).permission)
+    .toEqual({ edit: "ask", bash: "ask", webfetch: "ask" })
+})
+
+test("readableDirs must be an array of absolute folders: anything else is refused and nothing is written", async () => {
+  const entries: unknown[] = [
+    "relative/dir", "", "/", "//", "///", // nothing left once the trailing slashes are trimmed: would render "/*"
+    "/a/../b", "/a/./b", "/a//b", "/..", "/.", // not in canonical form (resolve() changes them)
+    `${INBOX}/*`, "/home/*/inbox", "/home/u/in?ox", // wildcards
+    "/a\\b", "/a\\", // a backslash, which OpenCode reads as "/"
+    1, null, { 0: INBOX },
+  ]
+  const containers: unknown[] = [...entries.map(entry => [entry]), INBOX, { 0: INBOX }, null]
+  for (const readableDirs of containers) {
+    const sessionHome = home()
+    const configHome = join(sessionHome, "config")
+    await expect(prepareOpenCodeEnvironment(spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome, readableDirs: readableDirs as string[] }))).rejects.toThrow(/readableDirs/)
+    expect(existsSync(join(configHome, "opencode", "opencode.json"))).toBe(false)
+  }
+})
+
+test("readableFolderPattern: trailing slashes are trimmed first, then only a canonical folder is left", () => {
+  for (const platform of ["linux", "darwin"] as const) {
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes/", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/home/u/.mux/session_inboxes//", platform)).toBe("/home/u/.mux/session_inboxes/*")
+    expect(readableFolderPattern("/Users/John Smith/.mux/session_inboxes", platform)).toBe("/Users/John Smith/.mux/session_inboxes/*") // spaces are fine in a pattern
+    for (const dir of ["", "/", "//", "///", "////", "a", "./a", "../a", "/a/..", "/a/.", "/a/../b", "/a/./b", "/a//b", "//a", "/a*", "/a?", "/a\\b", "/a\\", "\\a", undefined, null, 5, {}]) {
+      expect(() => readableFolderPattern(dir, platform)).toThrow(/readableDirs/)
+    }
+  }
+})
+
+test("readableFolderPattern on Windows: the backslash is the separator, written as '/' (a POSIX path with one is refused, see above)", () => {
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes\\", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  expect(readableFolderPattern("C:\\Users\\u\\.mux\\session_inboxes/", "win32")).toBe("C:/Users/u/.mux/session_inboxes/*")
+  for (const dir of ["", "C:\\", "C:/", "C:", "C:\\\\", "C:\\a\\..\\b", "C:\\a\\.\\b", "C:\\a\\\\b", "C:/Users/u", "C:\\a\\*", "C:\\a\\?", "relative\\dir", "\\\\"]) {
+    expect(() => readableFolderPattern(dir, "win32")).toThrow(/readableDirs/)
+  }
 })

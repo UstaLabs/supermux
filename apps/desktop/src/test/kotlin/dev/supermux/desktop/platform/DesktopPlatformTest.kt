@@ -20,6 +20,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class DesktopPlatformTest {
 
@@ -46,6 +50,10 @@ class DesktopPlatformTest {
                 // G1: the shared Compose terminal is bound; no hardware H.264 decoder (VNC displays).
                 terminal = true,
                 scrcpy = false,
+                // A Mac trackpad's wheel stream carries the system's momentum, with no lift in it.
+                trackpadMomentum = isMacOs(),
+                // #62: the assistant overlay floats over other apps on macOS and Windows.
+                assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,
             ),
             DesktopPlatform().caps,
         )
@@ -153,11 +161,60 @@ class DesktopPlatformTest {
         assertNotNull(staged)
         assertTrue(staged.isFile, "the bytes must be on disk before a handler is invoked")
         assertEquals("hello", staged.readText())
-        assertEquals(
-            File(System.getProperty("java.io.tmpdir"), "supermux-attachments"),
-            staged.parentFile,
-        )
+        assertEquals(File(System.getProperty("java.io.tmpdir")).canonicalFile, staged.parentFile.parentFile.canonicalFile)
         staged.delete()
+    }
+
+    /**
+     * The attachment's name comes from the broker. It kept `:` (on Windows an NTFS alternate stream of another file),
+     * `CON`/`NUL` (a device, not a file) and a trailing dot or space (dropped by Windows). Held to the broker's own
+     * Windows rules: the vectors of `paths.safeFolderName`, which its TS test reads too.
+     */
+    @Test
+    fun `an attachment's name is a file Windows can store, by the broker's rules`() {
+        val vectors = Json.parseToJsonElement(File("../../packages/platform/tests/windows-names.json").readText())
+            .jsonObject.getValue("windows").jsonArray
+        assertTrue(vectors.size >= 10)
+        for (vector in vectors) {
+            val (name, stored) = vector.jsonArray.map { it.jsonPrimitive.content }
+            assertEquals(stored, safeFileName(name, windows = true), "for \"$name\"")
+        }
+    }
+
+    @Test
+    fun `an attachment's name loses its directory part and is never a dot name, elsewhere nothing more`() {
+        for (windows in listOf(true, false)) {
+            assertEquals("c.png", safeFileName("a/b\\c.png", windows))
+            assertEquals("file", safeFileName("dir/", windows))
+            assertEquals("file", safeFileName("", windows))
+            assertEquals("file", safeFileName(".", windows))
+            assertEquals("file", safeFileName("..", windows))
+        }
+        // macOS and Linux store these as they are.
+        assertEquals("Fix: login? <now>", safeFileName("Fix: login? <now>", windows = false))
+        assertEquals("con", safeFileName("con", windows = false))
+        assertEquals("trailing. ", safeFileName("trailing. ", windows = false))
+    }
+
+    /**
+     * The staging folder was a fixed `<tmp>/supermux-attachments`: on Linux /tmp belongs to every user, so another one
+     * could make that folder first, read what was staged there, or plant a link the next attachment was written through.
+     */
+    @Test
+    fun `attachments are staged in a folder of this process that only this user can read`() {
+        val first = stageAttachmentForTest("a-${System.nanoTime()}.txt", "hello".toByteArray())
+        val second = stageAttachmentForTest("b-${System.nanoTime()}.txt", "x".toByteArray())
+        assertNotNull(first)
+        assertNotNull(second)
+        val dir = first.parentFile
+        assertEquals(dir, second.parentFile, "one staging folder per process")
+        assertTrue(dir.name.startsWith("supermux-attachments") && dir.name != "supermux-attachments", "not the shared fixed name: ${dir.name}")
+        if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+            val perms = java.nio.file.Files.getPosixFilePermissions(dir.toPath())
+            assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(perms))
+        }
+        first.delete()
+        second.delete()
     }
 
     /**

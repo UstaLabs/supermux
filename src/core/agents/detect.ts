@@ -7,12 +7,16 @@ import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { antigravityKeyringLogin } from "./antigravity/keyring"
 import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
+import { openCodeDataDir } from "./opencode/auth"
 
 export interface AgentStatus {
   kind: AgentKind
   installed: boolean
   authed: boolean
+  /** The provider refused the login on disk (see applySignInExpiry): `authed` is false, sign in again. */
+  signInExpired?: boolean
   /** Kind-derived behavior flags for login UIs — clients must not branch on
    *  `kind` for behavior (see core/agents/capabilities.ts). */
   capabilities: AgentAuthCapabilities
@@ -26,6 +30,8 @@ export interface DetectProbes {
   hasCredential?: (kind: AgentKind) => boolean
   /** Injected `claude auth status` runner; claude's module owns the default. */
   claudeAuthStatus?: AuthStatusRunner
+  /** Injected keyring probe for agy's login; antigravity's module owns the default. */
+  antigravityKeyring?: () => boolean
 }
 
 export interface DetectPaths {
@@ -33,7 +39,6 @@ export interface DetectPaths {
   xdgConfigHome?: string
   xdgDataHome?: string
   appData?: string
-  localAppData?: string
   platform?: NodeJS.Platform
   /** Environment to treat as a credential source. Empty by default, so detection
    * reads no ambient state unless the caller opts in. Only claude uses it. */
@@ -69,10 +74,8 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
         : (paths.xdgConfigHome || pathJoin(paths.home, ".config")), "cursor", "auth.json")
     case "opencode":
       // opencode stores multi-provider creds in its XDG data dir (written by
-      // `opencode auth login`), NOT the config dir.
-      return pathJoin(platform === "win32"
-        ? (paths.localAppData || pathJoin(paths.home, "AppData", "Local"))
-        : (paths.xdgDataHome || pathJoin(paths.home, ".local", "share")), "opencode", "auth.json")
+      // `opencode auth login`), NOT the config dir, on every OS.
+      return pathJoin(openCodeDataDir({ home: paths.home, xdgDataHome: paths.xdgDataHome, env: {}, platform }), "auth.json")
     case "grok":
       return pathJoin(paths.home, ".grok", "auth.json")
     case "antigravity":
@@ -97,7 +100,9 @@ const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) =
   cursor: credFileOrStored(AgentKind.Cursor),
   opencode: credFileOrStored(AgentKind.OpenCode),
   grok: credFileOrStored(AgentKind.Grok),
-  antigravity: credFileOrStored(AgentKind.Antigravity),
+  // agy writes its token file only when the keyring fails; on Windows the login is in Credential Manager.
+  antigravity: (probes, paths) => credFileOrStored(AgentKind.Antigravity)(probes, paths)
+    || (probes.antigravityKeyring ?? (() => antigravityKeyringLogin(paths.platform)))(),
 }
 
 function credFileOrStored(kind: AgentKind) {
@@ -151,13 +156,23 @@ export class AgentNotInstalledError extends Error {
   readonly status = 409
   readonly code = "agent_not_installed"
   constructor(readonly agent: AgentKind) {
-    super(`${agentDisplayName(agent)} isn't installed on this computer. Install it in Settings ▸ Agents, then try again.`)
+    super(`${agentDisplayName(agent)} isn't installed on this computer. Install it in Settings ▸ Providers, then try again.`)
     this.name = "AgentNotInstalledError"
   }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
   return ALL_KINDS.map((k) => detectAgent(k, probes, paths))
+}
+
+/**
+ * `authed` only says a credential is on disk, and a CLI keeps its file after the login expires (an old
+ * cursor-agent auth.json). A login its provider refused (`signInExpired(kind)`: the agent's system account
+ * carries the `account_expired` mark) is not signed in: `authed` false and `signInExpired` true, so the
+ * agent's login is offered again instead of "Ready".
+ */
+export function applySignInExpiry(statuses: AgentStatus[], signInExpired: (kind: AgentKind) => boolean): AgentStatus[] {
+  return statuses.map((s) => (s.authed && signInExpired(s.kind) ? { ...s, authed: false, signInExpired: true } : s))
 }
 
 /**

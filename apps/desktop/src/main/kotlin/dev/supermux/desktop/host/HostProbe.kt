@@ -74,16 +74,18 @@ sealed interface HostPlan {
 /**
  * The launch decision. Never returns a plan that stops or edits a broker the user didn't agree to
  * hand over. [appStateDir] is the state dir the app's broker would use; a broker on another state
- * dir is somebody else's installation.
+ * dir is somebody else's installation. [ownBroker]: THIS copy of the app started what answers (its
+ * child, or its own service runs it). Another copy's broker says `managedBy: desktop` too, and is
+ * somebody else's installation all the same (#77).
  */
-fun decideHost(probe: HostProbeResult, prefs: HostingPrefs, bundledBuild: String?, appStateDir: String): HostPlan {
+fun decideHost(probe: HostProbeResult, prefs: HostingPrefs, bundledBuild: String?, appStateDir: String, ownBroker: Boolean): HostPlan {
     if (!prefs.hosting) return HostPlan.NotHosting
     return when (probe) {
         HostProbeResult.PortFree -> HostPlan.Start
         HostProbeResult.ForeignProcess -> HostPlan.MovePort
         HostProbeResult.Busy -> HostPlan.Wait
         is HostProbeResult.Supermux -> when {
-            probe.managedBy == "desktop" -> when {
+            probe.managedBy == "desktop" && ownBroker -> when {
                 probe.stateDir != null && !sameDir(probe.stateDir, appStateDir) -> HostPlan.ReadOnly
                 bundledBuild == null || probe.mode != "binary" -> HostPlan.UseOwn
                 BrokerVersion.sameBuild(probe.build, bundledBuild) -> HostPlan.UseOwn

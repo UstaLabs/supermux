@@ -193,3 +193,12 @@ test("a resumed library registry corrects what the broker remembered", () => {
   store.applySnapshot("s1", { subagentId: "a", status: "cancelled", canMessage: true, canStop: false, cannotStopReason: "It has already stopped", actionsSource: "derived", name: "Sartre", updatedAt: 5 }, 5)
   expect(store.find("s1", "a")).toMatchObject({ status: "cancelled", canStop: false, name: "Sartre", endedAt: 5 })
 })
+
+test("abandonRunning keeps the entries the caller says are still alive elsewhere", () => {
+  const store = new SubagentStore()
+  store.applyBody("p", { kind: "subagent", subagentId: "native", phase: "started" })
+  store.applyBody("p", { kind: "subagent", subagentId: "child", phase: "started" })
+  store.abandonRunning("p", Date.now(), (id) => id === "child")
+  expect(store.find("p", "native")?.status).toBe("cancelled")
+  expect(store.find("p", "child")?.status).toBe("running")
+})

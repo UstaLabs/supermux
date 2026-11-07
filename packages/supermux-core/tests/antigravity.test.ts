@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import * as entry from "../src/antigravity/index.js"
-import { antigravity, antigravityArgs, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
+import { antigravity, antigravityArgs, antigravityUpdaterEnv, permissionFlags, type AntigravityOptions } from "../src/antigravity/index.js"
 import { agyPromptBlocks } from "../src/antigravity/files.js"
 import { redactSecrets } from "../src/antigravity/transport.js"
 import { sessionPreamble } from "../src/context/agents.js"
@@ -86,6 +86,19 @@ test("new conversation: init names the session; one agy process carries every tu
   } finally { await rt.close({ mode: "shutdown" }) }
 })
 
+// #70: agy's background updater runs `agy --version` from a process without a console, which on Windows opens a
+// console window of its own. Ahmet: switch it off there only; elsewhere it is silent and keeps agy current.
+test("agy's self-update is switched off only on Windows (AGY_CLI_DISABLE_AUTO_UPDATE=true; \"1\" is not enough)", async () => {
+  expect(antigravityUpdaterEnv("win32")).toEqual({ AGY_CLI_DISABLE_AUTO_UPDATE: "true" })
+  expect(antigravityUpdaterEnv("linux")).toEqual({})
+  expect(antigravityUpdaterEnv("darwin")).toEqual({})
+  const r = await rig()
+  const rt = await r.driver().open(ctx())
+  try {
+    expect((r.spawns()[0] as { updater?: string | null }).updater).toBe(process.platform === "win32" ? "true" : null)
+  } finally { await rt.close({ mode: "shutdown" }) }
+})
+
 test("an ineligible account fails the open with agy's message", async () => {
   const r = await rig()
   await expect(r.driver({ env: { FAKE_AGY_MODE: "ineligible" } }).open(ctx())).rejects.toThrow(/Eligibility check failed/)
@@ -155,11 +168,12 @@ test("configure: a new model restarts an idle agy lazily with --model; the same 
 
 test("permission modes map to agy flags; setPermissions applies next turn through a respawn", async () => {
   expect(permissionFlags({ kind: "antigravity", mode: "bypass" })).toEqual(["--dangerously-skip-permissions"])
-  expect(permissionFlags({ kind: "antigravity", mode: "acceptEdits" })).toEqual(["--mode", "accept-edits"])
-  expect(permissionFlags({ kind: "antigravity", mode: "plan" })).toEqual(["--mode", "plan"])
-  expect(permissionFlags({ kind: "antigravity", mode: "default" })).toEqual([])
+  const allow = ["--settings", '{"permissions":{"allow":["mcp(supermux-mux-shim/council_report)","mcp(supermux-mux-shim/message_session)"]}}']
+  expect(permissionFlags({ kind: "antigravity", mode: "acceptEdits" })).toEqual(["--mode", "accept-edits", ...allow])
+  expect(permissionFlags({ kind: "antigravity", mode: "plan" })).toEqual(["--mode", "plan", ...allow])
+  expect(permissionFlags({ kind: "antigravity", mode: "default" })).toEqual(allow)
   expect(antigravityArgs({ prefix: ["x"], conversationId: "c1", model: "m1", permissions: { kind: "antigravity", mode: "plan" } }))
-    .toEqual(["x", "--input-format", "stream-json", "--output-format", "stream-json", "--conversation", "c1", "--model", "m1", "--mode", "plan"])
+    .toEqual(["x", "--input-format", "stream-json", "--output-format", "stream-json", "--conversation", "c1", "--model", "m1", "--mode", "plan", ...allow])
   const r = await rig()
   expect(() => r.driver({ permissions: { kind: "claude", permissionMode: "default" } as any })).toThrow(TypeError)
   const rt = await r.driver({ permissions: { kind: "antigravity", mode: "plan" } }).open(ctx())

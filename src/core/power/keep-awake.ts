@@ -133,9 +133,8 @@ export function isDenied(stderr: string | undefined): boolean {
 export const CAFFEINATE = "/usr/bin/caffeinate"
 
 /**
- * The Linux wait run AS the inhibitor's command (systemd-inhibit, kde-inhibit). Same parent-bound
- * idea as frpc's wrapper (`parentBoundFrpcCommand` in core/relay/frp-provider): poll with `kill -0`
- * and end as soon as either the broker ($1) or our own parent (the inhibitor, $PPID) is gone, so
+ * The Linux wait run AS the inhibitor's command (systemd-inhibit, kde-inhibit), bound to its
+ * parents: poll with `kill -0` and end as soon as either the broker ($1) or our own parent (the inhibitor, $PPID) is gone, so
  * neither a broker SIGKILL nor a kill of the inhibitor leaves the lock or an orphan behind.
  */
 export const LINUX_WAIT_SH = [

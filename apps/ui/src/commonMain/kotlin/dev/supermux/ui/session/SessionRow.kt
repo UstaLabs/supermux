@@ -62,18 +62,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.pathLeaf
 import dev.supermux.host.HostView
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.SectionKey
 import dev.supermux.session.effectiveUserStatus
 import dev.supermux.session.formatWorkdir
-import dev.supermux.session.inferHomeDir
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.chat.councilHeadAndBody
+import dev.supermux.ui.chat.inboxSenderName
+import dev.supermux.ui.chat.noticePlainText
 import dev.supermux.ui.host.HostBadge
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
@@ -84,6 +88,27 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.softElevation
 import dev.supermux.ui.sessionPreviewPlainText
+
+/** What [sessionRowPreview] reads of a message at most. */
+private const val PREVIEW_INPUT_CAP = 300
+
+/**
+ * A session row's preview line: the last message as plain text. A message from another session (or
+ * supermux) names its sender ("personal-4: …"), a council report its council, round and member,
+ * without the ids agents are shown (decision #19). Null when there is nothing to show.
+ */
+internal fun sessionRowPreview(entry: LogEntry?): String? {
+    // An 80-character line never needs more (sessionPreviewPlainText caps the same way).
+    val raw = entry?.text?.take(PREVIEW_INPUT_CAP) ?: return null
+    if (entry.channel != "inbox") return sessionPreviewPlainText(raw).ifBlank { null }?.take(80)
+    val (sender, said) = if (entry.council_id != null) {
+        councilHeadAndBody(raw)
+    } else {
+        (inboxSenderName(entry) ?: "Another session") to raw
+    }
+    val plain = sessionPreviewPlainText(noticePlainText(said))
+    return (if (plain.isBlank()) sender else "$sender: $plain").take(80)
+}
 
 /**
  * Labels a session row's right-click / overflow menu offers, by lifecycle section.
@@ -205,7 +230,7 @@ fun PathGroupHeader(
 }
 
 private fun groupHeaderLeaf(label: String, fullLabel: Boolean): String =
-    if (fullLabel) label else label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+    if (fullLabel) label else pathLeaf(label).ifEmpty { label }
 
 /** [PathGroupHeader]'s default leading tile: the leaf's first letter on a label-hashed colour. */
 @Composable
@@ -497,19 +522,21 @@ private fun PointerSessionRow(
                         HostBadge(host)
                     }
 
-                    // Status badge — show when status is non-null and not "active".
+                    // Status badge — show when status is non-null and not "active". A suspended
+                    // session that is working is being woken (card #75): it says "starting".
                     val status = s.status
                     if (status != null && status != "active") {
-                        val badgeColor = if (status == "suspended") Color(c.warning)
+                        val waking = status == "suspended" && working
+                        val badgeColor = if (waking) cs.primary else if (status == "suspended") Color(c.warning)
                         else cs.onSurfaceVariant.copy(alpha = 0.6f)
                         Spacer(Modifier.height(2.dp))
-                        Text(status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
+                        Text(if (waking) "starting" else status, color = badgeColor, fontFamily = MonoFontFamily, fontSize = 10.sp)
                     } else {
                         Spacer(Modifier.height(Space.xs))
                     }
 
                     // Preview: last message or workdir fallback.
-                    val previewText = preview?.text?.let { sessionPreviewPlainText(it) }?.ifBlank { null }?.take(80)
+                    val previewText = sessionRowPreview(preview)
                     if (previewText != null) {
                         Text(
                             previewText,

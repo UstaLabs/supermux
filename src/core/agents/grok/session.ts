@@ -2,28 +2,20 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import type { GrokAcpCommand } from "../../slash-commands/types"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { CoreAdapter, GROK_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getGrokCoreHost } from "./core-host-provider"
 import type { GrokCoreHost, GrokPrepareExtra } from "./core-host"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
-import { grokSkillsDirs } from "../../plugins"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
-export type GrokCommandContext = {
-  commands?: GrokAcpCommand[]
-  skillsDirs: string[]
-}
-
-export function commandContext(ctx: CommandContextCtx): GrokCommandContext {
-  return {
-    commands: (ctx.adapter as { availableCommands?: GrokAcpCommand[] } | undefined)?.availableCommands,
-    skillsDirs: grokSkillsDirs(ctx.sessionName),
-  }
+/** Slash commands: what the session's grok reported (initialize, available_commands_update), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }
 
 export type GrokSessionAdapter = CoreAdapter
@@ -113,7 +105,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.grokHost)
-  const sessionHome = join(STATE_DIR, "agents", "grok", name)
+  const sessionHome = join(STATE_DIR, "agents", "grok", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Grok, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -172,6 +164,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)
@@ -208,12 +202,13 @@ export async function resumeGrokSession(
     onGrokSessionId?: (name: string, sid: string) => void
     grokHost?: GrokCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; permissionMode?: string; account?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.grokHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     extra: prepareExtra({
@@ -230,6 +225,7 @@ export async function resumeGrokSession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -301,6 +297,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onGrokSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       grokHost: ctx.grokHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

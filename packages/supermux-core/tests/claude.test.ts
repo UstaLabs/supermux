@@ -57,6 +57,38 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('a Claude process that dies mid-turn: the error says how it exited and the last line it wrote to stderr', async () => {
+  const exits: Error[] = []
+  const r = await driver().open(ctx({ onExit: e => { exits.push(e) } }))
+  try {
+    const failure: any = await r.prompt(input('crash'), signal()).then(() => undefined, (e: unknown) => e)
+    expect(failure).toMatchObject({ code: 'agent_exited', message: 'Claude process exited with code 3: oh no: Bun has crashed. This indicates a bug in Bun, not your code.' })
+    expect(failure.exit).toEqual({ code: 3, stderr: ['panic(main thread): Segmentation fault at address 0x0', 'oh no: Bun has crashed. This indicates a bug in Bun, not your code.'] })
+    expect(exits).toEqual([failure])
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('the initialize reply reaches the host as a native update carrying the command list', async () => {
+  // Claude 2.1.308 lists its slash commands in the initialize reply; no prompt is needed (card #13).
+  const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
+  const updates: any[] = []
+  const r = await driver({COMMANDS: JSON.stringify(commands)}).open(ctx({onUpdate: u => updates.push(u)}))
+  try {
+    const replies = updates.filter(u => u.protocol === 'native' && u.value?.type === 'control_response')
+    expect(replies).toHaveLength(1)
+    expect(replies[0].value.response.response.commands).toEqual(commands)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('resuming a conversation that was never sent to starts it fresh under the same id', async () => {
+  // Restarted before its first message: Claude has no conversation file and says "No conversation found".
+  const r = await driver().open(ctx({resumeId: 'never-sent'}))
+  try {
+    expect(r.agentSessionId).toBe('never-sent')
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('resume preserves identity; missing resume never creates a replacement', async () => {
   const r = await driver().open(ctx({resumeId: 'old'}))
   expect(r.agentSessionId).toBe('old')
@@ -73,11 +105,86 @@ test('resume preserves identity; missing resume never creates a replacement', as
   } finally { await late.close({ mode: "shutdown" }) }
 })
 
+test('/clear moves the runtime to the conversation Claude starts instead of failing it', async () => {
+  // Claude 2.1.308 answers /clear (and /reset, /new) with a new conversation under a new session id: conversation_reset,
+  // then frames under the new id. It used to fail the session as an identity mismatch (card #55).
+  const resets: unknown[] = []
+  const exits: Error[] = []
+  const updates: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset), onExit: e => exits.push(e), onUpdate: u => updates.push(u) }))
+  try {
+    const first = r.agentSessionId
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    const second = r.agentSessionId
+    expect(second).not.toBe(first)
+    // The new conversation's turns are this runtime's turns.
+    const before = updates.length
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(updates.slice(before).some(u => u.value?.session_id === second && u.value?.message?.content?.[0]?.text === 'héllo')).toBe(true)
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(r.agentSessionId).not.toBe(second)
+    expect(resets).toEqual([
+      {agentSessionId: second, previousAgentSessionId: first, trigger: 'clear'},
+      {agentSessionId: r.agentSessionId, previousAgentSessionId: second, trigger: 'clear'},
+    ])
+    expect(exits).toEqual([])
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('/clear as the very first message: no system/init under the launch id, still followed', async () => {
+  const resets: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset) }))
+  try {
+    const launched = r.agentSessionId
+    expect(await r.prompt(input('/clear'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(resets).toEqual([{agentSessionId: r.agentSessionId, previousAgentSessionId: launched, trigger: 'clear'}])
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('a conversation_reset that keeps the id ends with its turn: a later foreign id is still not this session', async () => {
+  const resets: unknown[] = []
+  const updates: any[] = []
+  const r = await driver().open(ctx({ onConversationReset: reset => resets.push(reset), onUpdate: u => updates.push(u) }))
+  try {
+    const id = r.agentSessionId
+    expect(await r.prompt(input('reset-same-id'), signal())).toEqual({stopReason: 'end_turn'})
+    // The fixture's normal reply starts with frames of 'other-session'.
+    expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
+    expect(r.agentSessionId).toBe(id)
+    expect(resets).toEqual([])
+    expect(updates.some(u => u.value?.session_id === 'other-session')).toBe(false)
+    expect(updates.some(u => u.value?.session_id === id && u.value?.message?.content?.[0]?.text === 'héllo')).toBe(true)
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('interrupt cancels the in-flight turn via control_request', async () => {
   const r = await driver().open(ctx())
   try {
     const pending = r.prompt(input('hang'), signal())
     await r.interrupt()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('interrupt whose error result arrives before its reply still cancels the turn', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const pending = r.prompt(input('hang'), signal())
+    pending.catch(() => {})
+    await r.interrupt()
+    expect(await pending).toEqual({stopReason: 'cancelled'})
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('aborting the prompt signal cancels the turn when the error result comes first', async () => {
+  const r = await driver({MODE: 'interrupt-error-first'}).open(ctx())
+  try {
+    const controller = new AbortController()
+    const pending = r.prompt(input('hang'), controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort()
     expect(await pending).toEqual({stopReason: 'cancelled'})
   } finally { await r.close({ mode: "shutdown" }) }
 })
@@ -373,6 +480,65 @@ test('AskUserQuestion through Core emits user-question and never permission-requ
   }
 })
 
+test('through Core, the command list Claude reports while opening becomes commands-update: fresh and on every re-attach', async () => {
+  // The initialize reply (fresh) and the repeat initialize's reply (re-attach) usually arrive before Core has
+  // made the Session, while it holds updates; they must still come out normalized (card #13).
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-core-cmds-'))
+  keeperDirs.push(stateDirectory)
+  const commands = [{name: 'verify', description: 'Check work', argumentHint: '[what]'}]
+  const core = createCore({stateDirectory, agents: [driver({COMMANDS: JSON.stringify(commands)})], limits: TEST_LIMITS})
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const listed = () => events.flatMap(e => e.type === 'session.event' && e.event.kind === 'commands-update' ? [e.event.commands] : [])
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 150 && !ok(); i++) await new Promise(r => setTimeout(r, 20)) }
+  try {
+    const id = nextId()
+    let session = await core.sessions.create({agent: 'claude', cwd: process.cwd(), id})
+    expect(listed()).toEqual([commands])
+    for (let round = 1; round <= 3; round++) {
+      const before = listed().length
+      await session.close({mode: 'detach'})
+      session = await core.sessions.resume(id)
+      await until(() => listed().length > before)
+      expect(listed().slice(before)).toEqual([commands])
+    }
+  } finally {
+    await core.close({agents: 'shutdown'})
+  }
+})
+
+test('through Core, /clear keeps the session and its record follows the new conversation, so a resume continues it', async () => {
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-core-clear-'))
+  keeperDirs.push(stateDirectory)
+  const core = createCore({stateDirectory, agents: [driver()], limits: TEST_LIMITS})
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const resets = () => events.flatMap(e => e.type === 'session.event' && e.event.kind === 'conversation-reset' ? [e.event] : [])
+  const until = async (ok: () => boolean) => { for (let i = 0; i < 150 && !ok(); i++) await new Promise(r => setTimeout(r, 20)) }
+  const run = async (session: Awaited<ReturnType<typeof core.sessions.create>>, text: string) => (await (await session.send({content: input(text), whenBusy: 'queue'})).completed).status
+  try {
+    const id = nextId()
+    const session = await core.sessions.create({agent: 'claude', cwd: process.cwd(), id})
+    const first = session.snapshot().agentSessionId
+    expect(await run(session, 'hello')).toBe('completed')
+    expect(await run(session, '/clear')).toBe('completed')
+    const second = session.snapshot().agentSessionId
+    expect(second).not.toBe(first)
+    await until(() => resets().length > 0)
+    expect(resets()).toMatchObject([{kind: 'conversation-reset', agentSessionId: second, previousAgentSessionId: first, trigger: 'clear'}])
+    expect(await core.sessions.get(id)).toMatchObject({agentSessionId: second, previousAgentSessionId: first})
+    expect(await run(session, 'hello')).toBe('completed')
+    expect(events.some(e => e.type === 'session.failed')).toBe(false)
+    // A relaunch resumes the cleared conversation, never the one before it.
+    await session.close({mode: 'shutdown'})
+    const resumed = await core.sessions.resume(id)
+    expect(resumed.snapshot().agentSessionId).toBe(second)
+    expect(await run(resumed, 'hello')).toBe('completed')
+  } finally {
+    await core.close({agents: 'shutdown'})
+  }
+})
+
 test('AskUserQuestion is a question, not a permission, and updatedInput.answers uses question text', async () => {
   const events: any[] = []
   const r = await hostDriver({EXPECT_PERM: 'question'}).open(ctx({
@@ -427,6 +593,66 @@ test('a session default mode launches without --permission-mode even when the fa
   try {
     const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
     expect(argv).not.toContain('--permission-mode')
+  } finally {
+    await r.close({ mode: 'shutdown' })
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+test('allowedTools reach the launch as one comma-joined --allowedTools value, rules with parentheses intact; an empty list passes no flag', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const rule = 'Read(//home/u/.mux/session_inboxes/**)'
+  const argvOf = async (name: string, extra: Record<string, unknown>) => {
+    const trace = join(dir, name)
+    const r = await driver({ ENV_TRACE: trace }, extra).open(ctx())
+    try { return (JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }).argv }
+    finally { await r.close({ mode: 'shutdown' }) }
+  }
+  try {
+    const argv = await argvOf('with', { allowedTools: [rule, 'Bash(git log:*)'], disallowedTools: ['WebFetch'] })
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toBe(`${rule},Bash(git log:*)`)
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toBe('WebFetch')
+    expect(argv).not.toContain('--add-dir')
+    expect(await argvOf('empty', { allowedTools: [] })).not.toContain('--allowedTools')
+    expect(await argvOf('absent', {})).not.toContain('--allowedTools')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+/**
+ * How Claude 2.1.308 splits the values after `--allowedTools` (module helper `qu` in the bundled JS, copied
+ * from the binary): at commas and spaces OUTSIDE parentheses, once per argv value. Inside `( ... )` both stay.
+ */
+function claudeCliSplit(values: string[]): string[] {
+  const out: string[] = []
+  for (const value of values) {
+    if (!value) continue
+    let current = ''
+    let inParens = false
+    for (const ch of value) {
+      if (ch === '(') { inParens = true; current += ch }
+      else if (ch === ')') { inParens = false; current += ch }
+      else if (ch === ',') { if (inParens) current += ch; else { if (current.trim()) out.push(current.trim()); current = '' } }
+      else if (ch === ' ') { if (inParens) current += ch; else if (current.trim()) { out.push(current.trim()); current = '' } }
+      else if (current || ch.trim()) current += ch
+    }
+    if (current.trim()) out.push(current.trim())
+  }
+  return out
+}
+
+test('rules with spaces inside their parentheses (exact Bash commands) survive the launch: Claude splits the one comma-joined value back into exactly them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-allow-'))
+  const file = '/home/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl'
+  const rules = ['Read(//home/u/.mux/session_inboxes/**)', `Bash(cat ${file})`, `Bash(head ${file})`, `Bash(tail ${file})`, `Bash(wc -l ${file})`]
+  const trace = join(dir, 'trace')
+  const r = await driver({ ENV_TRACE: trace }, { allowedTools: rules }).open(ctx())
+  try {
+    const { argv } = JSON.parse(await readFile(trace, 'utf8')) as { argv: string[] }
+    const at = argv.indexOf('--allowedTools')
+    expect(argv[at + 1]).toBe(rules.join(','))        // ONE argv value after the flag ...
+    expect(argv[at + 2]?.startsWith('-')).toBe(true)  // ... and a flag right behind it (nothing else is swallowed)
+    expect(claudeCliSplit([argv[at + 1]!])).toEqual(rules)
+    // The splitter is the same for one argv value per rule, so either way of passing them reads back alike.
+    expect(claudeCliSplit(rules)).toEqual(rules)
   } finally {
     await r.close({ mode: 'shutdown' })
     await rm(dir, { recursive: true, force: true })

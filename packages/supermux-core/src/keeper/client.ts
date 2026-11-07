@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
-import { lstat, rm, unlink } from 'node:fs/promises'
+import { rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { CoreError } from '../errors.js'
@@ -10,6 +10,8 @@ import { CORE_SUBCOMMANDS, selfEntry, type SelfEntry } from '../self-entry.js'
 import { privateSocketPath } from '../unix-socket.js'
 import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type KeeperWelcome } from './protocol.js'
 import { keeperSocketPaths } from './socket.js'
+import { files, proc } from '@supermux/platform'
+import { msSince, perfMark } from '../perf-marks.js'
 
 /**
  * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
@@ -51,7 +53,15 @@ export type KeeperConnection = {
   onFrame(cb: (event: KeeperFrameEvent) => void): void
   /** Records what the running agent now carries (after a change applied without a relaunch). */
   setFingerprint(fingerprint: string): Promise<void>
+  /**
+   * How the agent ended, once `frames` is done: its exit code, the signal that ended it and its last stderr lines.
+   * Undefined when the stream ended without the keeper reporting an exit (the keeper itself went away).
+   */
+  exitStatus(): KeeperExitStatus | undefined
 }
+
+/** @experimental May change before 1.0. */
+export type KeeperExitStatus = { code: number | null; signal?: string; stderr: string[] }
 
 const sessionLocks = new Map<string, Promise<unknown>>()
 
@@ -90,10 +100,8 @@ function validateSpec(spec: KeeperSpec): KeeperSpec {
   return spec
 }
 
-function alive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try { process.kill(pid, 0); return true } catch { return false }
-}
+/** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
+const alive = (pid: number): boolean => proc.isAlive(pid)
 
 /**
  * The keeper directory of session `sessionId`, `<real state directory>/keepers/<sessionId>`: like `keepers`, a
@@ -145,11 +153,14 @@ function mine(info: Stats): boolean {
  * outside the keeper directory, also sits in a 0700 directory this user owns (not a link to one).
  * A short path under a shared temp dir is predictable: another user could make its directory (once a
  * reboot emptied it, say) and listen there, to be sent a session's token.
+ * Windows: a socket file cannot be stat'ed ("socket"), and a uid or mode would mean nothing there; its
+ * folders (the keeper's, the user's own temp dir) are the user's.
  */
 function trustedSocket(dir: string, path: string): boolean {
   try {
-    const socket = lstatSync(path)
-    if (!socket.isSocket() || !mine(socket)) return false
+    const socket = files.lstatEntry(path)
+    if (socket === 'socket') return true
+    if (!socket?.isSocket() || !mine(socket)) return false
     if (resolve(dirname(path)) === resolve(dir)) return true
     const parent = lstatSync(dirname(path))
     return parent.isDirectory() && mine(parent) && (parent.mode & 0o777) === 0o700
@@ -164,8 +175,8 @@ function newSocketPath(dir: string): string {
 /** Deletes the socket a keeper left at `path` when it is this user's; anything else there stays (the path comes from a status file). */
 async function removeSocket(path: string) {
   try {
-    const info = await lstat(path)
-    if (info.isSocket() && mine(info)) await unlink(path)
+    const info = files.lstatEntry(path)
+    if (info === 'socket' || (info?.isSocket() && mine(info))) await unlink(path)
   } catch { /* gone */ }
 }
 
@@ -189,6 +200,17 @@ async function waitPidDead(pid: number, timeoutMs: number) {
   while (alive(pid) && Date.now() - start < timeoutMs) await sleep(20)
 }
 
+/**
+ * Why a keeper this call started failed: the error its status records (its agent did not start, say) when
+ * there is one, else `err`. Read before reapSpawned deletes the status; a keeper whose agent failed has
+ * removed its socket and gone, so `err` alone is a bare "connect ENOENT" or "keeper socket did not appear".
+ */
+async function keeperFailure(err: unknown, statusPath: string, pid: number): Promise<unknown> {
+  const status = await readStatus(statusPath)
+  if (status?.keeperPid !== pid || typeof status.error !== 'string' || !status.error) return err
+  return new Error(`The agent did not start: ${status.error}`, { cause: err })
+}
+
 async function reapSpawned(pid: number, sockPath: string, statusPath: string, shutdownTimeoutMs: number) {
   try { process.kill(pid, 'SIGTERM') } catch { /* */ }
   await waitPidDead(pid, shutdownTimeoutMs)
@@ -208,12 +230,55 @@ function readFingerprint(path: string): string | undefined {
 export type StopKeeperLimits = Pick<KeeperLimits, 'shutdownTimeoutMs' | 'connectTimeoutMs'>
 
 /**
- * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one):
- * SIGTERM makes the keeper shut its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exit.
+ * Asks the keeper of `dir` to stop its agent and exit, over its own socket: `hello` with its token, then `shutdown`, as an
+ * attached connection's shutdown() does. A SIGTERM did that on POSIX, but on Windows a signal is TerminateProcess: the
+ * keeper never stopped its agent, wrote its last status or removed its socket. True once the request went out.
  */
-async function retireKeeper(status: KeeperStatus, limits: StopKeeperLimits) {
-  try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
-  await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+function askKeeperToStop(dir: string, status: KeeperStatus, connectTimeoutMs: number): Promise<boolean> {
+  const token = readPrivateFile(join(dir, 'token'))?.trim()
+  if (!token) return Promise.resolve(false)
+  return new Promise(settle => {
+    const sock = createConnection(socketOf(dir, status))
+    let settled = false
+    const done = (sent: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!sent) sock.destroy()
+      settle(sent)
+    }
+    const timer = setTimeout(() => done(false), connectTimeoutMs)
+    let buffer = ''
+    sock.once('connect', () => sock.write(JSON.stringify({ type: 'hello', token, cursor: 'acked' }) + '\n'))
+    sock.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8')
+      for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        let msg: { type?: unknown }
+        try { msg = JSON.parse(line) } catch { continue }
+        if (msg.type === 'welcome') { sock.end(JSON.stringify({ type: 'shutdown' }) + '\n'); done(true); return }
+        if (msg.type === 'error') { done(false); return }
+      }
+    })
+    sock.once('error', () => done(false))
+    sock.once('close', () => done(false))
+  })
+}
+
+/**
+ * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one): asked over its own
+ * socket first (askKeeperToStop), it shuts its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exits. A
+ * keeper that does not is sent SIGTERM, then SIGKILL, and its agent after it.
+ */
+async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeeperLimits) {
+  if (await askKeeperToStop(dir, status, limits.connectTimeoutMs)) {
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
+  if (alive(status.keeperPid)) {
+    try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
+    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
+  }
   if (alive(status.keeperPid)) {
     try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
     await waitPidDead(status.keeperPid, 2000)
@@ -285,7 +350,7 @@ export function stopKeeper(options: { stateDirectory: string; sessionId: string;
     const state = await probeKeeper(dir, status, limits.connectTimeoutMs)
     if (state === 'down') return false
     if (state === 'unknown') throw new KeeperUnconfirmed(sessionId, status.keeperPid, socketOf(dir, status))
-    await retireKeeper(status, limits)
+    await retireKeeper(dir, status, limits)
     // A keeper killed outright leaves its socket behind.
     await removeSocket(socketOf(dir, status))
     return true
@@ -329,10 +394,12 @@ export function detachedKeeperHooks(stateDirectory: string, limits: StopKeeperLi
 }
 
 /** Waits for the new keeper's socket: a socket of this user's at `sockPath` (never connected to through a link). */
-async function waitForSocket(dir: string, sockPath: string, timeoutMs: number) {
+async function waitForSocket(dir: string, sockPath: string, pid: number, timeoutMs: number) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     if (trustedSocket(dir, sockPath)) return
+    // One that exited (its agent did not start, say) never makes it.
+    if (!alive(pid)) throw new Error('keeper exited before its socket appeared')
     await sleep(20)
   }
   throw new Error('keeper socket did not appear')
@@ -366,7 +433,11 @@ export function connectKeeper(options: ConnectKeeperOptions): Promise<KeeperConn
   if (options.cursor !== 'acked' && (typeof options.cursor !== 'number' || !Number.isInteger(options.cursor) || options.cursor < 0)) throw new TypeError('invalid cursor')
   const spec = validateSpec(options.spec)
   const limits = validateLimits(options.limits)
-  return serialize(sessionId, () => connectLocked({ stateDirectory, sessionId, spec, limits, cursor: options.cursor }))
+  const started = performance.now()
+  return serialize(sessionId, () => connectLocked({ stateDirectory, sessionId, spec, limits, cursor: options.cursor })).then(conn => {
+    perfMark(sessionId, 'keeper.connected', { ms: msSince(started) })
+    return conn
+  })
 }
 
 async function connectLocked(options: {
@@ -401,7 +472,7 @@ async function connectLocked(options: {
         throw new KeeperUnconfirmed(options.sessionId, status.keeperPid, sockPath,
           `The keeper of session ${options.sessionId} does not answer on ${sockPath}: its outdated launch was not stopped`)
       }
-      if (state === 'up') await retireKeeper(status, options.limits)
+      if (state === 'up') await retireKeeper(dir, status, options.limits)
       status = await readStatus(statusPath)
     }
   }
@@ -420,9 +491,11 @@ async function connectLocked(options: {
     sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
     const entry = keeperEntry()
+    const spawnStarted = performance.now()
     const child = spawn(entry.command, entry.args, {
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       cwd: entry.cwd,
       env: {
         ...process.env,
@@ -447,7 +520,7 @@ async function connectLocked(options: {
     try {
       if (options.spec.fingerprint !== undefined) writeKeeperFile(dir, fingerprintPath, options.spec.fingerprint + '\n')
       else await unlink(fingerprintPath).catch(() => {})
-      await waitForSocket(dir, sockPath, options.limits.connectTimeoutMs)
+      await waitForSocket(dir, sockPath, spawnedPid, options.limits.connectTimeoutMs)
       // The keeper creates the socket before it writes status.json; wait for the status
       // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
       const started = Date.now()
@@ -457,9 +530,11 @@ async function connectLocked(options: {
         if (Date.now() - started > options.limits.connectTimeoutMs) throw new Error('keeper status did not appear')
         await sleep(20)
       }
+      perfMark(options.sessionId, 'keeper.spawned', { ms: msSince(spawnStarted) })
     } catch (err) {
+      const failure = await keeperFailure(err, statusPath, spawnedPid)
       await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
-      throw err
+      throw failure
     }
   }
 
@@ -472,7 +547,7 @@ async function connectLocked(options: {
   const waiters: Array<(v: typeof queue[number]) => void> = []
   const frameCbs: Array<(e: KeeperFrameEvent) => void> = []
   let closed = false
-  let exitCode: number | null | undefined
+  let exitStatus: KeeperExitStatus | undefined
   let welcome!: KeeperWelcome
   let replaced = false
   let welcomeSettled = false
@@ -521,7 +596,12 @@ async function connectLocked(options: {
           continue
         }
         if (msg.type === 'replaced') { replaced = true; push({ err: 'replaced' }); sock.end(); continue }
-        if (msg.type === 'exit') { exitCode = msg.code ?? null; push({ done: true }); continue }
+        if (msg.type === 'exit') {
+          const stderr = Array.isArray(msg.stderr) ? msg.stderr.filter((line: unknown): line is string => typeof line === 'string') : []
+          exitStatus = { code: typeof msg.code === 'number' ? msg.code : null, ...(typeof msg.signal === 'string' && msg.signal ? { signal: msg.signal } : {}), stderr }
+          push({ done: true })
+          continue
+        }
         if (msg.type === 'frame' || msg.type === 'parked' || msg.type === 'stderr') {
           const ev: KeeperFrameEvent = { type: msg.type, seq: msg.seq, line: msg.line }
           if (msg.stale === true) ev.stale = true
@@ -607,6 +687,7 @@ async function connectLocked(options: {
       send({ type: 'signal', signal: name })
     },
     onFrame(cb) { frameCbs.push(cb) },
+    exitStatus: () => exitStatus ? { ...exitStatus, stderr: [...exitStatus.stderr] } : undefined,
     async setFingerprint(fingerprint: string) {
       if (typeof fingerprint !== 'string') throw new TypeError('invalid fingerprint')
       writeKeeperFile(dir, fingerprintPath, fingerprint + '\n')
@@ -616,7 +697,9 @@ async function connectLocked(options: {
   return conn
   } catch (err) {
     if (spawnedPid) {
+      const failure = await keeperFailure(err, statusPath, spawnedPid)
       await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
+      throw failure
     }
     throw err
   }

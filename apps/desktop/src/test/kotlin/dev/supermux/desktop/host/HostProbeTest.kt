@@ -11,8 +11,8 @@ class HostProbeTest {
         dir: String? = stateDir, id: String = "h1",
     ) = HostProbeResult.Supermux(hostId = id, build = build, mode = mode, managedBy = managedBy, stateDir = dir)
 
-    private fun decide(p: HostProbeResult, prefs: HostingPrefs = this.prefs, bundled: String? = "1.5.0 (abc)") =
-        decideHost(p, prefs, bundledBuild = bundled, appStateDir = stateDir)
+    private fun decide(p: HostProbeResult, prefs: HostingPrefs = this.prefs, bundled: String? = "1.5.0 (abc)", own: Boolean = true) =
+        decideHost(p, prefs, bundledBuild = bundled, appStateDir = stateDir, ownBroker = own)
 
     @Test fun hostingOffDoesNothing() =
         assertEquals(HostPlan.NotHosting, decide(HostProbeResult.PortFree, prefs.copy(hosting = false)))
@@ -60,6 +60,17 @@ class HostProbeTest {
     @Test fun managedWithForeignStateDirIsReadOnly() =
         assertEquals(HostPlan.ReadOnly, decide(sm(managedBy = "desktop", dir = "/elsewhere/state")))
     @Test fun busyWaits() = assertEquals(HostPlan.Wait, decide(HostProbeResult.Busy))
+
+    // Another copy of the app's broker says managedBy desktop too (#77): never ours to update or use.
+    @Test fun anotherCopysBrokerAsksToTakeOverInsteadOfUpdating() {
+        assertEquals(HostPlan.AskTakeover("h1"), decide(sm(managedBy = "desktop", build = "1.4.0 (old)"), own = false))
+        assertEquals(HostPlan.AskTakeover("h1"), decide(sm(managedBy = "desktop"), own = false))
+    }
+    @Test fun anotherCopysBrokerFollowsTheOutsideBrokerRules() {
+        assertEquals(HostPlan.ReadOnly, decide(sm(managedBy = "desktop"), prefs.copy(leftAloneHostIds = setOf("h1")), own = false))
+        assertEquals(HostPlan.ReadOnly, decide(sm(managedBy = "desktop", dir = "/elsewhere/state"), own = false))
+        assertEquals(HostPlan.AskDowngrade("h1"), decide(sm(managedBy = "desktop", build = "1.6.0 (new)"), own = false))
+    }
 
     private fun withServer(status: Int, body: String, block: (Int) -> Unit) {
         val srv = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)

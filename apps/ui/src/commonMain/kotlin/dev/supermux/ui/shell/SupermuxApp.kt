@@ -21,6 +21,8 @@
 // session-only chat for a session that belongs to no workspace ([chatFallback]).
 package dev.supermux.ui.shell
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -56,6 +58,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -66,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -100,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot
 import dev.supermux.host.viewingSurfaceVisible
@@ -113,7 +118,6 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.session.asSettledSession
 import dev.supermux.session.formatWorkdir
-import dev.supermux.session.inferHomeDir
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostProject
 import dev.supermux.state.HostStore
@@ -137,6 +141,8 @@ import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.RetainedPage
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.NewProjectDialog
@@ -161,13 +167,14 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateBannerHost
+import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.widgets.IosBackSwipe
 import dev.supermux.ui.widgets.IosPushIn
+import dev.supermux.ui.widgets.KeyboardFirstBack
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.iosStyleBackSwipe
 import dev.supermux.ui.widgets.iosSwipeUnderLayer
@@ -179,6 +186,8 @@ import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.groupWorkspaces
+import dev.supermux.ui.panes.TAB_STRIP_HEIGHT
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
@@ -296,18 +305,25 @@ fun SupermuxApp(
     val openByWorkspace = sessionListMode == SessionListMode.Workspaces
 
     val sessions by fleet.sessions.collectAsState()
-    // First frame that draws real sessions — the end of the cold-start path ([StartupTrace]) —
+    // Card #54: how often the whole shell recomposes (every live frame for any session can).
+    SideEffect {
+        dev.supermux.util.PerfTrace.countRecompose("shell")
+        // The first composition that has live sessions, applied (drawing comes after: ui.sessions.drawn).
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.firstMilestone("ui.shell.composed", "sessions" to sessions.size)
+    }
+    // First frame that draws real sessions — the end of the cold-start path ([PerfTrace]) —
     // and the frames after the next session-list changes (the cache, then the live snapshot).
     var sessionFrames by remember { mutableStateOf(0) }
     LaunchedEffect(sessions) {
         if (sessions.isEmpty() || sessionFrames >= 3) return@LaunchedEffect
         withFrameNanos { }
         sessionFrames++
-        dev.supermux.util.StartupTrace.mark("ui.sessions.drawn", "n=$sessionFrames sessions=${sessions.size}")
+        dev.supermux.util.PerfTrace.milestone("ui.sessions.drawn", "n" to sessionFrames, "sessions" to sessions.size)
     }
     val archivedSessions by fleet.archivedSessions.collectAsState()
     val workspaces by fleet.workspaces.collectAsState()
     val archivedWorkspaces by fleet.archivedWorkspaces.collectAsState()
+    val archivedPending by fleet.archivedPending.collectAsState()
     val messages by fleet.messages.collectAsState()
     val agentState by fleet.agentState.collectAsState()
     val subagentsBySession by fleet.subagents.collectAsState()
@@ -337,13 +353,25 @@ fun SupermuxApp(
     }
     // The app owning a given session; falls back to the active host's (single-host / unknown id).
     val appFor: (String) -> HostStore? = { id -> fleet.appFor(id) ?: hostApp }
+    // Archived Agents come from the store's archive list (refreshed whenever sessions change),
+    // never fetched by the sidebar itself: its rows come and go as the list scrolls.
+    val archivedAgents = remember(archivedSessions) {
+        archivedSessions.filter { it.role == "personal_assistant" }.sortedByDescending { it.killed_at }
+    }
+    val agentAvatars = dev.supermux.ui.session.rememberAgentAvatars(
+        sessions,
+        apiFor = { id -> appFor(id)?.api },
+        extra = remember(archivedAgents) { archivedAgents.mapNotNull { a -> a.avatar?.let { a.id to it } }.toMap() },
+    )
 
     var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(fleet) { hostFilter = fleet.hostFilter.first() }
     val setHostFilter: (String?) -> Unit = { hostFilter = it; fleet.saveHostFilter(it) }
 
-    // Refresh the settled fold when the live list changes (settle / resume / snapshot).
-    LaunchedEffect(sessions) { fleet.refreshArchived() }
+    // The archived list (the Agents ▸ Archived fold, the archive) is refreshed by each host's store
+    // when it can change: a (re)connect, an archive (session_removed), a resume. It used to be
+    // re-downloaded here on EVERY change to the live list — a model switch, a git status, a
+    // rename — ~420 KB each time (card #54).
 
     val selectedSession = ui.selectedId?.let { selectedId ->
         sessions.firstOrNull { it.id == selectedId }
@@ -396,8 +424,12 @@ fun SupermuxApp(
     }
 
     // Per-session composer drafts, hoisted to the ROOT so switching sessions — and leaving the
-    // workspace entirely — preserves each draft. In-memory only (broker-side sync is M4).
-    val drafts = remember { mutableStateMapOf<String, String>() }
+    // workspace entirely — preserves each draft. Kept by the fleet, not by this composition: an
+    // Android rotation or fold recreates the whole composition, and a plain `remember` here lost
+    // every half-typed message with it (card #89). In-memory only (broker-side sync is M4).
+    val drafts = remember(fleet) { fleet.retainedUi.getOrPut("composer.drafts") { mutableStateMapOf<String, String>() } }
+    // Writes that must land even if this composition is gone by the time they run.
+    val retainedScope = fleet.retainedUi.scope
 
     // Headless-verification hook (no input injection on CI boxes); off by default.
     if (autoSelect) {
@@ -445,6 +477,20 @@ fun SupermuxApp(
         ui.selectedId?.let { fleet.ensureMessagesLoaded(it) }
         fleet.updateViewing(viewingSnapshot)
         for (sid in viewingSnapshot?.visibleChatSessionIds.orEmpty()) notify.onSessionFocused(sid)
+    }
+
+    // Card #54: every selection is a chat open, with its own trace from here to "fully shown".
+    LaunchedEffect(ui.selectedId) {
+        val sid = ui.selectedId ?: return@LaunchedEffect
+        val trace = dev.supermux.util.PerfTrace.startChat(sid)
+        dev.supermux.util.PerfTrace.event(
+            "chat.open",
+            "session" to sid,
+            "name" to sessions.firstOrNull { it.id == sid }?.name,
+            "loaded" to fleet.appFor(sid)?.chatLoaded(sid),
+            "messages" to (messages[sid]?.size ?: 0),
+            trace = trace,
+        )
     }
 
     // Activate the opened session's chat view once per selection — never in response to a
@@ -515,10 +561,15 @@ fun SupermuxApp(
     }
 
     // ── Persistent project settings (the header ⋮ → Settings) and "New project" (the list ⋮) ──
+    // Kept by the fleet, not by this composition: an Android rotation recreated the shell with
+    // both closed (#89). Read straight from the fleet: this is above where the shell provides it.
+    val projectDialogs = remember(fleet) { fleet.retainedUi.getOrPut("shell.project-dialogs") { ProjectDialogs() } }
     /** (hostId, projectId) of the open settings sheet. */
-    var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var newProjectOpen by remember { mutableStateOf(false) }
+    var projectSettingsTarget by projectDialogs::settingsTarget
+    var newProjectOpen by projectDialogs::newProjectOpen
     val catalogHosts by fleet.projectCatalogHosts.collectAsState()
+    /** Each host's own home folder: a host's folders shorten under ITS home (the single [home] is the fallback). */
+    val homeDirs by fleet.homeDirs.collectAsState()
     /** Hosts "New project" may create on: those serving a catalog, narrowed by the host filter. */
     val newProjectHosts = remember(hostViews, catalogHosts, hostFilter) {
         newProjectHosts(hostViews, catalogHosts, hostFilter)
@@ -536,37 +587,43 @@ fun SupermuxApp(
             validatePath = { h, path -> fleet.validatePathOn(h, path) },
         )
     }
-    projectSettingsTarget?.let { (hostId, projectId) ->
-        ProjectSettingsSheet(
-            hostId = hostId,
-            projectId = projectId,
-            projects = projectRefs,
-            home = home,
-            actions = projectSettingsActions,
-            onDismiss = { projectSettingsTarget = null },
-            loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
-        )
-    }
-    if (newProjectOpen) {
-        // The filtered host, else the only host; with several and no filter the dialog asks.
-        val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
-        NewProjectDialog(
-            hosts = newProjectHosts,
-            initialHost = singleHost,
-            onCreate = { h, name -> fleet.createProject(h, name) },
-            onCreated = { h, id ->
-                newProjectOpen = false
-                projectSettingsTarget = h to id
-            },
-            onDismiss = { newProjectOpen = false },
-        )
+    // Drawn above where the shell provides the fleet's retained state, so given it here: what is
+    // typed in either outlives the composition too (#89).
+    CompositionLocalProvider(dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi) {
+        projectSettingsTarget?.let { (hostId, projectId) ->
+            ProjectSettingsSheet(
+                hostId = hostId,
+                projectId = projectId,
+                projects = projectRefs,
+                home = home,
+                actions = projectSettingsActions,
+                onDismiss = { projectSettingsTarget = null },
+                loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
+            )
+        }
+        if (newProjectOpen) {
+            // The filtered host, else the only host; with several and no filter the dialog asks.
+            val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+            NewProjectDialog(
+                hosts = newProjectHosts,
+                initialHost = singleHost,
+                onCreate = { h, name -> fleet.createProject(h, name) },
+                onCreated = { h, id ->
+                    newProjectOpen = false
+                    projectSettingsTarget = h to id
+                },
+                onDismiss = { newProjectOpen = false },
+            )
+        }
     }
 
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
     val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) }, isLocalHost = isLocalHost)
+    // The launcher's writes run on the fleet's scope, not this composition's: its dispose flush is
+    // queued while an Android recreation is cancelling this very scope, so it never landed (#89).
     val launcherDraftFlushDefault: (dev.supermux.state.LauncherDraft) -> Unit = { draft ->
-        overlayScope.launch { uiPrefs.putLauncherDraft(draft) }
+        retainedScope.launch { uiPrefs.putLauncherDraft(draft) }
     }
     val launcherPane: @Composable (
         onBack: () -> Unit,
@@ -582,7 +639,7 @@ fun SupermuxApp(
             actions = launcherActions,
             permissionCatalog = permissionCatalog,
             loadPrefs = { uiPrefs.launcherPrefs.first() },
-            onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
+            onPrefsChange = { retainedScope.launch { uiPrefs.putLauncherPrefs(it) } },
             // A workspace tab keeps ITS OWN draft (just the text, in the tab's state) — never the
             // New Session screen's global one, which would drag another project's workdir,
             // worktree and text into this tab. The broker drops it when it binds the tab.
@@ -592,12 +649,12 @@ fun SupermuxApp(
                 { dev.supermux.state.LauncherDraft(text = tab.draftText) }
             },
             onDraftChange = if (tab == null) {
-                { overlayScope.launch { uiPrefs.putLauncherDraft(it) } }
+                { retainedScope.launch { uiPrefs.putLauncherDraft(it) } }
             } else {
                 { tab.onDraftText(it.text) }
             },
             onClearDraft = if (tab == null) {
-                { overlayScope.launch { uiPrefs.clearLauncherDraft() } }
+                { retainedScope.launch { uiPrefs.clearLauncherDraft() } }
             } else {
                 {}
             },
@@ -609,27 +666,28 @@ fun SupermuxApp(
             // Throws the broker's OWN refusal (bad workdir / spawn 4xx), which the screen's
             // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
             // the first message (text + pre-uploaded files) with the spawn, so nothing about it
-            // depends on this pane staying composed.
+            // depends on this pane staying composed. Answers the new session's id and does NOT
+            // open it: the spawn can outlive this composition (#89), and [onOpenSession] below is
+            // called by whichever launcher is on screen when it lands.
             onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
-                onCreated(
-                    if (tab == null) {
-                        launcherActions.createSessionWithFirstMessage(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
-                        )
-                    } else {
-                        // A workspace tab's composer: JOIN that workspace and fill this very tab.
-                        // Without workspaceId the broker mints a second workspace for the session.
-                        fleet.createSessionWithFirstMessageOrThrow(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
-                            workspaceId = tab.workspaceId,
-                            viewId = tab.viewId,
-                            permissionMode = permissionMode,
-                            account = account,
-                        )
-                    },
-                )
-                null
+                if (tab == null) {
+                    launcherActions.createSessionWithFirstMessage(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
+                    )
+                } else {
+                    // A workspace tab's composer: JOIN that workspace and fill this very tab.
+                    // Without workspaceId the broker mints a second workspace for the session.
+                    fleet.createSessionWithFirstMessageOrThrow(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                        workspaceId = tab.workspaceId,
+                        viewId = tab.viewId,
+                        permissionMode = permissionMode,
+                        account = account,
+                    )
+                }
             },
+            onOpenSession = onCreated,
+            retainKey = if (tab == null) "new-session" else "tab:${tab.viewId}",
             onSaveDraft = { workdir, agent, model, level, text, replaceDraftId ->
                 launcherActions.createDraftSession(workdir, agent, model, level, text, replaceDraftId)
             },
@@ -639,13 +697,15 @@ fun SupermuxApp(
                 val path = formatWorkdir(t.repoRoot ?: t.workdir, home)
                 if (t.branch.isNullOrBlank()) path else "$path · ${t.branch}"
             },
-            // A reopened task-list draft belongs to the New Session route, never to a tab.
+            // A reopened task-list draft belongs to the New Session route, never to a tab. Its id
+            // stays for the replace; its CONTENT is a one-shot seed (see `launcherDraftSeed`).
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
-            initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
+            initialDraft = if (tab == null) ui.launcherDraftSeed?.let { dId -> sessions.find { it.id == dId } } else null,
+            onInitialDraftApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             // The sidebar's "+" on a project; a workspace tab never consults projects.
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
-            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherProject() },
+            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,
@@ -677,8 +737,9 @@ fun SupermuxApp(
     // ── ONE back handler for the whole app: Android's `PhoneLayerBack` plus the two per-layer
     //    handlers, folded together. Panes that own BACK themselves — the editor's search overlay
     //    and its tree drawer — register their own handler deeper in the tree, and Compose
-    //    dispatches to the innermost enabled one first, so they still win. The IME is the
-    //    platform's: while it is up the system hides it before this handler is reached.
+    //    dispatches to the innermost enabled one first, so they still win. The soft keyboard
+    //    comes before all of them, and the system does NOT see to that while these handlers are
+    //    on: [KeyboardFirstBack], at the end of this function, closes it (widgets/KeyboardBack.kt).
     var backProgress by remember { mutableFloatStateOf(0f) }
     val canPopLayer = compact && ui.currentRoute is Route.Home && ui.selectedId != null
     BackHandler(enabled = ui.overlayOpen) { ui.goBack() }
@@ -708,7 +769,21 @@ fun SupermuxApp(
             openSession = { sid -> ui.focusChatTab(sid) },
         )
     }
-    CompositionLocalProvider(dev.supermux.ui.chat.LocalChatSearch provides chatSearch) {
+    // Staged attachment chips and their uploads, for a host that keeps none of its own (#89):
+    // Android's is process-wide, but on iOS and desktop a width-class change rebuilt the composer
+    // somewhere else in the tree and dropped every chip with its upload. The fleet keeps this one,
+    // and the uploads run on the fleet's scope.
+    val attachmentStore = dev.supermux.ui.chat.LocalComposerAttachmentStore.current
+        ?: remember(fleet) {
+            fleet.retainedUi.getOrPut("composer.attachments") {
+                dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
+            }
+        }
+    CompositionLocalProvider(
+        dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
+        dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
+        dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
+    ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             Modifier
@@ -723,10 +798,19 @@ fun SupermuxApp(
                     else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
                 ),
         ) {
-            AppUpdateBannerHost(onOpenPage = { ui.openAppUpdate() }, modifier = Modifier.fillMaxSize()) {
+            // One update check per launch, here rather than in the sidebar's card: on a phone the
+            // sidebar comes and goes with every chat, and each return would be another poll.
+            val appUpdater = LocalPlatform.current.updates
+            LaunchedEffect(appUpdater) { appUpdater.check() }
+            Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
+                    // A card whose login was refused: the system login signs in again under
+                    // Providers (the CLI's own login flow), an added account under Accounts.
+                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
+                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
                         Column(Modifier.fillMaxWidth()) {
@@ -738,11 +822,12 @@ fun SupermuxApp(
                                 // above), so the screen must not paint a top bar even when the
                                 // window is narrowed into the Compact width class.
                                 topBarShown = true,
+                                onSignIn = usageSignIn,
                             )
                         }
                     }
 
-                    // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honour it.
+                    // Settings dirty-section close (SettingsHub); Esc / NavDisplay onBack honour it.
                     var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                     val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
@@ -750,6 +835,9 @@ fun SupermuxApp(
                     val sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit =
                         { standalone, listState ->
                             SessionListScreen(
+                                agentAvatars = agentAvatars,
+                                archivedAgents = archivedAgents,
+                                agentsActions = dev.supermux.ui.session.rememberAgentsActions(fleet),
                                 mode = sessionListMode,
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
@@ -800,6 +888,7 @@ fun SupermuxApp(
                                 onNewChatInWorkspace = onNewChatInWorkspace,
                                 archived = archivedSessions,
                                 archivedWorkspaces = archivedWorkspaces,
+                                archivedPending = archivedPending,
                                 archivedActiveId = ui.selectedArchivedWorkspaceId,
                                 onSelectArchived = { ui.selectArchivedWorkspace(it) },
                                 onOpenDraft = { id -> ui.openLauncher(draftId = id) },
@@ -817,6 +906,7 @@ fun SupermuxApp(
                                 onAddHost = { ui.openAddHost() },
                                 projects = projectRefs,
                                 workspaceHost = workspaceHostOf,
+                                homeDirs = homeDirs,
                                 loadProjectImage = loadProjectImage,
                                 projectImageCache = projectImageCache,
                                 onReorderProjects = { hostId, ids ->
@@ -848,6 +938,10 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
+                                        // The update card sits on the footer rail, not across the
+                                        // top of the app; it draws nothing until a newer release
+                                        // is found.
+                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
@@ -878,10 +972,61 @@ fun SupermuxApp(
                                     }
                                 },
                                 tabDragState = tabDragState,
-                                listState = listState ?: androidx.compose.foundation.lazy.rememberLazyListState(),
+                                listState = listState ?: rememberSessionListState(),
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
+
+                    // The collapsed sidebar (#57): the list's own groups, drawn as a rail.
+                    val sidebarRail: @Composable () -> Unit = {
+                        val railNow = rememberRailClock()
+                        val railWorkspaces = if (hostViews.size > 1 && hostFilter != null) {
+                            workspaces.filter { workspaceHostOf(it) == hostFilter }
+                        } else workspaces
+                        val railGroups = remember(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, sessions, homeDirs) {
+                            val roles = sessions.associate { it.id to it.role }
+                            groupWorkspaces(railWorkspaces, home, projectRefs, workspaceHostOf, archivedWorkspaces, homeOf = { homeDirs[it] }) { w ->
+                                val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+                                sid != null && roles[sid] == "personal_assistant"
+                            }
+                        }
+                        val railModel = remember(railGroups, sessions, agentState, lastBySession, lastRead, ui.selectedId, railNow) {
+                            sidebarRailModel(railGroups, sessions.associateBy { it.id }, agentState, lastBySession, lastRead, ui.selectedId, railNow)
+                        }
+                        SidebarRail(
+                            model = railModel,
+                            avatars = agentAvatars,
+                            onNewSession = onNewSession,
+                            onOpenSession = { sid -> ui.selectSession(sid) },
+                            onShowSidebar = { ui.sidebarCollapsed = false },
+                            footer = {
+                                HostSwitcher(
+                                    hosts = hostViews,
+                                    sessions = sessions,
+                                    sessionHost = sessionHost,
+                                    selected = hostFilter,
+                                    onSelect = { id ->
+                                        setHostFilter(id)
+                                        id?.let { fleet.setActiveHost(it) }
+                                    },
+                                    onAddHost = { ui.openAddHost() },
+                                    onRenameHost = listActions.renameHost,
+                                    onForgetHost = listActions.forgetHost,
+                                    compact = true,
+                                )
+                                RailSettingsButton(
+                                    appearance = appearance,
+                                    onToggleTheme = onToggleTheme,
+                                    onUsage = { ui.openUsage() },
+                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onSettings = { ui.openSettings() },
+                                    usageOpen = ui.usageOpen,
+                                    onUsageDismiss = { ui.closeUsage() },
+                                    usageContent = usagePopoverBody,
+                                )
+                            },
+                        )
+                    }
 
                     val routeOnBack: () -> Unit = {
                         when (ui.currentRoute) {
@@ -923,6 +1068,7 @@ fun SupermuxApp(
                                     sidebarTopPad = sidebarTopPad,
                                     sidebarChrome = sidebarChrome,
                                     sidebarList = sidebarList,
+                                    sidebarRail = sidebarRail,
                                     launcherPane = launcherPane,
                                     onNewSession = onNewSession,
                                     onTearOutTab = onTearOutTab,
@@ -955,6 +1101,7 @@ fun SupermuxApp(
                                                 actions = usageActions,
                                                 onBack = { ui.goBack() },
                                                 standalone = true,
+                                                onSignIn = usageSignIn,
                                             )
                                         }
                                     }
@@ -965,16 +1112,21 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
                                 EscapeBox("add_host_overlay", onEscape = { ui.goBack() }) {
-                                    AddHostScreen(
-                                        onBack = { ui.goBack() },
-                                        defaultDeviceName = defaultDeviceName,
-                                        onClaim = { payload, name -> fleet.addHost(payload, name) },
-                                        onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
-                                        onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
-                                        onAdded = { onAddedHost(); ui.goBack() },
-                                        needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
-                                        pendingScans = LocalPlatform.current.pendingScans(),
-                                    )
+                                    // One opening of the screen: a claim in flight and its outcome
+                                    // are kept for it through a rotation, and the next one starts
+                                    // clean (#89).
+                                    RetainedPage {
+                                        AddHostScreen(
+                                            onBack = { ui.goBack() },
+                                            defaultDeviceName = defaultDeviceName,
+                                            onClaim = { payload, name -> fleet.addHost(payload, name) },
+                                            onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
+                                            onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
+                                            onAdded = { onAddedHost(); ui.goBack() },
+                                            needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
+                                            pendingScans = LocalPlatform.current.pendingScans(),
+                                        )
+                                    }
                                 }
                             }
 
@@ -998,7 +1150,6 @@ fun SupermuxApp(
                                 EscapeBox(
                                     tag = when (route.section) {
                                         SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
                                         else -> "settings_overlay"
                                     },
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
@@ -1055,6 +1206,7 @@ fun SupermuxApp(
                                                 onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
                                                 projects = projectRefs,
                                                 workspaceHost = workspaceHostOf,
+                                                homeDirs = homeDirs,
                                                 loadProjectImage = loadProjectImage,
                                                 projectImageCache = projectImageCache,
                                                 // Archived-only projects are hidden from the live
@@ -1079,11 +1231,15 @@ fun SupermuxApp(
                                 EscapeBox("displays_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DisplaysScreen(
-                                                actions = rememberDisplayActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // A page opening, so the viewer it has open survives a
+                                            // rotation and the next visit starts with none (#89).
+                                            RetainedPage {
+                                                DisplaysScreen(
+                                                    actions = rememberDisplayActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1095,11 +1251,15 @@ fun SupermuxApp(
                                 EscapeBox("devices_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DevicesSettingsScreen(
-                                                actions = rememberDevicesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // The same page as the hub's Devices section, so its
+                                            // dialogs and a minted link survive a rotation (#89).
+                                            RetainedPage {
+                                                DevicesSettingsScreen(
+                                                    actions = rememberDevicesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1111,11 +1271,14 @@ fun SupermuxApp(
                                 EscapeBox("proxies_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            ProxiesSettingsScreen(
-                                                actions = rememberProxiesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // As Devices above: the page keeps its dialogs (#89).
+                                            RetainedPage {
+                                                ProxiesSettingsScreen(
+                                                    actions = rememberProxiesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1159,6 +1322,9 @@ fun SupermuxApp(
         }
     }
     }
+    // Last, so that it is added after every handler above even when the keyboard is already up
+    // on the first frame; when it comes up later this is the newest handler anyway.
+    KeyboardFirstBack()
 }
 
 /** A full-pane overlay that closes on Escape, the way every sibling overlay does. */
@@ -1226,6 +1392,7 @@ private fun ShellHome(
     sidebarTopPad: Dp,
     sidebarChrome: @Composable BoxScope.(sidebarWidth: Dp, collapsed: Boolean) -> Unit,
     sidebarList: @Composable (standalone: Boolean, listState: LazyListState?) -> Unit,
+    sidebarRail: @Composable () -> Unit,
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
@@ -1246,7 +1413,7 @@ private fun ShellHome(
         sessions.filter { s ->
             dev.supermux.session.sessionListShowsUnread(
                 active = false,
-                working = agentState[s.id]?.working == true,
+                working = agentState[s.id]?.busy == true,
                 lastMessageTs = lastBySession[s.id]?.ts,
                 lastReadAt = lastRead[s.id],
             )
@@ -1306,7 +1473,7 @@ private fun ShellHome(
             // edge and its divider drifted apart during every drag.)
             var resizing by remember { mutableStateOf(false) }
             var dragStartWidth by remember { mutableStateOf(0.dp) }
-            val targetWidth = if (ui.sidebarCollapsed) 64.dp else ui.sidebarWidth
+            val targetWidth = if (ui.sidebarCollapsed) RAIL_WIDTH else ui.sidebarWidth
             val springWidth by animateDpAsState(
                 targetValue = targetWidth,
                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
@@ -1324,31 +1491,49 @@ private fun ShellHome(
             ) {
                 // ── Sidebar: collapsed rail, or the full list ──
                 val collapsed = ui.sidebarCollapsed
+                // Collapsed under a title band (macOS, the custom Linux/Windows chrome), the band
+                // above the rail belongs to what is beside it: one row of window controls, sidebar
+                // toggle and tabs, in the tab strip's colour and at its height — or the launcher's,
+                // which paints the sidebar's tone up to the top. The rail starts below the band.
+                val railUnderBand = collapsed && sidebarTopPad > 0.dp
+                // The tab strip has no tone of its own now: it is the frame's, which the rail shares.
+                val bandColor = cs.surfaceContainerHigh
+                // No title band (iPad, Android, the web, a system-framed desktop): the sidebar gets
+                // a band of its own and the toggle sits in it in BOTH states, the same spot the
+                // desktop's title-band toggle never leaves (#57).
+                val ownBand = sidebarTopPad <= 0.dp
                 Box(
                     Modifier
                         .width(animatedWidth)
                         .fillMaxHeight()
-                        .background(cs.surfaceContainerHigh)
-                        .clipToBounds()
-                        .then(if (sidebarTopPad > 0.dp) Modifier.padding(top = sidebarTopPad) else Modifier),
+                        .background(if (railUnderBand) bandColor else cs.surfaceContainerHigh)
+                        .clipToBounds(),
                 ) {
-                    if (collapsed) {
-                        SessionsRail(
-                            sessions = sessions,
-                            selectedId = ui.selectedId,
-                            agentState = agentState,
-                            onSelect = { ui.selectSession(it) },
-                            onExpand = { ui.sidebarCollapsed = false },
-                            onNewSession = onNewSession,
-                            lastBySession = lastBySession,
-                            lastRead = lastRead,
-                        )
-                    } else {
-                        // requiredWidth keeps the list at its full width while the narrower
-                        // animating parent clips it during the reveal.
-                        Box(Modifier.requiredWidth(ui.sidebarWidth).fillMaxHeight()) {
-                            sidebarList(false, null)
+                    Box(
+                        Modifier.fillMaxSize().then(
+                            when {
+                                railUnderBand -> Modifier.padding(top = TAB_STRIP_HEIGHT)
+                                sidebarTopPad > 0.dp -> Modifier.padding(top = sidebarTopPad)
+                                else -> Modifier.padding(top = SIDEBAR_BAND)
+                            },
+                        ),
+                    ) {
+                        if (collapsed) {
+                            sidebarRail()
+                        } else {
+                            // requiredWidth keeps the list at its full width while the narrower
+                            // animating parent clips it during the reveal.
+                            Box(Modifier.requiredWidth(ui.sidebarWidth).fillMaxHeight()) {
+                                sidebarList(false, null)
+                            }
                         }
+                    }
+                    if (ownBand) {
+                        SidebarBandToggle(
+                            collapsed = collapsed,
+                            onToggle = { ui.sidebarCollapsed = !collapsed },
+                            modifier = Modifier.align(Alignment.TopStart),
+                        )
                     }
                 }
 
@@ -1367,17 +1552,9 @@ private fun ShellHome(
                 }
             }
 
-            // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width).
-            if (ui.sidebarCollapsed) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = 64.dp)
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(cs.outlineVariant),
-                )
-            } else {
+            // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width). The collapsed
+            // rail has no seam line: the panes' sheets beside it are the edge.
+            if (!ui.sidebarCollapsed) {
                 SidebarDivider(
                     // Start width + total travel, clamped by setSidebarWidth: an overshoot
                     // past min/max is not lost, so the edge waits for the cursor to return.
@@ -1402,7 +1579,7 @@ private fun ShellHome(
     // ── Compact: one full-bleed layer per surface. The workspace / chat layers stay composed
     //    (a WebView, a PTY and a transcript are expensive to rebuild) and the session list
     //    slides over them.
-    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState(0, 0) }
+    val listState = rememberSessionListState()
     val visitedSessions = rememberVisitedSessions(ui.selectedId, remember(sessions) { sessions.map { it.id }.toSet() })
     val workspaceBySession = remember(workspaces) {
         workspaces.flatMap { ws -> ws.views.mapNotNull { v -> v.chatSessionId()?.let { it to ws } } }.toMap()
@@ -1519,6 +1696,31 @@ private fun ShellDetailForeground(
 ) {
     val cs = MaterialTheme.colorScheme
     when {
+        // The launcher first: it opens over whatever is selected, an archived workspace as much as
+        // a live one, and closing it goes back there. Below the archived notice it never showed.
+        ui.launcherOpen -> {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .zIndex(2f)
+                    // A sheet in the frame, like the panes': it starts where theirs do, below the
+                    // strip row, and sits in the same 6 dp gutter.
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(start = 6.dp, end = 6.dp, top = TAB_STRIP_HEIGHT, bottom = 6.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .testTag("launcher_overlay")
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                            ui.closeLauncher()
+                            true
+                        } else {
+                            false
+                        }
+                    },
+            ) {
+                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null)
+            }
+        }
         ui.selectedArchivedWorkspaceId != null -> {
             val archived = archivedWorkspaces.firstOrNull { it.id == ui.selectedArchivedWorkspaceId }
             Box(
@@ -1537,24 +1739,6 @@ private fun ShellDetailForeground(
                     },
                     color = cs.onSurfaceVariant,
                 )
-            }
-        }
-        ui.launcherOpen -> {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .zIndex(2f)
-                    .testTag("launcher_overlay")
-                    .onPreviewKeyEvent { e ->
-                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                            ui.closeLauncher()
-                            true
-                        } else {
-                            false
-                        }
-                    },
-            ) {
-                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null)
             }
         }
         selectedSession == null -> {
@@ -1609,8 +1793,9 @@ private fun WorkspacePanel(
     unreadSessions: Set<String>,
     onTearOutTab: (String) -> Unit,
 ) {
-    // Set by PaneHost onCloseView; never ends work by itself.
-    var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+    // Set by PaneHost onCloseView; never ends work by itself. Kept with the workspace, which the
+    // phone layout shares, so the question outlives a rotation or a width change (#89).
+    val panesKept = rememberWorkspacePanesKept(current.id)
     val ws = rememberHostWorkspaceSession(
         current = current,
         wsApp = wsApp,
@@ -1755,8 +1940,8 @@ private fun WorkspacePanel(
             overlayScope = overlayScope,
             launcherPane = launcherPane,
             tabDragState = tabDragState,
-            closeCandidate = closeCandidate,
-            onCloseCandidate = { closeCandidate = it },
+            closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
+            onCloseCandidate = { panesKept.askToClose(it) },
             sessionNames = sessionNames,
             unreadSessions = unreadSessions,
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
@@ -1889,4 +2074,36 @@ internal fun gitBannerFor(
             }
         }
     }
+}
+
+/** The project settings sheet's target and whether "New project" is open, kept by the fleet (#89). */
+private class ProjectDialogs {
+    var settingsTarget by mutableStateOf<Pair<String, String>?>(null)
+    var newProjectOpen by mutableStateOf(false)
+}
+
+/**
+ * The session list's state, built from the one scroll position both layouts share (#89). The
+ * Compact list and the wide sidebar each kept their own, so turning a phone or opening a Fold put
+ * the list back at the top. The fleet keeps the position as plain numbers; each list builds a
+ * state from them and writes its scrolling back.
+ */
+@Composable
+private fun rememberSessionListState(): LazyListState {
+    val place = rememberRetained("shell:sessionList.place") { SessionListPlace() }
+    val state = rememberLazyListState(place.index, place.offset)
+    LaunchedEffect(state, place) {
+        snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                place.index = index
+                place.offset = offset
+            }
+    }
+    return state
+}
+
+/** Where the session list is scrolled to (see [rememberSessionListState]). */
+private class SessionListPlace {
+    var index = 0
+    var offset = 0
 }

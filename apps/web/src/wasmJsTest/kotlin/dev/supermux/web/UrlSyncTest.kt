@@ -30,13 +30,12 @@ class UrlSyncTest {
         "/archived",
         "/proxies",
         "/displays",
-        "/personal-assistants",
-        "/settings/agents",
+        "/agents",
+        "/settings/providers",
         "/settings/devices",
         "/settings/system",
         "/settings/git-hosting",
         "/settings/proxies",
-        "/settings/assistant",
         "/settings/curator",
         "/settings/voice",
         "/settings/editor",
@@ -78,11 +77,11 @@ class UrlSyncTest {
         assertEquals("/", pathFor(ui.currentRoute, ui.selectedId))
     }
 
-    @Test fun bareSettingsNormalisesToAgents() {
+    @Test fun bareSettingsNormalisesToProviders() {
         val ui = ShellUiState()
         applyTarget(ui, parsePath("/settings"))
-        assertEquals(Route.Settings(SettingsSection.Agents), ui.currentRoute)
-        assertEquals("/settings/agents", pathFor(ui.currentRoute, ui.selectedId))
+        assertEquals(Route.Settings(SettingsSection.Providers), ui.currentRoute)
+        assertEquals("/settings/providers", pathFor(ui.currentRoute, ui.selectedId))
     }
 
     @Test fun theWizardsPathParsesHomeButIsNeverAppliedAsAnInitialUrl() {

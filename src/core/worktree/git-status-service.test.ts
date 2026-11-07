@@ -161,3 +161,21 @@ test("live: committing in a worktree triggers a recompute", async () => {
   svc.sync([])                                                // close watches
   expect(changes.some((c) => c?.ahead === 1)).toBe(true)
 })
+
+// Card #75: a session born asleep is tracked before its worktree exists (no git dirs yet).
+test("retrack: a session whose folder was made after it was tracked gets its watches and a status", async () => {
+  let made = false
+  const h = harness({ resolveGitDirs: (s) => (made ? { gitDir: `/git/${s.id}`, commonDir: "/common" } : null) })
+  h.svc.sync([{ id: "born", workdir: "/w/born" }])
+  expect(h.watchers.size).toBe(0)
+  made = true
+  h.svc.sync([{ id: "born", workdir: "/w/born" }])   // nothing changed in the row: sync alone does not look again
+  expect(h.watchers.size).toBe(0)
+  h.svc.retrack("born")
+  expect([...h.watchers.keys()].sort()).toEqual(["/common", join("/common", "refs", "heads"), "/git/born"].sort())
+  h.flush()
+  await Promise.resolve(); await Promise.resolve()
+  expect(h.svc.get("born")?.ahead).toBe(1)
+  h.svc.retrack("unknown")   // a session it does not track: nothing happens
+  expect(h.watchers.size).toBe(3)
+})

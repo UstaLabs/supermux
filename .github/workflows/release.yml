@@ -65,12 +65,12 @@ jobs:
             os: linux
             arch: arm64
             target: linux-arm64
-          # macOS native binary (Mach-O), Apple-Silicon only (macos-14). The
+          # macOS native binary (Mach-O), Apple-Silicon only (macos-15; macos-14 is retired 2026-11-02). The
           # same build-binary.sh runs unchanged and smoke-binary.sh boots the
           # real broker, so this validates macOS at RUNTIME, not just compile.
           # Intel macOS is omitted on purpose: free Intel runners are scarce and
           # would stall releases — Intel Macs can use --docker / --source.
-          - runner: macos-14
+          - runner: macos-15
             os: darwin
             arch: arm64
             target: macos-arm64
@@ -625,8 +625,8 @@ jobs:
           ST_ZIG_JOBS: "4"
         run: bash apps/terminal-core/native/build.sh linux-x64
 
-      - name: Stage host helper binaries (broker + frpc + tmux + zmx)
-        # Plan 3 Task 5 + Plan 4 Task 6: build the Bun broker, fetch frpc, and build the pinned
+      - name: Stage host helper binaries (broker + tmux + zmx)
+        # Plan 3 Task 5 + Plan 4 Task 6: build the Bun broker and build the pinned
         # zmx bundle into apps/desktop/resources/linux-x64/ so jpackage bundles them into the
         # .deb. The script self-locates the repo root, so the `apps` working-directory default is
         # fine via the relative path. tmux has no static upstream release; supply one via
@@ -772,8 +772,9 @@ jobs:
         run: ./gradlew.bat :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2
         with:
-          # Bun's ConPTY/EOF behavior is a native-Windows release gate.
-          bun-version: "1.3.14"
+          # Bun's ConPTY/EOF behavior is a native-Windows release gate, checked on every PR by ci.yml's windows lane
+          # at this same version. 1.4.x refuses a .cmd argument cmd.exe would split into a second command; 1.3.14 ran it.
+          bun-version: "1.4.4"
       - name: Install broker dependencies
         working-directory: .
         run: bun install
@@ -804,10 +805,12 @@ jobs:
         working-directory: .
         run: bun run typecheck
       - name: Test desktop native-host integration
-        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --console=plain --no-daemon
+        # DesktopOsTest runs read-aloud's and the file opener's real scripts in Windows
+        # PowerShell 5.1 (#40); every other OS only ever runs them in pwsh 7.
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --tests 'dev.supermux.desktop.platform.ScreenWatchTest' --console=plain --no-daemon
       - name: Stage native host helpers
         # Git Bash provides sh/curl/tar; the canonical staging path compiles the
-        # Windows x64 broker + sessiond and fetches the pinned frpc.exe.
+        # Windows x64 broker + sessiond.
         shell: bash
         env:
           # The web client came from web-client: no Gradle web build (and no Zig, which has
@@ -819,8 +822,7 @@ jobs:
         run: |
           $broker = Get-Item desktop/resources/windows-x64/supermux-broker.exe
           $sessiond = Get-Item desktop/resources/windows-x64/mux-sessiond.exe
-          $frpc = Get-Item desktop/resources/windows-x64/frpc.exe
-          foreach ($helper in @($broker, $sessiond, $frpc)) {
+          foreach ($helper in @($broker, $sessiond)) {
             if ($helper.Length -le 0) { throw "empty host helper: $($helper.FullName)" }
           }
       - name: Build distributable image and .msi
@@ -829,7 +831,7 @@ jobs:
         shell: pwsh
         run: |
           $imageRoot = "desktop/build/compose/binaries/main/app"
-          foreach ($name in @("supermux-broker.exe", "mux-sessiond.exe", "frpc.exe")) {
+          foreach ($name in @("supermux-broker.exe", "mux-sessiond.exe")) {
             $matches = @(Get-ChildItem $imageRoot -Recurse -File -Filter $name)
             if ($matches.Count -ne 1) {
               throw "expected one $name in application image, found $($matches.Count)"
@@ -1011,7 +1013,7 @@ jobs:
           # Raw codesign against a non-default keychain needs the SHA-1, not the label.
           IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
           res=apps/desktop/resources/macos-arm64
-          for helper in supermux-broker frpc tmux zmx mux-zmx-helper; do
+          for helper in supermux-broker tmux zmx mux-zmx-helper; do
             codesign --force --options runtime --timestamp \
               --keychain "$MACOS_COMPOSE_KEYCHAIN" \
               --sign "$IDENTITY" "$res/$helper"
@@ -1124,7 +1126,7 @@ jobs:
   build-ios-testflight:
     # Signed iOS app (with the embedded watch app + both notification extensions)
     # archived, exported as an App Store .ipa, and uploaded to TestFlight. The iOS app
-    # bundles NO broker/tmux/frpc, so there's no bun/stage-desktop-binaries step here.
+    # bundles NO broker/tmux, so there's no bun/stage-desktop-binaries step here.
     #
     # Runs on tag pushes AND workflow_dispatch dry runs. Whether it uploads to TestFlight is
     # the `upload` flag computed below = signing secrets present AND (a v* tag OR a dry run
@@ -1358,7 +1360,11 @@ jobs:
       #                    train normally clears straight through, which is what keeps this fast.
       # The external group and the review details it needs are created by
       # `bun scripts/testflight-external-setup.ts` (idempotent, run once per app).
-      TESTFLIGHT_GROUP: "Smoke Test,Developer Beta"
+      # Ahmet's rule (2026-11-04): no build goes to the EXTERNAL group, which submits it for Beta App
+      # Review, without his own word. So a release attaches to the internal group only; to send one
+      # to external testers, set the repo variable TESTFLIGHT_GROUPS="Smoke Test,Developer Beta"
+      # for that run (or attach it in App Store Connect).
+      TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUPS || 'Smoke Test' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -1439,7 +1445,14 @@ jobs:
             gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
             if [ "$CHANNEL" = "alpha" ]; then gh release edit "${GITHUB_REF_NAME}" --prerelease --latest=false; fi
           else
-            gh release create "${GITHUB_REF_NAME}" --generate-notes "${prerelease[@]}" "${assets[@]}"
+            # The release PR's own bullets (`- **feat(x):** …`) go above GitHub's generated list:
+            # the apps' update card reads its "What's new" from this body, and the generated list
+            # alone is only PR titles. No PR (a tag cut by hand) → just the generated list.
+            highlights=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '.[0].body // ""' 2>/dev/null | grep -E '^\s*[-*] ' || true)
+            notes=()
+            if [ -n "$highlights" ]; then notes=(--notes "$(printf "## What's new\n\n%s\n" "$highlights")"); fi
+            gh release create "${GITHUB_REF_NAME}" --generate-notes "${notes[@]}" "${prerelease[@]}" "${assets[@]}"
           fi
 
   publish-website:

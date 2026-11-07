@@ -1,3 +1,5 @@
+import { proc as platformProc } from "@supermux/platform"
+
 export interface AdbDevice { serial: string; state: string }
 
 export function parseAdbDevices(stdout: string): AdbDevice[] {
@@ -13,7 +15,7 @@ export function parseAdbDevices(stdout: string): AdbDevice[] {
 }
 
 export async function listDevices(): Promise<AdbDevice[]> {
-  const proc = Bun.spawn(["adb", "devices"], { stdout: "pipe", stderr: "ignore" })
+  const proc = Bun.spawn(["adb", "devices"], { ...platformProc.spawnDefaults(), stdout: "pipe", stderr: "ignore" })
   const out = await new Response(proc.stdout).text()
   await proc.exited
   return parseAdbDevices(out)

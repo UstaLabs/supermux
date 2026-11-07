@@ -7,7 +7,7 @@ package dev.supermux.ui.nav
  * *where inside Settings* you land, a route is *what full screen* is on the stack.
  */
 enum class SettingsSection(val label: String) {
-    Agents("Agents"),
+    Providers("Providers"),
     /** Extra logins per agent, picked per chat; auto-switch on a usage limit (slice A3b). */
     Accounts("Accounts"),
     Devices("Devices"),
@@ -16,11 +16,8 @@ enum class SettingsSection(val label: String) {
     Proxies("Proxies"),
     /** Session worktrees on disk: size, age, owner, manual cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
     Worktrees("Worktrees"),
-    /** PA name + soul.md — distinct from [PersonalAssistants] fleet and [Curator]. */
-    Assistant("Identity"),
     /** Nightly ~/.mux curator schedule + run-now. */
     Curator("Curator"),
     Voice("Voice"),
     EditorLsp("Editor / LSP"),
-    PersonalAssistants("Personal assistants"),
 }

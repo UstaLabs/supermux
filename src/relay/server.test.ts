@@ -31,3 +31,10 @@ test("rejects malformed bodies with 400", async () => {
   const res = await handler()(req("/register", { platform: "windows", pushToken: "t" }))
   expect(res.status).toBe(400)
 })
+
+test("an unexpected error answers JSON 500 instead of an HTML error page", async () => {
+  const broken = { register: async () => { throw new Error("boom") }, push: async () => { throw new Error("boom") }, unregister: () => {} }
+  const res = await makeRelayHandler(broken as any)(req("/push", { routingToken: "rt", ciphertext: "x" }))
+  expect(res.status).toBe(500)
+  expect(await res.json()).toEqual({ ok: false, gone: false, reason: "relay_error" })
+})

@@ -398,3 +398,132 @@ describe("UUID-only public API (name/UUID contract)", () => {
     expect(r.getActive("chat-x")).toBe(s.id)
   })
 })
+
+describe("default Agent on kill", () => {
+  test("unregistering the default Agent makes the oldest remaining Agent the default", () => {
+    const reg = makeRegistry()
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(ana.id)
+    expect(reg.defaultPA()?.name).toBe("bob")
+    expect(reg.listPAs().filter(s => s.is_default).map(s => s.name)).toEqual(["bob"])
+  })
+  test("the archived default Agent row no longer carries is_default", () => {
+    const db = openDb(join(tmpDir, `test-${Math.random()}.sqlite3`))
+    runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+    const reg = new Registry(db)
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(ana.id)
+    const row = db.query("SELECT is_default FROM sessions WHERE id = ?").get(ana.id) as { is_default: number }
+    expect(row.is_default).toBe(0)
+  })
+  test("unregistering a non-default Agent leaves the default alone", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    reg.unregister(bob.id)
+    expect(reg.defaultPA()?.name).toBe("ana")
+  })
+})
+
+describe("setDefaultAgent", () => {
+  test("makes exactly one Agent the default", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+    expect(reg.setDefaultAgent(bob.id)).toBe(true)
+    expect(reg.listPAs().filter(s => s.is_default).map(s => s.name)).toEqual(["bob"])
+  })
+  test("refuses a worker and an unknown id, and changes nothing", () => {
+    const reg = makeRegistry()
+    reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    expect(reg.setDefaultAgent(w.id)).toBe(false)
+    expect(reg.setDefaultAgent("nope")).toBe(false)
+    expect(reg.defaultPA()?.name).toBe("ana")
+  })
+})
+
+describe("onAgentsChanged", () => {
+  test("fires when the Agent list changes: create, set default, rename, kill", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    const ana = reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+    expect(n).toBe(1)
+    const bob = reg.registerPA({ name: "bob", agent: "claude" as any, workdir: "/h2", pid: 2 })
+    expect(n).toBe(2)
+    expect(reg.setDefaultAgent(bob.id)).toBe(true)
+    expect(n).toBe(3)
+    reg.rename(ana.id, "anna")
+    expect(n).toBe(4)
+    reg.unregister(bob.id)
+    expect(n).toBe(5)
+  })
+  test("stays quiet for workers and for a refused set-default", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    reg.rename(w.id, "w2")
+    expect(reg.setDefaultAgent(w.id)).toBe(false)
+    expect(reg.setDefaultAgent("nope")).toBe(false)
+    reg.unregister(w.id)
+    expect(n).toBe(0)
+  })
+  test("fires when an archived Agent is restored, not when a worker is", () => {
+    const reg = makeRegistry()
+    const ana = reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1 })
+    const w = reg.register({ name: "w", workdir: "/w", tmux_target: "t3", pid: 3 })
+    reg.unregister(ana.id)
+    reg.unregister(w.id)
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.resume(w.id, "w", 4)
+    expect(n).toBe(0)
+    const back = reg.resume(ana.id, "ana", 5)
+    expect(back?.status).not.toBe("archived")
+    expect(n).toBe(1)
+  })
+  test("fires when reassignDefault picks a new default (the supervisor's path)", () => {
+    const reg = makeRegistry()
+    reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1 })
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.reassignDefault()
+    expect(reg.defaultPA()?.is_default).toBe(true)
+    expect(n).toBe(1)
+  })
+  test("reassignDefault with no Agents stays quiet; unregister of the default fires once", () => {
+    const reg = makeRegistry()
+    let n = 0
+    reg.onAgentsChanged(() => { n++ })
+    reg.reassignDefault()
+    expect(n).toBe(0)
+    const ana = reg.registerPA({ name: "ana", agent: "claude" as any, workdir: "/h", pid: 1, is_default: true })
+    reg.registerPA({ name: "bob", agent: "claude" as any, workdir: "/h2", pid: 2 })
+    n = 0
+    reg.unregister(ana.id)
+    expect(n).toBe(1)
+  })
+})
+
+test("PATCH {isDefault:true} (updateAgent wired to the registry as in main.ts) sends agents_changed", async () => {
+  const { updateAgent } = await import("../src/core/session-manager/create-agent")
+  const reg = makeRegistry()
+  reg.register({ name: "ana", workdir: "/h", tmux_target: "t", pid: 1, role: "personal_assistant", is_default: true })
+  const bob = reg.register({ name: "bob", workdir: "/h2", tmux_target: "t2", pid: 2, role: "personal_assistant" })
+  const frames: object[] = []
+  reg.onAgentsChanged(() => frames.push({ type: "agents_changed" }))
+  const r = await updateAgent({
+    find: (k) => reg.get(k) ?? reg.resolveName(k),
+    takenNames: () => reg.takenNames(),
+    setDefault: (id) => reg.setDefaultAgent(id),
+    rename: async (id, name) => reg.rename(id, name),
+    switchModel: async () => ({ ok: true }),
+    switchReasoning: async () => ({ ok: true }),
+  }, bob.id, { isDefault: true })
+  expect(r).toEqual({ ok: true })
+  expect(frames).toEqual([{ type: "agents_changed" }])
+})

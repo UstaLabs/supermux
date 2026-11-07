@@ -22,6 +22,9 @@ import kotlin.test.assertTrue
 
 private const val BUNDLED = "1.5.0 (abc1234)"
 
+/** The install id of the copy of the app a [Harness] stands for. */
+internal const val OUR_ID = "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e"
+
 /** A broker child that exits when told to (or when destroyed). */
 class FakeChild(override val pid: Long? = 4242, override val startMillis: Long? = 1_000) : ChildHandle {
     private val done = CompletableFuture<Int>()
@@ -43,7 +46,7 @@ class FakeProcessTable : ProcessTable {
 }
 
 /** One supervisor over fakes: a scripted probe, recorded prefs saves, fake children and a FakeOsEnv. */
-private class Harness(
+internal class Harness(
     val ts: TestScope,
     os: OsEnv.Os = OsEnv.Os.MAC,
     prefs: HostingPrefs = HostingPrefs(background = false),
@@ -54,11 +57,21 @@ private class Harness(
     captures: Map<List<String>, String> = emptyMap(),
     envVars: Map<String, String> = emptyMap(),
     cgroup: String? = null,
+    /** This computer's name; null: [lookupHostName] answers it. */
+    hostName: String? = "testbox",
+    lookupHostName: () -> String = { "looked-up" },
     val repo: Path? = null,
     xdg: String? = null,
     val home: Path = createTempDirectory("sup-home"),
     val state: Path = createTempDirectory("sup-state"),
+    /** This copy of the app's install id; null: its first launch since install ids (none saved yet). */
+    val ourId: String? = OUR_ID,
 ) {
+    /** This copy of the app's own data dir (hosts.json, install.json). */
+    val appData: Path = createTempDirectory("sup-app")
+    val identity = InstallIdentity(appData.resolve("install.json")).also { id ->
+        ourId?.let { id.save(BrokerService.Owner(it)) }
+    }
     val env = FakeOsEnv(os = os, home = home, uid = 501, xdgRuntimeDir = xdg, commands = commands, failing = failing, scripted = scripted, failIf = failIf, captures = captures, envVars = envVars, cgroup = cgroup)
     val events = mutableListOf<String>()
     var saved = prefs
@@ -68,7 +81,7 @@ private class Harness(
     var bins = HostBinaries.SidecarBinaries(
         brokerPath = state.resolve("desktop-assets/bin/supermux-broker"),
         binDir = state.resolve("desktop-assets/bin"),
-        sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = null,
+        sessiondPath = null, tmuxPath = null, zmxDir = null,
     )
     val table = FakeProcessTable()
     var baseEnv: Map<String, String> = mapOf("HOME" to home.toString())
@@ -106,7 +119,8 @@ private class Harness(
         baseEnv = { baseEnv },
         repoDir = { repo },
         bunPath = { "bun" },
-        hostName = "testbox",
+        hostName = hostName,
+        lookupHostName = lookupHostName,
         freePort = { 45678 },
         now = { ts.testScheduler.currentTime },
         io = StandardTestDispatcher(ts.testScheduler),
@@ -114,6 +128,8 @@ private class Harness(
         existingPath = "/usr/bin:/bin",
         userHome = home.toString(),
         log = { events += "log:$it" },
+        identity = identity,
+        appDataPredatesIds = { Files.exists(appData.resolve("hosts.json")) },
     )
 
     init {
@@ -128,15 +144,38 @@ private class Harness(
     fun healthyIfChild(): (Int) -> HostProbeResult = { if (liveChild != null) desktop() else HostProbeResult.PortFree }
     fun bootstrapped(plist: Path = ourPlist) = env.ran.any { it == listOf("launchctl", "bootstrap", "gui/501", plist.toString()) }
     fun ourPids() = children.map { it.pid }
+    /** A definition this copy of the app wrote: it carries [ourId]. */
+    fun ourSpec(env: Map<String, String> = emptyMap()) =
+        BrokerService.Spec(bins.brokerPath!!, env + (BrokerService.INSTALL_ENV to ourId!!), state.resolve("l.log"))
     fun writeOurPlist() {
         Files.createDirectories(ourPlist.parent)
-        Files.writeString(ourPlist, BrokerService.launchdPlist(BrokerService.Spec(bins.brokerPath!!, emptyMap(), state.resolve("l.log"))))
+        Files.writeString(ourPlist, BrokerService.launchdPlist(ourSpec()))
     }
+    /** Our registered task (the fake's `schtasks /Query` answers by default): its loop's env names us. */
+    fun writeOurWindowsTask() = BrokerService.writePrivate(BrokerService.windowsEnvPath(env), "\uFEFF" + BrokerService.windowsEnvFile(ourSpec()))
 }
 
 class HostSupervisorTest {
     private fun res(name: String) = String(javaClass.getResourceAsStream("/takeover/$name")!!.readAllBytes(), Charsets.UTF_8)
     private val running = HostingStatus.Running(9898, readOnly = false)
+
+    // #29 step 9: the app builds its supervisor during composition, on the UI thread, and InetAddress.getLocalHost() can
+    // stall ~5 s on macOS. The name is looked up when a launch needs it, on the io dispatcher, and only once.
+    @Test fun theHostNameIsLookedUpWhenTheBrokerStartsNotWhenTheSupervisorIsBuilt() = runTest {
+        val lookups = mutableListOf<String>()
+        val h = Harness(this, hostName = null, lookupHostName = { lookups += "lookup"; "studio-mac" })
+        assertTrue(lookups.isEmpty(), "building the supervisor looked the name up")
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        assertEquals("studio-mac", h.launches.single().env["MUX_HOST_NAME"])
+        assertEquals(listOf("lookup"), lookups)
+    }
+
+    // A dev run from a checkout starts the broker with bun: off PATH, the installer's own place, bun.exe on Windows.
+    @Test fun aDevRunFindsBunWhereItsInstallerPutsIt() {
+        assertEquals(Path.of("C:\\Users\\a", ".bun", "bin", "bun.exe"), HostSupervisor.installedBun("C:\\Users\\a", windows = true))
+        assertEquals(Path.of("/home/a", ".bun", "bin", "bun"), HostSupervisor.installedBun("/home/a", windows = false))
+    }
 
     // 1
     @Test fun childModeStartsTheBrokerAsAChildWithTheManagedEnv() = runTest {
@@ -154,7 +193,7 @@ class HostSupervisorTest {
         assertEquals("h-own", h.sup.hostId.value)
         assertEquals("http://127.0.0.1:9898", h.sup.localBaseUrl)
         assertTrue(h.env.ran.isEmpty())
-        assertEquals("5000:1000", Files.readString(h.state.resolve("desktop-broker.pid")))
+        assertEquals("5000:1000:$OUR_ID", Files.readString(h.state.resolve("desktop-broker.pid")))
     }
 
     // 2
@@ -447,7 +486,7 @@ class HostSupervisorTest {
         assumePosixHost()
         val bins = HostBinaries.SidecarBinaries(
             brokerPath = Path.of("/s/bin/supermux-broker"), binDir = Path.of("/s/bin"),
-            sessiondPath = null, frpcPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
+            sessiondPath = null, tmuxPath = null, zmxDir = Path.of("/s/zmx"),
         )
         val env = brokerEnv(
             HostingPrefs(port = 9898, relay = false), bins,
@@ -467,7 +506,7 @@ class HostSupervisorTest {
     }
 
     @Test fun brokerEnvWithoutCarriedUsesTheLoopbackPublicUrlAndDefaultsThePath() {
-        val bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        val bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         val env = brokerEnv(HostingPrefs(port = 9912), bins, emptyMap(), Path.of("/s"), "box", existingPath = null, home = "/h", os = OsEnv.Os.LINUX)
         // The broker's web channel needs MUX_WEB_PORT and MUX_WEB_PUBLIC_URL together (web_env_invalid).
         assertEquals("http://127.0.0.1:9912", env["MUX_WEB_PUBLIC_URL"])
@@ -477,7 +516,7 @@ class HostSupervisorTest {
 
     @Test fun brokerEnvOnWindowsCarriesSessiondAndUsesSemicolons() {
         val bin = Path.of("C:/s/bin")
-        val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker.exe"), bin, bin.resolve("mux-sessiond.exe"), null, null, null)
+        val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker.exe"), bin, bin.resolve("mux-sessiond.exe"), null, null)
         val env = brokerEnv(HostingPrefs(), bins, emptyMap(), Path.of("C:/s"), "win", existingPath = "C:/Windows", home = "C:/u", os = OsEnv.Os.WINDOWS)
         assertEquals(bin.resolve("mux-sessiond.exe").toString(), env["MUX_SESSIOND_PATH"])
         assertEquals("$bin;C:/Windows", env["PATH"])
@@ -511,7 +550,7 @@ class HostSupervisorTest {
     @Test fun devCheckoutFallsBackToABunChildInBackgroundMode() = runTest {
         val repo = createTempDirectory("repo")
         val h = Harness(this, prefs = HostingPrefs(background = true), repo = repo)
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.packaged = false
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
@@ -902,7 +941,7 @@ class HostSupervisorTest {
         val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
         Files.createDirectories(previous.parent)
         Files.writeString(previous, "old broker")
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = h.healthyIfChild()
         h.sup.ensure()
         assertEquals(listOf(previous.toString()), h.launches.single().argv)
@@ -915,7 +954,7 @@ class HostSupervisorTest {
         val previous = h.state.resolve("desktop-assets/bin/supermux-broker")
         Files.createDirectories(previous.parent)
         Files.writeString(previous, "old broker")
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
         h.sup.ensure()
         assertTrue("<string>$previous</string>" in Files.readString(h.ourPlist))
@@ -1031,7 +1070,7 @@ class HostSupervisorTest {
     @Test fun updateCopyFailureKeepsTheRunningService() = runTest {
         val h = Harness(this, prefs = HostingPrefs(background = true))
         h.writeOurPlist()
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1044,7 +1083,7 @@ class HostSupervisorTest {
         Files.writeString(h.state.resolve("desktop-broker.pid"), "777:1000")
         val orphan = FakeChild(777)
         h.table.procs[777] = ProcInfo(1_000, "/s/supermux-broker") to orphan
-        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null, null)
+        h.bins = HostBinaries.SidecarBinaries(null, null, null, null, null)
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1496,6 +1535,7 @@ class HostSupervisorTest {
         val elevated = { argv: List<String> -> argv.firstOrNull()?.endsWith("powershell.exe") == true && argv.last().contains("-Verb RunAs") }
         // Our task is registered (schtasks /Query answers) with an older definition; nothing else runs.
         val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevated, captures = noProcesses)
+        h.writeOurWindowsTask()
         h.probeFn = { h.desktop(build = "1.4.0 (old)") } // the old broker, running again after /Run
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1512,6 +1552,7 @@ class HostSupervisorTest {
     @Test fun windowsUpdateWhoseBrokerWontStopChangesNothing() = runTest {
         // The process listing fails: the old broker may still run, so no new loop may start.
         val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true))
+        h.writeOurWindowsTask()
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1524,6 +1565,7 @@ class HostSupervisorTest {
 
     @Test fun hostingOffWithUacDeclinedKeepsHostingOnAndSaysWhy() = runTest {
         val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), failIf = elevatedCall, captures = noProcesses)
+        h.writeOurWindowsTask()
         h.probeFn = { h.desktop() }
         h.sup.ensure()
         assertEquals(running, h.sup.status.value)
@@ -1646,7 +1688,9 @@ class HostSupervisorTest {
         // At login the XDG autostart started the broker: not our child, so orphan mode.
         val autostart = h.home.resolve(".config/autostart/supermux-host.desktop")
         Files.createDirectories(autostart.parent)
-        Files.writeString(autostart, BrokerService.xdgAutostart(BrokerService.Spec(h.bins.brokerPath!!, emptyMap(), h.state.resolve("l.log")), h.home.resolve(".config/supermux/broker.env")))
+        val envFile = h.home.resolve(".config/supermux/broker.env")
+        BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(h.ourSpec()))
+        Files.writeString(autostart, BrokerService.xdgAutostart(h.ourSpec(), envFile))
         val atLogin = FakeChild(999, startMillis = 0)
         Files.writeString(h.state.resolve("broker.pid"), "999")
         h.table.procs[999] = ProcInfo(0, h.bins.brokerPath.toString()) to atLogin

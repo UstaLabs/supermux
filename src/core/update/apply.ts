@@ -50,6 +50,7 @@ import { chmodSync, closeSync, existsSync, linkSync, openSync, readFileSync, ren
 import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
+import { proc as platformProc } from "@supermux/platform"
 
 const TMP_NAME = `.supermux-update.${process.pid}.tmp`
 const PREV_SUFFIX = ".prev"
@@ -588,6 +589,7 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
   const proc = Bun.spawn(
     ["sh", "-c", 'sleep 1; exec systemctl --user restart "$1"', "--", unit],
     {
+      ...platformProc.spawnDefaults(),
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
@@ -627,6 +629,7 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
   const proc = Bun.spawn(
     ["sh", "-c", `sleep 1; exec launchctl kickstart -k "gui/${uid}/$1"`, "--", label],
     {
+      ...platformProc.spawnDefaults(),
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",

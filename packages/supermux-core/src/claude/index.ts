@@ -10,6 +10,7 @@ import { CoreError } from '../errors.js'
 import { CLAUDE_CONTEXT, appliedContext, claudeContextArgs, editPluginFolder } from '../context/agents.js'
 import { EMPTY_CONTEXT_FINGERPRINT } from '../context/index.js'
 import { detachedKeeperHooks } from '../keeper/client.js'
+import { msSince, perfMark } from '../perf-marks.js'
 import type { ContextChange, ResolvedMcpServer, RuntimeContextControl } from '../context/types.js'
 
 /** Keeper meta `context`: what the running process can change live (see the runtime's context control). */
@@ -129,6 +130,11 @@ function argv(options: ClaudeOptions, permissions: Extract<PermissionsSpec, { ki
   return [...options.args, ...flags]
 }
 
+/** Claude's startup error for a --resume whose conversation file does not exist (nothing was ever sent). */
+function isMissingConversation(error: unknown): boolean {
+  return error instanceof Error && /No conversation found with session ID/i.test(error.message)
+}
+
 function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper'] {
   if (!keeper || typeof keeper !== 'object' || Array.isArray(keeper)) throw new TypeError('Claude keeper is required')
   if (typeof keeper.stateDirectory !== 'string' || !keeper.stateDirectory) throw new TypeError('Claude keeper.stateDirectory must be a nonempty string')
@@ -161,14 +167,16 @@ export function claude(options: ClaudeOptions): AgentDriver {
   const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
   const keeper = requireKeeper(options.keeper)
-  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+  /** One launch: `resume` resumes the recorded conversation, else starts it fresh under the same id. */
+  const openOnce = async function (context: Parameters<AgentDriver['open']>[0], resume: boolean): ReturnType<AgentDriver['open']> {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
     let identityConfirmed = false
     let fromMetaOwned = false
     const hostPermissions = options.permissionPrompts === 'host'
-    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
+    /** interrupting: interrupt requests sent but not yet answered; Claude may end the turn (as an error) before it answers. */
+    type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean; interrupting: number }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
     let livePermissions = launchPermissions('claude', context.permissions, initialPermissions)
@@ -177,6 +185,13 @@ export function claude(options: ClaudeOptions): AgentDriver {
     const normalizer = createClaudeNormalizer()
     /** A turn the CLI started by itself (background task finished): no user frame, no owner. */
     let unsolicited: string | undefined
+    /** Re-attached during an owned turn: ask for the command list once that turn is over. */
+    let commandsAfterTurn = false
+    /**
+     * Claude announced a new conversation (conversation_reset) in the turn that runs: the next id its own frames carry
+     * is the new one's. Kept in the keeper meta too, so a host that re-attaches before that id arrives still follows it.
+     */
+    let resetting: { trigger?: string } | undefined
     let unsolicitedSeq = 0
     const pendingPermissions = new Map<string, PendingPermission>()
     const answeredPermissions = new Map<string, AnsweredPermission>()
@@ -207,6 +222,22 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (turnUuid !== undefined && pending.turnUuid !== turnUuid) continue
         pending.controller.abort()
       }
+    }
+    /**
+     * /clear (and /reset, /new): Claude 2.1.308 goes on in a new conversation under a new session id. It says so
+     * with conversation_reset, still under the old id (its new_conversation_id is not the session id), and the
+     * frames after it carry the new id. The keeper keeps the id it replaced: a host whose record still names that
+     * one can re-attach.
+     */
+    function followConversation(next: string, previous: string, trigger?: string) {
+      agentSessionId = next
+      resetting = undefined
+      try { rpc.setMeta({ agentSessionId: next, previousAgentSessionId: previous, conversationReset: null }) } catch { /* */ }
+      try { context.onConversationReset?.({ agentSessionId: next, previousAgentSessionId: previous, ...(trigger ? { trigger } : {}) }) } catch { /* */ }
+    }
+    function expectReset(next: { trigger?: string } | undefined) {
+      resetting = next
+      try { rpc.setMeta({ conversationReset: next ?? null }) } catch { /* */ }
     }
     function fail(error: Error) {
       if (fatal) return
@@ -400,13 +431,23 @@ export function claude(options: ClaudeOptions): AgentDriver {
       cancelPendingPermissions(a.uuid)
       if (a.interrupted || frame.stop_reason === 'cancelled' || frame.stop_reason === 'interrupt') a.completion.resolve({ stopReason: 'cancelled' })
       else if (frame.is_error === true || (typeof frame.subtype === 'string' && frame.subtype.startsWith('error'))) {
+        // Interrupted mid tool call, Claude ends the turn as error_during_execution ([ede_diagnostic] ...), often before the interrupt's reply.
+        if (a.interrupting > 0) { a.completion.resolve({ stopReason: 'cancelled' }); return }
         const message = Array.isArray(frame.errors) ? frame.errors.find((x: unknown) => typeof x === 'string') : undefined
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, !!context.resumeId), context.profile)
+    const baseArgs = launchArgs(argv(options, livePermissions, agentSessionId, resume), context.profile)
     // Session context goes last: it carries a host's own appended prompt (see claudeContextArgs).
     const args = context.sessionContext ? [...baseArgs, ...claudeContextArgs(context.sessionContext, baseArgs)] : baseArgs
+    // Startup marks (perf-marks.ts): the first frames of each kind after the process came up.
+    const firstSeen = new Set<string>()
+    const firstFrame = (kind: string, fields?: Record<string, unknown>) => {
+      if (firstSeen.has(kind)) return
+      firstSeen.add(kind)
+      perfMark(context.sessionId, `claude.${kind}`, fields)
+    }
+    const transportStarted = performance.now()
     const rpc = await transport({
       command: options.command, args,
       fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT,
@@ -425,7 +466,25 @@ export function claude(options: ClaudeOptions): AgentDriver {
         return
       }
       if (plumbing.has(message?.type)) return
+      // Four kinds in all (with prompt_written): once each was seen, no frame is looked at again.
+      if (firstSeen.size < 4 && !message?.parent_tool_use_id) {
+        if (message?.type === 'system' && message.subtype === 'init') {
+          if (!firstSeen.has('system_init')) firstFrame('system_init', { mcpServers: Array.isArray(message.mcp_servers) ? message.mcp_servers.map((m: any) => `${m?.name}:${m?.status}`).join(' ') : undefined })
+        } else if (message?.type === 'stream_event') firstFrame('first_stream')
+        else if (message?.type === 'assistant') firstFrame('first_assistant')
+      }
       const sessionId = message?.session_id
+      // Only Claude's own main-thread frames name its conversation (a subagent's frames carry a parent_tool_use_id).
+      const ownFrame = !message?.parent_tool_use_id
+      if (message?.type === 'conversation_reset') {
+        if (ownFrame && (typeof sessionId !== 'string' || sessionId === agentSessionId)) expectReset({ ...(typeof message.trigger === 'string' && message.trigger ? { trigger: message.trigger } : {}) })
+      } else if (resetting && ownFrame && (message?.type === 'system' || message?.type === 'result') && typeof sessionId === 'string' && sessionId && sessionId !== agentSessionId) {
+        followConversation(sessionId, agentSessionId, resetting.trigger)
+      } else if (resetting && ownFrame && message?.type === 'result') {
+        // The reset's turn ended in the conversation it had: the next foreign id is not a new conversation.
+        expectReset(undefined)
+      }
+      // An id change Claude did not announce is still a failure.
       if (message?.type === 'system' && message.subtype === 'init') {
         if (typeof message.session_id !== 'string' || !message.session_id) { fail(new Error('Claude session identity missing')); return }
         if (message.session_id !== agentSessionId) { fail(new Error('Claude session identity mismatch')); return }
@@ -458,16 +517,32 @@ export function claude(options: ClaudeOptions): AgentDriver {
         if (typeof promptUuid === 'string' && promptUuid !== active.uuid && !fromMetaOwned) return
         const finishing = active
         complete(finishing, message)
-        try { context.onActivity?.({ id: finishing.uuid, phase: 'completed' }) } catch { /* */ }
-        try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
+        // Cleared before Core hears the turn ended: its drain starts the next queued prompt inside onActivity.
+        active = undefined
         fromMetaOwned = false
-        if (active === finishing) active = undefined
+        try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
+        try { context.onActivity?.({ id: finishing.uuid, phase: 'completed' }) } catch { /* */ }
+        if (commandsAfterTurn && !active) { commandsAfterTurn = false; askCommands() }
       }
     }, fail)
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
       if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Claude runtime closed')) }
       await rpc.close({ mode })
+    }
+    /**
+     * Claude lists its slash commands in the initialize and reload_plugins replies. Such a reply goes to the
+     * host as the native frame it is, and the normalizer turns it into commands-update — no prompt needed.
+     */
+    function forwardCommands(reply: any) {
+      if (Array.isArray(reply?.response?.commands)) context.onUpdate({ protocol: 'native', value: { type: 'control_response', response: reply } })
+    }
+    /**
+     * A second initialize: Claude 2.1.308 answers with the live list and keeps its MCP servers and permission mode.
+     * Optional: a CLI that refuses or never answers it costs the host only this refresh, never the session.
+     */
+    function askCommands() {
+      void rpc.request({ subtype: 'initialize' }, { optional: true }).then(forwardCommands, () => { /* the host keeps its stored list */ })
     }
     const setupAbort = () => { fail(new Error('Claude setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
@@ -487,14 +562,22 @@ export function claude(options: ClaudeOptions): AgentDriver {
           ? structuredClone(seededContext)
           : { folder: false, launchServers: contextMeta.launchServers, dynamicServers: [] }
         const sid = rpc.welcome.meta.agentSessionId as string
-        if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
+        // The process went on in a new conversation (/clear) the host never saved: its record names the one before.
+        const behind = !!context.resumeId && context.resumeId !== sid && rpc.welcome.meta.previousAgentSessionId === context.resumeId
+        if (context.resumeId && context.resumeId !== sid && !behind) throw new Error('Claude session identity mismatch')
         agentSessionId = sid
+        if (behind) {
+          try { context.onConversationReset?.({ agentSessionId: sid, previousAgentSessionId: context.resumeId! }) } catch { /* */ }
+        }
+        // The old host heard conversation_reset but not yet the new id: the replay follows it.
+        const pending = rpc.welcome.meta.conversationReset as { trigger?: unknown } | null | undefined
+        if (pending && typeof pending === 'object' && !Array.isArray(pending)) resetting = { ...(typeof pending.trigger === 'string' && pending.trigger ? { trigger: pending.trigger } : {}) }
         identityConfirmed = true
         const owned = rpc.welcome.meta.ownedTurn
         if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
           const uuid = (owned as { uuid: string }).uuid
           fromMetaOwned = true
-          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false }
+          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
           active = a
           try { context.onActivity?.({ id: uuid, phase: 'started' }) } catch { /* */ }
         }
@@ -506,9 +589,16 @@ export function claude(options: ClaudeOptions): AgentDriver {
         rpc.start()
         if (fatal) throw fatal
         ready = true
+        // The host that heard the first initialize is gone; ask again, once no owned turn is running.
+        if (active) commandsAfterTurn = true
+        else askCommands()
       } else {
+        perfMark(context.sessionId, 'claude.transport', { ms: msSince(transportStarted) })
+        const initializeStarted = performance.now()
         rpc.start()
-        await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
+        const initialized = await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
+        perfMark(context.sessionId, 'claude.initialized', { ms: msSince(initializeStarted), commands: Array.isArray(initialized?.response?.commands) ? initialized.response.commands.length : undefined })
+        forwardCommands(initialized)
         // Native system/init is not part of open(): CLI 2.1.261 acks initialize
         // without a session id, and emits system/init only on the first user prompt.
         // A created but never-prompted session may have no durable history.
@@ -524,7 +614,10 @@ export function claude(options: ClaudeOptions): AgentDriver {
         return
       }
       cancelPendingPermissions(a.uuid)
-      if (active === a) await rpc.request({ subtype: 'interrupt' })
+      if (active !== a) return
+      a.interrupting++
+      try { await rpc.request({ subtype: 'interrupt' }) }
+      finally { a.interrupting-- }
       if (active === a && !fatal) a.interrupted = true
     }
     // A re-attached process still runs what it ran; a fresh one cannot.
@@ -549,6 +642,8 @@ export function claude(options: ClaudeOptions): AgentDriver {
           let reply: any
           try { reply = await rpc.request({ subtype: 'reload_plugins', ...(applyOptions.holdOnCacheImpact ? { hold_on_cache_impact: true } : {}) }) }
           catch (error) { undo(); throw error }
+          // A held reload changed nothing (the folder is restored below): its list is not news.
+          if (reply?.response?.held !== true) forwardCommands(reply)
           if (reply?.response?.held === true) {
             undo()
             const impact = reply.response.cache_impact !== undefined ? `: ${JSON.stringify(reply.response.cache_impact)}` : ''
@@ -576,7 +671,9 @@ export function claude(options: ClaudeOptions): AgentDriver {
       recordFingerprint: fingerprint => rpc.setFingerprint(fingerprint),
     }
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
+      // Live: /clear moves the process to a new conversation (see followConversation).
+      get agentSessionId() { return agentSessionId },
+      capabilities: { resume: true, steer: false, fork: false, detach: true, permissions: true }, close, interrupt,
       nativeProtocol: 'claude-stream-json' as const,
       ...(restoredSubagents ? { restoredSubagents } : {}),
       context: contextControl,
@@ -611,13 +708,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
         signal.throwIfAborted()
         if (active) throw new Error('Claude prompt already running')
         const converted = input(content)
-        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false }
+        const a: Active = { uuid: randomUUID(), completion: deferred<{stopReason: string}>(), interrupted: false, interrupting: 0 }
         active = a
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
           rpc.setMeta({ ownedTurn: { uuid: a.uuid } })
           rpc.write({ type: 'user', uuid: a.uuid, session_id: agentSessionId, message: { role: 'user', content: converted } })
+          firstFrame('prompt_written')
           return await a.completion.promise
         } catch (error) { a.completion.reject(error instanceof Error ? error : new Error(String(error))); throw error }
         finally {
@@ -627,6 +725,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
           try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
         }
       },
+    }
+  }
+  return { id: options.id, context: CLAUDE_CONTEXT, ...detachedKeeperHooks(keeper.stateDirectory, { shutdownTimeoutMs, connectTimeoutMs: keeper.limits.connectTimeoutMs }), async open(context) {
+    try { return await openOnce(context, !!context.resumeId) } catch (error) {
+      // Claude writes a conversation file only with the first message: a session restarted before it
+      // has nothing to resume ("No conversation found"). Start it fresh under the same id instead.
+      if (!context.resumeId || context.signal.aborted || !isMissingConversation(error)) throw error
+      return await openOnce(context, false)
     }
   } }
 }

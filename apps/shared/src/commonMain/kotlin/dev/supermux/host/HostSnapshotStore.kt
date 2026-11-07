@@ -1,6 +1,9 @@
 package dev.supermux.host
 
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.WorkspaceDto
 
 /**
  * Pure per-host offline-snapshot cache (spec §5): recordId → its last-known LIVE session list,
@@ -32,8 +35,11 @@ class HostSnapshotStore(private val persistence: SnapshotPersistence) {
         sessions: List<SessionInfo>,
         fetchedAt: Long,
         brokerVersion: String? = null,
+        workspaces: List<WorkspaceDto> = emptyList(),
+        projects: List<ProjectDto> = emptyList(),
+        lastMessages: Map<String, LogEntry> = emptyMap(),
     ) {
-        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion)
+        byRecord[recordId] = HostSnapshot(recordId, sessions, fetchedAt, brokerVersion, workspaces, projects, lastMessages)
         flush()
     }
 

@@ -37,17 +37,17 @@ test("curator config persists across store instances (same db)", () => {
 test("app config: getAppConfig resolves env when store empty", () => {
   const db = freshDb()
   const s = new SettingsStore(db)
-  const c = s.getAppConfig({ MUX_PA_NAME: "envpa" })
-  expect(c.paName).toBe("envpa")
+  const c = s.getAppConfig({ MUX_WEB_PUBLIC_URL: "https://env.example" })
+  expect(c.webPublicUrl).toBe("https://env.example")
   expect(c.onboarded).toBe(false)
 })
 
 test("app config: setAppConfig persists and wins over env across instances", () => {
   const db = freshDb()
-  new SettingsStore(db).setAppConfig({ paName: "stored", onboarded: true })
+  new SettingsStore(db).setAppConfig({ webPublicUrl: "https://stored.example", onboarded: true })
   const reloaded = new SettingsStore(db)
-  const c = reloaded.getAppConfig({ MUX_PA_NAME: "envpa" })
-  expect(c.paName).toBe("stored")
+  const c = reloaded.getAppConfig({ MUX_WEB_PUBLIC_URL: "https://env.example" })
+  expect(c.webPublicUrl).toBe("https://stored.example")
   expect(c.onboarded).toBe(true)
   expect(reloaded.has("app")).toBe(true)
 })
@@ -55,9 +55,9 @@ test("app config: setAppConfig persists and wins over env across instances", () 
 test("app config: partial store still reveals env seed for unset fields", () => {
   const db = freshDb()
   new SettingsStore(db).setAppConfig({ telegramBotToken: "xyz" })
-  const c = new SettingsStore(db).getAppConfig({ MUX_PA_NAME: "envpa" })
+  const c = new SettingsStore(db).getAppConfig({ MUX_WEB_PUBLIC_URL: "https://env.example" })
   expect(c.telegramBotToken).toBe("xyz")
-  expect(c.paName).toBe("envpa") // never set in store → env wins
+  expect(c.webPublicUrl).toBe("https://env.example") // never set in store → env wins
 })
 
 test("app config: storage stays sparse (unset fields not persisted)", () => {
@@ -66,7 +66,7 @@ test("app config: storage stays sparse (unset fields not persisted)", () => {
   s.setAppConfig({ telegramBotToken: "xyz" })
   const raw = s.get<Record<string, unknown>>("app")!
   expect(raw.telegramBotToken).toBe("xyz")
-  expect("paName" in raw).toBe(false) // sparse: not densified to defaults
+  expect("webPublicUrl" in raw).toBe(false) // sparse: not densified to defaults
 })
 
 test("app config: explicitly cleared string reveals env on read", () => {

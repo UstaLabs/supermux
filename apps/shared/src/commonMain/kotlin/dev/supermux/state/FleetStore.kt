@@ -21,6 +21,8 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.util.TransportPolicy
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
+import dev.supermux.pairing.ClaimRedemption
+import dev.supermux.pairing.redeem
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.Attachment
@@ -162,6 +164,9 @@ class FleetStore(
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
 
+    /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
+    val retainedUi = RetainedUiState(fleetScope)
+
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
@@ -295,11 +300,15 @@ class FleetStore(
 
     val workspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.workspaces }
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = mergedList { it.archivedWorkspaces }
+    /** Some host's archived list is still on its way after a `lazyArchived` snapshot (card #54). */
+    val archivedPending: StateFlow<Boolean> =
+        eachHost { it.archivedPending }.map { pending -> pending.any { it } }.stateIn(fleetScope, SharingStarted.Eagerly, false)
     val displays: StateFlow<List<DisplayStream>> = mergedList { it.displays }
     val activity: StateFlow<Map<String, List<ActivityEvent>>> = mergedMap { it.activity }
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> = mergedMap { it.agentErrors }
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = mergedMap { it.bgTasks }
     val subagents: StateFlow<Map<String, List<dev.supermux.proto.Subagent>>> = mergedMap { it.subagents }
+    val councils: StateFlow<Map<String, List<dev.supermux.proto.CouncilView>>> = mergedMap { it.councils }
     val commands: StateFlow<Map<String, List<SlashCommand>>> = mergedMap { it.commands }
     val commandsResolved: StateFlow<Map<String, Boolean>> = mergedMap { it.commandsResolved }
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = mergedMap { it.finishJobs }
@@ -434,6 +443,13 @@ class FleetStore(
             .distinctUntilChanged()
             .flatMapLatest { app -> app?.accountLogins ?: emptyFlow() }
 
+    /** `agents_changed` frames, and reconnects, of the ACTIVE host: its Agent list is stale. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAgentsChanged: Flow<Unit> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.agentsReload ?: emptyFlow() }
+
     /**
      * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
      * known (an old broker, or before the first snapshot).
@@ -454,6 +470,14 @@ class FleetStore(
                 } ?: flowOf(emptyList())
             }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
+
+    /** The ACTIVE host's mux home, bound like [activeProjectCatalog]. Null until its snapshot. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMuxHome: StateFlow<String?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.muxHome ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
     /**
      * Record ids of the connected hosts whose broker has sent a project catalog (an empty one
@@ -478,6 +502,30 @@ class FleetStore(
         }
             .distinctUntilChanged()
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
+
+    /**
+     * Each connected host's own home folder (record id → the homeDir its snapshot sent), so a host's
+     * paths shorten to `~` under ITS home, not under one home guessed for the whole fleet. A host whose
+     * broker sent none (an older broker) is absent. Keyed on the live [HostStore]s like
+     * [projectCatalogHosts].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val homeDirs: StateFlow<Map<String, String>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                val ids = synchronized(lock) {
+                    apps.map { app -> conns.entries.firstOrNull { it.value.app === app }?.key }
+                }
+                combine(apps.mapIndexed { i, app -> app.homeDir.map { home -> ids[i]?.let { id -> home?.let { id to it } } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<Pair<String, String>?>).filterNotNull().toMap()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyMap())
 
     /**
      * The ACTIVE host's requirements ([HostStore.hostRequirements]) for the launcher's "needs git"
@@ -589,6 +637,9 @@ class FleetStore(
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         app.bindMedia(recordId)
+        // Card #54: a cache that holds workspaces (the desktop's) draws the sidebar before the
+        // socket opens; one that holds only sessions keeps the older, session-only seed above.
+        snapshots?.get(recordId)?.takeIf { it.workspaces.isNotEmpty() }?.let { app.seedFromCache(it) }
         val conn = HostConn(app)
         // Collectors funnel each host's flows into the merged state, tagged by recordId.
         conn.jobs += fleetScope.launch { app.sessions.collect { onHostSessions(recordId, it) } }
@@ -643,6 +694,7 @@ class FleetStore(
         if (seedHolds) return@publishing
         sessionsByHost[recordId] = sessions
         stageSessions(pub)
+        if (sessions.isNotEmpty()) dev.supermux.util.PerfTrace.once("fleet.sessions.published", "sessions" to sessions.size)
     }
 
     private fun onHostMessages(recordId: String, messages: Map<String, List<LogEntry>>) = publishing { pub ->
@@ -927,6 +979,15 @@ class FleetStore(
      * single-workspace, and [updateViewing] has already cleared every other host's entry, so
      * re-asserting on the rest would resurrect presence the fleet deliberately dropped.
      */
+    /**
+     * Card #62: live text for [sessionIds] without their being on screen (the assistant overlay's Agent), asked of
+     * the host that owns each; every other host's pins are cleared. Presence for nothing ([HostStore.pinLive]).
+     */
+    fun pinLive(sessionIds: Set<String>) {
+        val byHost = sessionIds.groupBy { appFor(it) }
+        for (conn in conns.values) conn.app.pinLive(byHost[conn.app].orEmpty())
+    }
+
     fun reassertViewing() {
         activeApp()?.reassertViewing()
     }
@@ -965,22 +1026,14 @@ class FleetStore(
 
     /**
      * Claim a host from a scanned/pasted [PairingPayload]: POST /pair/claim, ABORT if the returned
-     * `host.hostId` differs from the payload's (identity-mismatch guard), then persist via the store
-     * and open its connection. Mirrors Android AppViewModel.addHost.
+     * `host.hostId` differs from the payload's (identity-mismatch guard — [redeem], the same check
+     * the first-run connect page uses), then persist via the store and open its connection. Mirrors
+     * Android AppViewModel.addHost.
      */
     suspend fun addHost(payload: PairingPayload, deviceName: String): AddHostResult {
-        val url = payload.relayUrl ?: payload.directUrl
-            ?: return AddHostResult.Error("That pairing link has no host URL.")
-        val res = claim(url, payload.claimSecret, deviceName)
-            ?: return AddHostResult.Error("The host rejected the pairing — the claim is expired or already used.")
-        if (res.deviceToken.isBlank()) return AddHostResult.Error("The host didn't return a device token.")
-        // Anti-MITM (spec §3.4): require an EXACT, non-empty hostId match — a missing/blank returned
-        // id is a failure, not a pass (otherwise a MITM broker omitting `host` would be accepted).
-        val returned = res.host?.hostId
-        if (returned.isNullOrBlank() || returned != payload.hostId) {
-            return AddHostResult.Error(
-                "Host identity mismatch (link ${payload.hostId}, got ${returned?.ifBlank { null } ?: "none"}) — aborting.",
-            )
+        val res = when (val r = payload.redeem(deviceName) { url, secret, name -> claim(url, secret, name) }) {
+            is ClaimRedemption.Failed -> return AddHostResult.Error(r.message)
+            is ClaimRedemption.Redeemed -> r.result
         }
         val host = synchronized(lock) {
             store.addOrUpdate(
@@ -1339,6 +1392,15 @@ class FleetStore(
     }
     suspend fun transcribeEdit(sessionId: String?, text: String, newWords: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeEdit(text, newWords)
+    /** Live dictation stream to the host a dictation would go to. THROWS when there is none or it fails. */
+    suspend fun openDictationStream(
+        sessionId: String?,
+        dictationId: String,
+        session: suspend (dev.supermux.net.DictationStreamSocket) -> Unit,
+    ) {
+        val app = (sessionId?.let(::appFor) ?: activeApp()) ?: error("no host for this dictation")
+        app.openDictationStream(sessionId, dictationId, session)
+    }
     /** The probed voice capabilities of the host a dictation would go to. */
     suspend fun voiceConfig(sessionId: String?): AppConfigDto? =
         (sessionId?.let(::appFor) ?: activeApp())?.appConfig()
@@ -1430,9 +1492,15 @@ class FleetStore(
     suspend fun patchWorkspaceLayout(workspaceId: String, layout: LayoutNodeDto) {
         appForWorkspace(workspaceId)?.patchWorkspaceLayout(workspaceId, layout)
     }
+    /**
+     * A reorder scope can span hosts (the Agents, the flat list), so every host that owns one of
+     * the rows gets the WHOLE order: its broker renumbers only the rows it has, each to its index in
+     * the merged list, and the merged sidebar keeps exactly the order that was dropped.
+     */
     fun reorderWorkspaces(orderedIds: List<String>) {
-        val app = orderedIds.firstOrNull()?.let(::appForWorkspace) ?: activeApp()
-        app?.reorderWorkspaces(orderedIds)
+        val ids = orderedIds.toSet()
+        val owners = conns.values.map { it.app }.filter { app -> app.workspaces.value.any { it.id in ids } }
+        owners.ifEmpty { listOfNotNull(activeApp()) }.forEach { it.reorderWorkspaces(orderedIds) }
     }
     fun reorderSessions(orderedIds: List<String>) {
         val app = orderedIds.firstOrNull()?.let(::appFor) ?: activeApp()
@@ -1462,7 +1530,6 @@ class FleetStore(
     fun spawn(workdir: String, name: String?, agent: String, model: String? = null, permissionMode: String? = null) {
         activeApp()?.spawn(workdir, name, agent, model, permissionMode)
     }
-    fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
     /**
      * Restart the active host's broker; true when the POST was accepted (cluster E3).
@@ -1578,12 +1645,18 @@ class FleetStore(
         reasoningLevel: String? = null,
     ): CuratorSettingsResponse? = activeApp()?.saveCurator(enabled, hour, minute, agent, model, reasoningLevel)
     suspend fun runCuratorNow(): Boolean = activeApp()?.runCuratorNow() == true
-    suspend fun assistantLoad(): Pair<String, String>? = activeApp()?.assistantLoad()
-    suspend fun assistantSave(paName: String, soul: String): String? = activeApp()?.assistantSave(paName, soul)
-    suspend fun personalAssistants(): List<PADto> = activeApp()?.personalAssistants().orEmpty()
-    suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
-        activeApp()?.createPersonalAssistant(name, agent, focus) == true
-    suspend fun killPersonalAssistant(id: String) { (appFor(id) ?: activeApp())?.killPersonalAssistant(id) }
+    suspend fun listAgents(): AccountResult<List<PADto>> =
+        activeApp()?.listAgents() ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun createAgent(name: String, provider: String, model: String?, avatar: String? = null, effort: String? = null): AccountResult<Unit> =
+        activeApp()?.createAgent(name, provider, model, avatar, effort) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setAgentAvatar(id: String, json: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setAgentAvatar(id, json) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun killAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.killAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun setDefaultAgent(id: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.setDefaultAgent(id) ?: AccountResult.Failed(null, null, "No host is connected.")
+    suspend fun renameAgent(id: String, name: String): AccountResult<Unit> =
+        (appFor(id) ?: activeApp())?.renameAgent(id, name) ?: AccountResult.Failed(null, null, "No host is connected.")
     /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
     suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)

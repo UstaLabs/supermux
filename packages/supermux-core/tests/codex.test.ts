@@ -85,6 +85,14 @@ async function traced(env={},extra={},context={}){
  return {r,trace,dir,lines:async()=>(await readFile(trace,'utf8')).trim().split('\n').filter(Boolean).map(l=>JSON.parse(l))}
 }
 function turnStarts(lines){return lines.filter(x=>x.method==='turn/start')}
+/** Resolves once [check] holds; the limit only turns an event that never comes into a clear failure. */
+async function until(check:()=>boolean,what:string,ms=10_000){
+ const start=Date.now()
+ while(!check()){
+  if(Date.now()-start>ms)throw new Error(`timed out waiting for ${what}`)
+  await new Promise(x=>setTimeout(x,10))
+ }
+}
 /** The deny for a cancelled host ask is written asynchronously; poll briefly instead of reading the trace once. */
 async function answeredApproval(lines:()=>Promise<any[]>,id='approval'){
  for(let i=0;i<50;i++){
@@ -464,13 +472,14 @@ test('autonomous turn on open reports activity and native updates without a prom
   onUpdate:u=>updates.push(u),
  }))
  try{
-  await new Promise(x=>setTimeout(x,80))
+  // The fixture sends the autonomous turn after its thread/start reply; 'native activity' comes last.
+  await until(()=>updates.some(x=>x.value?.params?.delta==='native activity'),'the native activity delta')
   expect(activity).toEqual([{id:'auto-1',phase:'started'}])
   expect(updates.some(x=>x.value?.method==='account/rateLimits/updated')).toBe(true)
   expect(updates.some(x=>x.value?.params?.delta==='native activity')).toBe(true)
   expect(updates.some(x=>x.value?.params?.threadId==='other-thread')).toBe(false)
   await r.interrupt()
-  await new Promise(x=>setTimeout(x,40))
+  await until(()=>activity.some(x=>x.id==='auto-1'&&x.phase==='completed'),'auto-1 to end')
   expect(activity).toEqual([{id:'auto-1',phase:'started'},{id:'auto-1',phase:'completed'}])
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
  }finally{await r.close({ mode: "shutdown" })}
@@ -498,16 +507,17 @@ test('idle rate-limits update is process-scoped and does not create activity',as
  const activity:any[]=[];const updates:any[]=[]
  const r=await driver({MODE:'rate-limits'}).open(ctx({onActivity:n=>activity.push({...n}),onUpdate:u=>updates.push(u)}))
  try{
-  await new Promise(x=>setTimeout(x,40))
+  await until(()=>updates.some(x=>x.value?.method==='account/rateLimits/updated'),'the rate-limits update')
   expect(updates.some(x=>x.value?.method==='account/rateLimits/updated')).toBe(true)
   expect(activity).toEqual([])
  }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('native-only steer uses the exact autonomous turn',async()=>{
- const {r,dir,lines}=await traced({MODE:'native-steer'})
+ const activity:any[]=[]
+ const {r,dir,lines}=await traced({MODE:'native-steer'},{},{onActivity:n=>activity.push({...n})})
  try{
-  await new Promise(x=>setTimeout(x,40))
+  await until(()=>activity.some(x=>x.id==='auto-1'&&x.phase==='started'),'auto-1 to start')
   await r.steer!(input('change'))
   const steers=(await lines()).filter(x=>x.method==='turn/steer')
   expect(steers).toHaveLength(1)
@@ -519,12 +529,13 @@ test('overlap turns reject steer and prompt; stale complete leaves the newer tur
  const activity:any[]=[];const updates:any[]=[]
  const r=await driver({MODE:'stale-complete'}).open(ctx({onActivity:n=>activity.push({...n}),onUpdate:u=>updates.push(u)}))
  try{
-  await new Promise(x=>setTimeout(x,80))
+  await until(()=>activity.some(x=>x.id==='auto-2'&&x.phase==='started'),'auto-2 to start')
   expect(activity.filter(x=>x.phase==='started').map(x=>x.id).sort()).toEqual(['auto-1','auto-2'])
   await expect(r.steer!(input('x'))).rejects.toThrow('ambiguous')
   await expect(r.prompt(input('hello'),signal())).rejects.toThrow('already running')
   await expect(r.configure({})).rejects.toThrow('idle')
-  await new Promise(x=>setTimeout(x,250))
+  // The fixture ends auto-1 itself, 250 ms after starting it; auto-2 it never ends.
+  await until(()=>activity.some(x=>x.id==='auto-1'&&x.phase==='completed'),'auto-1 to end')
   expect(activity.some(x=>x.id==='auto-1'&&x.phase==='completed')).toBe(true)
   expect(activity.some(x=>x.id==='auto-2'&&x.phase==='completed')).toBe(false)
   expect(updates.some(x=>x.value?.params?.turnId==='auto-2'||x.value?.params?.turn?.id==='auto-2')).toBe(true)
@@ -536,7 +547,8 @@ test('owned prompt reports the same native id once and overlap native survives o
  const r=await driver({MODE:'overlap-turns'}).open(ctx({onActivity:n=>activity.push({...n})}))
  try{
   const pending=r.prompt(input('hang'),signal())
-  await new Promise(x=>setTimeout(x,80))
+  // The fixture starts turn-1, then auto-2: once auto-2 is seen, every report of turn-1 is in.
+  await until(()=>activity.some(x=>x.id==='auto-2'&&x.phase==='started'),'auto-2 to start')
   expect(activity.filter(x=>x.phase==='started').map(x=>x.id).sort()).toEqual(['auto-2','turn-1'])
   expect(activity.filter(x=>x.id==='turn-1'&&x.phase==='started')).toHaveLength(1)
   await r.interrupt()

@@ -5,6 +5,10 @@ vhostHTTPPort = 8080
 subdomainHost = "relay.supermux.dev"
 transport.maxPoolCount = 5
 transport.tls.force = true
+# Caddy's Let's Encrypt certificate for control.relay.supermux.dev, copied by supermux-frps-tls-sync.
+# Without these frps serves a throwaway self-signed certificate no client can verify.
+transport.tls.certFile = "/etc/supermux-relay/tls/frps.crt"
+transport.tls.keyFile = "/etc/supermux-relay/tls/frps.key"
 
 [[httpPlugins]]
 name = "supermux-auth"

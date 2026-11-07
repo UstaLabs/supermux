@@ -108,7 +108,7 @@ class GitHostingHubTest {
 
     @Test fun rail_can_switch_to_git_hosting_from_agents() = runComposeUiTest {
         val body = """{"connections":[],"cli":null}"""
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = appWithForges(body)
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {

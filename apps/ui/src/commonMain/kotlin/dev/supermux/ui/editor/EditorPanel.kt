@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
@@ -78,6 +79,7 @@ import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.chat.LocalMarkdownFiles
+import dev.supermux.ui.chat.LinkSelectionContainer
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.chat.markdownPreviewColumn
 import dev.supermux.ui.chat.MarkdownFiles
@@ -527,17 +529,20 @@ fun EditorPanel(
                                         else MarkdownFiles(parentOf(editorAbsolutePath(workdir, activeTab.path))) { abs -> fs.raw(abs) }
                                     }
                                     CompositionLocalProvider(LocalMarkdownFiles provides mdFiles) {
-                                        MarkdownBody(
-                                            text = activeTab.content,
-                                            modifier = Modifier.markdownPreviewColumn(),
-                                            document = true,
-                                            linkify = true,
-                                            onOpenFile = { ref ->
-                                                val open = onOpenFile
-                                                if (open != null) open(ref)
-                                                else revealFile(ref.path, ref.line, ref.endLine)
-                                            },
-                                        )
+                                        // Selectable as in FilePane's preview (inside the scroll).
+                                        LinkSelectionContainer {
+                                            MarkdownBody(
+                                                text = activeTab.content,
+                                                modifier = Modifier.markdownPreviewColumn(),
+                                                document = true,
+                                                linkify = true,
+                                                onOpenFile = { ref ->
+                                                    val open = onOpenFile
+                                                    if (open != null) open(ref)
+                                                    else revealFile(ref.path, ref.line, ref.endLine)
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -586,7 +591,7 @@ fun EditorPanel(
                                             color = cs.primary,
                                         )
                                         Text(
-                                            editor.loadingPath!!.substringAfterLast('/'),
+                                            pathLeaf(editor.loadingPath!!),
                                             color = cs.onSurfaceVariant,
                                             fontSize = 12.sp,
                                             modifier = Modifier.padding(top = Space.sm),

@@ -1,15 +1,12 @@
-import { readdirSync, readFileSync, existsSync } from "fs"
-import { join } from "path"
+import { readdirSync, readFileSync, existsSync, statSync } from "fs"
+import { basename, join } from "path"
 import type { Db } from "../storage/db"
 import { splitSections } from "./sections"
-import { homedir } from "os"
-
-function encodeProjectDir(cwd: string): string {
-  return cwd.replace(/\/$/, "").replace(/[/.]/g, "-")
-}
+import { home } from "../../shared/home"
+import { claudeProjectDirName } from "../agents/claude/project-dir"
 
 function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
-  return join(homedir(), ".claude", "projects", encodeProjectDir(cwd), `${claudeSessionId}.jsonl`)
+  return join(home(), ".claude", "projects", claudeProjectDirName(cwd), `${claudeSessionId}.jsonl`)
 }
 
 export interface KnowledgeHit {
@@ -40,6 +37,10 @@ export interface MessageHit {
   message_id: string
   ts: string
   direction: string
+  /** "inbox" for a message from another session (or supermux, or a council). */
+  channel: string
+  /** Who sent an inbox message. */
+  from_session_name?: string
   /** The match with some context either side; `…` marks a cut. */
   snippet: string
 }
@@ -51,57 +52,104 @@ export interface SessionFilter {
   limit?: number
 }
 
+/** A file the knowledge index covers; `stamp` is its size and mtime, taken before it is read. */
+type KnowledgeFile = { path: string; scope: string; isPersonal: number; stamp: string }
+
+const INSERT_KNOWLEDGE = "INSERT INTO memory_fts (scope, name, heading, body, path, is_personal) VALUES (?, ?, ?, ?, ?, ?)"
+
 export class SearchStore {
+  /** Each indexed file's stamp as of the last (re)index; undefined until the first build. */
+  private stamps: Map<string, string> | undefined
+
   constructor(
     private readonly db: Db,
     private readonly home: string,
   ) {}
 
-  /** Wipe + repopulate the knowledge index from domains/, personal/, conventions.md. */
+  /** Wipe + repopulate the knowledge index from domains/, personal/, conventions.md, agent-memory/. */
   rebuildKnowledge(): void {
-    const ins = this.db.prepare(
-      "INSERT INTO memory_fts (scope, name, heading, body, path, is_personal) VALUES (?, ?, ?, ?, ?, ?)",
-    )
+    const files = this.knowledgeFiles()
+    const ins = this.db.prepare(INSERT_KNOWLEDGE)
     const tx = this.db.transaction(() => {
       // DELETE + re-inserts as one atomic swap: a throw mid-rebuild won't leave the index empty.
       this.db.exec("DELETE FROM memory_fts")
-      this.indexDir(ins, join(this.home, "domains"), (f) => (f.endsWith(".digest.md") ? "digest" : "domain"), 0, (f) => f !== "_inbox.md" && f.endsWith(".md"))
-      this.indexDir(ins, join(this.home, "personal"), () => "personal", 1, (f) => f.endsWith(".md"))
-      const conv = join(this.home, "conventions.md")
-      if (existsSync(conv)) this.indexFile(ins, conv, "conventions", 0)
-      const soul = join(this.home, "soul.md")
-      if (existsSync(soul)) this.indexFile(ins, soul, "personal", 1)
+      for (const f of files) this.indexFile(ins, f)
     })
     tx()
+    this.stamps = new Map(files.map((f) => [f.path, f.stamp]))
   }
 
-  private indexDir(ins: any, dir: string, scopeOf: (f: string) => string, isPersonal: number, accept: (f: string) => boolean): void {
-    if (!existsSync(dir)) return
-    for (const file of readdirSync(dir).filter(accept).sort()) {
-      this.indexFile(ins, join(dir, file), scopeOf(file), isPersonal)
+  /**
+   * Re-indexes only the files written, added or removed since the last (re)index. Agents write memory at any time,
+   * while the full rebuild runs at broker start and after a curator run, which is off by default: without this a
+   * finding saved since then is never found (card #83). Unchanged files cost a stat; a full rebuild of a large home
+   * blocks the broker for up to a second.
+   */
+  private refreshKnowledge(): void {
+    const stamps = this.stamps
+    if (!stamps) return this.rebuildKnowledge()
+    const files = this.knowledgeFiles()
+    const changed = files.filter((f) => stamps.get(f.path) !== f.stamp)
+    const present = new Set(files.map((f) => f.path))
+    const removed = [...stamps.keys()].filter((path) => !present.has(path))
+    if (changed.length === 0 && removed.length === 0) return
+    const ins = this.db.prepare(INSERT_KNOWLEDGE)
+    const del = this.db.prepare("DELETE FROM memory_fts WHERE path = ?")
+    const tx = this.db.transaction(() => {
+      for (const path of [...removed, ...changed.map((f) => f.path)]) del.run(path)
+      for (const f of changed) this.indexFile(ins, f)
+    })
+    tx()
+    this.stamps = new Map(files.map((f) => [f.path, f.stamp]))
+  }
+
+  private knowledgeFiles(): KnowledgeFile[] {
+    const files: KnowledgeFile[] = []
+    const add = (path: string, scope: string, isPersonal: number) => {
+      const st = statSync(path)
+      files.push({ path, scope, isPersonal, stamp: `${st.size}:${st.mtimeMs}` })
     }
+    const addDir = (dir: string, scopeOf: (f: string) => string, isPersonal: number) => {
+      if (!existsSync(dir)) return
+      for (const file of readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) add(join(dir, file), scopeOf(file), isPersonal)
+    }
+    // The inbox too: with the curator off, nothing ever files its findings under a topic.
+    addDir(join(this.home, "domains"), (f) => (f.endsWith(".digest.md") ? "digest" : "domain"), 0)
+    addDir(join(this.home, "personal"), () => "personal", 1)
+    const conv = join(this.home, "conventions.md")
+    if (existsSync(conv)) add(conv, "conventions", 0)
+    // Agent memory (spec §4): scope "agent", name = the agent id (".digest" stripped by indexFile).
+    addDir(join(this.home, "agent-memory"), () => "agent", 0)
+    return files
   }
 
-  private indexFile(ins: any, path: string, scope: string, isPersonal: number): void {
-    const name = path.split("/").pop()!.replace(/\.digest\.md$/, "").replace(/\.md$/, "")
-    for (const sec of splitSections(readFileSync(path, "utf8"))) {
+  private indexFile(ins: any, file: KnowledgeFile): void {
+    // The runtime's basename: the path comes from join(), so on Windows it holds \ and a "/" split kept it whole,
+    // and an Agent's filter on its own memory (name = ?) never matched.
+    const name = basename(file.path).replace(/\.digest\.md$/, "").replace(/\.md$/, "")
+    for (const sec of splitSections(readFileSync(file.path, "utf8"))) {
       if (!sec.body && !sec.heading) continue
-      ins.run(scope, name, sec.heading, sec.body, path, isPersonal)
+      ins.run(file.scope, name, sec.heading, sec.body, file.path, file.isPersonal)
     }
   }
 
-  searchKnowledge(query: string, opts: { includePersonal: boolean; limit?: number }): KnowledgeHit[] {
+  searchKnowledge(query: string, opts: { includePersonal: boolean; agentId?: string; limit?: number }): KnowledgeHit[] {
+    // A failed refresh (a file removed mid-read) leaves the last index in place and is retried by the next search.
+    try { this.refreshKnowledge() } catch { /* the index is rebuildable */ }
     const limit = opts.limit ?? 10
     const personalClause = opts.includePersonal ? "" : "AND is_personal = 0"
+    // Agent memory is visible only to its own Agent; everyone else never sees scope "agent".
+    const agentClause = opts.agentId ? "AND (scope != 'agent' OR name = ?)" : "AND scope != 'agent'"
+    const params: (string | number)[] = [toMatch(query), ...(opts.agentId ? [opts.agentId] : []), limit]
     const rows = this.db
       .prepare(
         `SELECT scope, name, heading, path, snippet(memory_fts, 3, '[', ']', '…', 16) AS snippet
            FROM memory_fts
-          WHERE memory_fts MATCH ? ${personalClause}
+          WHERE memory_fts MATCH ? ${personalClause} ${agentClause}
           ORDER BY (scope = 'digest') DESC, rank
           LIMIT ?`,
       )
-      .all(toMatch(query), limit) as any[]
+      .all(...params) as any[]
     return rows.map((r) => ({ scope: r.scope, name: r.name, heading: r.heading, path: r.path, snippet: r.snippet }))
   }
 
@@ -178,13 +226,14 @@ export class SearchStore {
     const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
     const rows = this.db
       .prepare(
-        `SELECT m.id, m.session_id, m.ts, m.direction, m.text, s.name, s.workdir, s.agent
+        `SELECT m.id, m.session_id, m.ts, m.direction, m.channel, m.from_session_name, m.text, s.name, s.workdir, s.agent
            FROM messages m
            JOIN sessions s ON s.id = m.session_id
           WHERE m.text LIKE ? ESCAPE '\\'
             AND (m.op IS NULL OR m.op = 'reply')
             AND s.status != 'archived'
             AND s.internal = 0
+            AND s.parent_session_id IS NULL
             AND (? IS NULL OR m.session_id = ?)
           ORDER BY m.ts DESC
           LIMIT ?`,
@@ -198,6 +247,8 @@ export class SearchStore {
       message_id: r.id,
       ts: r.ts,
       direction: r.direction,
+      channel: r.channel,
+      ...(r.from_session_name ? { from_session_name: r.from_session_name } : {}),
       snippet: messageSnippet(r.text, q),
     }))
   }

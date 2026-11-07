@@ -2,6 +2,9 @@ package dev.supermux.android.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -18,6 +21,7 @@ import dev.supermux.ui.chat.LocalComposerAttachmentStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.HostTheme
+import dev.supermux.ui.widgets.LocalSoftKeyboardTakesBack
 
 /**
  * Android's thin wrapper over the shared theme: edge-to-edge system-bar icon contrast
@@ -33,6 +37,7 @@ import dev.supermux.ui.theme.HostTheme
  * is `false`). Settings → Appearance still shows the "Material You" switch and still persists it,
  * but it is now a **no-op**: nothing reads the stored flag to build a scheme.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AndroidTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
@@ -70,9 +75,16 @@ fun AndroidTheme(
         // NOT the other way round: `screenWidthDp` excludes the system bars before API 35, so the
         // window's own bounds are the measurement that agrees with desktop and iOS.
         widthClass = rememberWindowWidthClass(LocalConfiguration.current.screenWidthDp),
+        // Card #76: "Remove animations" turns the live reply's ink edge and gliding scroll off.
+        reduceMotion = rememberReduceMotion(),
     ) {
         // A rotation recreates the activity, and with it every composition: the composer's staged
         // photos (and their uploads) live in the process instead, so turning the phone keeps them.
-        CompositionLocalProvider(LocalComposerAttachmentStore provides ComposerAttachmentStore.process, content = content)
+        CompositionLocalProvider(
+            LocalComposerAttachmentStore provides ComposerAttachmentStore.process,
+            // BACK closes the keyboard first; the shell enforces it (ui/widgets/KeyboardBack.kt).
+            LocalSoftKeyboardTakesBack provides WindowInsets.isImeVisible,
+            content = content,
+        )
     }
 }

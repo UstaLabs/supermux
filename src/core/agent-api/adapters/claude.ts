@@ -10,11 +10,11 @@
 // All I/O is injectable (fetchFn / readFileFn) so the adapter is fully unit-testable
 // with no network or disk.
 
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { defaultRead, readJson } from "../auth"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("agent-api:claude")
 
@@ -37,7 +37,7 @@ let warned = false
 export function claudeAdapter(opts: ClaudeAdapterOpts = {}): AgentApi {
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
-  const credsPath = opts.credsPath ?? join(homedir(), ".claude", ".credentials.json")
+  const credsPath = opts.credsPath ?? join(home(), ".claude", ".credentials.json")
 
   const loadToken = (): string | undefined => {
     const tok = readJson(read, credsPath)?.claudeAiOauth?.accessToken

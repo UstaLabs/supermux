@@ -115,6 +115,9 @@ interface Platform {
     /** The microphone, for dictation. [MicCapture.available] says whether to offer a mic button. */
     val mic: MicCapture
 
+    /** The assistant overlay's system side (#62); null where there is none. */
+    val assistantOverlay: AssistantOverlayHost? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 
@@ -223,6 +226,16 @@ data class Caps(
     val terminal: Boolean = false,
     val scrcpy: Boolean = false,
     val setupWizard: Boolean = false,
+    /**
+     * A two-finger trackpad scroll arrives as wheel events that run straight on into the system's
+     * momentum, with nothing to say when the fingers lifted (macOS through AWT). A screen that pages
+     * or pulls on a swipe has to read the lift from the deltas itself; the stock wheel handling
+     * judges the swipe by the momentum's dying tail instead.
+     */
+    val trackpadMomentum: Boolean = false,
+    /** The assistant overlay (#62): the default Agent can float over other apps (Android's
+     *  "Display over other apps"). Gates the Appearance switch; see [Platform.assistantOverlay]. */
+    val assistantOverlay: Boolean = false,
 )
 
 /**

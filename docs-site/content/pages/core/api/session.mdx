@@ -1,0 +1,116 @@
+---
+title: Session
+description: Everything you can do with an open session.
+---
+
+Get a `Session` from `core.sessions.create()`, `resume()` or `live()`. Don't construct one yourself.
+
+## Messages
+
+```ts
+send(options: SendOptions): Promise<Receipt>
+
+type SendOptions = { content: ContentBlock[]; whenBusy: "queue" | "reject"; idempotencyKey?: string }
+type Receipt = { messageId: string; completed: Promise<Completion> }
+type Completion =
+  | { status: "completed"; stopReason: string }
+  | { status: "cancelled" }
+  | { status: "failed"; error: Error }
+```
+
+- `whenBusy: "reject"` fails with `session_busy` while a turn runs or the queue is paused.
+- A full queue fails with `queue_full`.
+- The same `idempotencyKey` with the same content returns the same receipt; with different content, `idempotency_conflict`.
+
+```ts
+pending: {
+  list(): { messageId: string }[]
+  cancel(messageId: string): boolean
+  clear(): void
+  continue(): void   // resume a queue paused by interrupt()
+}
+```
+
+## Interrupt and steer
+
+```ts
+interrupt(options: { pending: "keep" | "discard" }): Promise<{ status: "stopped" | "already_idle" | "unconfirmed" }>
+steer(input: { content: ContentBlock[] }): Promise<void>
+```
+
+`interrupt()` stops the turn, cancels pending requests, and pauses the queue (`discard` also clears it). Call `pending.continue()` to run queued messages again. It's `unconfirmed` if the agent didn't stop within `interruptTimeoutMs`.
+
+`steer()` adds a message to the running turn. Codex only; others throw `unsupported_operation`.
+
+## Requests
+
+```ts
+requests: {
+  list(): PendingRequest[]
+  respond(requestId: string, answer: RequestAnswer): Promise<void>
+}
+
+type RequestAnswer =
+  | { optionId: string; message?: string }                     // a permission
+  | { answers: Record<string, string | string[]> }             // a question: option ids or free text
+  | { decline: true }                                          // a question you won't answer
+```
+
+See [Permissions](/core/concepts/permissions).
+
+## State
+
+```ts
+snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number; turnId?: string }
+capabilities(): { resume: boolean; steer: boolean; fork: boolean; detach: boolean; configure?: boolean; history?: boolean; permissions?: boolean }
+```
+
+`SessionState` is `"idle" | "running" | "interrupting" | "closing" | "closed" | "failed"`.
+
+## Model and permissions
+
+```ts
+configuration(): SessionConfiguration
+configure(patch: { model?: string; reasoningEffort?: string; serviceTier?: string }): Promise<void>
+setPermissions(spec: PermissionsSpec): Promise<{ applied: "now" | "next-turn" }>
+```
+
+`configure()` needs an idle session with an empty queue (else `session_busy`), and an agent that supports it: Codex, Grok Build or Antigravity. It rolls back if the change fails.
+
+## History and fork
+
+```ts
+history(options?: { cursor?: string; limit?: number }): Promise<{ protocol: "native" | "acp"; items: unknown[]; cursor?: string }>
+fork(options: { id: string; at?: { nativeTurnId: string } }): Promise<Session>
+```
+
+Both are Codex only today. `fork()` needs an idle session and a new id.
+
+## Subagents
+
+```ts
+subagents(): SubagentSnapshot[]
+messageSubagent(subagentId: string, content: ContentBlock[], options?: { whenBusy?: "queue" | "reject" }):
+  Promise<{ via: "direct"; delivery: Promise<…> } | { via: "relay"; receipt: Receipt; delivery: Promise<…> }>
+stopSubagent(subagentId: string): Promise<void>
+```
+
+A `relay` message is a main-thread message asking the agent to pass it on. Which actions each agent supports is in [Drivers](/core/concepts/drivers).
+
+## Close
+
+```ts
+close(options: { mode: "shutdown" | "detach" }): Promise<void>
+```
+
+`shutdown` stops the agent; `detach` lets go and leaves it running behind its keeper. A turn in progress completes as `cancelled` for you, its queue is cleared, and pending requests are cancelled.
+
+`close()` throws synchronously for a missing mode, or `detach` on an agent that can't detach.
+
+## Session context
+
+```ts
+updateContext(patch: ContextPatch, options?: UpdateContextOptions): Promise<UpdateContextResult>
+```
+
+Changes the session's skills, plugins and MCP servers while it runs. Instructions are fixed when the session is created. See the package's API.md for the context types.

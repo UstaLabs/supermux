@@ -16,6 +16,10 @@ package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.fs.hostJoin
+import dev.supermux.ui.editor.repoPath
+import dev.supermux.ui.isAbsoluteEditorPath
+import dev.supermux.ui.terminal.LocalTerminalFindKey
 import dev.supermux.ui.terminal.LocalTerminalTitleSink
 import dev.supermux.ui.terminal.TerminalTitles
 import androidx.compose.animation.core.tween
@@ -36,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +53,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -68,12 +73,19 @@ import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
+import dev.supermux.ui.files.TreeViewEdits
 import dev.supermux.ui.files.TreeViewStates
+import dev.supermux.ui.files.editorAbsolutePath
+import dev.supermux.ui.files.fileNotFoundNotice
+import dev.supermux.ui.files.parentOf
+import dev.supermux.ui.files.tappedFileMissing
+import dev.supermux.fs.FileSystemService
 import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
@@ -238,10 +250,12 @@ fun ViewHost(
                 else AgentTerminalForSession(actions, sessionId, terminalId, modifier)
             } else {
                 key(workspaceId, terminalId) {
-                    // The program's title goes to this view's TAB, which the pane strip draws.
+                    // The program's title goes to this view's TAB, which the pane strip draws. The
+                    // terminal's name keeps its find bar through a rotation or a width change (#89).
                     val viewId = view.id
                     CompositionLocalProvider(
                         LocalTerminalTitleSink provides { title -> TerminalTitles.set(viewId, title) },
+                        LocalTerminalFindKey provides "$workspaceId:$terminalId",
                     ) {
                         workspaceTerminalContent(
                             { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
@@ -269,6 +283,7 @@ fun ViewHost(
                         // intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
                         onNavigate = { p, line -> onOpenFile(p, line, null) },
+                        onOpenFile = onOpenFile,
                         modifier = modifier.testTag("editor-$workdir"),
                     )
                 "diff" -> DiffPaneForWorkspace(
@@ -301,7 +316,7 @@ fun ViewHost(
             // Not `?: hint`: BOTH hosts mint a Display view with an EMPTY displayId (the stream is
             // started separately), and `stateString` hands that back as "". A blank id therefore
             // means "whatever is running here", not "a stream that has gone away".
-            DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), modifier)
+            DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), "$workspaceId:${view.id}", modifier)
         }
         else -> UnknownViewHint(view.kind, modifier)
     }
@@ -342,7 +357,6 @@ private fun ChatViewPane(
         UnknownViewHint("chat", modifier)
         return
     }
-    val notices = LocalPlatform.current.notices
     val finish = FinishBindings(
         job = finishJobs[sessionId],
         readiness = { actions.finishReadiness(sessionId) },
@@ -356,24 +370,9 @@ private fun ChatViewPane(
         verifySave = { actions.verifySave(sessionId, it) },
         sendToAgent = { actions.sendMessage(sessionId, it) },
     )
-    // A tap on a file path in the transcript opens a `file` pane — by its absolute path when it lies
-    // outside the workspace. One the host says is gone is reported rather than opened.
-    val tapScope = rememberCoroutineScope()
+    // A tap on a file path in the transcript opens a `file` pane.
     val tapFileSystem = actions.sessionFileSystem(sessionId)
-    val openTappedPath: (FilePathRef) -> Unit = { ref ->
-        val rel = workspaceOpenPath(ref, workdir)
-        if (rel == null) {
-            notices.show("That's the workspace folder itself")
-        } else {
-            tapScope.launch {
-                if (dev.supermux.ui.files.tappedFileMissing(tapFileSystem, dev.supermux.ui.files.editorAbsolutePath(workdir, rel))) {
-                    notices.show(dev.supermux.ui.files.fileNotFoundNotice(ref.path))
-                } else {
-                    onOpenFile(rel, ref.line, ref.endLine)
-                }
-            }
-        }
-    }
+    val openTappedPath = rememberOpenTappedPath(workdir, tapFileSystem, onOpenFile)
     val state = chatState(sessionId)
     val acts = chatActions(session)
     // Images an agent writes as host paths (`![](out/shot.png)`) read through this host; relative
@@ -488,7 +487,7 @@ private fun ChatViewPane(
         ChatViewHeader(
             modifier = Modifier.collapseVertically({ headerFraction }, slideUp = true),
             session = session,
-            working = state.agent?.working == true,
+            working = state.agent?.busy == true,
             sessionLinks = sessionLinks,
             finish = finish,
             onGitOp = gitOp,
@@ -544,6 +543,46 @@ fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
     toEditorPath(ref.path, workdir, inferHomeDir(workdir))
 
 /**
+ * The editor keys a tapped [ref] may name, in the order to try them. A relative path is tried under
+ * [relativeTo] first (a markdown file's own folder, absolute: what its links mean), then at the
+ * workspace root (where an agent's paths start). Empty only for the workspace folder itself.
+ */
+fun tappedPathCandidates(ref: FilePathRef, workdir: String, relativeTo: String? = null): List<String> {
+    val path = ref.path.trim()
+    val relative = !isAbsoluteEditorPath(path) && !path.startsWith("~")
+    val inFolder = if (relativeTo != null && relative) workspaceOpenPath(FilePathRef(hostJoin(relativeTo, path)), workdir) else null
+    return listOfNotNull(inFolder, workspaceOpenPath(ref, workdir)).distinct()
+}
+
+/**
+ * Opens a file path tapped in markdown (a chat transcript, a file's preview) as a `file` pane, by its
+ * absolute path when it lies outside the workspace: the first of [tappedPathCandidates] the host
+ * does not say is gone. One that is gone everywhere is reported rather than opened.
+ */
+@Composable
+private fun rememberOpenTappedPath(
+    workdir: String,
+    fileSystem: FileSystemService?,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
+    relativeTo: String? = null,
+): (FilePathRef) -> Unit {
+    val notices = LocalPlatform.current.notices
+    val scope = rememberCoroutineScope()
+    return { ref ->
+        val candidates = tappedPathCandidates(ref, workdir, relativeTo)
+        if (candidates.isEmpty()) {
+            notices.show("That's the workspace folder itself")
+        } else {
+            scope.launch {
+                val found = candidates.firstOrNull { !tappedFileMissing(fileSystem, editorAbsolutePath(workdir, it)) }
+                if (found == null) notices.show(fileNotFoundNotice(ref.path))
+                else onOpenFile(found, ref.line, ref.endLine)
+            }
+        }
+    }
+}
+
+/**
  * Session-scoped terminal adapter:
  * - terminalId "agent" → the agent PTY
  * - any other id → a session scratch terminal
@@ -559,17 +598,20 @@ private fun AgentTerminalForSession(
 ) {
     val terminals = LocalPlatform.current.terminalView()
     key(sessionId, terminalId) {
-        terminals.TerminalView(
-            connect = {
-                if (terminalId == "agent") actions.connectAgentTerminal(sessionId).orFail(sessionId)
-                else actions.connectTerminal(sessionId, terminalId).orFail(sessionId)
-            },
-            modifier = modifier.fillMaxSize().testTag(
-                if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
-            ),
-            active = true,
-            onExit = null,
-        )
+        // Named, so its find bar outlives a rotation or a width change (#89).
+        CompositionLocalProvider(LocalTerminalFindKey provides "$sessionId:$terminalId") {
+            terminals.TerminalView(
+                connect = {
+                    if (terminalId == "agent") actions.connectAgentTerminal(sessionId).orFail(sessionId)
+                    else actions.connectTerminal(sessionId, terminalId).orFail(sessionId)
+                },
+                modifier = modifier.fillMaxSize().testTag(
+                    if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
+                ),
+                active = true,
+                onExit = null,
+            )
+        }
     }
 }
 
@@ -607,8 +649,11 @@ private fun ExplorerPaneForWorkspace(
     modifier: Modifier,
 ) {
     // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
-    // different roots/depths, and a drag or split must not reset either.
-    val view = remember(treeStates, viewId, workdir) { treeStates.forView(viewId, workdir) }
+    // different roots/depths, and a drag or split must not reset either. Its open dialog or
+    // in-place field, the name typed in it and the "Go to file…" query outlive the workspace's
+    // composition too, which a rotation or a width change rebuilds (#89).
+    val edits = rememberRetained("files:$workspaceId:$viewId:$workdir") { TreeViewEdits() }
+    val view = remember(treeStates, viewId, workdir, edits) { treeStates.forView(viewId, workdir, edits) }
     ExplorerPane(
         fileSystem = actions.fileSystemFor(workspaceId),
         view = view,
@@ -635,6 +680,7 @@ private fun FilePaneForWorkspace(
     documents: DocumentStore,
     lspSessionId: String?,
     onNavigate: (path: String, line: Int) -> Unit,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
 ) {
     // Resolve the id against the LIVE session list: a workspace whose primary session has been
@@ -642,6 +688,14 @@ private fun FilePaneForWorkspace(
     // pane's status up while every call no-ops. Unresolved -> the quiet "code intelligence is off"
     // note the pane already draws for a chat-less workspace.
     val lspSession = actions.resolvedSessionId(lspSessionId)
+    // A file link in the markdown preview opens the way a path tapped in chat does, tried in this
+    // file's own folder first.
+    val openLink = rememberOpenTappedPath(
+        workdir,
+        actions.fileSystemFor(workspaceId),
+        onOpenFile,
+        relativeTo = parentOf(editorAbsolutePath(workdir, path)),
+    )
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt): the collected values
     // start at the defaults for one frame, then settle on what was persisted.
     val prefs = LocalUiPrefs.current
@@ -666,6 +720,7 @@ private fun FilePaneForWorkspace(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         onNavigate = onNavigate,
+        onOpenFile = openLink,
         rawBytes = { abs -> actions.fileSystemFor(workspaceId)?.raw(abs) ?: Result.failure(IllegalStateException("Host offline")) },
         fileSystem = actions.fileSystemFor(workspaceId),
         modifier = modifier.fillMaxSize(),
@@ -692,8 +747,13 @@ private fun DiffPaneForWorkspace(
     val reviewSessionId = actions.resolvedSessionId(lspSessionId)
     val selectedWalkthroughId = actions.resolvedSessionId(walkthroughSessionId ?: lspSessionId)
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
-    // base it was looking at.
-    val diff = remember(workspaceId, viewId, base) { DiffState().apply { base?.let { diffBase = it } } }
+    // base it was looking at. A base picked in the menu is never written to the view, so it is
+    // kept here (per saved base) for a pane a rotation or a width change rebuilds (#89).
+    val picked = rememberRetained("diff:$workspaceId:$viewId:base:${base.orEmpty()}") { DiffBasePick() }
+    val diff = remember(workspaceId, viewId, base, picked) {
+        DiffState().apply { (picked.base ?: base)?.let { diffBase = it } }
+    }
+    LaunchedEffect(diff, picked) { snapshotFlow { diff.diffBase }.collect { picked.base = it } }
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
@@ -709,10 +769,10 @@ private fun DiffPaneForWorkspace(
         },
         getReviewComments = { reviewSessionId?.let { actions.reviewComments(it) }.orEmpty() },
         readWalkthroughFile = { repo, path ->
-            actions.workspaceFsRead(workspaceId, if (repo.isBlank()) path else "$repo/$path")
+            actions.workspaceFsRead(workspaceId, repoPath(repo, path))
         },
         onOpenWalkthroughFile = { repo, path, line ->
-            onOpenFile(if (repo.isBlank()) path else "$repo/$path", line, null)
+            onOpenFile(repoPath(repo, path), line, null)
         },
         // Review stays session-keyed; only available when we have a primary chat.
         onReviewAddComment = { body -> reviewSessionId?.let { actions.reviewAddComment(it, body) } },
@@ -726,9 +786,11 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { reviewSessionId?.let { actions.reviewSubmit(it) } },
         onClose = onClose,
-        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, if (repo.isBlank()) path else "$repo/$path", text) },
+        writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
         diffDocuments = documents,
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
+        // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
+        retainKey = "diff:$workspaceId:$viewId",
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -741,6 +803,8 @@ private fun DiffPaneForWorkspace(
 private fun DisplayPanelForStream(
     actions: ShellActions,
     displayId: String,
+    /** The view, named so its VNC password survives a rotation or the width swap, and only that (#89). */
+    retainKey: String,
     modifier: Modifier,
 ) {
     val live by actions.display.displays.collectAsState()
@@ -769,6 +833,7 @@ private fun DisplayPanelForStream(
         sessionName = stream.sessionName,
         actions = actions.display,
         modifier = modifier.fillMaxSize().testTag("view_display"),
+        retainKey = retainKey,
     )
 }
 
@@ -799,4 +864,9 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/** The diff base a pane's user picked from its menu, kept by the fleet (see `DiffPaneForWorkspace`). */
+private class DiffBasePick {
+    var base: String? = null
 }

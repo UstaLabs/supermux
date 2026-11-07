@@ -1,5 +1,7 @@
 package dev.supermux.state
 
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -24,11 +26,13 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         state.copy(
             sessions = frame.sessions,
             workspaces = if (catalogKnown) applyMembership(frame.workspaces, frame.projectMembership) else frame.workspaces,
-            archivedWorkspaces = if (catalogKnown) {
-                applyMembership(frame.archivedWorkspaces, frame.projectMembership)
-            } else {
-                frame.archivedWorkspaces
+            archivedWorkspaces = when {
+                // Not in this snapshot: keep what we hold until the store's fetch replaces it.
+                frame.archivedLazy -> state.archivedWorkspaces
+                catalogKnown -> applyMembership(frame.archivedWorkspaces, frame.projectMembership)
+                else -> frame.archivedWorkspaces
             },
+            archivedPending = frame.archivedLazy && state.archivedWorkspaces.isEmpty(),
             projects = frame.projects,
             projectCatalogKnown = catalogKnown,
             messages = snapshotMessages(state, frame),
@@ -37,6 +41,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             completeExtras = frame.partialExtras?.let { frame.logs.keys - it.toSet() } ?: frame.logs.keys,
             bgTasks = frame.bgTasks,
             subagents = frame.subagents.mapValues { (_, list) -> list.sortedBy { it.startedAt } },
+            councils = frame.councils.mapValues { (_, list) -> list.sortedBy { it.createdAt } },
             agentState = frame.agentState,
             commands = frame.commands + keptExtras(state.commands, frame),
             commandsResolved = frame.commandsResolved + keptExtras(state.commandsResolved, frame),
@@ -46,6 +51,10 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 .toMap(),
             requests = frame.requests,
             permissionModes = frame.permissionModes,
+            muxHome = frame.muxHome,
+            homeDir = frame.homeDir,
+            // Card #76: the snapshot's open streams are the whole truth about what is being written now.
+            live = liveFromSnapshot(frame.streams),
             // A snapshot is a NEW broker connection: the broker disposed the old connection's
             // language servers with it (src/core/lsp/bridge.ts, one LspConnection per socket), so
             // every server this client had open is gone. Say so, and an editor's LSP client opens
@@ -92,7 +101,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         // session (a dead badge on a live agent) until the agent next changed state.
         val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
         if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent &&
-            !state.subagents.containsKey(frame.id) &&
+            !state.subagents.containsKey(frame.id) && !state.councils.containsKey(frame.id) &&
             frame.id !in state.completeLogs && frame.id !in state.completeExtras
         ) {
             state
@@ -101,6 +110,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 sessions = state.sessions.filterNot { s -> s.id == frame.id },
                 bgTasks = state.bgTasks - frame.id,
                 subagents = state.subagents - frame.id,
+                councils = state.councils - frame.id,
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
                 requests = state.requests - frame.id,
@@ -110,6 +120,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             )
         }
     }
+    is ServerFrame.AgentAvatarChanged -> state.copy(
+        sessions = state.sessions.map { s -> if (s.id == frame.id) s.copy(avatar = frame.avatar) else s },
+    )
     is ServerFrame.SessionRenamed -> state.copy(
         sessions = state.sessions.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s },
     )
@@ -173,13 +186,25 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     }
     is ServerFrame.MessageAppend -> {
         val prev = state.messages[frame.session] ?: emptyList()
-        val pruned = if (frame.entry.direction.startsWith("in")) {
-            prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
-        } else prev
+        val entry = frame.entry
+        // The app's own copy of a message it sent goes when the broker's copy of that message arrives
+        // (card #75): found by the id it was sent under, which the broker logs as message_id. A broker
+        // that ignored the id gave the message one of its own: then one copy with the same text goes.
+        val echo = when {
+            !entry.direction.startsWith("in") -> null
+            entry.message_id?.startsWith(CLIENT_MESSAGE_ID_PREFIX) == true -> localEchoId(entry.message_id)
+            else -> prev.firstOrNull { it.id.startsWith("local-") && it.text == entry.text }?.id
+        }
+        val kept = if (echo == null) prev else prev.filterNot { it.id == echo }
+        // An entry that is already there (the same frame twice) is replaced where it is, not shown twice.
+        val at = kept.indexOfFirst { it.id == entry.id }
+        val next = if (at < 0) kept + entry else kept.toMutableList().also { it[at] = entry }
         // The transcript moved on, so the just-answered receipts have served their purpose;
         // the "answered: …" line the close wrote is the record that stays.
         state.copy(
-            messages = state.messages + (frame.session to (pruned + frame.entry)),
+            messages = state.messages + (frame.session to next),
+            // Card #76: the stored reply replaces its live text in the same step, so nothing flickers.
+            live = dropLive(state.live, frame.session, frame.entry.stream),
             closedRequests = if (frame.session in state.closedRequests) {
                 state.closedRequests - frame.session
             } else {
@@ -204,12 +229,23 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 permissionMode = frame.permissionMode ?: s.permissionMode,
                 account = frame.account ?: s.account,
                 accountLabel = frame.accountLabel ?: s.accountLabel,
+                status = frame.status ?: s.status,
             )
         },
     )
     is ServerFrame.ActivityAppend -> state.copy(
         activity = state.activity + (frame.session to ((state.activity[frame.session] ?: emptyList()) + frame.event)),
+        // Card #76: the stored thinking replaces the live thinking in the same step.
+        live = dropLive(state.live, frame.session, frame.event.stream),
     )
+    is ServerFrame.ReplyStream -> {
+        val next = applyLiveDelta(state.live, frame)
+        if (next === state.live) state else state.copy(live = next)
+    }
+    is ServerFrame.ReplyStreamEnd -> {
+        val next = dropLive(state.live, frame.session, frame.stream)
+        if (next === state.live) state else state.copy(live = next)
+    }
     is ServerFrame.RequestOpen -> {
         val prev = state.requests[frame.session] ?: emptyList()
         if (prev.any { it.requestId == frame.request.requestId }) state
@@ -251,12 +287,18 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             closedRequests = state.closedRequests + (frame.session to receipts),
         )
     }
-    is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
+    // A frame this app sent that the broker doesn't know (an older broker): nothing the user can act on, so not shown.
+    is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE) state else state.copy(lastError = frame.reason.ifBlank { null })
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
     is ServerFrame.SubagentUpdate -> {
         val prev = state.subagents[frame.session] ?: emptyList()
         val next = (prev.filterNot { it.id == frame.subagent.id } + frame.subagent).sortedBy { it.startedAt }
         state.copy(subagents = state.subagents + (frame.session to next))
+    }
+    is ServerFrame.CouncilUpdate -> {
+        val prev = state.councils[frame.session] ?: emptyList()
+        val next = (prev.filterNot { it.id == frame.council.id } + frame.council).sortedBy { it.createdAt }
+        state.copy(councils = state.councils + (frame.session to next))
     }
     is ServerFrame.SubagentsCleared ->
         if (frame.session !in state.subagents) state else state.copy(subagents = state.subagents - frame.session)
@@ -399,6 +441,23 @@ private fun <V> keptExtras(held: Map<String, V>, frame: ServerFrame.Snapshot): M
 }
 
 /**
+ * A chat-extras subagent list plus what live `subagent_update`s changed while it was in flight:
+ * per id the fresher of the two (by last activity), ordered by start.
+ */
+fun mergeFetchedSubagents(
+    fetched: List<dev.supermux.proto.Subagent>,
+    current: List<dev.supermux.proto.Subagent>,
+): List<dev.supermux.proto.Subagent> {
+    val byId = LinkedHashMap<String, dev.supermux.proto.Subagent>()
+    for (s in fetched) byId[s.id] = s
+    for (s in current) {
+        val f = byId[s.id]
+        if (f == null || s.lastActivityAt > f.lastActivityAt) byId[s.id] = s
+    }
+    return byId.values.sortedBy { it.startedAt }
+}
+
+/**
  * Fetched activity plus live `activity_append`s that landed while the fetch was in flight —
  * those carry a higher broker `seq` than anything in the fetched list.
  */
@@ -406,6 +465,16 @@ fun mergeFetchedActivity(fetched: List<ActivityEvent>, current: List<ActivityEve
     val newest = fetched.mapNotNull { it.seq }.maxOrNull() ?: return if (fetched.isEmpty()) current else fetched
     return fetched + current.filter { (it.seq ?: Int.MIN_VALUE) > newest }
 }
+
+/** The prefix of an id the app gives a message it sends (card #75); the rest is a uuid. */
+const val CLIENT_MESSAGE_ID_PREFIX = "web-"
+
+/** The id of the app's own copy of the message it sent as [clientMessageId], shown until the broker's copy arrives. */
+fun localEchoId(clientMessageId: String): String = "local-$clientMessageId"
+
+/** A new id for a message the app sends (card #75). */
+@OptIn(ExperimentalUuidApi::class)
+fun newClientMessageId(): String = CLIENT_MESSAGE_ID_PREFIX + Uuid.random().toString()
 
 /**
  * A fetched history page plus whatever the live buffer gained while the fetch was in flight:
@@ -417,3 +486,6 @@ fun mergeFetchedLog(fetched: List<LogEntry>, current: List<LogEntry>): List<LogE
     val known = fetched.mapTo(HashSet()) { it.id }
     return fetched + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
 }
+
+/** What a broker answers a frame it doesn't know with (`src/channels/web/index.ts`). */
+internal const val UNKNOWN_FRAME_TYPE = "unknown frame type"

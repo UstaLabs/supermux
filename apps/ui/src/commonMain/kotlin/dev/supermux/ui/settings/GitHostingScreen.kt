@@ -83,6 +83,8 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -165,8 +167,10 @@ fun GitHostingScreen(
     var cliStatus by remember { mutableStateOf<ForgeCliStatus?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var dialogOpen by remember { mutableStateOf(false) }
-    var presetKind by remember { mutableStateOf<String?>(null) }
+    // The add form, open or not and what is typed in it, kept for the page on display (#89): a
+    // rotation closed it with a pasted token gone. Its connect runs on the fleet's scope and lands
+    // in it (see [ForgeForm]).
+    val add = rememberRetainedOnPage("git:add") { ForgeForm() }
     var disconnectTarget by remember { mutableStateOf<ForgeConnection?>(null) }
     var disconnecting by remember { mutableStateOf(false) }
 
@@ -186,10 +190,7 @@ fun GitHostingScreen(
     LaunchedEffect(Unit) { reload() }
 
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val onManual: (String?) -> Unit = { kind ->
-        presetKind = kind
-        dialogOpen = true
-    }
+    val onManual: (String?) -> Unit = { kind -> add.open(kind) }
     val onImport: (String) -> Unit = { kind ->
         scope.launch {
             val ok = actions.forgeImport(kind, "https")
@@ -219,7 +220,7 @@ fun GitHostingScreen(
                     },
                     actions = {
                         IconButton(
-                            onClick = { presetKind = null; dialogOpen = true },
+                            onClick = { add.open(null) },
                             modifier = Modifier.testTag("git_hosting_add_action"),
                         ) {
                             Icon(
@@ -262,15 +263,15 @@ fun GitHostingScreen(
         )
     }
 
-    if (dialogOpen) {
+    if (add.isOpen) {
         AddForgeForm(
-            presetKind = presetKind,
+            form = add,
             cliStatus = cliStatus,
             onAdd = actions.forgeAdd,
             onImport = actions.forgeImport,
-            onDismiss = { dialogOpen = false },
+            onDismiss = { add.close() },
             onDone = {
-                dialogOpen = false
+                add.close()
                 scope.launch { reload() }
             },
         )
@@ -636,7 +637,7 @@ private fun ForgeEmptyState(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddForgeForm(
-    presetKind: String?,
+    form: ForgeForm,
     cliStatus: ForgeCliStatus?,
     onAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
     onImport: suspend (kind: String, transport: String) -> Boolean,
@@ -647,7 +648,15 @@ private fun AddForgeForm(
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val scope = rememberCoroutineScope()
     // Hoisted so the CONTAINER can refuse a dismiss mid-submit, exactly as desktop's dialog did.
-    var submitting by remember { mutableStateOf(false) }
+    // Read when the dismiss arrives, not captured at composition: the sheet may still hold a
+    // callback from before the submit started.
+    val submitting by form::submitting
+    // A connect that landed, finished by the form on screen (it may be another one than started it).
+    LaunchedEffect(form, form.done) {
+        if (!form.done) return@LaunchedEffect
+        form.done = false
+        onDone()
+    }
     if (compact) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
@@ -655,7 +664,7 @@ private fun AddForgeForm(
                 if (submitting) {
                     // A sheet is NOT a dialog: Material 3 animates it to Hidden and only THEN
                     // calls this, so merely returning here would leave it composed but invisible
-                    // while the screen still holds `dialogOpen = true` — the "+" action would go
+                    // while the screen still holds the form open — the "+" action would go
                     // dead until the user left the section. Bring the sheet back up instead.
                     scope.launch { sheetState.show() }
                 } else {
@@ -665,46 +674,34 @@ private fun AddForgeForm(
             sheetState = sheetState,
             containerColor = cs.surfaceContainerLow,
         ) {
-            AddForgeBody(
-                presetKind, cliStatus, onAdd, onImport, onDismiss, onDone,
-                submitting = submitting,
-                onSubmittingChange = { submitting = it },
-            )
+            AddForgeBody(form, cliStatus, onAdd, onImport, onDismiss)
         }
     } else {
         Dialog(onDismissRequest = { if (!submitting) onDismiss() }) {
-            AddForgeBody(
-                presetKind, cliStatus, onAdd, onImport, onDismiss, onDone,
-                submitting = submitting,
-                onSubmittingChange = { submitting = it },
-            )
+            AddForgeBody(form, cliStatus, onAdd, onImport, onDismiss)
         }
     }
 }
 
 @Composable
 private fun AddForgeBody(
-    presetKind: String?,
+    form: ForgeForm,
     cliStatus: ForgeCliStatus?,
     onAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
     onImport: suspend (kind: String, transport: String) -> Boolean,
     onDismiss: () -> Unit,
-    onDone: () -> Unit,
-    submitting: Boolean,
-    onSubmittingChange: (Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
-    val scope = rememberCoroutineScope()
+    val scope = rememberRetainedScope()
 
-    var kind by remember {
-        mutableStateOf(presetKind?.takeIf { it == "github" || it == "gitlab" } ?: "github")
-    }
-    var token by remember { mutableStateOf("") }
-    var hostUrl by remember { mutableStateOf("") }
-    var transport by remember { mutableStateOf("https") }
-    var showAdvanced by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var kind by form::kind
+    var token by form::token
+    var hostUrl by form::hostUrl
+    var transport by form::transport
+    var showAdvanced by form::showAdvanced
+    var error by form::error
+    val submitting = form.submitting
 
     val canImport = cliStatus?.let { (if (kind == "github") it.github else it.gitlab).available } == true
     val cliLoginLabel = cliStatus?.let {
@@ -716,13 +713,16 @@ private fun AddForgeBody(
     fun submitConnect() {
         val t = token.trim()
         if (t.isEmpty() || hostUrlError != null || submitting) return
-        onSubmittingChange(true)
+        form.submitting = true
         error = null
+        val k = kind
+        val host = hostUrl.trim().ifBlank { null }
+        val tr = transport
         scope.launch {
-            val ok = onAdd(kind, t, hostUrl.trim().ifBlank { null }, transport)
-            onSubmittingChange(false)
-            if (ok) onDone()
-            else error = "Couldn't connect — check your token and try again."
+            val ok = onAdd(k, t, host, tr)
+            form.submitting = false
+            if (ok) form.done = true
+            else form.error = "Couldn't connect — check your token and try again."
         }
     }
 
@@ -762,14 +762,16 @@ private fun AddForgeBody(
         if (canImport) {
             Button(
                 onClick = {
-                    onSubmittingChange(true)
+                    form.submitting = true
                     error = null
+                    val k = kind
+                    val tr = transport
                     scope.launch {
-                        val ok = onImport(kind, transport)
-                        onSubmittingChange(false)
-                        if (ok) onDone()
+                        val ok = onImport(k, tr)
+                        form.submitting = false
+                        if (ok) form.done = true
                         else {
-                            error = "Couldn't import from ${cliName(kind)} — is it logged in?"
+                            form.error = "Couldn't import from ${cliName(k)} — is it logged in?"
                         }
                     }
                 },
@@ -1012,4 +1014,39 @@ internal fun isValidForgeHostUrl(raw: String): Boolean {
     if (labels.any { it.isEmpty() }) return false
     val labelOk = Regex("^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$")
     return labels.all { labelOk.matches(it) }
+}
+
+/**
+ * The "Add a Git account" form, kept for the page on display (`rememberRetainedOnPage`, #89): open
+ * or not, what is typed, and a connect in flight, which runs on the fleet's scope and sets [done]
+ * for the form on screen. Closing it starts the next opening afresh, as closing the dialog did.
+ */
+private class ForgeForm {
+    var isOpen by mutableStateOf(false)
+    var kind by mutableStateOf("github")
+    var token by mutableStateOf("")
+    var hostUrl by mutableStateOf("")
+    var transport by mutableStateOf("https")
+    var showAdvanced by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var submitting by mutableStateOf(false)
+    var done by mutableStateOf(false)
+
+    fun open(presetKind: String?) {
+        close()
+        kind = presetKind?.takeIf { it == "github" || it == "gitlab" } ?: "github"
+        isOpen = true
+    }
+
+    fun close() {
+        isOpen = false
+        kind = "github"
+        token = ""
+        hostUrl = ""
+        transport = "https"
+        showAdvanced = false
+        error = null
+        submitting = false
+        done = false
+    }
 }

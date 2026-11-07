@@ -19,26 +19,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.FsOpRequest
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.sameHostSegment
 import dev.supermux.fs.snapshotOrPrevious
 import dev.supermux.net.FsException
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
@@ -62,15 +61,29 @@ sealed interface FileTreeDialog {
  * invalid but gets an empty message: the dialog just keeps its button disabled. Leading/trailing
  * whitespace is refused rather than trimmed, so what is created is exactly what was typed.
  */
-fun validateNewName(name: String, siblings: Collection<String>, current: String? = null): String? = when {
-    name.isBlank() -> ""
-    name != current && name != name.trim() -> "A name can't start or end with a space"
-    '/' in name -> "A name can't contain “/”"
-    '\u0000' in name -> "A name can't contain a null character"
-    name == "." || name == ".." -> "“$name” isn't a valid name"
-    name != current && name in siblings -> "A file with that name already exists"
-    else -> null
+fun validateNewName(name: String, siblings: Collection<String>, current: String? = null, inFolder: String? = null): String? {
+    // The folder the name goes in says whose rules apply: a Windows host's under a drive or a share.
+    val windows = inFolder != null && isWindowsHostPath(inFolder)
+    val reserved = if (windows) name.firstOrNull { it in WINDOWS_RESERVED_CHARS } else null
+    return when {
+        name.isBlank() -> ""
+        name != current && name != name.trim() -> "A name can't start or end with a space"
+        '/' in name -> "A name can't contain “/”"
+        '\u0000' in name -> "A name can't contain a null character"
+        name == "." || name == ".." -> "“$name” isn't a valid name"
+        reserved != null -> "A name can't contain “$reserved”"
+        windows && WINDOWS_DEVICE_NAME.matches(name) -> "“$name” is reserved on Windows"
+        windows && name != current && name.endsWith('.') -> "A name can't end with “.”"
+        // A Windows host names a file whatever its letter case; a rename that only changes the case is the same file.
+        name != current && siblings.any { it != current && sameHostSegment(it, name, windows) } -> "A file with that name already exists"
+        else -> null
+    }
 }
+
+// What a Windows host refuses in a name besides `/` and NUL (refused everywhere): Win32's reserved characters, and its
+// device names with or without an extension (`NUL.txt` is `NUL`).
+private const val WINDOWS_RESERVED_CHARS = "\\:*?\"<>|"
+private val WINDOWS_DEVICE_NAME = Regex("^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\\..*)?$", RegexOption.IGNORE_CASE)
 
 /** The `error` code of a failed `/fs/ops` call (the body is `{error: code, message}`), or null. */
 fun fsOpErrorCode(e: Throwable): String? {
@@ -170,7 +183,10 @@ private fun InlineEditField(
             current = null,
             folder = edit.folder,
             siblings = siblingNames(fileSystem, edit.parent),
+            inFolder = edit.parent,
             placeholder = if (edit.folder) "Folder name" else "File name",
+            typed = view.typedName { nameFieldValue("", edit.folder) },
+            op = view.fileOp(),
             onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
             onDone = { name, refocus ->
                 afterCreate(view, edit.parent, name, edit.folder, onOpenFile)
@@ -182,12 +198,16 @@ private fun InlineEditField(
         is InlineEdit.Rename -> {
             val old = edit.path
             val oldName = displayName(old)
+            val folder = view.isExpanded(old) || isFolderRow(fileSystem, old)
             InlineNameField(
                 initial = oldName,
                 current = oldName,
-                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                folder = folder,
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                inFolder = parentOf(old),
                 placeholder = null,
+                typed = view.typedName { nameFieldValue(oldName, folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name, refocus ->
                     afterRename(view, old, name, onEntryMoved)
@@ -330,6 +350,9 @@ fun FileTreeDialogs(
                 current = null,
                 folder = dialog.folder,
                 siblings = siblingNames(fileSystem, parent),
+                inFolder = parent,
+                typed = view.typedName { nameFieldValue("", dialog.folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> createEntry(fileSystem, parent, name, dialog.folder) },
                 onDone = { name ->
                     afterCreate(view, parent, name, dialog.folder, onOpenFile)
@@ -341,13 +364,17 @@ fun FileTreeDialogs(
         is FileTreeDialog.Rename -> {
             val old = dialog.path
             val oldName = displayName(old)
+            val folder = view.isExpanded(old) || isFolderRow(fileSystem, old)
             NameDialog(
                 title = "Rename",
                 confirmLabel = "Rename",
                 initial = oldName,
                 current = oldName,
-                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                folder = folder,
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
+                inFolder = parentOf(old),
+                typed = view.typedName { nameFieldValue(oldName, folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name ->
                     afterRename(view, old, name, onEntryMoved)
@@ -378,28 +405,48 @@ private fun NameDialog(
     current: String?,
     folder: Boolean,
     siblings: List<String>,
+    /** The folder the name goes in: its host's name rules apply. */
+    inFolder: String? = null,
+    /** Where the name being typed is kept: the pane's, which outlives this composition (#89). */
+    typed: TypedName? = null,
+    /** Where the op and its result are kept: the pane's, likewise. */
+    op: FileOp? = null,
     onSubmit: suspend (String) -> Result<Unit>,
     onDone: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    // A rename pre-selects the stem, so typing replaces "name" but keeps ".kt".
-    var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
-    var serverError by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    // A rename pre-selects the stem, so typing replaces "name" but keeps ".kt". Kept in [typed]
+    // when the pane gives one: a rotation reopened the dialog with what was typed gone.
+    val own = remember { TypedName(nameFieldValue(initial, folder)) }
+    val kept = typed ?: own
+    var field by kept::value
+    // With the pane's [op], the create or rename runs on the fleet's scope: a rotation cancelled
+    // it with this dialog, so a file could be made or moved with nothing selecting it or moving
+    // the tabs open on it. Its result is applied by the dialog on screen when it lands.
+    val ownOp = remember { FileOp() }
+    val state = op ?: ownOp
+    var serverError by state::error
+    val busy by state::busy
+    val scope = if (op != null) rememberRetainedScope() else rememberCoroutineScope()
     val name = field.text
-    val invalid = validateNewName(name, siblings, current)
+    val invalid = validateNewName(name, siblings, current, inFolder)
     val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
     val submit = {
-        if (invalid == null && !busy) {
-            busy = true
+        if (invalid == null && !state.busy) {
+            state.busy = true
+            val submitted = name
             scope.launch {
-                val r = onSubmit(name)
-                busy = false
-                r.onSuccess { onDone(name) }.onFailure { serverError = fsOpErrorMessage(it) }
+                val r = onSubmit(submitted)
+                state.busy = false
+                state.result = FileOpResult(submitted, refocus = false, failure = r.exceptionOrNull())
             }
         }
+    }
+    LaunchedEffect(state, state.result) {
+        val r = state.result ?: return@LaunchedEffect
+        state.result = null
+        if (r.failure == null) onDone(r.name) else serverError = fsOpErrorMessage(r.failure)
     }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -449,11 +496,33 @@ private fun DeleteDialog(
 ) {
     val cs = MaterialTheme.colorScheme
     val path = dialog.path
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    // The delete runs on the fleet's scope and its result waits in the pane's op for the dialog
+    // on screen, as NameDialog's does: a rotation cancelled it with the dialog, after the host
+    // had deleted the file, and the tabs open on it never closed (#89).
+    val state = view.fileOp()
+    var error by state::error
+    val busy by state::busy
     // The trash is on another filesystem (409 EXDEV): the second step asks for a permanent delete.
-    var permanent by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    // Kept in the pane's edits, with the dialog: a rotation must not take the user back a step (#89).
+    var permanent by view.edits::permanent
+    val scope = rememberRetainedScope()
+    LaunchedEffect(state, state.result) {
+        val r = state.result ?: return@LaunchedEffect
+        state.result = null
+        val failure = r.failure
+        if (failure == null) {
+            view.prune(path)
+            val sel = view.selected
+            if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
+            onEntryMoved(path, null)
+            onDismiss()
+        } else if (!permanent && fsOpErrorCode(failure) == "EXDEV") {
+            permanent = true
+            error = null
+        } else {
+            error = fsOpErrorMessage(failure)
+        }
+    }
     val what = if (dialog.folder) "This folder and everything in it" else "This file"
     AlertDialog(
         // Not while the delete is in flight — see NameDialog.
@@ -476,21 +545,12 @@ private fun DeleteDialog(
             TextButton(
                 enabled = !busy,
                 onClick = {
-                    busy = true
+                    state.busy = true
                     val asked = permanent
                     scope.launch {
                         val r = fileSystem.op(FsOpRequest(op = "delete", path = path, permanent = if (asked) true else null))
-                        busy = false
-                        r.onSuccess {
-                            view.prune(path)
-                            val sel = view.selected
-                            if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
-                            onEntryMoved(path, null)
-                            onDismiss()
-                        }.onFailure {
-                            if (!asked && fsOpErrorCode(it) == "EXDEV") { permanent = true; error = null }
-                            else error = fsOpErrorMessage(it)
-                        }
+                        state.busy = false
+                        state.result = FileOpResult(path, refocus = false, failure = r.exceptionOrNull())
                     }
                 },
                 modifier = Modifier.testTag(if (permanent) "tree_dialog_delete_permanently" else "tree_dialog_confirm"),

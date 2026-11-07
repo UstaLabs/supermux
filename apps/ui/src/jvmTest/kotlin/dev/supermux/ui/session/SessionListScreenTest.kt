@@ -16,6 +16,7 @@ import dev.supermux.host.HostView
 import dev.supermux.ui.host.HostSwitcher
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -417,6 +418,30 @@ class SessionListScreenTest {
         onNodeWithText("suspended").assertIsDisplayed()
     }
 
+    // Card #75: a suspended session whose agent is working is being woken: its badge says so.
+    @Test
+    fun row_saysStartingWhileASuspendedSessionIsBeingWoken() = runComposeUiTest {
+        setContent {
+            SessionListScreen(
+                workspaces = listOf(
+                    ws(
+                        "w1", "waking", "/home/u/projects/app",
+                        views = listOf(chatView("v1", "s1", "w1")),
+                    ).copy(primarySessionId = "s1"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = listOf(
+                    SessionInfo(id = "s1", name = "waking", workdir = "/home/u/projects/app", agent = "claude", status = "suspended"),
+                ),
+                agentState = mapOf("s1" to AgentStatus(phase = "thinking", state = "working", working = true, detail = "starting")),
+            )
+        }
+        onNodeWithText("starting").assertIsDisplayed()
+        onNodeWithText("suspended").assertDoesNotExist()
+    }
+
     @Test
     fun groupToggle_flipsToTheStatusViewAndPersistsIt() = runComposeUiTest {
         val seen = mutableListOf<Boolean>()
@@ -439,14 +464,14 @@ class SessionListScreenTest {
                 onGroupByProjectChange = { seen += it },
             )
         }
-        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        onNodeWithText("ACTIVE").assertDoesNotExist()
         onNodeWithContentDescription("Group by status").performClick()
-        onNodeWithText("READY FOR YOU").assertIsDisplayed()
+        onNodeWithText("ACTIVE").assertIsDisplayed()
         onNodeWithText("EVERYTHING ELSE").assertIsDisplayed()
         onNodeWithText("fresh").assertIsDisplayed()
         onNodeWithText("quiet").assertIsDisplayed()
         onNodeWithContentDescription("Group by project").performClick()
-        onNodeWithText("READY FOR YOU").assertDoesNotExist()
+        onNodeWithText("ACTIVE").assertDoesNotExist()
         assertEquals(listOf(false, true), seen)
     }
 
@@ -492,10 +517,10 @@ class SessionListScreenTest {
             )
         }
         onNodeWithContentDescription("Flat list").performClick()
-        onNodeWithText("PERSONAL ASSISTANTS").assertIsDisplayed()
+        // Agents left the flat list for their own zone above it (never a project, never tagged).
+        onNodeWithText("Agents").assertIsDisplayed()
+        onNodeWithText("My PA").assertIsDisplayed()
         onNodeWithText("IN PROGRESS").assertDoesNotExist()
-        // projectLabel of the PA's own workdir — the tag Android's flat row carried.
-        onNodeWithText("pa").assertIsDisplayed()
     }
 
     /**

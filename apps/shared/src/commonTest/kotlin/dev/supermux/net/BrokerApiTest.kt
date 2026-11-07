@@ -213,8 +213,6 @@ class BrokerApiTest {
     @Test
     fun app_config_dto_roundtrips() {
         val cfg = AppConfigDto(
-            paName = "my-assistant",
-            paWorkdir = "/home/user",
             webPublicUrl = "https://example.com",
             telegramConfigured = true,
             claudeConfigured = true,
@@ -242,7 +240,6 @@ class BrokerApiTest {
             |"telegramConfigured":false,"claudeConfigured":true,"anthropicConfigured":false,
             |"codexConfigured":false,"cursorConfigured":false}""".trimMargin()
         val cfg = json.decodeFromString<AppConfigDto>(raw)
-        assertEquals("pa", cfg.paName)
         assertEquals(true, cfg.onboarded)
         assertEquals(true, cfg.claudeConfigured)
     }

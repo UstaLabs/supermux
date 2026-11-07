@@ -18,6 +18,8 @@ export type AssistantMessageEvent = {
   files?: string[]
   format?: "text" | "markdownv2"
   keyboard?: string[]
+  /** Card #76: the live stream this stored message replaces in the app (the bridge's id for its text block). */
+  stream?: string
 }
 
 export type ToolCallEvent = {
@@ -29,12 +31,28 @@ export type ToolCallEvent = {
 }
 
 export type TurnStartEvent    = { kind: "turn-start" }
-export type TurnCompleteEvent = { kind: "turn-complete" }
+/** `error`: the turn ended in this failure (decision #17). The agent still runs unless "session-failed" follows. */
+/** `reported`: a turn-failed event already told about this failure while the turn still ran. */
+export type TurnCompleteEvent = { kind: "turn-complete"; error?: Error; reported?: boolean }
+/**
+ * The running turn failed but could not be ended: it stalled and the interrupt went unconfirmed, so the
+ * agent may never finish it. Its parent or council caller hears it now, not at a turn-complete that may never come.
+ */
+export type TurnFailedEvent = { kind: "turn-failed"; error: Error }
 // errorType is the agent's own classification (e.g. Claude's StopFailure error_type);
 // omitted by stream-derived adapters, which fall back to a generic "error".
-export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string }
+// recoverable: the agent retries on its own (Codex willRetry), so the turn goes on.
+export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string; recoverable?: boolean }
 
 export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
+
+/** Card #76: a piece of the reply (or thinking) being written, before it is stored. */
+export type LiveDeltaEvent = { kind: "live-delta"; stream: string; streamKind: "reply" | "thinking"; text: string }
+/**
+ * Card #76: a live stream ended. `final`: its stored message or reasoning row follows at once with the same
+ * `stream` id and replaces it in the app; otherwise nothing replaces it and the apps drop it.
+ */
+export type LiveEndEvent = { kind: "live-end"; stream: string; final: boolean }
 
 export type BrokerRequestOption = { id: string; label: string; kind?: string }
 
@@ -90,6 +108,9 @@ export type SubagentSnapshotEvent = { kind: "subagent-snapshot"; subagents: Suba
 /** A subagent's own tool call started: the one-line activity to show when the agent sends none. */
 export type SubagentActivityEvent = { kind: "subagent-activity"; subagentId: string; activity: string }
 
+/** The agent went on in a new, empty conversation (Claude /clear, /reset, /new); the session stays. */
+export type ConversationResetEvent = { kind: "conversation-reset"; trigger?: string }
+
 /** Background shell / workflow / monitor tasks (Claude background Bash, …). */
 export type TaskEvent = {
   kind: "task"
@@ -105,13 +126,17 @@ export type AgentEvent =
   | ToolCallEvent
   | TurnStartEvent
   | TurnCompleteEvent
+  | TurnFailedEvent
   | AgentErrorEvent
   | ActivityCardsEvent
+  | LiveDeltaEvent
+  | LiveEndEvent
   | RequestOpenEvent
   | RequestClosedEvent
   | SubagentEvent
   | SubagentActivityEvent
   | SubagentSnapshotEvent
+  | ConversationResetEvent
   | TaskEvent
 
 export type InboundMeta = {
@@ -130,6 +155,10 @@ export type InboundMeta = {
   /** JSON array of every attachment ({file_id, kind, mime, size, name}); the flat keys above describe only the first. */
   attachments?: string
   system_generated?: string
+  /** Inbox delivery (spec §1.3): "queue" waits for the running turn (never steers);
+   *  "interrupt" ends the turn running when send() is called (if it still runs; a later turn is left
+   *  alone) and keeps other waiting input. Absent: the agent's usual busy behavior. */
+  busy?: "queue" | "interrupt"
 }
 
 export interface AgentAdapter extends EventEmitter {
@@ -138,8 +167,13 @@ export interface AgentAdapter extends EventEmitter {
   readonly workdir: string
 
   start(): Promise<void>
+  /** Opens the session, resuming its native conversation: also again after its agent crashed. */
   resume(): Promise<void>
   stop(): Promise<void>
+  /** True while the agent runs: false once it crashed or was stopped (CoreAdapter). */
+  isAlive?(): boolean
+  /** True when an account switch will move the session on after its turn (CoreAdapter). Read at the call. */
+  willSwitchAccount?(): Promise<boolean>
 
   send(text: string, meta?: InboundMeta): Promise<void>
   interrupt(): Promise<void>

@@ -89,6 +89,13 @@ interface FileAccess {
      * their decoder from the suffix) — `attachmentTempName` in `:ui`'s timeline builds it.
      */
     suspend fun stageTemp(name: String, bytes: ByteArray): String?
+
+    /**
+     * A JPEG of the frame a picked clip's [PickedFile.preview] holds — on Android the first frame
+     * the picker already grabbed for the chip — to upload as the clip's poster. Null where the host
+     * makes none (the clip's tile then waits for the viewer's frame, or shows ▶ and its length).
+     */
+    fun posterJpeg(preview: Any?): ByteArray? = null
 }
 
 /**
@@ -179,6 +186,14 @@ interface MicCapture {
     suspend fun snapshot(): CapturedAudio? = null
 
     /**
+     * The raw audio captured after the first [byteOffset] bytes — 16 kHz mono 16-bit little-endian
+     * PCM, no header — WITHOUT stopping capture: what a live dictation stream sends the broker as it
+     * records (`/transcribe/stream`). Empty when nothing new has arrived. Null when this host cannot
+     * hand out raw PCM (iOS records to a file), which keeps its dictation on the per-pause uploads.
+     */
+    fun pcmSince(byteOffset: Long): ByteArray? = null
+
+    /**
      * On-device streaming recognition, when the host has one — Android's `SpeechRecognizer`,
      * Apple's Speech framework. Used only in the "On this device" dictation mode
      * ([dev.supermux.ui.chat.DictationMode]). Null on a host with no on-device ASR (web, desktop),
@@ -209,6 +224,13 @@ interface LiveTranscript {
 
     /** The running transcript as it grows — committed segments plus the current partial. */
     val partial: StateFlow<String>
+
+    /**
+     * How loud you are while it recognises, as normalised loudness 0..1 (silence 0, loud speech 1),
+     * or null when the recogniser cannot meter. What a listening avatar moves with in this mode,
+     * since [MicCapture.level] only meters a recording.
+     */
+    val level: StateFlow<Float>? get() = null
 }
 
 /**

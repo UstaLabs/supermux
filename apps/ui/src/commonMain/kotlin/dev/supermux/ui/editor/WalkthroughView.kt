@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.chat.LinkSelectionContainer
 import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
@@ -269,17 +270,19 @@ private fun StepSlide(
         }
         if (path == null) {
             Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
-                MarkdownBody(step.bodyMd, Modifier.fillMaxWidth())
+                // Selectable like a chat reply. A mouse drag over the text now selects instead of
+                // paging (the selection consumes it); the keys and a finger swipe still page.
+                LinkSelectionContainer { MarkdownBody(step.bodyMd, Modifier.fillMaxWidth()) }
             }
             return@Column
         }
         Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
-            MarkdownBody(step.bodyMd, Modifier.fillMaxWidth())
+            LinkSelectionContainer { MarkdownBody(step.bodyMd, Modifier.fillMaxWidth()) }
         }
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (step.repo.isBlank()) path else "${step.repo}/$path",
+                repoPath(step.repo, path),
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
                 color = cs.onSurfaceVariant,

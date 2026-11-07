@@ -15,7 +15,7 @@
  * SessionManager.orchestration for the retry de-dup.
  */
 import { mcpServer, McpServer, fromJsonSchema, type ConnectionContext } from "../../../packages/supermux-core/src/mcp/index.js"
-import { listTools, toolResult, toolRoute, type ToolCallResult } from "../../shim/tools"
+import { listTools, toolCallIdOf, toolResult, toolRoute, type ToolAgentChoices, type ToolCallResult } from "../../shim/tools"
 import type { ToolOperation } from "../../shared/socket-frames"
 import { makeLogger } from "../../shared/log"
 
@@ -24,6 +24,9 @@ const log = makeLogger("mux-tools")
 export type MuxToolHandler = {
   outbound(sessionId: string, op: ToolOperation): Promise<ToolCallResult>
   orchestration(sessionId: string, op: ToolOperation): Promise<ToolCallResult>
+  councilMember?: (sessionId: string) => boolean
+  /** The access levels and efforts each agent takes: the session-starting tools' enums. */
+  choices?: () => ToolAgentChoices
 }
 
 let handler: MuxToolHandler | undefined
@@ -37,13 +40,17 @@ export function bindMuxTools(next: MuxToolHandler): () => void {
 /** The SDK server for one (session, connection). */
 export function buildMuxToolsServer(ctx: ConnectionContext, rpcOnly: boolean): McpServer {
   const name = rpcOnly ? "mux-rpc" : "mux-shim"
-  const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: {} } })
-  for (const tool of listTools(rpcOnly)) {
+  // listChanged: after a broker restart the core's bridge re-lists this server and tells the agent if
+  // the list changed (supermux-core/src/mcp/bridge.ts); Claude Code only listens to a server that declares it.
+  const server = new McpServer({ name, version: "0.0.1" }, { capabilities: { tools: { listChanged: true } } })
+  // Built per (session, connection) when the agent connects; a member's membership is recorded before it starts.
+  for (const tool of listTools(rpcOnly, { councilMember: handler?.councilMember?.(ctx.sessionId) === true, choices: handler?.choices?.() })) {
     const route = toolRoute(tool.name, rpcOnly)!
-    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never) }, (async (args: Record<string, unknown> | undefined) => {
+    server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema as never), ...("annotations" in tool && tool.annotations ? { annotations: tool.annotations } : {}) }, (async (args: Record<string, unknown> | undefined, reqCtx: { mcpReq?: { _meta?: unknown } } | undefined) => {
       const bound = handler
       if (!bound) return toolResult(tool.name, { ok: false, error: "supermux broker is not ready" }, rpcOnly)
-      const op: ToolOperation = { name: route.op, args: args ?? {} }
+      const callId = toolCallIdOf(reqCtx?.mcpReq?._meta)
+      const op: ToolOperation = { name: route.op, args: args ?? {}, ...(callId ? { callId } : {}) }
       let result: ToolCallResult
       try {
         result = route.kind === "outbound" ? await bound.outbound(ctx.sessionId, op) : await bound.orchestration(ctx.sessionId, op)

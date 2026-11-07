@@ -51,3 +51,20 @@ test("DELETE /devices/iphone cascades to push_subscriptions", async () => {
   expect(res.status === 200 || res.status === 204).toBe(true)
   expect(store.get("iphone")).toBeNull()
 })
+
+// Card #86: `supermux revoke` runs in its own process, so only the broker's next
+// read of devices.json can notice. The push row must go with the device.
+test("a revoke from another process (the CLI) cascades to push_subscriptions", async () => {
+  const devicesFile = join(tmpDir, "devices.json")
+  const ipad = new DeviceStore(devicesFile).mint("ipad").token
+  // The broker has seen the iPad: it connected and registered for push.
+  expect((await fetch(`http://127.0.0.1:${port}/me`, { headers: { Cookie: `cmux_token=${ipad}` } })).status).toBe(200)
+  store.upsert({ device: "ipad", endpoint: "ep2", keys: { p256dh: "a", auth: "b" } })
+
+  new DeviceStore(devicesFile).revoke("ipad")
+  // Any authenticated request makes the broker re-read devices.json.
+  await fetch(`http://127.0.0.1:${port}/me`, { headers: { Cookie: `cmux_token=${token}` } })
+
+  expect(store.get("ipad")).toBeNull()
+  expect(store.get("iphone")).not.toBeNull()
+})

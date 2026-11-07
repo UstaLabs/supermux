@@ -18,6 +18,11 @@ export type Account = {
   identity?: AccountIdentity
   /** Own history root, never linked to the shared one; never picked by the switch policy. */
   isolated?: boolean
+  /**
+   * Why the account was made isolated though nobody asked: "file_links_unsupported" when this host cannot create the
+   * file links sharing needs (Windows without Developer Mode, #37). For the app to say so.
+   */
+  isolatedBecause?: "file_links_unsupported"
   /** OpenCode api_key accounts: the provider id the key belongs to (e.g. "anthropic"). */
   provider?: string
   createdAt: string
@@ -99,6 +104,13 @@ export type AuthAdapter = {
   refreshSecret?(secret: string, fetch: FetchLike): Promise<string>
   /** Validates an add() before anything is stored. */
   validate?(options: AddAccountOptions): void
+  /**
+   * The agent's HTTP 401/402/403 (a failed turn's error `data.http_status`) is about the whole login: Core
+   * counts a 402 as an exhausted balance and marks the account unavailable on a 401/403. Unset where one
+   * login spans several providers (OpenCode: OpenRouter answers 402 when one provider is out of credits),
+   * whose one provider's answer says nothing about the others.
+   */
+  readonly httpAccountErrors?: boolean
 }
 
 export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
@@ -106,9 +118,10 @@ export type UsageWindow = { name: string; usedPercent: number; resetsAt?: Date }
 /**
  * An account the agent's API refused (401/403: login revoked, subscription access disabled, ...).
  * A label, never a block: a session may still be put on it by hand. Cleared by the next turn that
- * completes on it, or by removing the account.
+ * completes on it, or by removing the account. `code` names a refusal the host can act on
+ * (`account_expired`: the login must be signed in again).
  */
-export type AccountUnavailable = { reason: string; since: Date }
+export type AccountUnavailable = { reason: string; since: Date; code?: string }
 
 export type AccountsOptions = {
   /**
@@ -187,6 +200,7 @@ export type LoginSpawn = { command: string; args: string[]; env: Record<string, 
 
 export interface LoginProcess {
   onOutput(listener: (chunk: string) => void): void
+  /** Once the process has exited and all of its output has gone to onOutput (a failed login reports its end). */
   onExit(listener: (code: number | null) => void): void
   write(data: string): void
   /** Terminates the whole process group. */
@@ -202,4 +216,9 @@ export type LoginConfig = {
   commands?: Partial<Record<"claude" | "codex" | "grok" | "cursor" | "antigravity", string>>
   /** Whole login, including the user's part. Default 1800000 (30 min): a link opened on a phone takes a while. */
   timeoutMs?: number
+  /**
+   * Starts that timeout: calls `fire` after `ms`, returns what stops it. Default: a timer that does not keep the
+   * process alive. A test passes its own to fire it when it chooses, not when a loaded machine gets there.
+   */
+  schedule?: (fire: () => void, ms: number) => () => void
 }

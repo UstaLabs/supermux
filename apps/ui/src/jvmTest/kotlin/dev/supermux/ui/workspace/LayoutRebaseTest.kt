@@ -140,8 +140,15 @@ class LayoutRebaseTest {
 
         // Click "c" in the right pane, then have the broker delete "a" from the
         // left one while that click is still unconfirmed.
+        //
+        // One frame, not waitForIdle: that runs the strip's springs to rest, ~300ms,
+        // which brings the clock to the PATCH debounce. The click's write then fires
+        // between the delete and the frame that would have shown it, and this
+        // stand-in broker — unlike the real one, which refuses a tree naming a view
+        // it has deleted — stores it over the delete.
         onNodeWithTag("view-tab-c").performTouchInput { down(center); up() }
-        waitForIdle()
+        mainClock.advanceTimeByFrame()
+        assertTrue(h.sync!!.dirty, "the click must still be unconfirmed when the broker speaks")
         h.server = removeViewFromLayout(h.server.toDomainOrNull()!!, "a")!!.toDto()
         repeat(20) { mainClock.advanceTimeBy(200); waitForIdle() }
 

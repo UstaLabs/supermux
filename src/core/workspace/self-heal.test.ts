@@ -85,3 +85,14 @@ test("an internal orphan is still healed with a workspace, but flagged internal 
   const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's1'").get() as any
   expect(ws.getById(link.workspace_id)).toBeDefined()
 })
+
+test("a delegated child with no workspace is not healed", () => {
+  const { db, ws } = seed()
+  insertSession(db, "c1", "kid", "/w")
+  db.run("UPDATE sessions SET parent_session_id = 'p1' WHERE id = 'c1'")
+
+  expect(healSessionsWithoutWorkspace(db, ws)).toEqual([])
+  expect(ws.list()).toEqual([])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 'c1'").get() as any
+  expect(link.workspace_id).toBeNull()
+})

@@ -72,19 +72,29 @@ class FleetStoreActionsTest {
         val fleet = FleetStore(
             store = s, scope = this, deps = testDeps(),
             appFactory = { url, token, onConn ->
-                val http = HttpClient(MockEngine { req ->
-                    if (req.url.encodedPath == "/archived-sessions") {
-                        archivedHits += url
-                        val id = if (url.contains("h-a")) "a1" else "b1"
-                        respond(
-                            """[{"id":"$id","name":"$id","workdir":"/w","agent":"claude"}]""",
-                            HttpStatusCode.OK,
-                            headersOf("Content-Type", "application/json"),
-                        )
-                    } else {
-                        respond("{}", HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                // Both hosts answer on the thread that asked, as they do on the app's main dispatcher.
+                // On Ktor's IO threads the two answers land on two threads at once, and FleetStore
+                // emits each merged list outside its lock, so the OLDER list could be the last one
+                // emitted and stay: archived=[b1] with both hosts hit. The app never publishes from two
+                // threads (every client runs the fleet on its main dispatcher); this test must not.
+                val http = HttpClient(MockEngine) {
+                    engine {
+                        dispatcher = Dispatchers.Unconfined
+                        addHandler { req ->
+                            if (req.url.encodedPath == "/archived-sessions") {
+                                archivedHits += url
+                                val id = if (url.contains("h-a")) "a1" else "b1"
+                                respond(
+                                    """[{"id":"$id","name":"$id","workdir":"/w","agent":"claude"}]""",
+                                    HttpStatusCode.OK,
+                                    headersOf("Content-Type", "application/json"),
+                                )
+                            } else {
+                                respond("{}", HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                            }
+                        }
                     }
-                })
+                }
                 HostStore(
                     url, token, this, testDeps(http = http), connectOnInit = false,
                     onConnectionChange = onConn, apiOverride = BrokerApi(url, token, http),
@@ -238,6 +248,28 @@ class FleetStoreActionsTest {
         fleet.sync(s.list().map { if (it.recordId == "h2") it.copy(relayUrl = "https://h-b2.relay.supermux.dev") else it })
         advanceUntilIdle()
         assertEquals(emptySet(), fleet.projectCatalogHosts.value)
+        fleet.close()
+    }
+
+    // ── homeDirs: each host's own home folder, from its snapshot (platform layer #29) ──
+
+    @Test fun homeDirsAreEachHostsOwn() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val fleet = FleetStore(
+            store = s, scope = this, deps = testDeps(),
+            appFactory = { url, token, onConn ->
+                HostStore(url, token, this, testDeps(), connectOnInit = false, onConnectionChange = onConn)
+            },
+        )
+        advanceUntilIdle()
+        assertEquals(emptyMap(), fleet.homeDirs.value)
+        fleet.appForRecord("h1")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(homeDir = "/home/ahmet"))
+        fleet.appForRecord("h2")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(homeDir = "C:\\Users\\me"))
+        advanceUntilIdle()
+        assertEquals(mapOf("h1" to "/home/ahmet", "h2" to "C:\\Users\\me"), fleet.homeDirs.value)
         fleet.close()
     }
 }

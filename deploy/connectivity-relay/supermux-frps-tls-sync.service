@@ -1,0 +1,7 @@
+[Unit]
+Description=Copy the relay's TLS certificate to frps and restart it when renewed
+After=caddy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/supermux-frps-tls-sync

@@ -7,6 +7,7 @@ import { ensureHome, homePath } from "./homes.js"
 import { RefreshCoordinator } from "./refresh.js"
 import { assertVaultId, fileVault } from "./vault.js"
 import type { Account, AccountIdentity, AccountsOptions, AddAccountOptions, AuthAdapter, FetchLike, HomeRoots, Materialized, Vault } from "./types.js"
+import { files } from "@supermux/platform"
 
 const SYSTEM_CREATED_AT = new Date(0).toISOString()
 /** materialize refreshes a vault-owned token that expires sooner than this. */
@@ -19,6 +20,9 @@ export function systemAccountId(agent: string): string { return `${agent}:system
  * vault; subscription homes under `<stateDirectory>/accounts/homes/<agent>/<id>/`. One built-in
  * `system` account per agent (the CLI's own login, never moved or copied).
  */
+/** Whether this host may create file links (files.canLinkFiles, tried once per process). A seam for tests. */
+export const hostLinks = { canLinkFiles: (): boolean => files.canLinkFiles() }
+
 export class AccountRegistry {
   readonly directory: string
   readonly homesDirectory: string
@@ -140,6 +144,13 @@ export class AccountRegistry {
       ...(input.isolated ? { isolated: true } : {}),
       ...(input.provider ? { provider: input.provider } : {}),
     }
+    // Q5 (#37): sharing the agent's history links files as well as folders. Where this host may not create file links
+    // (Windows without Developer Mode), the account keeps its history to itself instead of failing after sign-in.
+    if (input.method === "subscription" && !account.isolated
+      && adapter.layout?.(this.roots).shared.some(entry => entry.type === "file") && !hostLinks.canLinkFiles()) {
+      account.isolated = true
+      account.isolatedBecause = "file_links_unsupported"
+    }
     return { input, account, accounts, adapter }
   }
 
@@ -253,7 +264,7 @@ export class AccountRegistry {
     try {
       const file = await open(temp, "wx", 0o600)
       try { await file.writeFile(JSON.stringify({ version: 1, accounts: [...accounts.values()] })); await file.sync() } finally { await file.close() }
-      await rename(temp, this.file)
+      await files.replace(temp, this.file)
     } finally { await rm(temp, { force: true }) }
   }
 }
@@ -309,5 +320,6 @@ function validAccount(value: unknown): value is Account {
     && (a.label === undefined || typeof a.label === "string")
     && (a.provider === undefined || typeof a.provider === "string")
     && (a.isolated === undefined || typeof a.isolated === "boolean")
+    && (a.isolatedBecause === undefined || a.isolatedBecause === "file_links_unsupported")
     && (a.identity === undefined || (!!a.identity && typeof a.identity === "object"))
 }

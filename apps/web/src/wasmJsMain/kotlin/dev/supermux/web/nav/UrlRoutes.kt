@@ -10,14 +10,13 @@ sealed interface UrlTarget {
 }
 
 private val sectionSlugs = mapOf(
-    SettingsSection.Agents to "agents",
+    SettingsSection.Providers to "providers",
     SettingsSection.Accounts to "accounts",
     SettingsSection.Devices to "devices",
     SettingsSection.System to "system",
     SettingsSection.GitHosting to "git-hosting",
     SettingsSection.Proxies to "proxies",
     SettingsSection.Worktrees to "worktrees",
-    SettingsSection.Assistant to "assistant",
     SettingsSection.Curator to "curator",
     SettingsSection.Voice to "voice",
     SettingsSection.EditorLsp to "editor",
@@ -30,17 +29,14 @@ private val slugSections = sectionSlugs.entries.associate { (k, v) -> v to k }
  *
  * [selectedId] only shows up on [Route.Home]: every other destination is a full-pane overlay whose
  * URL says nothing about which session is selected underneath it (closing it returns to `/s/<id>`).
- * [SettingsSection.PersonalAssistants] keeps its own top-level path because that is where the Vue
- * app put it, and [Route.Appearance]/[Route.AppUpdate] live under `/settings/` for the same reason
- * even though they are their own routes here.
+ * [Route.Appearance]/[Route.AppUpdate] live under `/settings/` because that is where the Vue app
+ * put them, even though they are their own routes here.
  */
 fun pathFor(route: Route, selectedId: String?): String = when (route) {
     Route.Home -> if (selectedId != null) "/s/$selectedId" else "/"
     is Route.NewSession -> if (route.draftId.isBlank()) "/new" else "/new?draft=${route.draftId}"
     Route.AddHost -> "/add-host"
-    is Route.Settings ->
-        if (route.section == SettingsSection.PersonalAssistants) "/personal-assistants"
-        else "/settings/${sectionSlugs.getValue(route.section)}"
+    is Route.Settings -> "/settings/${sectionSlugs.getValue(route.section)}"
     Route.Usage -> "/usage"
     Route.Devices -> "/devices"
     Route.Archived -> "/archived"
@@ -69,10 +65,11 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "archived" -> UrlTarget.Screen(Route.Archived)
         segs[0] == "proxies" -> UrlTarget.Screen(Route.Proxies)
         segs[0] == "displays" -> UrlTarget.Screen(Route.Displays)
-        segs[0] == "personal-assistants" -> UrlTarget.Screen(Route.Settings(SettingsSection.PersonalAssistants))
-        segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings(SettingsSection.Agents))
+        segs[0] == "settings" && segs.size == 1 -> UrlTarget.Screen(Route.Settings(SettingsSection.Providers))
         segs[0] == "settings" && segs[1] == "appearance" -> UrlTarget.Screen(Route.Appearance)
         segs[0] == "settings" && segs[1] == "updates" -> UrlTarget.Screen(Route.AppUpdate)
+        // Pre-rename bookmark: the CLI screen lived at /settings/agents until 2026-10.
+        segs[0] == "settings" && segs[1] == "agents" -> UrlTarget.Screen(Route.Settings(SettingsSection.Providers))
         segs[0] == "settings" ->
             slugSections[segs[1]]?.let { UrlTarget.Screen(Route.Settings(it)) } ?: UrlTarget.Screen(Route.Home)
         else -> UrlTarget.Screen(Route.Home)

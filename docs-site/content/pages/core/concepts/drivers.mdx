@@ -1,0 +1,91 @@
+---
+title: Drivers
+description: One driver per agent CLI. It starts the CLI, speaks its protocol and reports what it can do.
+---
+
+A driver connects the core to one agent CLI. It starts the CLI, speaks its protocol, turns its output into [normalized events](/core/concepts/events) and says which features the agent supports. The core owns everything else: session records, the message queue, events and permission requests.
+
+| | Owns |
+|---|---|
+| **Your app** | Working folders, credentials, environment, UI, permission decisions, deployment |
+| **The core** | Scheduling, queues and receipts, session records, events |
+| **A driver** | The CLI's protocol, what it can do, the agent's own conversation id |
+
+## The built-in drivers
+
+| Agent | Key | How it runs the CLI | Protocol |
+|---|---|---|---|
+| Claude Code | `claude` | `claude --print --output-format stream-json --input-format stream-json …` | Claude stream-json |
+| Codex | `codex` | `codex app-server` | JSON-RPC (`thread/*`, `turn/*`) |
+| Grok Build | `grok` | `grok agent stdio` | ACP |
+| OpenCode | `opencode` | `opencode acp` | ACP |
+| Cursor | `cursor` | `cursor-agent acp` | ACP |
+| Antigravity | `antigravity` | one long-lived `agy --input-format stream-json --output-format stream-json` per session | agy stream-json |
+
+Every built-in driver runs its CLI behind a [keeper](/core/concepts/keeper).
+
+## What each agent can do
+
+| Agent | Permission default | Steer | Fork | Model switch | History | Subagents | Questions |
+|---|---|:-:|:-:|:-:|:-:|---|---|
+| Claude Code | `permissionMode: default` | | | | | list, message, stop | `AskUserQuestion` |
+| Codex | `workspace-write`, `on-request` | ✓ | ✓ | ✓ | ✓ | list, message, stop | inline, steered into the turn |
+| Grok Build | `policy: ask` | | | ✓ | | list, message (once finished), stop | `_x.ai/ask_user_question` |
+| OpenCode | `policy: ask` | | | | | list, message, stop | |
+| Cursor | `policy: ask`, mode `agent` | | | | | list, message | |
+| Antigravity | `mode: default` | | | ✓ | | | |
+
+All six can resume and re-attach. Anything a runtime doesn't advertise fails with `unsupported_operation`; check `session.capabilities()` on a live session:
+
+```ts
+const caps = session.capabilities()
+// { resume, steer, fork, detach, configure?, history?, permissions? }
+if (caps.steer) await session.steer({ content: [{ type: "text", text: "Use the v2 API instead" }] })
+```
+
+## Per-agent notes
+
+- **Claude Code**: resume uses `--resume=<id>`. If Claude has no conversation under that id yet (nothing was ever sent), the driver starts fresh under the same id. A per-session model isn't supported: set `model` per agent in `supermux()`.
+- **Codex**: steer, fork, model switch and history are all native. `history()` reads the thread's turns.
+- **Grok Build, OpenCode, Cursor (ACP)**: resume uses `session/resume` when the CLI advertises it, otherwise `session/load` (which replays history). A turn that finished while your process was away comes back on `resume()` as raw `session.update`s rather than normalized events.
+- **Antigravity**: needs a prepared "shadow" home, made with `prepareAntigravityEnvironment` from `@supermux/core/environment`. It has no prompt channel: it denies what its mode disallows, and the core emits a `warning` naming the denied actions at the end of the turn. Interrupting stops the CLI; the next prompt starts it again on the same conversation.
+
+## What you can send
+
+Input is a list of ACP content blocks.
+
+- **Claude Code, Codex**: `text` and `image` blocks.
+- **Antigravity**: `text` and `image` (images are saved and referenced by path).
+- **ACP agents**: blocks are passed through to the CLI.
+
+## Writing your own driver
+
+A driver is an object with an `id` and an `open(context)` that returns a runtime:
+
+```ts
+import type { AgentDriver } from "@supermux/core"
+
+const echo: AgentDriver = {
+  id: "echo",
+  async open(context) {
+    return {
+      agentSessionId: `echo-${context.sessionId}`,
+      capabilities: { resume: true, steer: false, fork: false, detach: false },
+      async prompt(content, signal) {
+        // send content to your agent; report what it does through context.onUpdate(...)
+        return { stopReason: "end_turn" }
+      },
+      async interrupt() {},
+      async close(options) {},
+    }
+  },
+}
+```
+
+Register it with `createCore({ agents: [echo, …], … })`. A runtime can also implement `steer`, `configure`, `history`, `normalize`, `setPermissions` and the subagent methods. Rules worth knowing:
+
+- Honor `context.signal` and report the agent's exit with `context.onExit`.
+- Without `normalize`, your driver yields raw `session.update`s plus the core's own events.
+- `close({ mode: "detach" })` needs `capabilities.detach`. To keep your agent running behind a keeper, see `connectKeeper` (experimental).
+
+The runnable version is [examples/custom-driver.mjs](/core/examples).

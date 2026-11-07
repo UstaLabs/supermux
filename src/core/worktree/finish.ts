@@ -1,11 +1,12 @@
 // src/core/worktree/finish.ts
-import { resolve, sep } from "path"
+import { resolve } from "path"
 import { gitAsync } from "../git/exec"
 import { syncBaseIntoBranch, integrateFastForward, dirtyFiles, mergeInProgress } from "../git/integrate"
 import { resolveVerifyCommand, runVerify } from "./verify"
 import { removeWorktree, worktreesRoot } from "./manager"
 import { publishBranch } from "../git/remote"
 import { openPullRequest, compareUrl } from "../git/pr"
+import { paths } from "@supermux/platform"
 
 export interface FinishSession { repoRoot: string; worktreeDir: string; sessionBranch: string; baseBranch: string }
 export interface FinishOpts { skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; cleanup?: boolean; deleteBranch?: boolean; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -33,7 +34,7 @@ async function hasCommitsToIntegrate(repoRoot: string, base: string, branch: str
 
 /** Only worktrees mux itself created (under worktreesRoot()) may be auto-removed. */
 function isMuxOwned(worktreeDir: string): boolean {
-  return resolve(worktreeDir).startsWith(resolve(worktreesRoot()) + sep)
+  return paths.isStrictlyInside(resolve(worktreeDir), resolve(worktreesRoot()))
 }
 
 /** Re-entrant finish: sync base in → verify → ff-only integrate. Returns the

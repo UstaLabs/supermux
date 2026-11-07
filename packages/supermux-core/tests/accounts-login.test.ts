@@ -3,8 +3,10 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
-import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand } from "../src/accounts/index.js"
-import type { AgentDriver, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
+import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
+import { loginPlan, unlinkLink } from "../src/accounts/login.js"
+import { proc } from "@supermux/platform"
+import type { AgentDriver, LoginConfig, LoginHandle, LoginRunner, LoginState } from "../src/index.js"
 import { TEST_LIMITS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
@@ -20,7 +22,7 @@ const driver = (id: string): AgentDriver => ({ id, async open() { throw new Erro
 type Identity = { email?: string; org?: string; accountId?: string }
 const IDENTITY: Identity = { email: "new@x.io", org: "org-new", accountId: "acct-new" }
 
-async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner } = {}) {
+async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner; schedule?: LoginConfig["schedule"] } = {}) {
   const base = await mkdtemp(join(tmpdir(), "accounts-login-"))
   dirs.push(base)
   const log = join(base, "cli.log")
@@ -37,7 +39,7 @@ async function setup(options: { behavior?: string; identity?: Identity; timeoutM
   const vault = memoryVault()
   const core = createCore({
     stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode", "antigravity"].map(driver), limits: TEST_LIMITS,
-    accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}) } },
+    accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}), ...(options.schedule ? { schedule: options.schedule } : {}) } },
   })
   cores.push(core)
   const pending = join(stateDirectory, "accounts", "pending")
@@ -70,6 +72,49 @@ test("parsers strip ANSI/OSC 8 and find URLs and device codes", () => {
   expect(ptyCommand({ command: "/x/claude", args: ["auth", "login", "--email", "a'b@x"] }, "linux")).toEqual({ command: "script", args: ["-qec", `stty cols 600; exec '/x/claude' 'auth' 'login' '--email' 'a'\\''b@x'`, "/dev/null"] })
   expect(ptyCommand({ command: "claude", args: [] }, "darwin").command).toBe("/bin/sh")
   expect(() => ptyCommand({ command: "claude", args: [] }, "win32")).toThrow()
+})
+
+test("spawnConptyLogin: the CLI gets a terminal, its output, the typed input and its exit code (a pty here, a ConPTY on Windows)", async () => {
+  const base = await mkdtemp(join(tmpdir(), "conpty-login-"))
+  dirs.push(base)
+  const script = join(base, "cli.mjs")
+  await writeFile(script, `process.stdout.write("tty=" + process.stdin.isTTY + " cols=" + process.stdout.columns + " cwd=" + process.cwd() + " arg=" + process.argv[2] + "\\n")
+process.stdin.setEncoding("utf8")
+process.stdin.once("data", d => { process.stdout.write("got=" + d.trim() + "\\n"); process.exit(3) })
+`)
+  const proc = spawnConptyLogin({ command: process.execPath, args: [script, "a b"], env: { ...process.env } as Record<string, string>, cwd: base })
+  let out = ""
+  proc.onOutput(chunk => { out += chunk })
+  const exited = new Promise<number | null>(resolve => proc.onExit(resolve))
+  for (let i = 0; i < 100 && !out.includes("arg="); i++) await Bun.sleep(50)
+  expect(out).toContain(`tty=true cols=600 cwd=${base} arg=a b`)
+  proc.write("the-code\r")
+  expect(await exited).toBe(3)
+  expect(out).toContain("got=the-code")
+})
+
+test("unlinkLink removes the link to the login directory, never the directory's contents", async () => {
+  const base = await mkdtemp(join(tmpdir(), "unlink-link-"))
+  dirs.push(base)
+  await writeFile(join(base, "token"), "secret")
+  await mkdir(join(base, "home"))
+  await symlink(base, join(base, "home", "link"), "dir")
+  await unlinkLink(join(base, "home", "link"))
+  await unlinkLink(join(base, "home", "absent"))
+  expect(await readdir(join(base, "home"))).toEqual([])
+  expect(await readFile(join(base, "token"), "utf8")).toBe("secret")
+})
+
+// One rule with the broker's launcher (@supermux/platform's windowsLaunch). Core's own refused " % ! in any word, the
+// resolved .cmd path included, so a Windows user named "Ana!" could not run a guided login.
+test("windows login argv: an .exe runs directly, a .cmd shim through cmd.exe by the launcher's rule, any character passes", () => {
+  const args = ["auth", "login", "--claudeai", "--email", "a&b@x"]
+  expect(windowsLoginArgv("C:\\Users\\a\\.local\\bin\\claude.exe", args)).toEqual(["C:\\Users\\a\\.local\\bin\\claude.exe", ...args])
+  const shim = windowsLoginArgv("C:\\npm\\claude.CMD", args)
+  expect(shim.slice(1, 5)).toEqual(["/d", "/v:off", "/s", "/c"])
+  expect(shim[5]).toBe(proc.windowsCmdCommandLine("C:\\npm\\claude.CMD", args))
+  for (const word of ['a"b@x', "a%PATH%@x", "a!b@x"]) expect(() => windowsLoginArgv("C:\\npm\\claude.cmd", ["--email", word])).not.toThrow()
+  expect(windowsLoginArgv("C:\\Users\\Ana!\\AppData\\Roaming\\npm\\claude.cmd", ["auth", "login"])[5]).toStartWith('"C:\\Users\\Ana^!\\')
 })
 
 test("claude: PTY login, URL parsed, code typed then Enter, promoted into an account home with shared links", async () => {
@@ -254,6 +299,20 @@ test("parseAntigravityLoginUrl prefers the Google URL; a lone docs link is not a
   expect(parseAntigravityLoginUrl("Open https://example.com/auth?x=1 then paste the authorization code")).toBe("https://example.com/auth?x=1")
 })
 
+test("antigravity login: agy's self-update is off on Windows only (#70)", () => {
+  expect(loginPlan("antigravity", "/tmp/acct", "agy", undefined, "win32").spawn.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("true")
+  expect(loginPlan("antigravity", "/tmp/acct", "agy", undefined, "linux").spawn.env.AGY_CLI_DISABLE_AUTO_UPDATE).toBeUndefined()
+})
+
+test("parseAntigravityLoginUrl under a Windows ConPTY: a cursor move after the URL ends it", () => {
+  // Shape captured from agy 1.5.0 under Bun's ConPTY on Windows 11 (2026-11-04): the blank line after the URL
+  // is drawn as ESC[5;1H, and the URL used to end in "…stateWaiting".
+  const google = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=d2FEsf"
+  const output = `Authentication required. Please visit the URL to log in:\r\n  ${google}\x1b[5;1HWaiting for authentication (timeout 60s)...\r\n`
+    + `\x1b]0;C:\\Users\\Tester\\AppData\\Local\\agy\\bin\\agy.exe\x07\x1b[?25hOr, paste the authorization code here and press Enter:\r\n`
+  expect(parseAntigravityLoginUrl(output)).toBe(google)
+})
+
 test("duplicate identity (the system login) → account_exists naming it; temp dir removed, nothing promoted", async () => {
   const { core, roots, stateDirectory, pending } = await setup({ identity: { email: "me@x.io", accountId: "acct-system" } })
   await mkdir(roots.codexRoot, { recursive: true })
@@ -283,8 +342,15 @@ test("cancel kills the process group and removes the temp dir", async () => {
 })
 
 test("timeout fails the login and cleans up", async () => {
-  const { core, pending, invocations } = await setup({ behavior: "hang", timeoutMs: 400 })
+  // The login's own timeout, fired once the CLI runs: a real 400 ms one fired whenever a loaded machine took
+  // longer to start the CLI, which was killed before it logged the pid this test checks.
+  let timeout: { fire: () => void; ms: number } | undefined
+  const schedule = (fire: () => void, ms: number) => { timeout = { fire, ms }; return () => { timeout = undefined } }
+  const { core, pending, invocations } = await setup({ behavior: "hang", timeoutMs: 400, schedule })
   const handle = core.accounts.login({ agent: "grok" })
+  await phase(handle, "awaiting_user")
+  expect(timeout?.ms).toBe(400)
+  timeout!.fire()
   await expect(handle.done).rejects.toMatchObject({ code: "login_timeout" })
   expect(handle.state()).toMatchObject({ phase: "failed", errorCode: "login_timeout" })
   const [run] = await invocations()

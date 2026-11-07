@@ -9,6 +9,7 @@ import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.PromptRequestOption
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.Subagent
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.WorktreeSizeDto
@@ -30,6 +31,14 @@ class HostReducerTest {
 
     private fun view(id: String, workspaceId: String) =
         ViewDto(id = id, workspaceId = workspaceId, kind = "editor")
+
+    // #62: an app newer than its broker may send a frame the broker doesn't know (`live`), and the broker answers
+    // "unknown frame type". The user can do nothing about it, so it is not shown; any other error still is.
+    @Test fun aBrokerNotKnowingAFrameIsNotShownToTheUser() {
+        val s = HostState()
+        assertSame(s, reduceHostFrame(s, ServerFrame.Error(reason = "unknown frame type")))
+        assertEquals("session busy", reduceHostFrame(s, ServerFrame.Error(reason = "session busy")).lastError)
+    }
 
     @Test fun frameThatChangesNothingReturnsSameInstance() {
         val s = HostState()
@@ -99,6 +108,23 @@ class HostReducerTest {
         assertEquals(emptyMap(), cleared.agentErrors)
         val deadKeeps = reduceHostFrame(withErr, ServerFrame.AgentState(session = "s1", phase = "dead", state = "dead"))
         assertEquals(err, deadKeeps.agentErrors["s1"])
+    }
+
+    @Test fun runningBackgroundAgentsMakeAnIdleSessionBusy() {
+        val st = HostState(
+            agentState = mapOf("s1" to AgentStatus(phase = "idle"), "s2" to AgentStatus(phase = "idle")),
+            subagents = mapOf(
+                "s1" to listOf(
+                    Subagent(id = "a", background = true, status = "running"),
+                    Subagent(id = "b", background = true, status = "completed"),
+                ),
+                "s2" to listOf(Subagent(id = "c", background = true, status = "completed")),
+            ),
+        ).agentStateWithAgents()
+        assertEquals(1, st["s1"]!!.agentsRunning)
+        assertEquals(false, st["s1"]!!.working)
+        assertEquals(true, st["s1"]!!.busy)
+        assertEquals(false, st["s2"]!!.busy)
     }
 
     @Test fun sessionRemovedDropsKnownId() {
@@ -311,6 +337,15 @@ class HostReducerTest {
         val open2 = reduceHostFrame(HostState(), ServerFrame.RequestOpen("s1", prompt()))
         val cancelled = reduceHostFrame(open2, ServerFrame.RequestClosed("s1", "r1", "cancelled"))
         assertEquals("cancelled", cancelled.messages["s1"]?.last()?.text)
+    }
+
+    // Card #75: a session woken (or put back to sleep) tells every client its status.
+    @Test fun sessionStateCarriesTheLifecycleStatus() {
+        val s = HostState(sessions = listOf(sessionFixture("s1").copy(status = "suspended")))
+        val awake = reduceHostFrame(s, ServerFrame.SessionState(session = "s1", status = "active"))
+        assertEquals("active", awake.sessions.single().status)
+        val untouched = reduceHostFrame(awake, ServerFrame.SessionState(session = "s1", mute = true))
+        assertEquals("active", untouched.sessions.single().status)
     }
 
     @Test fun sessionStatePatchesPrompts() {

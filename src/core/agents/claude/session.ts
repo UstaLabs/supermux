@@ -1,4 +1,5 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
+import { reportedCommands, type ReportedCommandsCtx } from "../../slash-commands/types"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
@@ -160,6 +161,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         core: true,
         permissionMode,
         account: args.account,
@@ -194,6 +197,7 @@ export async function resumeClaudeSession(
     effort?: string
     fast?: boolean
     agent_session_id?: string
+    account?: string
     permissionMode?: string
     pa?: boolean
     rpcMcpConfig?: string
@@ -215,12 +219,13 @@ export async function resumeClaudeSession(
     pa: session.pa,
     rpcMcpConfig: session.rpcMcpConfig,
   })
-  const handle = host.register({ id: session.id, env: {}, extra })
+  const handle = host.register({ ...(session.account ? { account: session.account } : {}), id: session.id, env: {}, extra })
   let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -309,10 +314,12 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       agent_session_id: session.agent_session_id,
       permissionMode: session.permissionMode ?? undefined,
       pa: session.role === "personal_assistant",
+      account: session.account ?? undefined,
     },
   )
 }
 
-export function commandContext(_ctx: CommandContextCtx): undefined {
-  return undefined
+/** Slash commands: what the session's Claude reported (initialize reply, commands_changed), kept on its adapter. */
+export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
+  return reportedCommands(ctx.adapter)
 }

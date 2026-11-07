@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test"
 import { spawn, type ChildProcess } from "node:child_process"
 import { once } from "node:events"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -121,6 +121,26 @@ test("sessions.close(id, shutdown) stops the agent a detached session left behin
   const resumed = await core.sessions.resume("d1")
   expect(launches(trace)).toBe(2)
   await resumed.close({ mode: "shutdown" })
+})
+
+// On Windows a signal is TerminateProcess: a keeper sent SIGTERM never stops its agent, writes its last status or removes
+// its socket, and its agent is then killed outright too. So a keeper that answers is asked over its own socket first
+// (hello with its token, then shutdown), and stops itself and its agent; a signal is only the fallback.
+test("a detached session's keeper is asked to stop over its own socket: this process signals neither it nor its agent", async () => {
+  const { state, status, core } = await detachedClaude("d-asked")
+  const kill = spyOn(process, "kill")
+  try {
+    await core.sessions.close("d-asked", { mode: "shutdown" })
+    const signals = kill.mock.calls.filter(([pid, signal]) => (pid === status.keeperPid || pid === status.agentPid) && signal !== 0)
+    expect(signals).toEqual([])
+  } finally {
+    kill.mockRestore()
+  }
+  expect(alive(status.keeperPid)).toBe(false)
+  expect(alive(status.agentPid)).toBe(false)
+  // It ended the way a keeper ends: its last status written, its socket removed by itself.
+  expect(keeperStatus(state, "d-asked").agentExited).toBeDefined()
+  expect(existsSync(status.socket ?? join(state, "keepers", "d-asked", "keeper.sock"))).toBe(false)
 })
 
 test("every built-in driver stops a detached session's keeper on sessions.close(id, shutdown)", async () => {
@@ -425,7 +445,7 @@ test("what connectKeeper takes and returns, and connectKeeper itself, are marked
       if (named && ts.getJSDocTags(statement).some(tag => tag.tagName.text === "experimental")) tagged.add(named)
     }
   }
-  for (const name of ["connectKeeper", "ConnectKeeperOptions", "KeeperConnection", "KeeperFrameEvent", "KeeperSpec", "KeeperLimits", "KeeperWelcome", "FrameShape"]) {
+  for (const name of ["connectKeeper", "ConnectKeeperOptions", "KeeperConnection", "KeeperExitStatus", "KeeperFrameEvent", "KeeperSpec", "KeeperLimits", "KeeperWelcome", "FrameShape"]) {
     expect({ name, experimental: tagged.has(name) }).toEqual({ name, experimental: true })
   }
 })

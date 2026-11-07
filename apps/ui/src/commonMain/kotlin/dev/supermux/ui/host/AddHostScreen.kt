@@ -36,7 +36,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,10 +47,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.host.PairingPayload
 import dev.supermux.net.PairUrl
+import dev.supermux.pairing.PairingCode
 import dev.supermux.state.AddHostResult
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -105,9 +107,15 @@ fun AddHostScreen(
     var urlInput by rememberSaveable { mutableStateOf("") }
     var deviceName by rememberSaveable { mutableStateOf(defaultDeviceName) }
     var insecureAck by rememberSaveable { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var info by remember { mutableStateOf<String?>(null) }
+    // A claim runs on the fleet's scope and its result waits here for the screen on display
+    // (#89). The claim is one-time and the host redeems it before the device token comes back,
+    // so a claim cancelled by a rotation could burn it and drop the token. The camera stays on
+    // this screen's scope: a scan cut short that way comes back through [pendingScans].
+    val claim = rememberRetainedOnPage("addhost:claim") { HostClaim() }
+    val claims = rememberRetainedScope()
+    var busy by claim::busy
+    var error by claim::error
+    var info by claim::info
 
     fun handle(result: AddHostResult) {
         busy = false
@@ -121,21 +129,26 @@ fun AddHostScreen(
         }
     }
 
+    fun launchClaim(add: suspend () -> AddHostResult) {
+        busy = true
+        claims.launch { claim.result = add() }
+    }
+    LaunchedEffect(claim, claim.result) {
+        val result = claim.result ?: return@LaunchedEffect
+        claim.result = null
+        handle(result)
+    }
+
     fun claimInput(raw: String) {
         error = null; info = null
-        val payload = PairingPayload.parse(raw)
-        if (payload != null) {
-            busy = true
-            scope.launch { handle(onClaim(payload, deviceName.trim().ifBlank { defaultDeviceName })) }
-            return
+        when (val code = PairingCode.parse(raw)) {
+            is PairingCode.Claim -> {
+                val name = deviceName.trim().ifBlank { defaultDeviceName }
+                launchClaim { onClaim(code.payload, name) }
+            }
+            is PairingCode.Token -> launchClaim { onClaimLegacy(code.pair) }
+            null -> error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
         }
-        val legacy = PairUrl.parse(raw)
-        if (legacy == null) {
-            error = "That isn't a valid supermux pairing link. Scan or paste the complete QR value."
-            return
-        }
-        busy = true
-        scope.launch { handle(onClaimLegacy(legacy)) }
     }
 
     LaunchedEffect(pendingScans) { pendingScans.collect { claimInput(it) } }
@@ -273,11 +286,11 @@ fun AddHostScreen(
                     }
                     Button(
                         onClick = {
-                            error = null; info = null; busy = true
+                            error = null; info = null
                             val ack = insecureAck
-                            scope.launch {
-                                handle(onClaimByUrl(urlInput.trim(), deviceName.trim().ifBlank { defaultDeviceName }, ack))
-                            }
+                            val url = urlInput.trim()
+                            val name = deviceName.trim().ifBlank { defaultDeviceName }
+                            launchClaim { onClaimByUrl(url, name, ack) }
                         },
                         enabled = !busy && urlInput.isNotBlank() && (!needsOptIn || insecureAck),
                         modifier = Modifier.fillMaxWidth().testTag("add_host_url_submit"),
@@ -297,4 +310,15 @@ fun AddHostScreen(
             }
         }
     }
+}
+
+/**
+ * One opening's claim (`rememberRetainedOnPage`, #89): whether it is in flight, what it said, and
+ * its result until the screen on display handles it.
+ */
+private class HostClaim {
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var info by mutableStateOf<String?>(null)
+    var result by mutableStateOf<AddHostResult?>(null)
 }

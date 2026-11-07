@@ -17,6 +17,8 @@ import {
 } from "./index"
 import { readClaudeLocalUsage, readCodexLocalUsage } from "./local"
 import type { AccountUsageTarget } from "./accounts"
+import { systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
+import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 
 export type UsageProvider = "claude" | "codex" | "cursor" | "opencode" | "grok"
 export type UsageSource = "live" | "agent" | "local" | "cache"
@@ -42,15 +44,33 @@ export interface AccountUsageEntry {
   cursor?: CursorUsage | null
   grok?: GrokUsage | null
   error: string | null
+  /** Why `error`, when the fetch failed for a known reason (e.g. `account_expired`: sign in again). */
+  errorCode: string | null
   fetchedAt: string | null
   refreshing: boolean
 }
 
 export interface UsageSnapshot extends UsageResponse {
+  errorCodes: Record<string, string>
   fetchedAt: Record<UsageProvider, string | null>
   source: Record<UsageProvider, UsageSource | null>
   refreshing: UsageProvider[]
   accounts: AccountUsageEntry[]
+}
+
+/** One live fetch that returned data: a system login (`<agent>:system`) or an added account (its id). */
+export interface UsageFetched {
+  provider: UsageProvider
+  account: string
+  data: unknown
+}
+
+/** One live fetch that failed for a reason with a code (e.g. `account_expired`: the provider refused the login). */
+export interface UsageFailed {
+  provider: UsageProvider
+  account: string
+  message: string
+  code: string
 }
 
 type AccountState = {
@@ -59,6 +79,7 @@ type AccountState = {
   quota: boolean
   data: unknown | null
   error: string | null
+  errorCode: string | null
   fetchedAt: string | null
   lastLiveAt: number | null
 }
@@ -103,6 +124,11 @@ function errorMessage(err: unknown): string {
   return String(err)
 }
 
+/** A CoreError's code (`account_expired`, …); other errors (and Node's system codes) carry none. */
+function errorCode(err: unknown): string | undefined {
+  return err instanceof CoreError && err.code ? err.code : undefined
+}
+
 function usageField(res: UsageResponse, provider: UsageProvider): unknown {
   switch (provider) {
     case "claude":
@@ -118,6 +144,11 @@ function usageField(res: UsageResponse, provider: UsageProvider): unknown {
   }
 }
 
+/**
+ * Emits "updated" on every change, "fetched" (UsageFetched) for each live fetch's data it takes in: a
+ * system login's (`apply` with source "live", wherever it was fetched) or an added account's, and "failed"
+ * (UsageFailed) for each live fetch that failed with an error code.
+ */
 export class UsageStore extends EventEmitter {
   private readonly filePath: string
   private readonly staleMs: number
@@ -134,6 +165,7 @@ export class UsageStore extends EventEmitter {
   private opencode: OpenCodeUsage | null = null
   private grok: GrokUsage | null = null
   private errors: Record<string, string> = {}
+  private errorCodes: Record<string, string> = {}
   private fetchedAt: Record<UsageProvider, string | null> = emptyMeta()
   private source: Record<UsageProvider, UsageSource | null> = emptyMeta()
   private lastLiveAt: Record<UsageProvider, number | null> = emptyMeta()
@@ -165,6 +197,7 @@ export class UsageStore extends EventEmitter {
       opencode: this.opencode,
       grok: this.grok,
       errors: { ...this.errors },
+      errorCodes: { ...this.errorCodes },
       fetchedAt: { ...this.fetchedAt },
       source: { ...this.source },
       refreshing: PROVIDERS.filter((p) => this.refreshingSet.has(p)),
@@ -176,6 +209,7 @@ export class UsageStore extends EventEmitter {
         quota: a.quota,
         ...(a.quota ? { [a.target.agent]: a.data } : {}),
         error: a.error,
+        errorCode: a.errorCode,
         fetchedAt: a.fetchedAt,
         refreshing: this.accountInFlight.has(a.target.id),
       })),
@@ -217,7 +251,7 @@ export class UsageStore extends EventEmitter {
    * Re-reads the account list (so added/removed/renamed accounts show up) and fetches every account
    * whose last live fetch is older than the stale window, or all of them with `force`.
    */
-  async refreshAccounts(opts?: { force?: boolean }): Promise<void> {
+  async refreshAccounts(opts?: { force?: boolean; agent?: UsageProvider }): Promise<void> {
     if (!this.accountSource) return
     if (!this.accountListing) {
       this.accountListing = this.syncAccounts().finally(() => { this.accountListing = null })
@@ -225,9 +259,15 @@ export class UsageStore extends EventEmitter {
     await this.accountListing
     const force = opts?.force === true
     const jobs = this.accountStates
-      .filter((a) => a.target.fetch && (force || a.lastLiveAt == null || this.nowFn() - a.lastLiveAt >= this.staleMs))
+      .filter((a) => a.target.fetch && (!opts?.agent || a.target.agent === opts.agent))
+      .filter((a) => force || a.lastLiveAt == null || this.nowFn() - a.lastLiveAt >= this.staleMs)
       .map((a) => this.fetchAccount(a))
     if (jobs.length > 0) await Promise.all(jobs)
+  }
+
+  /** Fetches one agent's usage where older than the stale window: its system login and its added accounts (Auto picks by them). */
+  async refreshAgent(agent: UsageProvider): Promise<void> {
+    await Promise.all([this.refresh([agent]), this.refreshAccounts({ agent })])
   }
 
   private async syncAccounts(): Promise<void> {
@@ -246,10 +286,10 @@ export class UsageStore extends EventEmitter {
       if (prev && prev.target.agent === target.agent) {
         prev.target = target
         prev.quota = quota
-        if (!quota) { prev.data = null; prev.error = null }
+        if (!quota) { prev.data = null; prev.error = null; prev.errorCode = null }
         return prev
       }
-      return { target, quota, data: null, error: null, fetchedAt: null, lastLiveAt: null }
+      return { target, quota, data: null, error: null, errorCode: null, fetchedAt: null, lastLiveAt: null }
     })
     const changed = summary() !== before
     if (changed) {
@@ -269,12 +309,17 @@ export class UsageStore extends EventEmitter {
         if (data != null) {
           state.data = data
           state.error = null
+          state.errorCode = null
           state.fetchedAt = new Date(this.nowFn()).toISOString()
+          this.emit("fetched", { provider: state.target.agent, account: id, data } satisfies UsageFetched)
         } else {
           state.error = nullError(state.target.agent)
+          state.errorCode = null
         }
       } catch (err) {
         state.error = errorMessage(err)
+        state.errorCode = errorCode(err) ?? null
+        if (state.errorCode) this.emit("failed", { provider: state.target.agent, account: id, message: state.error, code: state.errorCode } satisfies UsageFailed)
       }
       state.lastLiveAt = this.nowFn()
       this.schedulePersist()
@@ -303,8 +348,11 @@ export class UsageStore extends EventEmitter {
     // it satisfies the live-fetch throttle too — no point re-hitting the API.
     if (source === "live" || source === "agent") this.lastLiveAt[provider] = atMs
     delete this.errors[provider]
+    delete this.errorCodes[provider]
     this.schedulePersist()
     this.emitUpdated()
+    // Agent pushes stay out (a live session reports its windows to Core itself), and so do local seeds.
+    if (source === "live") this.emit("fetched", { provider, account: systemAccountId(provider), data } satisfies UsageFetched)
   }
 
   applyResponse(res: UsageResponse, fetchedAt?: Date): void {
@@ -318,7 +366,7 @@ export class UsageStore extends EventEmitter {
       const message = res.errors[provider]
       if (typeof message === "string") {
         this.lastLiveAt[provider] = at.getTime()
-        this.setError(provider, message)
+        this.failLive(provider, message, res.errorCodes?.[provider])
       }
     }
   }
@@ -420,7 +468,7 @@ export class UsageStore extends EventEmitter {
       else this.setError(provider, nullError(provider))
     } catch (err) {
       this.lastLiveAt[provider] = this.nowFn()
-      this.setError(provider, errorMessage(err))
+      this.failLive(provider, errorMessage(err), errorCode(err))
     }
   }
 
@@ -450,9 +498,17 @@ export class UsageStore extends EventEmitter {
     }
   }
 
-  private setError(provider: UsageProvider, message: string): void {
-    if (this.errors[provider] === message) return
+  /** A system login's live fetch failed: its error, and "failed" when the failure has a code. */
+  private failLive(provider: UsageProvider, message: string, code: string | undefined): void {
+    this.setError(provider, message, code)
+    if (code) this.emit("failed", { provider, account: systemAccountId(provider), message, code } satisfies UsageFailed)
+  }
+
+  private setError(provider: UsageProvider, message: string, code?: string): void {
+    if (this.errors[provider] === message && this.errorCodes[provider] === code) return
     this.errors[provider] = message
+    if (code) this.errorCodes[provider] = code
+    else delete this.errorCodes[provider]
     this.schedulePersist()
     this.emitUpdated()
   }
@@ -477,6 +533,11 @@ export class UsageStore extends EventEmitter {
     if (raw.opencode !== undefined) this.opencode = raw.opencode
     if (raw.grok !== undefined) this.grok = raw.grok
     if (raw.errors && typeof raw.errors === "object") this.errors = { ...raw.errors }
+    if (raw.errorCodes && typeof raw.errorCodes === "object") {
+      this.errorCodes = Object.fromEntries(
+        Object.entries(raw.errorCodes as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== ""),
+      )
+    }
     if (Array.isArray(raw.accounts)) {
       this.accountStates = raw.accounts.flatMap((a: any): AccountState[] => {
         if (!a || typeof a.id !== "string" || !isUsageProvider(a.agent)) return []
@@ -487,6 +548,7 @@ export class UsageStore extends EventEmitter {
           quota: a.quota === true,
           data: a.data ?? null,
           error: typeof a.error === "string" ? a.error : null,
+          errorCode: typeof a.errorCode === "string" && a.errorCode ? a.errorCode : null,
           fetchedAt: typeof a.fetchedAt === "string" ? a.fetchedAt : null,
           lastLiveAt: Number.isFinite(live) ? live : null,
         }]
@@ -555,6 +617,7 @@ export class UsageStore extends EventEmitter {
       opencode: this.opencode,
       grok: this.grok,
       errors: this.errors,
+      errorCodes: this.errorCodes,
       fetchedAt: this.fetchedAt,
       source: this.source,
       lastLiveAt,
@@ -566,6 +629,7 @@ export class UsageStore extends EventEmitter {
         quota: a.quota,
         data: a.data,
         error: a.error,
+        errorCode: a.errorCode,
         fetchedAt: a.fetchedAt,
         lastLiveAt: a.lastLiveAt == null ? null : new Date(a.lastLiveAt).toISOString(),
       })),

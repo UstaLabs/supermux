@@ -40,8 +40,6 @@ class HostBinariesTest {
         assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, Os.MAC))
         assertEquals("supermux-broker.exe", HostBinaries.fileName(Binary.Broker, Os.WINDOWS))
         assertEquals("mux-sessiond.exe", HostBinaries.fileName(Binary.Sessiond, Os.WINDOWS))
-        assertEquals("frpc", HostBinaries.fileName(Binary.Frpc, Os.LINUX))
-        assertEquals("frpc.exe", HostBinaries.fileName(Binary.Frpc, Os.WINDOWS))
         assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, Os.MAC))
         // The zmx bundle is staged flat and never suffixed: it exists on POSIX only.
         assertEquals("zmx", HostBinaries.fileName(Binary.Zmx, Os.LINUX))
@@ -49,14 +47,13 @@ class HostBinariesTest {
         assertEquals("zmx-manifest.json", HostBinaries.fileName(Binary.ZmxManifest, Os.LINUX))
     }
 
-    // ── isBundled: Windows is client-only (frpc only, for when it later hosts) ────────
+    // ── isBundled: what each OS's image carries ───────────────────────────────────────
 
     @Test fun bundledSetPerOs() {
-        // Linux/macOS host natively: all three ship.
+        // Linux/macOS host natively: broker, tmux and the zmx bundle ship.
         for (os in listOf(Os.LINUX, Os.MAC)) {
             assertTrue(HostBinaries.isBundled(Binary.Broker, os))
             assertTrue(HostBinaries.isBundled(Binary.Tmux, os))
-            assertTrue(HostBinaries.isBundled(Binary.Frpc, os))
             assertFalse(HostBinaries.isBundled(Binary.Sessiond, os))
             // Workspace terminals: the pinned zmx daemon, its framed helper, their manifest.
             assertTrue(HostBinaries.isBundled(Binary.Zmx, os))
@@ -71,10 +68,9 @@ class HostBinariesTest {
         // Windows: the native broker uses sessiond instead of tmux.
         assertTrue(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
         assertTrue(HostBinaries.isBundled(Binary.Sessiond, Os.WINDOWS))
-        assertTrue(HostBinaries.isBundled(Binary.Frpc, Os.WINDOWS))
         assertFalse(HostBinaries.isBundled(Binary.Tmux, Os.WINDOWS))
         // Unknown OS ships nothing.
-        assertFalse(HostBinaries.isBundled(Binary.Frpc, Os.OTHER))
+        assertFalse(HostBinaries.isBundled(Binary.Broker, Os.OTHER))
     }
 
     // ── packaged detection off the Compose resources-dir system property ─────────────
@@ -97,10 +93,10 @@ class HostBinariesTest {
         assertEquals(dir.toString(), HostBinaries.prependPath(dir, existing = ""))
     }
 
-    // ── resolve DEV: no resources dir ⇒ broker via repo+bun (null), tmux/frpc off PATH ─
+    // ── resolve DEV: no resources dir ⇒ broker via repo+bun (null), tmux off PATH ──────
 
     @Test fun resolveDevUsesPathAndNoBundledBroker() {
-        val fakePath = mapOf("frpc" to Path.of("/usr/local/bin/frpc"), "tmux" to Path.of("/usr/bin/tmux"))
+        val fakePath = mapOf("tmux" to Path.of("/usr/bin/tmux"))
         val bins = HostBinaries.resolve(
             stateDir = tmp(),
             os = Os.LINUX,
@@ -109,16 +105,14 @@ class HostBinariesTest {
         )
         assertNull(bins.brokerPath, "dev broker runs from the repo via bun, not a bundled binary")
         assertNull(bins.binDir, "dev needs no materialized bin dir")
-        assertEquals(Path.of("/usr/local/bin/frpc"), bins.frpcPath)
         assertEquals(Path.of("/usr/bin/tmux"), bins.tmuxPath)
     }
 
-    // ── resolve PACKAGED (Linux): materialize all three into one exec bin dir ─────────
+    // ── resolve PACKAGED (Linux): materialize the execs into one bin dir ──────────────
 
-    @Test fun resolvePackagedMaterializesAllThreeExecutable() {
+    @Test fun resolvePackagedMaterializesExecutables() {
         val resDir = tmp()
         Files.writeString(resDir.resolve("supermux-broker"), "#!broker\n")
-        Files.writeString(resDir.resolve("frpc"), "frpc-bytes")
         Files.writeString(resDir.resolve("tmux"), "tmux-bytes")
         val stateDir = tmp()
 
@@ -126,23 +120,42 @@ class HostBinariesTest {
 
         assertNotNull(bins.binDir)
         assertNotNull(bins.brokerPath)
-        assertNotNull(bins.frpcPath)
         assertNotNull(bins.tmuxPath)
-        // All three land in the SAME bin dir (so it can be prepended to the broker's PATH).
+        // Both land in the SAME bin dir (so it can be prepended to the broker's PATH).
         assertEquals(bins.binDir, bins.brokerPath.parent)
-        assertEquals(bins.binDir, bins.frpcPath.parent)
         assertEquals(bins.binDir, bins.tmuxPath.parent)
         // Content copied verbatim, and marked executable (POSIX host).
-        assertEquals("frpc-bytes", Files.readString(bins.frpcPath))
+        assertEquals("tmux-bytes", Files.readString(bins.tmuxPath))
         assertTrue(Files.isExecutable(bins.brokerPath), "materialized broker must be executable")
-        assertTrue(Files.isExecutable(bins.frpcPath), "materialized frpc must be executable")
+        assertTrue(Files.isExecutable(bins.tmuxPath), "materialized tmux must be executable")
     }
 
-    // ── resolve PACKAGED (Windows): broker + sessiond + frpc, no tmux ────────────────
+    // ── an frpc left by an earlier build is deleted (Defender flags it as PUA) ────────
+
+    @Test fun resolvePackagedDeletesALeftoverFrpc() {
+        val resDir = tmp()
+        Files.writeString(resDir.resolve("supermux-broker.exe"), "broker-win")
+        // Even an image that still carried one never brings it back.
+        Files.writeString(resDir.resolve("frpc.exe"), "frpc-win")
+        val stateDir = tmp()
+        val binDir = stateDir.resolve(HostBinaries.BIN_SUBDIR)
+        Files.createDirectories(binDir)
+        Files.writeString(binDir.resolve("frpc.exe"), "old frpc")
+        Files.writeString(binDir.resolve("frpc.exe.stamp"), "1:2")
+        Files.writeString(binDir.resolve("frpc"), "old frpc")
+
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.WINDOWS, resourcesDir = resDir, onPath = { null })
+
+        assertNotNull(bins.brokerPath)
+        assertFalse(Files.exists(binDir.resolve("frpc.exe")))
+        assertFalse(Files.exists(binDir.resolve("frpc.exe.stamp")))
+        assertFalse(Files.exists(binDir.resolve("frpc")))
+    }
+
+    // ── resolve PACKAGED (Windows): broker + sessiond, no tmux ──────────────────────
 
     @Test fun resolvePackagedWindowsMaterializesNativeHostHelpers() {
         val resDir = tmp()
-        Files.writeString(resDir.resolve("frpc.exe"), "frpc-win")
         Files.writeString(resDir.resolve("supermux-broker.exe"), "broker-win")
         Files.writeString(resDir.resolve("mux-sessiond.exe"), "sessiond-win")
         Files.writeString(resDir.resolve("tmux"), "tmux-win")
@@ -150,13 +163,10 @@ class HostBinariesTest {
 
         assertNotNull(bins.brokerPath)
         assertNotNull(bins.sessiondPath)
-        assertNotNull(bins.frpcPath)
         assertEquals("supermux-broker.exe", bins.brokerPath.fileName.toString())
         assertEquals("mux-sessiond.exe", bins.sessiondPath.fileName.toString())
-        assertEquals("frpc.exe", bins.frpcPath.fileName.toString())
         assertEquals(bins.binDir, bins.brokerPath.parent)
         assertEquals(bins.binDir, bins.sessiondPath.parent)
-        assertEquals(bins.binDir, bins.frpcPath.parent)
         assertNull(bins.tmuxPath, "native Windows uses sessiond, never tmux")
         assertNull(bins.zmxDir, "native Windows uses sessiond, never zmx")
     }
@@ -205,13 +215,11 @@ class HostBinariesTest {
     @Test fun resolvePackagedToleratesMissingSlot() {
         val resDir = tmp()
         Files.writeString(resDir.resolve("supermux-broker"), "broker")
-        Files.writeString(resDir.resolve("frpc"), "frpc")
         // tmux intentionally absent from the image.
         val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.LINUX, resourcesDir = resDir, onPath = { null })
         assertNotNull(bins.brokerPath)
-        assertNotNull(bins.frpcPath)
         assertNull(bins.tmuxPath, "a missing tmux slot resolves to null, not a crash")
-        assertNotNull(bins.binDir, "binDir still exists (broker + frpc materialized)")
+        assertNotNull(bins.binDir, "binDir still exists (broker materialized)")
     }
 
     // ── macOS: our copies lose the download quarantine (no second Gatekeeper prompt) ──
@@ -234,7 +242,6 @@ class HostBinariesTest {
     @Test fun resolveOnMacClearsQuarantineEveryRunEvenOnTheFastPath() {
         val resDir = tmp()
         Files.writeString(resDir.resolve("supermux-broker"), "broker")
-        Files.writeString(resDir.resolve("frpc"), "frpc")
         Files.writeString(resDir.resolve("tmux"), "tmux")
         Files.writeString(resDir.resolve("zmx"), "zmx")
         Files.writeString(resDir.resolve("mux-zmx-helper"), "helper")
@@ -245,7 +252,7 @@ class HostBinariesTest {
         // Already materialized (an install from before the fix): still cleared.
         HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { calls += it })
         assertEquals(2, calls.size)
-        val expected = listOf(first.brokerPath, first.frpcPath, first.tmuxPath, first.zmxDir).map { it!!.toAbsolutePath().normalize().toString() }
+        val expected = listOf(first.brokerPath, first.tmuxPath, first.zmxDir).map { it!!.toAbsolutePath().normalize().toString() }
         assertEquals(listOf("/usr/bin/xattr", "-dr", "com.apple.quarantine") + expected, calls[1])
         // A failing xattr is never fatal; Linux runs nothing.
         assertNotNull(HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { error("boom") }).brokerPath)

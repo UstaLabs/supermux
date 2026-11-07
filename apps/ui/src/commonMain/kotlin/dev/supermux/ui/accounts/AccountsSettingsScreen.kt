@@ -72,6 +72,7 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
@@ -164,6 +165,8 @@ fun AccountsSettingsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
+    /** "Sign in again" on a system login whose sign-in expired: the agent's own login (Settings ▸ Providers). */
+    onSignInAgain: ((agent: String) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -181,19 +184,22 @@ fun AccountsSettingsScreen(
                 )
             },
             containerColor = cs.background,
-        ) { padding -> AccountsSettingsBody(actions, modifier.padding(padding)) }
+        ) { padding -> AccountsSettingsBody(actions, modifier.padding(padding), onSignInAgain) }
     } else {
-        AccountsSettingsBody(actions, modifier)
+        AccountsSettingsBody(actions, modifier, onSignInAgain)
     }
 }
 
 @Composable
-private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier) {
+private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, onSignInAgain: ((agent: String) -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val accounts by actions.accounts.collectAsState(null)
     val autoSwitch by actions.autoSwitch.collectAsState(null)
-    var addFor by remember { mutableStateOf<String?>(null) }
+    // The open add sheet, kept for the page on display (#89): a rotation closed it in the middle
+    // of a sign-in that went on on the host. The sheet keeps its own state under its key.
+    val adding = rememberRetainedOnPage("accounts:adding") { AccountAdding() }
+    var addFor by adding::agent
     var removing by remember { mutableStateOf<AccountDto?>(null) }
     var autoSwitchError by remember { mutableStateOf<String?>(null) }
     var pendingAutoSwitch by remember { mutableStateOf<Boolean?>(null) }
@@ -261,6 +267,7 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier) {
                         accounts = accountsFor(list, agent),
                         onAdd = { addFor = agent },
                         onRemove = { removing = it },
+                        onSignInAgain = onSignInAgain,
                     )
                 }
             }
@@ -273,6 +280,7 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier) {
             actions = actions,
             existing = accountsFor(accounts.orEmpty(), agent),
             onDismiss = { addFor = null },
+            retainKey = "accounts:add:$agent",
         )
     }
     removing?.let { account ->
@@ -340,6 +348,7 @@ private fun AgentAccountsGroup(
     accounts: List<AccountDto>,
     onAdd: () -> Unit,
     onRemove: (AccountDto) -> Unit,
+    onSignInAgain: ((agent: String) -> Unit)?,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().testTag("accounts-group:$agent"), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
@@ -369,7 +378,7 @@ private fun AgentAccountsGroup(
         AccountsCard {
             accounts.forEachIndexed { i, account ->
                 if (i > 0) HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.6f))
-                AccountRow(account, onRemove = { onRemove(account) })
+                AccountRow(account, onRemove = { onRemove(account) }, onSignInAgain = onSignInAgain)
             }
         }
     }
@@ -383,7 +392,7 @@ private fun accountIcon(account: AccountDto): ImageVector = when (account.method
 }
 
 @Composable
-private fun AccountRow(account: AccountDto, onRemove: () -> Unit) {
+private fun AccountRow(account: AccountDto, onRemove: () -> Unit, onSignInAgain: ((agent: String) -> Unit)?) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
     Row(
@@ -444,12 +453,25 @@ private fun AccountRow(account: AccountDto, onRemove: () -> Unit) {
                 )
             }
             accountUnavailableText(account)?.let {
+                val expired = signInExpired(account)
                 Text(
-                    "$it. Log in again, or pick it for a chat to retry.",
+                    when {
+                        !expired -> "$it. Log in again, or pick it for a chat to retry."
+                        // The system login signs in again through the agent's own login flow (Providers).
+                        account.system -> if (onSignInAgain != null) "$it." else "$it. Sign in again under Providers."
+                        // An added login cannot be signed in again in place: a new sign-in is a new account.
+                        else -> "$it. Remove it, then add it again to sign in."
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = sem.danger,
                     modifier = Modifier.testTag("account-unavailable-reason:${account.id}"),
                 )
+                if (expired && account.system && onSignInAgain != null) {
+                    OutlinedButton(
+                        onClick = { onSignInAgain(account.agent) },
+                        modifier = Modifier.padding(top = Space.xs).testTag("account-sign-in:${account.id}"),
+                    ) { Text("Sign in again", color = cs.primary) }
+                }
             }
             if (account.usage.isNotEmpty()) {
                 Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -540,4 +562,9 @@ private fun RemoveAccountDialog(
             }
         },
     )
+}
+
+/** Which agent's add sheet is open, kept for the page on display (`rememberRetainedOnPage`, #89). */
+private class AccountAdding {
+    var agent by mutableStateOf<String?>(null)
 }

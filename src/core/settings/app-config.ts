@@ -17,8 +17,6 @@ export interface TunnelRecord {
 }
 
 export interface AppConfig {
-  paName: string
-  paWorkdir: string
   telegramBotToken: string // "" when unset
   webPublicUrl: string // "" when unset
   webPort: string // "" when unset; kept as string to match the env-var shape
@@ -72,8 +70,6 @@ export const DEFAULT_VOICE_CLEANUP_GLOSSARY: string[] = [
 ]
 
 export const defaultAppConfig: AppConfig = {
-  paName: "assistant",
-  paWorkdir: "",
   telegramBotToken: "",
   webPublicUrl: "",
   webPort: "",
@@ -127,8 +123,6 @@ function parseTunnelRecord(v: unknown): TunnelRecord | undefined {
 }
 
 export interface AppConfigEnv {
-  MUX_PA_NAME?: string
-  MUX_PA_WORKDIR?: string
   MUX_TELEGRAM_BOT_TOKEN?: string
   MUX_WEB_PUBLIC_URL?: string
   MUX_WEB_PORT?: string
@@ -154,8 +148,6 @@ function firstNonEmpty(...vals: (string | undefined)[]): string {
 export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv): AppConfig {
   const mode = stored.exposureMode === "public" || stored.exposureMode === "local" ? stored.exposureMode : defaultAppConfig.exposureMode
   return {
-    paName: firstNonEmpty(stored.paName, env.MUX_PA_NAME) || defaultAppConfig.paName,
-    paWorkdir: firstNonEmpty(stored.paWorkdir, env.MUX_PA_WORKDIR),
     telegramBotToken: firstNonEmpty(stored.telegramBotToken, env.MUX_TELEGRAM_BOT_TOKEN),
     webPublicUrl: firstNonEmpty(stored.webPublicUrl, env.MUX_WEB_PUBLIC_URL),
     webPort: firstNonEmpty(stored.webPort, env.MUX_WEB_PORT),
@@ -195,8 +187,6 @@ export function resolveAppConfig(stored: Partial<AppConfig>, env: AppConfigEnv):
 export function sanitizeAppConfigPatch(input: unknown): Partial<AppConfig> {
   const o = (input ?? {}) as Record<string, unknown>
   const out: Partial<AppConfig> = {}
-  if (typeof o.paName === "string") out.paName = o.paName
-  if (typeof o.paWorkdir === "string") out.paWorkdir = o.paWorkdir
   if (typeof o.telegramBotToken === "string") out.telegramBotToken = o.telegramBotToken
   if (typeof o.webPublicUrl === "string") out.webPublicUrl = o.webPublicUrl
   if (typeof o.webPort === "string") out.webPort = o.webPort
@@ -242,8 +232,6 @@ export function parseAppConfig(input: unknown, base: AppConfig = defaultAppConfi
   const o = (input ?? {}) as Record<string, unknown>
   const mode = o.exposureMode === "public" || o.exposureMode === "local" ? o.exposureMode : base.exposureMode
   return {
-    paName: str(o.paName, base.paName),
-    paWorkdir: str(o.paWorkdir, base.paWorkdir),
     telegramBotToken: str(o.telegramBotToken, base.telegramBotToken),
     webPublicUrl: str(o.webPublicUrl, base.webPublicUrl),
     webPort: str(o.webPort, base.webPort),

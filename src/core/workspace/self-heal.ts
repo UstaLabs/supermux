@@ -33,6 +33,8 @@ type OrphanRow = {
  * for a broker-internal session (e.g. an rpc-worker) — its workspace is still
  * healed (hidden workspaces are a normal, supported shape), but it must never
  * gain a project.
+ *
+ * A delegated child is never healed: it lives hidden in its parent's workspace (spec §3).
  */
 export function healSessionsWithoutWorkspace(
   db: Db,
@@ -43,6 +45,7 @@ export function healSessionsWithoutWorkspace(
     SELECT s.id, s.name, s.workdir, s.repo_root, s.base_branch, s.session_branch, s.sort_order, s.internal
       FROM sessions s
      WHERE s.status IN ('active', 'suspended')
+       AND s.parent_session_id IS NULL
        AND (s.workspace_id IS NULL
             OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = s.workspace_id))
   `).all() as OrphanRow[]

@@ -1,0 +1,1297 @@
+{
+ "format": "supermux-avatar",
+ "version": 2,
+ "name": "Sprout",
+ "size": 100,
+ "parts": [
+  {
+   "id": "shadow",
+   "shape": "ellipse",
+   "cx": 50,
+   "cy": 92,
+   "rx": 22,
+   "ry": 3.6,
+   "fill": "#00000040"
+  },
+  {
+   "id": "plant",
+   "shape": "group",
+   "pivot": [
+    50,
+    90
+   ],
+   "scale": 1.08,
+   "behaviors": [
+    {
+     "type": "breathe",
+     "amount": 0.02
+    }
+   ],
+   "children": [
+    {
+     "id": "sprout",
+     "shape": "group",
+     "pivot": [
+      50,
+      58
+     ],
+     "children": [
+      {
+       "id": "stem",
+       "d": "M50 58 C50 50 51 46 50 40",
+       "fill": "none",
+       "stroke": "#2F8A3E",
+       "strokeWidth": 4.5,
+       "lineCap": "round"
+      },
+      {
+       "id": "leaves",
+       "shape": "group",
+       "pivot": [
+        50,
+        40
+       ],
+       "children": [
+        {
+         "id": "leafL",
+         "d": "M50 41 C44 26 32 20 18 22 C20 36 34 45 50 41 Z",
+         "fill": {
+          "linear": {
+           "from": [
+            20,
+            22
+           ],
+           "to": [
+            50,
+            42
+           ],
+           "stops": [
+            "#9BE36D",
+            "#3FAE4A"
+           ]
+          }
+         },
+         "stroke": "#23753A",
+         "strokeWidth": 2,
+         "pivot": [
+          50,
+          41
+         ],
+         "children": [
+          {
+           "id": "veinL",
+           "d": "M47 39 Q36 30 25 26",
+           "fill": "none",
+           "stroke": "#E6FFD0",
+           "strokeWidth": 1.6,
+           "lineCap": "round",
+           "opacity": 0.75
+          }
+         ]
+        },
+        {
+         "id": "leafR",
+         "d": "M50 41 C56 26 68 20 82 22 C80 36 66 45 50 41 Z",
+         "fill": {
+          "linear": {
+           "from": [
+            80,
+            22
+           ],
+           "to": [
+            50,
+            42
+           ],
+           "stops": [
+            "#9BE36D",
+            "#3FAE4A"
+           ]
+          }
+         },
+         "stroke": "#23753A",
+         "strokeWidth": 2,
+         "pivot": [
+          50,
+          41
+         ],
+         "children": [
+          {
+           "id": "veinR",
+           "d": "M53 39 Q64 30 75 26",
+           "fill": "none",
+           "stroke": "#E6FFD0",
+           "strokeWidth": 1.6,
+           "lineCap": "round",
+           "opacity": 0.75
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "flower",
+       "shape": "group",
+       "pivot": [
+        50,
+        33
+       ],
+       "showIn": [
+        "waiting"
+       ],
+       "children": [
+        {
+         "id": "petals",
+         "d": "M44.5 26.5 a4.5 4.5 0 1 0 9 0 a4.5 4.5 0 1 0 -9 0 M51.5 30 a4.5 4.5 0 1 0 9 0 a4.5 4.5 0 1 0 -9 0 M39.5 30 a4.5 4.5 0 1 0 9 0 a4.5 4.5 0 1 0 -9 0 M42 37 a4.5 4.5 0 1 0 9 0 a4.5 4.5 0 1 0 -9 0 M49 37 a4.5 4.5 0 1 0 9 0 a4.5 4.5 0 1 0 -9 0",
+         "fill": "#FF7FAE",
+         "stroke": "#C2406F",
+         "strokeWidth": 1.4,
+         "keepColor": true
+        },
+        {
+         "id": "flowerEye",
+         "shape": "circle",
+         "cx": 50,
+         "cy": 32.5,
+         "r": 3.6,
+         "fill": "#FFD34D",
+         "keepColor": true
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "pot",
+     "d": "M27 62 L73 62 L68.5 87 Q68 90 65 90 L35 90 Q32 90 31.5 87 Z",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        62
+       ],
+       "to": [
+        50,
+        90
+       ],
+       "stops": [
+        "#E9875A",
+        "#C65B34"
+       ]
+      }
+     },
+     "stroke": "#8E3B1E",
+     "strokeWidth": 2
+    },
+    {
+     "id": "rim",
+     "shape": "rect",
+     "x0": 22,
+     "y0": 54,
+     "w": 56,
+     "h": 11,
+     "corner": 4,
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        54
+       ],
+       "to": [
+        50,
+        65
+       ],
+       "stops": [
+        "#F4A177",
+        "#DD7447"
+       ]
+      }
+     },
+     "stroke": "#8E3B1E",
+     "strokeWidth": 2
+    },
+    {
+     "id": "cheekL",
+     "shape": "ellipse",
+     "cx": 36,
+     "cy": 79,
+     "rx": 4,
+     "ry": 2.4,
+     "fill": "#FF8F8F99"
+    },
+    {
+     "id": "cheekR",
+     "shape": "ellipse",
+     "cx": 64,
+     "cy": 79,
+     "rx": 4,
+     "ry": 2.4,
+     "fill": "#FF8F8F99"
+    },
+    {
+     "id": "eyes",
+     "shape": "group",
+     "pivot": "center",
+     "hideIn": [
+      "asleep"
+     ],
+     "behaviors": [
+      {
+       "type": "blink"
+      }
+     ],
+     "children": [
+      {
+       "id": "eyeL",
+       "shape": "ellipse",
+       "cx": 42,
+       "cy": 73,
+       "rx": 3.4,
+       "ry": 4.4,
+       "fill": "#2A1610",
+       "behaviors": [
+        {
+         "type": "lookAt",
+         "range": 1.8
+        }
+       ],
+       "children": [
+        {
+         "id": "glintL",
+         "shape": "circle",
+         "cx": 43.2,
+         "cy": 71.4,
+         "r": 1.3,
+         "fill": "#FFFFFF"
+        }
+       ]
+      },
+      {
+       "id": "eyeR",
+       "shape": "ellipse",
+       "cx": 58,
+       "cy": 73,
+       "rx": 3.4,
+       "ry": 4.4,
+       "fill": "#2A1610",
+       "behaviors": [
+        {
+         "type": "lookAt",
+         "range": 1.8
+        }
+       ],
+       "children": [
+        {
+         "id": "glintR",
+         "shape": "circle",
+         "cx": 59.2,
+         "cy": 71.4,
+         "r": 1.3,
+         "fill": "#FFFFFF"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "sleepyEyes",
+     "d": "M38.5 74 Q42 77 45.5 74 M54.5 74 Q58 77 61.5 74",
+     "fill": "none",
+     "stroke": "#2A1610",
+     "strokeWidth": 2.4,
+     "lineCap": "round",
+     "showIn": [
+      "asleep"
+     ]
+    },
+    {
+     "id": "smile",
+     "d": "M46.5 80.5 Q50 83.5 53.5 80.5",
+     "fill": "none",
+     "stroke": "#2A1610",
+     "strokeWidth": 2.2,
+     "lineCap": "round",
+     "hideIn": [
+      "speaking"
+     ]
+    },
+    {
+     "id": "mouth",
+     "shape": "ellipse",
+     "cx": 50,
+     "cy": 82,
+     "rx": 3.4,
+     "ry": 2.8,
+     "fill": "#5A1E14",
+     "pivot": [
+      50,
+      80.5
+     ],
+     "showIn": [
+      "speaking"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sparkles",
+   "shape": "group",
+   "showIn": [
+    "working"
+   ],
+   "keepColor": true,
+   "children": [
+    {
+     "id": "spark1",
+     "d": "M14 38 Q14 46 6 46 Q14 46 14 54 Q14 46 22 46 Q14 46 14 38 Z",
+     "fill": "#FFD23F",
+     "stroke": "#D9A400",
+     "strokeWidth": 1,
+     "pivot": "center",
+     "keepColor": true
+    },
+    {
+     "id": "spark2",
+     "d": "M87 39 Q87 46 80 46 Q87 46 87 53 Q87 46 94 46 Q87 46 87 39 Z",
+     "fill": "#B6F27A",
+     "stroke": "#5DAA2E",
+     "strokeWidth": 1,
+     "pivot": "center",
+     "keepColor": true
+    },
+    {
+     "id": "spark3",
+     "d": "M82 7 Q82 14 75 14 Q82 14 82 21 Q82 14 89 14 Q82 14 82 7 Z",
+     "fill": "#FFD23F",
+     "stroke": "#D9A400",
+     "strokeWidth": 1,
+     "pivot": "center",
+     "keepColor": true
+    }
+   ]
+  },
+  {
+   "id": "zzz",
+   "d": "M76 12 H86 L76 22 H86",
+   "fill": "none",
+   "stroke": "#9AB2EA",
+   "strokeWidth": 3,
+   "lineCap": "round",
+   "keepColor": true,
+   "showIn": [
+    "asleep"
+   ]
+  },
+  {
+   "id": "bang",
+   "shape": "group",
+   "showIn": [
+    "waiting"
+   ],
+   "children": [
+    {
+     "id": "bangLine",
+     "d": "M88 8 V20",
+     "fill": "none",
+     "stroke": "#FFB938",
+     "strokeWidth": 4.2,
+     "lineCap": "round"
+    },
+    {
+     "id": "bangDot",
+     "shape": "circle",
+     "cx": 88,
+     "cy": 27,
+     "r": 2.5,
+     "fill": "#FFB938"
+    }
+   ]
+  },
+  {
+   "id": "waves",
+   "shape": "group",
+   "pivot": [
+    80,
+    40
+   ],
+   "showIn": [
+    "listening"
+   ],
+   "children": [
+    {
+     "id": "wave1",
+     "d": "M85 33 Q89 40 85 47",
+     "fill": "none",
+     "stroke": "#5FD38A",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    },
+    {
+     "id": "wave2",
+     "d": "M90 28 Q96 40 90 52",
+     "fill": "none",
+     "stroke": "#5FD38A",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    }
+   ]
+  }
+ ],
+ "states": {
+  "idle": {
+   "tracks": [
+    {
+     "part": "sprout",
+     "prop": "rotate",
+     "duration": 3200,
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       0.5,
+       4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 3200,
+     "delay": 300,
+     "keys": [
+      [
+       0,
+       3
+      ],
+      [
+       0.5,
+       -4
+      ],
+      [
+       1,
+       3
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 3200,
+     "delay": 300,
+     "keys": [
+      [
+       0,
+       3
+      ],
+      [
+       0.5,
+       -4
+      ],
+      [
+       1,
+       3
+      ]
+     ]
+    }
+   ]
+  },
+  "working": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "leaves",
+     "prop": "scaleX",
+     "duration": 520,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       1,
+       "in"
+      ],
+      [
+       0.25,
+       0,
+       "out"
+      ],
+      [
+       0.5,
+       -1,
+       "in"
+      ],
+      [
+       0.75,
+       0,
+       "out"
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "leaves",
+     "prop": "y",
+     "duration": 520,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -1.5
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "plant",
+     "prop": "y",
+     "duration": 260,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -1.2
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ]
+    },
+    {
+     "part": "spark1",
+     "prop": "scale",
+     "duration": 1200,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1.15
+      ],
+      [
+       0.65,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "spark2",
+     "prop": "scale",
+     "duration": 1200,
+     "delay": 400,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1.15
+      ],
+      [
+       0.65,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "spark3",
+     "prop": "scale",
+     "duration": 1200,
+     "delay": 800,
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1.15
+      ],
+      [
+       0.65,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    }
+   ]
+  },
+  "waiting": {
+   "tracks": [
+    {
+     "part": "plant",
+     "prop": "y",
+     "duration": 900,
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -7,
+       "in"
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "plant",
+     "prop": "scaleY",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.6,
+       1
+      ],
+      [
+       0.7,
+       0.94
+      ],
+      [
+       0.85,
+       1
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "flower",
+     "prop": "scale",
+     "duration": 500,
+     "loop": false,
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.7,
+       1.2
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    },
+    {
+     "part": "flower",
+     "prop": "rotate",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -8
+      ],
+      [
+       0.5,
+       8
+      ],
+      [
+       1,
+       -8
+      ]
+     ]
+    },
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       14
+      ],
+      [
+       0.3,
+       22
+      ],
+      [
+       0.6,
+       14
+      ],
+      [
+       1,
+       14
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 900,
+     "keys": [
+      [
+       0,
+       -14
+      ],
+      [
+       0.3,
+       -22
+      ],
+      [
+       0.6,
+       -14
+      ],
+      [
+       1,
+       -14
+      ]
+     ]
+    },
+    {
+     "part": "bang",
+     "prop": "y",
+     "duration": 900,
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -3
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "y",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ]
+    }
+   ]
+  },
+  "asleep": {
+   "saturation": 0.35,
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "sprout",
+     "prop": "rotate",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       7
+      ],
+      [
+       0.5,
+       9
+      ],
+      [
+       1,
+       7
+      ]
+     ]
+    },
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       -42
+      ],
+      [
+       0.5,
+       -36
+      ],
+      [
+       1,
+       -42
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       40
+      ],
+      [
+       0.5,
+       34
+      ],
+      [
+       1,
+       40
+      ]
+     ]
+    },
+    {
+     "part": "leaves",
+     "prop": "y",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       2
+      ],
+      [
+       1,
+       2
+      ]
+     ]
+    },
+    {
+     "part": "plant",
+     "prop": "scaleY",
+     "duration": 4000,
+     "keys": [
+      [
+       0,
+       0.97
+      ],
+      [
+       0.5,
+       1
+      ],
+      [
+       1,
+       0.97
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "y",
+     "duration": 2600,
+     "ease": "linear",
+     "keys": [
+      [
+       0,
+       4
+      ],
+      [
+       1,
+       -4
+      ]
+     ]
+    },
+    {
+     "part": "zzz",
+     "prop": "opacity",
+     "duration": 2600,
+     "keys": [
+      [
+       0,
+       0.25
+      ],
+      [
+       0.3,
+       1
+      ],
+      [
+       1,
+       0.25
+      ]
+     ]
+    }
+   ]
+  },
+  "listening": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "sprout",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       6
+      ],
+      [
+       1,
+       6
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -28
+      ],
+      [
+       1,
+       -28
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "scaleY",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       1.15
+      ],
+      [
+       1,
+       1.45
+      ]
+     ]
+    },
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       0.5,
+       4
+      ],
+      [
+       1,
+       -2
+      ]
+     ]
+    },
+    {
+     "part": "eyeL",
+     "prop": "x",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.8
+      ],
+      [
+       1,
+       1.8
+      ]
+     ]
+    },
+    {
+     "part": "eyeR",
+     "prop": "x",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.8
+      ],
+      [
+       1,
+       1.8
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "scale",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.75
+      ],
+      [
+       1,
+       1.15
+      ]
+     ]
+    },
+    {
+     "part": "waves",
+     "prop": "opacity",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.45
+      ],
+      [
+       1,
+       1
+      ]
+     ]
+    }
+   ]
+  },
+  "speaking": {
+   "tracks": [
+    {
+     "part": "mouth",
+     "prop": "scaleY",
+     "driver": "level",
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       0.3
+      ],
+      [
+       1,
+       1.5
+      ]
+     ]
+    },
+    {
+     "part": "mouth",
+     "prop": "scaleX",
+     "driver": "level",
+     "keys": [
+      [
+       0,
+       0.9
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    },
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 700,
+     "gain": "level",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       14
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 700,
+     "delay": 350,
+     "gain": "level",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -14
+      ],
+      [
+       1,
+       0
+      ]
+     ]
+    },
+    {
+     "part": "sprout",
+     "prop": "rotate",
+     "duration": 2400,
+     "keys": [
+      [
+       0,
+       -3
+      ],
+      [
+       0.5,
+       3
+      ],
+      [
+       1,
+       -3
+      ]
+     ]
+    }
+   ]
+  },
+  "hover": {
+   "tracks": [
+    {
+     "part": "leafL",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       18
+      ],
+      [
+       1,
+       18
+      ]
+     ]
+    },
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -18
+      ],
+      [
+       1,
+       -18
+      ]
+     ]
+    },
+    {
+     "part": "leaves",
+     "prop": "scale",
+     "duration": 600,
+     "loop": false,
+     "ease": "out",
+     "keys": [
+      [
+       0,
+       1
+      ],
+      [
+       0.5,
+       1.12
+      ],
+      [
+       1,
+       1.05
+      ]
+     ]
+    },
+    {
+     "part": "eyes",
+     "prop": "scale",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       1.1
+      ],
+      [
+       1,
+       1.1
+      ]
+     ]
+    }
+   ]
+  },
+  "hover:asleep": {
+   "tracks": [
+    {
+     "part": "leafR",
+     "prop": "rotate",
+     "duration": 1000,
+     "keys": [
+      [
+       0,
+       -22
+      ],
+      [
+       1,
+       -22
+      ]
+     ]
+    }
+   ]
+  }
+ }
+}

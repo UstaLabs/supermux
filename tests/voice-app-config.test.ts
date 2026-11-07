@@ -13,7 +13,7 @@ test("voice/whisper fields survive sanitize + resolve", () => {
 })
 
 test("voice/whisper fields absent when not provided", () => {
-  const patch = sanitizeAppConfigPatch({ paName: "test" })
+  const patch = sanitizeAppConfigPatch({ webPort: "1" })
   expect(patch.voiceCleanupModel).toBeUndefined()
   expect(patch.whisperModel).toBeUndefined()
   expect(patch.whisperLang).toBeUndefined()

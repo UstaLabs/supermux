@@ -1,200 +1,123 @@
-import { test, expect, describe, afterAll, beforeEach, afterEach, mock } from "bun:test"
+import { test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
-import { createSupervisor } from "../src/core/session-manager/supervisor"
+import { createSupervisor, reconcileOnStartup } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
 import { setSessionBackendForTests } from "../src/core/runtime"
-import type { SessionBackend } from "../src/core/runtime/session-backend"
-import { fakeCodexHost } from "./helpers/fake-codex-host"
-
-// Codex PA spawns go through the real spawnPA path; its collaborators are
-// swapped via bun module mocks (there are no injection seams). mock.module is
-// process-global: capture the real modules and restore them in afterAll.
-const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
-
-let fake = fakeCodexHost()
-
-mock.module("../src/core/agents/codex/core-host-provider", () => ({
-  ...realCodexCoreHost,
-  getCodexCoreHost: () => fake.host,
-}))
-
-afterAll(() => {
-  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
-})
 
 let tmpDir: string, db: ReturnType<typeof openDb>
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "amux-sup-"))
   db = openDb(join(tmpDir, "t.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
-  fake = fakeCodexHost()
 })
-afterEach(async () => {
-  await fake.close()
+afterEach(() => {
   setSessionBackendForTests()
   try { db.close() } catch {}
   rmSync(tmpDir, { recursive: true, force: true })
 })
 
-test("createSupervisor exposes ensurePersonalAssistants", () => {
-  const registry = new Registry(db)
-  const sup = createSupervisor({ registry, bindSocket: async () => {} })
-  expect(typeof sup.ensurePersonalAssistants).toBe("function")
-})
+type FakeAdapter = { alive: boolean; resumed: number; isAlive(): boolean; resume(): Promise<void> }
+const fakeAdapter = (alive: boolean): FakeAdapter => ({ alive, resumed: 0, isAlive() { return this.alive }, async resume() { this.resumed++; this.alive = true } })
 
-test("ensurePersonalAssistants keeps a fresh install at zero PAs", async () => {
+function agentRow(registry: Registry, name: string, agent: AgentKind, is_default = false) {
+  return registry.registerPA({ name, agent, workdir: `/tmp/${name}`, pid: 0, is_default, core: true })
+}
+
+test("a live Agent is left alone, whatever its provider (no double start for pid 0)", async () => {
   const registry = new Registry(db)
+  const rows = [agentRow(registry, "c", AgentKind.Claude, true), agentRow(registry, "x", AgentKind.Codex), agentRow(registry, "g", AgentKind.Grok)]
+  const adapters = new Map(rows.map(r => [r.id, fakeAdapter(true)]))
+  const resumeSuspended: string[] = [], fresh: string[] = []
   const sup = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    paWorkdir: "/tmp/amux-test-pa",
+    registry, bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: (id) => adapters.get(id), resumeSuspended: async (s) => { resumeSuspended.push(s.name); return true } },
+    startAgentFresh: async (s) => { fresh.push(s.name) },
   })
-  await sup.ensurePersonalAssistants()
-  expect(registry.listPAs().length).toBe(0)
+  await sup.superviseAgents()
+  sup.stop()
+  expect([...adapters.values()].map(a => a.resumed)).toEqual([0, 0, 0])
+  expect(resumeSuspended).toEqual([])
+  expect(fresh).toEqual([])
 })
 
-test("bootstrapPA supports codex agent and stores it in registry", async () => {
+test("a crashed Agent is revived through its own adapter, for every provider", async () => {
   const registry = new Registry(db)
-  const supervisor = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    sessionManager: { registerSpawnedAdapter: () => {} },
-  })
-
-  await supervisor.bootstrapPA("coder", { agent: AgentKind.Codex })
-
-  const pa = registry.resolveName("coder")
-  expect(pa?.agent).toBe("codex")
-  expect(pa?.role).toBe("personal_assistant")
+  const rows = [agentRow(registry, "c", AgentKind.Claude, true), agentRow(registry, "o", AgentKind.OpenCode), agentRow(registry, "a", AgentKind.Antigravity)]
+  const adapters = new Map(rows.map(r => [r.id, fakeAdapter(false)]))
+  const sup = createSupervisor({ registry, bindSocket: async () => {}, sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: (id) => adapters.get(id), resumeSuspended: async () => true } })
+  await sup.reconcile() // the 30 s tick
+  sup.stop()
+  expect([...adapters.values()].map(a => a.resumed)).toEqual([1, 1, 1])
 })
 
-test("a sessionManager-equipped supervisor registers the adapter of a spawned non-Claude PA (half-filled-bag regression)", async () => {
+test("an Agent with no adapter is resumed through the normal resume path; one that cannot resume starts fresh with the same id", async () => {
   const registry = new Registry(db)
-  const registered: Array<{ name: string }> = []
-  const supervisor = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    // Adapter registration must DERIVE from sessionManager.
-    sessionManager: {
-      registerSpawnedAdapter: (name: string) => { registered.push({ name }) },
-    },
+  const resumable = agentRow(registry, "r", AgentKind.Codex, true)
+  const neverTalked = agentRow(registry, "n", AgentKind.Codex)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: () => undefined, resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); return s.id === resumable.id } },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}:${s.id === neverTalked.id}`) },
   })
-
-  await supervisor.bootstrapPA("coder-reg", { agent: AgentKind.Codex })
-  supervisor.stop()
-
-  expect(registered.length).toBe(1)
-  expect(registered[0]?.name).toBe("coder-reg")
+  await sup.superviseAgents()
+  sup.stop()
+  expect(calls).toEqual(["resume:r", "resume:n", "fresh:n:true"])
 })
 
-test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
+test("zero Agents stay zero, and a missing default is repaired", async () => {
   const registry = new Registry(db)
-  const registered = registry.registerPA({
-    name: "codex-pa",
-    agent: AgentKind.Codex,
-    workdir: "/tmp/codex-pa-test",
-    pid: 999999, // dead PID
-    is_default: true,
-  })
-  const paId = registered.id
-  const supervisor = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    sessionManager: { registerSpawnedAdapter: () => {} },
-  })
-  await expect(supervisor.ensurePersonalAssistants()).resolves.toBeUndefined()
-  const pa = registry.get(paId)
-  expect(pa?.status).toBe("active")
-  expect(pa?.pid).toBe(0)
+  const sup = createSupervisor({ registry, bindSocket: async () => {}, sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: () => undefined, resumeSuspended: async () => true } })
+  await sup.superviseAgents()
+  expect(registry.listPAs()).toEqual([])
+  const a = agentRow(registry, "a", AgentKind.Claude, false)
+  await sup.superviseAgents()
+  sup.stop()
+  expect(registry.get(a.id)?.is_default).toBe(true)
 })
 
-test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
-  const { createClaudeCoreHost } = await import("../src/core/agents/claude/core-host")
-  const dir = mkdtempSync(join(tmpdir(), "mux-claude-sup-"))
-  const host = createClaudeCoreHost({
-    stateDirectory: dir,
-    driverFactory: () => ({
-      id: "claude",
-      async open(ctx) {
-        return {
-          agentSessionId: ctx.resumeId ?? "n1",
-          capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },
-          async prompt() { return { stopReason: "end_turn" } },
-          async interrupt() {},
-          async close() {},
-        }
-      },
-    }),
-  })
+test("two overlapping passes revive a crashed Agent once", async () => {
   const registry = new Registry(db)
-  const supervisor = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    sessionManager: { registerSpawnedAdapter: () => {} },
-    claudeHost: host,
-  })
-
-  let captured: any
-  const originalRegisterPA = registry.registerPA.bind(registry)
-  registry.registerPA = (input: any) => {
-    captured = input
-    return originalRegisterPA(input)
-  }
-
-  await supervisor.bootstrapPA("test-pa", {
-    agent: AgentKind.Claude,
-    model: "claude-opus-4",
-    reasoningLevel: "high",
-  })
-  supervisor.stop()
-  await host.close({ agents: "shutdown" }).catch(() => {})
-  rmSync(dir, { recursive: true, force: true })
-
-  expect(captured.model).toBe("claude-opus-4")
-  expect(captured.reasoningLevel).toBe("high")
-  expect(captured.core).toBe(true)
-  expect(captured.pid).toBe(0)
+  const row = agentRow(registry, "c", AgentKind.Claude, true)
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  const adapter = { alive: false, resumed: 0, isAlive() { return this.alive }, async resume() { this.resumed++; await gate; this.alive = true } }
+  const sup = createSupervisor({ registry, bindSocket: async () => {}, sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: (id) => id === row.id ? adapter : undefined } })
+  const first = sup.superviseAgents()
+  const second = sup.reconcile()
+  release()
+  await Promise.all([first, second])
+  sup.stop()
+  expect(adapter.resumed).toBe(1)
 })
 
-test("bootstrapPA creates Claude as a Core session", async () => {
-  const { createClaudeCoreHost } = await import("../src/core/agents/claude/core-host")
-  const dir = mkdtempSync(join(tmpdir(), "mux-claude-sup2-"))
-  const host = createClaudeCoreHost({
-    stateDirectory: dir,
-    driverFactory: () => ({
-      id: "claude",
-      async open(ctx) {
-        return {
-          agentSessionId: ctx.resumeId ?? "n1",
-          capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },
-          async prompt() { return { stopReason: "end_turn" } },
-          async interrupt() {},
-          async close() {},
-        }
-      },
-    }),
-  })
+test("with awaitBootPass, the tick leaves Agents to the boot pass until it has run", async () => {
   const registry = new Registry(db)
-  const supervisor = createSupervisor({
-    registry,
-    bindSocket: async () => {},
-    sessionManager: { registerSpawnedAdapter: () => {} },
-    claudeHost: host,
+  agentRow(registry, "x", AgentKind.Codex, true)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {}, awaitBootPass: true,
+    sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: () => undefined, resumeSuspended: async (s) => { calls.push(s.name); return true } },
   })
+  await sup.reconcile() // a tick while resumeAtBoot may still be resuming this Agent
+  expect(calls).toEqual([])
+  await sup.superviseAgents() // main.ts, after resumeAtBoot
+  await sup.reconcile()
+  sup.stop()
+  expect(calls).toEqual(["x", "x"])
+})
 
-  await supervisor.bootstrapPA("native-pa", { agent: AgentKind.Claude })
-  supervisor.stop()
-  await host.close({ agents: "shutdown" }).catch(() => {})
-  rmSync(dir, { recursive: true, force: true })
-
-  const pa = registry.resolveName("native-pa")
-  expect(pa?.core).toBe(true)
-  expect(pa?.pid).toBe(0)
-  expect(pa?.tmux_window_id).toBeUndefined()
+test("reconcileOnStartup leaves Agents to resumeAtBoot (never restarts them itself)", async () => {
+  const registry = new Registry(db)
+  agentRow(registry, "c", AgentKind.Claude, true)
+  let supervised = 0
+  await reconcileOnStartup({ registry, bindSocket: async () => {}, supervisor: { superviseAgents: async () => { supervised++ }, reconcile: async () => {}, stop() {} }, isAlive: () => false, livePanePid: async () => null })
+  expect(supervised).toBe(0)
+  expect(registry.resolveName("c")?.status).toBe("active")
 })
 
 test("reconcile invokes the internal-worker reaper each tick", async () => {
@@ -236,4 +159,67 @@ test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips 
   expect(after).toBeDefined()
   expect(after?.status).toBe("active")
   expect(after?.user_status).toBe("draft")
+})
+
+test("a failed resume of an Agent with a saved native conversation never starts it fresh (any provider)", async () => {
+  const registry = new Registry(db)
+  const claude = agentRow(registry, "c", AgentKind.Claude, true)
+  const codexNoHome = agentRow(registry, "x", AgentKind.Codex) // a thread id without agent_home is still a saved thread
+  registry.sessions.setAgentSessionId(claude.id, "claude-conv-1")
+  registry.sessions.setAgentSessionId(codexNoHome.id, "thread-1")
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: () => undefined, resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); return false } },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(calls).toEqual(["resume:c", "resume:x"])
+  expect(registry.get(claude.id)?.agent_session_id).toBe("claude-conv-1")
+  expect(registry.get(codexNoHome.id)?.agent_session_id).toBe("thread-1")
+})
+
+test("an Agent whose boot resume is still in flight (boot_resume_timeout) is owned: no second resume, no fresh start", async () => {
+  const registry = new Registry(db)
+  const row = agentRow(registry, "x", AgentKind.Codex, true)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: {
+      registerSpawnedAdapter: () => {}, adapterFor: () => undefined,
+      bootResumeInFlight: (id) => id === row.id,
+      resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); return false },
+    },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(calls).toEqual([])
+})
+
+test("an Agent archived mid-pass is never reactivated or started fresh", async () => {
+  const registry = new Registry(db)
+  const crashed = agentRow(registry, "c", AgentKind.Claude, true)
+  const noAdapter = agentRow(registry, "n", AgentKind.Codex)
+  const adapter = fakeAdapter(false)
+  const calls: string[] = []
+  const sup = createSupervisor({
+    registry, bindSocket: async () => {},
+    sessionManager: {
+      registerSpawnedAdapter: () => {},
+      adapterFor: (id) => {
+        if (id !== crashed.id) return undefined
+        registry.sessions.archive(crashed.id) // archived between listPAs and the revive
+        return adapter
+      },
+      resumeSuspended: async (s) => { calls.push(`resume:${s.name}`); registry.sessions.archive(s.id); return false },
+    },
+    startAgentFresh: async (s) => { calls.push(`fresh:${s.name}`) },
+  })
+  await sup.superviseAgents()
+  sup.stop()
+  expect(adapter.resumed).toBe(0)
+  expect(calls).toEqual(["resume:n"])
+  expect(registry.sessions.getById(noAdapter.id)?.status).toBe("archived")
 })

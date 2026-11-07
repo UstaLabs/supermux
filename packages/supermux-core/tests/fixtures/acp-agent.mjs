@@ -10,6 +10,9 @@ if (mode === 'stubborn') process.on('SIGTERM', () => {});
 let finish;
 let promptActive = false;
 let nativeTurn = false;
+// NATIVE_SLOW: a native turn the first cancel misses: it is not cancellable yet when that cancel
+// arrives, and is from then on (tied to the cancel, not to a clock the host's reaction would race).
+let armOnCancel;
 const record = (value) => { if (process.env.TRACE) appendFileSync(process.env.TRACE, JSON.stringify(value) + '\n'); };
 async function emitNativeTurn(client, sessionId, { id, starts = 1, complete = true, delayCompleteMs = 0 } = {}) {
   const update = (sessionUpdate, extra = {}) => ({ sessionUpdate, ...(id ? { prompt_id: id } : {}), ...extra })
@@ -17,7 +20,7 @@ async function emitNativeTurn(client, sessionId, { id, starts = 1, complete = tr
     await client.extNotification('_x.ai/session/update', { sessionId, update: update('user_message_chunk', { content: { type: 'text', text: 'user' } }) })
   }
   const arm = () => { nativeTurn = true }
-  if (process.env.NATIVE_SLOW === '1') setTimeout(arm, 80)
+  if (process.env.NATIVE_SLOW === '1') armOnCancel = arm
   else arm()
   if (!complete) return
   const done = async () => {
@@ -102,6 +105,15 @@ new AgentSideConnection(client => ({
   if(text === 'permission-read') {
     promptActive = true
     const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-r',title:'Read',kind:'read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'},{optionId:'reject',name:'Reject',kind:'reject_once'}] })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
+  // A `read` tool call that names the files it touches (ACP toolCall.locations): "permission-read-at:<path>|<path>".
+  if(text.startsWith('permission-read-at:')) {
+    promptActive = true
+    const locations = text.slice('permission-read-at:'.length).split('|').map(path => ({ path }))
+    const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-at',title:'Read',kind:'read',locations},options:[{optionId:'allow',name:'Allow',kind:'allow_once'},{optionId:'reject',name:'Reject',kind:'reject_once'}] })
     record(response)
     promptActive = false
     return { stopReason: 'end_turn' }
@@ -220,6 +232,7 @@ new AgentSideConnection(client => ({
  },
  async cancel() {
   record({cancel:true,promptActive,nativeTurn});
+  if (armOnCancel) { const arm = armOnCancel; armOnCancel = undefined; arm(); return }
   if (process.env.PERM_AFTER_CANCEL === '1' && nativeTurn) {
     const response = await client.requestPermission({ sessionId: 'agent-1', toolCall: { toolCallId: 'auto-perm', title: 'Auto' }, options: [{ optionId: 'allow_once', name: 'Allow', kind: 'allow_once' }] })
     record({ permissionResponse: response, tool: 'auto-perm' })

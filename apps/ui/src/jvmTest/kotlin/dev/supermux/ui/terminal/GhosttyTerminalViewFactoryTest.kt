@@ -25,6 +25,7 @@ import dev.supermux.terminal.TerminalSize
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -55,6 +56,10 @@ class GhosttyTerminalViewFactoryTest {
         /** The surface's own prediction state, held here so a test can read what it would draw. */
         val predictions = GhosttyPredictionState(PredictionEngine(PredictionConfig(40, 600, 50), clock), clock)
 
+        /** The session the surface opened, so a test can wait on what it has PUBLISHED. */
+        @Volatile var session: TerminalSession? = null
+            private set
+
         val factory = GhosttyTerminalViewFactory(
             nowMs = clock,
             openSession = { size, effects ->
@@ -64,7 +69,7 @@ class GhosttyTerminalViewFactoryTest {
                     limits = TerminalLimits(),
                     effects = effects,
                     engineFactory = { _, _ -> engine },
-                )
+                ).also { session = it }
             },
             predictionsOf = { predictions },
         )
@@ -90,6 +95,22 @@ class GhosttyTerminalViewFactoryTest {
         val socket: FakeTerminalSocket get() = transport.sockets.first()
     }
 
+    /**
+     * [runComposeUiTest] with the composition on a STANDARD test dispatcher, so every coroutine of
+     * the surface runs on the test's own thread when it pumps, as the app runs them on its UI thread.
+     *
+     * The default is unconfined, and an unconfined dispatcher runs a coroutine resumed from another
+     * thread right there, on that thread. The session's owner lives on Dispatchers.Default and
+     * resumes three of the surface's coroutines on every keystroke and frame: the prediction lane,
+     * the reconcile collector and the client's sender. So under the default they ran on the owner's
+     * thread, off the UI thread the overlay is confined to, and only once the owner had taken the
+     * skiko dispatcher's run lock, which the test thread takes for every frame it pumps. On a loaded
+     * runner a keystroke could wait out a whole `until` for it: 'y' was on the socket in the
+     * timeout's own report, ten seconds late.
+     */
+    private fun runTerminalTest(block: suspend ComposeUiTest.() -> Unit) =
+        runComposeUiTest(effectContext = StandardTestDispatcher(), block = block)
+
     /** Pump until [condition]; the engine and the client run beside the composition, not in it. */
     private fun ComposeUiTest.until(what: String, condition: () -> Boolean) {
         try {
@@ -100,7 +121,8 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     /**
-     * Open the connection AND wait until the replay boundary has closed in the ADAPTER.
+     * Open the connection AND wait until the replay boundary has closed in the ADAPTER, and the
+     * grid's own geometry is on the published screen.
      *
      * The client's own `restoring` flag flips a step before the adapter's collector sees
      * `replay-end`, so "the socket accepted my keystroke" does not yet mean "the next server byte
@@ -108,6 +130,12 @@ class GhosttyTerminalViewFactoryTest {
      * replay — correctly, and invisibly — and then wonders why nothing is ever predicted. The
      * sentinel byte is below 0x20, so it moves the fake screen not at all and the boundary
      * everything.
+     *
+     * The geometry is the same trap from the other side. The session opens at a placeholder size
+     * and the grid resizes it on its first layout, and the overlay drops EVERY prediction when the
+     * geometry changes — correctly: a reflow moves every cell. A test that types before that frame
+     * is published has its warm-up round trip wiped behind its back: no latency sample, an epoch
+     * that never confirms, and an 'a' that is tracked but never drawn.
      */
     private fun ComposeUiTest.openLive(h: Harness) {
         h.socket.openEpoch()
@@ -115,6 +143,22 @@ class GhosttyTerminalViewFactoryTest {
         until("the replay boundary closed", h) {
             h.engine.feeds.any { it.second == OutputOrigin.LIVE }
         }
+        until("the grid sized the session", h) { h.engine.resizes > 0 }
+        untilPublished("the grid's own geometry was published", h)
+    }
+
+    /**
+     * Wait until the session has PUBLISHED everything the engine holds, and the surface has folded
+     * that frame in: the screen a person would be typing at.
+     *
+     * The session publishes from its own coroutine on Dispatchers.Default, one frame per
+     * acknowledgement, which `waitForIdle` cannot see. And that coroutine runs a keystroke already
+     * in its mailbox BEFORE it publishes, so a key pressed while a frame is still owed is encoded
+     * against the previous one — its caret, its geometry. People type at what is on screen, and so
+     * must these tests.
+     */
+    private fun ComposeUiTest.untilPublished(what: String, h: Harness) {
+        until(what, h) { h.session?.viewports?.value?.generation == h.engine.generation }
         waitForIdle()
     }
 
@@ -123,18 +167,23 @@ class GhosttyTerminalViewFactoryTest {
         try {
             waitUntil(timeoutMillis = 10_000) { condition() }
         } catch (timeout: Throwable) {
+            val published = h.session?.viewports?.value
             throw AssertionError(
                 "timed out waiting until $what; " +
                     "screen='${h.engine.text}' sent='${h.socket.sentText}' " +
                     "feeds=${h.engine.feeds} sockets=${h.transport.sockets.size} " +
-                    "predicted=${h.predictions.cells.toList()} clock=${h.clock.now}",
+                    "predicted=${h.predictions.cells.toList()} clock=${h.clock.now} " +
+                    "engine=${h.engine.size.columns}x${h.engine.size.rows} resizes=${h.engine.resizes} " +
+                    "published=${published?.size?.columns}x${published?.size?.rows}@${published?.cursor?.column} " +
+                    "client=${h.client?.status?.value} restoring=${h.client?.restoring?.value} " +
+                    "engineCloses=${h.engine.closes} released=${h.transport.released}",
                 timeout,
             )
         }
     }
 
     @Test
-    fun a_typed_character_is_predicted_then_confirmed_without_doubling() = runComposeUiTest {
+    fun a_typed_character_is_predicted_then_confirmed_without_doubling() = runTerminalTest {
         val h = Harness()
         lateinit var surface: TerminalSurface
         setContent {
@@ -153,10 +202,11 @@ class GhosttyTerminalViewFactoryTest {
         // sits on the boundary is a fixture that fails on a slow machine and passes on a fast one.
         fun roundTrip(ch: Char, gapMs: Long) {
             surface.keys.press(TerminalKey.Printable(ch))
-            until("'$ch' reached the socket") { h.socket.sentText.endsWith(ch.toString()) }
+            until("'$ch' reached the socket", h) { h.socket.sentText.endsWith(ch.toString()) }
             h.clock.now += gapMs
             h.socket.pushBytes(ch.toString().encodeToByteArray())
-            until("'$ch' echoed back onto the screen") { h.engine.text.endsWith(ch.toString()) }
+            until("'$ch' echoed back onto the screen", h) { h.engine.text.endsWith(ch.toString()) }
+            untilPublished("'$ch' is on the published screen", h)
         }
         roundTrip('x', 200)
         roundTrip('y', 200)
@@ -164,7 +214,7 @@ class GhosttyTerminalViewFactoryTest {
 
         // Now the one under test.
         surface.keys.press(TerminalKey.Printable('a'))
-        until("'a' was predicted") { h.predictions.cells.isNotEmpty() }
+        until("'a' was predicted", h) { h.predictions.cells.isNotEmpty() }
         waitForIdle()
 
         // Drawn speculatively — and NOT in Ghostty. The authoritative screen still says "xy",
@@ -185,7 +235,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun a_mispredicted_character_gives_way_to_the_authoritative_text() = runComposeUiTest {
+    fun a_mispredicted_character_gives_way_to_the_authoritative_text() = runTerminalTest {
         val h = Harness()
         lateinit var surface: TerminalSurface
         setContent {
@@ -197,10 +247,11 @@ class GhosttyTerminalViewFactoryTest {
 
         fun roundTrip(typed: Char, echoed: Char, gapMs: Long) {
             surface.keys.press(TerminalKey.Printable(typed))
-            until("'$typed' reached the socket") { h.socket.sentText.endsWith(typed.toString()) }
+            until("'$typed' reached the socket", h) { h.socket.sentText.endsWith(typed.toString()) }
             h.clock.now += gapMs
             h.socket.pushBytes(echoed.toString().encodeToByteArray())
-            until("'$echoed' landed") { h.engine.text.endsWith(echoed.toString()) }
+            until("'$echoed' landed", h) { h.engine.text.endsWith(echoed.toString()) }
+            untilPublished("'$echoed' is on the published screen", h)
         }
         roundTrip('x', 'x', 200)
         roundTrip('y', 'y', 200)
@@ -224,7 +275,7 @@ class GhosttyTerminalViewFactoryTest {
 
     @Test
     fun server_bytes_reach_the_engine_exactly_once_with_the_replay_boundarys_origin() =
-        runComposeUiTest {
+        runTerminalTest {
             val h = Harness()
             setContent {
                 val surface = h.factory.rememberTerminalSurface { h.connect() }
@@ -253,7 +304,7 @@ class GhosttyTerminalViewFactoryTest {
         }
 
     @Test
-    fun an_armed_modifier_is_encoded_by_the_engine_exactly_once() = runComposeUiTest {
+    fun an_armed_modifier_is_encoded_by_the_engine_exactly_once() = runTerminalTest {
         val h = Harness()
         lateinit var surface: TerminalSurface
         setContent {
@@ -279,7 +330,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun a_locked_modifier_survives_a_key_and_a_one_shot_does_not() = runComposeUiTest {
+    fun a_locked_modifier_survives_a_key_and_a_one_shot_does_not() = runTerminalTest {
         val h = Harness()
         lateinit var surface: TerminalSurface
         setContent {
@@ -305,7 +356,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun a_background_terminal_keeps_no_armed_modifier() = runComposeUiTest {
+    fun a_background_terminal_keeps_no_armed_modifier() = runTerminalTest {
         val h = Harness()
         lateinit var surface: TerminalSurface
         var active by mutableStateOf(true)
@@ -331,7 +382,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun hiding_and_showing_a_pane_keeps_its_history_and_never_stops_its_client() = runComposeUiTest {
+    fun hiding_and_showing_a_pane_keeps_its_history_and_never_stops_its_client() = runTerminalTest {
         val h = Harness()
         var active by mutableStateOf(true)
         setContent {
@@ -360,7 +411,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun disposal_closes_the_local_engine_and_ends_the_connection_exactly_once() = runComposeUiTest {
+    fun disposal_closes_the_local_engine_and_ends_the_connection_exactly_once() = runTerminalTest {
         val h = Harness()
         var mounted by mutableStateOf(true)
         setContent {
@@ -397,7 +448,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun an_exit_ends_the_view_once_and_a_failure_never_does() = runComposeUiTest {
+    fun an_exit_ends_the_view_once_and_a_failure_never_does() = runTerminalTest {
         val h = Harness()
         var exits = 0
         setContent {
@@ -429,7 +480,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun the_surface_only_connects_once_the_grid_is_composed() = runComposeUiTest {
+    fun the_surface_only_connects_once_the_grid_is_composed() = runTerminalTest {
         val h = Harness()
         var draw by mutableStateOf(false)
         setContent {
@@ -447,7 +498,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun the_grid_reports_its_geometry_and_only_the_visible_pane_claims_it() = runComposeUiTest {
+    fun the_grid_reports_its_geometry_and_only_the_visible_pane_claims_it() = runTerminalTest {
         val h = Harness()
         var active by mutableStateOf(true)
         var windowFocused = false
@@ -486,7 +537,7 @@ class GhosttyTerminalViewFactoryTest {
     }
 
     @Test
-    fun an_engine_that_never_loads_says_so_and_says_what_to_do() = runComposeUiTest {
+    fun an_engine_that_never_loads_says_so_and_says_what_to_do() = runTerminalTest {
         // THE STALE-DEPLOY CASE, WHICH IS THE ONE THAT REACHES USERS AND NEEDS NO CACHE TO HAPPEN.
         // Assets are content-hashed and served `immutable`, so a tab open since before a deploy is
         // holding a bundle whose wasm URL the current build no longer serves — and nobody finds out

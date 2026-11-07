@@ -8,7 +8,7 @@
 //     `createLocalRepo`, with `git init` only when git is there). Git is optional throughout.
 //   - [InstallAgentPanel] (InstallAgentPanel.kt) once a project is chosen but no agent is installed
 //     (or the spawn came back 409 `code:"agent_not_installed"`): one card per agent, installed in
-//     place through the same broker install jobs as Settings ▸ Agents.
+//     place through the same broker install jobs as Settings ▸ Providers.
 //
 // [BrokerRefusal] carries the broker's OWN reason out of a call that used to collapse every failure
 // to null, so the picker can say "A folder named x already exists" instead of "check the connection".

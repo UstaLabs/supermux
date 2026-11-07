@@ -1,7 +1,11 @@
 package dev.supermux.web
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.rememberWindowWidthClass
 import dev.supermux.ui.platform.NoticeOverlay
@@ -9,6 +13,7 @@ import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.HostTheme
 import kotlinx.browser.window
+import org.w3c.dom.events.Event
 
 /**
  * Does a real pointing device drive this page?
@@ -49,9 +54,25 @@ fun WebTheme(
         // phone PWA keeps the Files tree's dialogs.
         hardwareKeyboard = pointer,
         widthClass = rememberWindowWidthClass(),
+        // Card #76: the OS's reduce-motion setting (as the browser reports it) turns the live reply's ink edge and
+        // gliding scroll off.
+        reduceMotion = rememberReduceMotion(),
     ) {
         // The browser has no Toast either, so `Platform.notices` surfaces as the same Compose
         // snackbar desktop and iOS use — over `platform.notices`, the ONE bus the platform holds.
         NoticeOverlay(platform.notices, content)
     }
+}
+
+/** The browser's `prefers-reduced-motion`, kept current while the OS setting changes. */
+@Composable
+private fun rememberReduceMotion(): Boolean {
+    val query = remember { window.matchMedia("(prefers-reduced-motion: reduce)") }
+    var reduce by remember { mutableStateOf(query.matches) }
+    DisposableEffect(query) {
+        val listener: (Event) -> Unit = { reduce = query.matches }
+        query.addEventListener("change", listener)
+        onDispose { query.removeEventListener("change", listener) }
+    }
+    return reduce
 }

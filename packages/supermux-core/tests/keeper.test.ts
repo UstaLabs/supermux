@@ -1,12 +1,12 @@
 import { afterEach, expect, test, setDefaultTimeout } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { connectKeeper, keeperAgentRunning, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
+import { agentExitError, connectKeeper, keeperAgentRunning, requestId, responseId, type KeeperConnection } from '../src/keeper/index.js'
 import type { KeeperLimits } from '../src/keeper/protocol.js'
 
 setDefaultTimeout(20_000)
@@ -285,6 +285,57 @@ test('journal cap hysteresis rewrites far fewer times than frames appended', asy
   expect(bytes).toBeLessThanOrEqual(400)
   expect(j[0]!.seq).toBe(st.firstSeq)
   await shutdownAndAssert(conn, stateDirectory, sessionId)
+})
+
+test('a journal rewrite whose rename the OS refuses leaves the keeper and the agent running, and says so in the status', async () => {
+  const { conn, stateDirectory, sessionId } = await open('rename-refused', {}, limits({ journalMaxBytes: 400 }))
+  const journal = join(stateDirectory, 'keepers', sessionId, 'journal.ndjson')
+  // A rewrite renames a new file onto journal.ndjson. Windows refuses that while the journal is open (EPERM); here a
+  // directory in its place makes the rename fail the same way (the keeper's descriptor still writes to the old file).
+  await rm(journal)
+  await mkdir(join(journal, 'blocked'), { recursive: true })
+  const echoed: number[] = []
+  for (let i = 0; i < 30; i++) {
+    conn.write(JSON.stringify({ cmd: 'echo', n: i }))
+    const [frame] = await collect(conn, 1)
+    if (!frame) break
+    echoed.push(JSON.parse(frame.line).echoed)
+    conn.ack(frame.seq)
+  }
+  expect(echoed).toEqual([...Array(30).keys()])
+  const st = await waitStatus(stateDirectory, sessionId, s => typeof s.warning === 'string')
+  expect(st.journalRewrites).toBeGreaterThan(0)
+  expect(st.warning).toContain('journal')
+  expect(st.error).toBeUndefined()
+  expect(alive(st.keeperPid)).toBe(true)
+  expect(alive(st.agentPid)).toBe(true)
+  await shutdownAndAssert(conn, stateDirectory, sessionId)
+})
+
+test('agentExitError says in one line how the agent ended (the last stderr line of a real Bun crash is indented)', () => {
+  const bun = ['panic(main thread): Segmentation fault at address 0x3E800384E75', ' https://bun.report/1.4.4/l_19aa0ec3']
+  expect(agentExitError('Claude', { code: 1, signal: 'SIGSEGV', stderr: bun }).message).toBe('Claude process exited on SIGSEGV: https://bun.report/1.4.4/l_19aa0ec3')
+  expect(agentExitError('Claude', { code: 3221225477, stderr: [] }).message).toBe('Claude process exited with code 0xC0000005')
+  expect(agentExitError('Codex', undefined)).toMatchObject({ code: 'agent_exited', message: 'Codex process exited: its keeper stopped without reporting how' })
+})
+
+test('the exit the keeper reports carries the code, the signal and the last stderr lines; the status keeps them', async () => {
+  const { conn, stateDirectory, sessionId } = await open('exit-report')
+  const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`)
+  conn.write(JSON.stringify({ cmd: 'exit', code: 7, stderr: lines }))
+  expect(await collect(conn, 1)).toEqual([])
+  // The last 20 lines: enough for a crash report, bounded however much the agent wrote.
+  expect(conn.exitStatus()).toEqual({ code: 7, stderr: lines.slice(-20) })
+  const st = await waitStatus(stateDirectory, sessionId, s => s.agentExited === 7)
+  expect(st.agentStderr).toEqual(lines.slice(-20))
+  expect(st.agentSignal).toBeUndefined()
+
+  const killed = await open('exit-signal')
+  const pid = (await waitStatus(killed.stateDirectory, killed.sessionId, s => s.agentPid > 0)).agentPid
+  process.kill(pid, 'SIGKILL')
+  expect(await collect(killed.conn, 1)).toEqual([])
+  expect(killed.conn.exitStatus()).toEqual({ code: 1, signal: 'SIGKILL', stderr: [] })
+  expect((await waitStatus(killed.stateDirectory, killed.sessionId, s => s.agentSignal === 'SIGKILL')).agentSignal).toBe('SIGKILL')
 })
 
 test('shutdown terminates stubborn agent and keeper exits', async () => {
@@ -702,4 +753,22 @@ test('signal SIGINT reaches the agent; ndjson frames pass through', async () => 
   const rest = await collect(conn, 5)
   expect(rest.map(f => ({ type: f.type, frame: JSON.parse(f.line) }))).toEqual([{ type: 'frame', frame: { event: 'bye' } }])
   expect(await keeperAgentRunning(stateDirectory, sessionId)).toBe(false)
+})
+
+test('an agent that cannot start fails the connect with its spawn error, not a bare socket error', async () => {
+  const stateDirectory = await dir()
+  const missing = join(stateDirectory, 'no-such-agent')
+  const started = Date.now()
+  const err = await connectKeeper({
+    stateDirectory,
+    sessionId: 'unstartable',
+    spec: { command: missing, args: [], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, frameShape: 'jsonrpc', captureStderr: false },
+    limits: limits(),
+    cursor: 0,
+  }).then(() => undefined, (e: Error) => e)
+  live.push({ dir: stateDirectory, sessionId: 'unstartable' })
+  expect(err?.message).toStartWith('The agent did not start: ')
+  expect(err?.message).toContain('ENOENT')
+  // Known as soon as the keeper goes, not after connectTimeoutMs.
+  expect(Date.now() - started).toBeLessThan(limits().connectTimeoutMs)
 })

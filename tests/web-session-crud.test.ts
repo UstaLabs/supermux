@@ -49,7 +49,10 @@ beforeEach(async () => {
       return { id: "draft-id", name: args.name ?? "draft-name", workdir: args.workdir, agent: args.agent ?? "claude" }
     },
     killSession: async (name: string) => { killCalls.push(name) },
-    renameSession: async (oldName: string, newName: string) => { renameCalls.push({ old: oldName, new: newName }) },
+    renameSession: async (oldName: string, newName: string) => {
+      if (newName.includes("/")) throw Object.assign(new Error("name must not contain /"), { status: 400, code: "name_invalid" })
+      renameCalls.push({ old: oldName, new: newName })
+    },
     reorderSessions: (orderedIds: string[]) => { reorderCalls.push(orderedIds) },
     listArchivedSessions: () => [{ id: "archived-a", name: "archived-a", workdir: join(tmpRoot, "project-a"), agent: "claude" as const }],
   } as any)
@@ -138,6 +141,19 @@ test("POST /sessions with firstMessage → forwarded to spawn", async () => {
   expect(spawnCalls).toHaveLength(1)
   expect(spawnCalls[0].inheritFrom).toBe("src-1")
   expect(spawnCalls[0].firstMessage).toBe("pick up here")
+})
+
+// Card #75: the app names its first message, so a retried create can't deliver it twice.
+test("POST /sessions forwards the app's id for the first message; one not in the app's shape is dropped", async () => {
+  const post = (extra: object) => fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", firstMessage: "hi", ...extra }),
+  })
+  expect((await post({ client_message_id: "web-6f1c2a9e-4d" })).status).toBe(200)
+  expect((await post({ client_message_id: "in:telegram:1" })).status).toBe(200)
+  expect((await post({})).status).toBe(200)
+  expect(spawnCalls.map((c) => c.firstMessageId)).toEqual(["web-6f1c2a9e-4d", undefined, undefined])
 })
 
 test("POST /sessions with userStatus:in_progress → spawns as usual", async () => {
@@ -234,6 +250,17 @@ test("POST /sessions/:name/rename → renames", async () => {
   const body = await res.json() as any
   expect(body.ok).toBe(true)
   expect(renameCalls).toEqual([{ old: "sess-a", new: "better-name" }])
+})
+
+test("POST /sessions/:name/rename refused by the Agent name rules → status + code", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions/sess-a/rename`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ name: "a/b" }),
+  })
+  expect(res.status).toBe(400)
+  expect(await res.json()).toEqual({ error: "name must not contain /", code: "name_invalid" })
+  expect(renameCalls).toEqual([])
 })
 
 test("POST /sessions/:name/rename without name → 400", async () => {

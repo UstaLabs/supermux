@@ -1,5 +1,7 @@
 package dev.supermux.session
 
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.RemoteRepo
 
@@ -123,10 +125,11 @@ fun buildOmniboxOptions(
 }
 
 /** The last path segment — what a project is called in the picker ("~" stays "~"). */
-fun projectFolderName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+fun projectFolderName(path: String): String = pathLeaf(path).ifEmpty { path }
 
 /** Whether the omnibox should treat [query] as a folder path rather than a name to search. */
 fun looksLikePath(query: String): Boolean {
     val q = query.trim()
-    return q.startsWith("/") || q.startsWith("~") || q.startsWith(".") || q.contains('/')
+    return q.startsWith("/") || q.startsWith("~") || q.startsWith(".") || q.contains('/') || q.contains('\\') ||
+        isWindowsHostPath(q)
 }

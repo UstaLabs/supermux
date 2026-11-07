@@ -1,0 +1,1176 @@
+{
+ "format": "supermux-avatar",
+ "version": 2,
+ "name": "Hoot",
+ "size": 100,
+ "parts": [
+  {
+   "id": "shadow",
+   "shape": "ellipse",
+   "cx": 50,
+   "cy": 93,
+   "rx": 22,
+   "ry": 3.5,
+   "fill": "#00000038"
+  },
+  {
+   "id": "body",
+   "shape": "group",
+   "pivot": [
+    50,
+    90
+   ],
+   "behaviors": [
+    {
+     "type": "breathe",
+     "amount": 0.025
+    }
+   ],
+   "children": [
+    {
+     "id": "feet",
+     "d": "M40 87 q-2 4 1 4 q1 -2 2 0 q1 -2 2 0 q3 0 1 -4 Z M54 87 q-2 4 1 4 q1 -2 2 0 q1 -2 2 0 q3 0 1 -4 Z",
+     "fill": "#F39A3C"
+    },
+    {
+     "id": "torso",
+     "d": "M50 36 C71 36 82 50 82 66 C82 82 68 90 50 90 C32 90 18 82 18 66 C18 50 29 36 50 36 Z",
+     "fill": {
+      "linear": {
+       "from": [
+        50,
+        36
+       ],
+       "to": [
+        50,
+        90
+       ],
+       "stops": [
+        "#8F7BEA",
+        "#6A55D0"
+       ]
+      }
+     }
+    },
+    {
+     "id": "belly",
+     "shape": "ellipse",
+     "cx": 50,
+     "cy": 74,
+     "rx": 16,
+     "ry": 13,
+     "fill": "#D9D0FA"
+    },
+    {
+     "id": "chevrons",
+     "d": "M43 70 l3 2.5 l3 -2.5 M51 70 l3 2.5 l3 -2.5 M47 77 l3 2.5 l3 -2.5",
+     "fill": "none",
+     "stroke": "#A898E8",
+     "strokeWidth": 1.8,
+     "lineCap": "round"
+    },
+    {
+     "id": "wingL",
+     "d": "M27 52 C17 58 15 74 24 85 C30 80 33 64 27 52 Z",
+     "fill": "#5442B8",
+     "pivot": [
+      27,
+      54
+     ]
+    },
+    {
+     "id": "wingR",
+     "d": "M73 52 C83 58 85 74 76 85 C70 80 67 64 73 52 Z",
+     "fill": "#5442B8",
+     "pivot": [
+      73,
+      54
+     ]
+    },
+    {
+     "id": "head",
+     "shape": "group",
+     "pivot": [
+      50,
+      60
+     ],
+     "children": [
+      {
+       "id": "tuftL",
+       "d": "M25 34 L19 11 C26 14 33 19 39 25 Z",
+       "fill": "#5442B8",
+       "pivot": [
+        30,
+        30
+       ]
+      },
+      {
+       "id": "tuftR",
+       "d": "M75 34 L81 11 C74 14 67 19 61 25 Z",
+       "fill": "#5442B8",
+       "pivot": [
+        70,
+        30
+       ]
+      },
+      {
+       "id": "skull",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 42,
+       "rx": 30,
+       "ry": 23,
+       "fill": {
+        "linear": {
+         "from": [
+          50,
+          19
+         ],
+         "to": [
+          50,
+          65
+         ],
+         "stops": [
+          "#9C8AF0",
+          "#8F7BEA"
+         ]
+        }
+       }
+      },
+      {
+       "id": "disc",
+       "d": "M50 33 C44 25 25 25 25 42 C25 57 42 60 50 53 C58 60 75 57 75 42 C75 25 56 25 50 33 Z",
+       "fill": "#FBF3E4"
+      },
+      {
+       "id": "eyes",
+       "shape": "group",
+       "pivot": "center",
+       "behaviors": [
+        {
+         "type": "blink"
+        }
+       ],
+       "hideIn": [
+        "asleep"
+       ],
+       "children": [
+        {
+         "id": "irisL",
+         "shape": "circle",
+         "cx": 37.5,
+         "cy": 42,
+         "r": 9.5,
+         "fill": "#F7C04A",
+         "stroke": "#E39A2A",
+         "strokeWidth": 1.2,
+         "children": [
+          {
+           "id": "pupilL",
+           "shape": "circle",
+           "cx": 37.5,
+           "cy": 42,
+           "r": 5.6,
+           "fill": "#1E1838",
+           "behaviors": [
+            {
+             "type": "lookAt",
+             "range": 2.8
+            }
+           ],
+           "children": [
+            {
+             "id": "glintL",
+             "shape": "circle",
+             "cx": 39.5,
+             "cy": 40,
+             "r": 1.7,
+             "fill": "#FFFFFF"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "irisR",
+         "shape": "circle",
+         "cx": 62.5,
+         "cy": 42,
+         "r": 9.5,
+         "fill": "#F7C04A",
+         "stroke": "#E39A2A",
+         "strokeWidth": 1.2,
+         "children": [
+          {
+           "id": "pupilR",
+           "shape": "circle",
+           "cx": 62.5,
+           "cy": 42,
+           "r": 5.6,
+           "fill": "#1E1838",
+           "behaviors": [
+            {
+             "type": "lookAt",
+             "range": 2.8
+            }
+           ],
+           "children": [
+            {
+             "id": "glintR",
+             "shape": "circle",
+             "cx": 64.5,
+             "cy": 40,
+             "r": 1.7,
+             "fill": "#FFFFFF"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "sleepyEyes",
+       "d": "M31 42 Q37.5 47 44 42 M56 42 Q62.5 47 69 42",
+       "fill": "none",
+       "stroke": "#2A2147",
+       "strokeWidth": 2.6,
+       "lineCap": "round",
+       "keepColor": true,
+       "showIn": [
+        "asleep"
+       ]
+      },
+      {
+       "id": "blush",
+       "d": "M27 51 a3.5 2 0 1 0 7 0 a3.5 2 0 1 0 -7 0 Z M66 51 a3.5 2 0 1 0 7 0 a3.5 2 0 1 0 -7 0 Z",
+       "fill": "#FF9DB580",
+       "showIn": [
+        "hover"
+       ]
+      },
+      {
+       "id": "mouth",
+       "shape": "ellipse",
+       "cx": 50,
+       "cy": 53.5,
+       "rx": 3.4,
+       "ry": 3,
+       "fill": "#5A2230",
+       "pivot": [
+        50,
+        51
+       ],
+       "showIn": [
+        "speaking"
+       ]
+      },
+      {
+       "id": "beakLower",
+       "d": "M47 51.5 L53 51.5 L50 56 Z",
+       "fill": "#D9782A"
+      },
+      {
+       "id": "beak",
+       "d": "M45.5 48.5 Q50 46.5 54.5 48.5 L50 54.5 Z",
+       "fill": "#F39A3C",
+       "stroke": "#D9782A",
+       "strokeWidth": 0.8
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "zzz",
+   "d": "M78 10 H87 L78 19 H87",
+   "fill": "none",
+   "stroke": "#A08EF2",
+   "strokeWidth": 3.4,
+   "lineCap": "round",
+   "keepColor": true,
+   "showIn": [
+    "asleep"
+   ]
+  },
+  {
+   "id": "bang",
+   "shape": "group",
+   "showIn": [
+    "waiting"
+   ],
+   "children": [
+    {
+     "id": "bangLine",
+     "d": "M88 10 V21",
+     "fill": "none",
+     "stroke": "#FFB547",
+     "strokeWidth": 4.2,
+     "lineCap": "round"
+    },
+    {
+     "id": "bangDot",
+     "shape": "circle",
+     "cx": 88,
+     "cy": 28,
+     "r": 2.5,
+     "fill": "#FFB547"
+    }
+   ]
+  },
+  {
+   "id": "waves",
+   "shape": "group",
+   "showIn": [
+    "listening"
+   ],
+   "pivot": [
+    14,
+    44
+   ],
+   "children": [
+    {
+     "id": "wave1",
+     "d": "M13 37 Q8 44 13 51",
+     "fill": "none",
+     "stroke": "#34BFA8",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    },
+    {
+     "id": "wave2",
+     "d": "M8 32 Q1 44 8 56",
+     "fill": "none",
+     "stroke": "#34BFA8",
+     "strokeWidth": 2.6,
+     "lineCap": "round"
+    }
+   ]
+  }
+ ],
+ "states": {
+  "idle": {
+   "tracks": [
+    {
+     "part": "tuftR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.86,
+       0
+      ],
+      [
+       0.9,
+       9
+      ],
+      [
+       0.95,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 4200
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.4,
+       0
+      ],
+      [
+       0.5,
+       -6
+      ],
+      [
+       0.75,
+       -6
+      ],
+      [
+       0.85,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 6000
+    },
+    {
+     "part": "wingL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.9,
+       0
+      ],
+      [
+       0.95,
+       8
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 5000
+    }
+   ]
+  },
+  "working": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "head",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       0.5,
+       10
+      ],
+      [
+       1,
+       -10
+      ]
+     ],
+     "duration": 1400
+    },
+    {
+     "part": "pupilL",
+     "prop": "x",
+     "keys": [
+      [
+       0,
+       -2.5
+      ],
+      [
+       0.5,
+       2.5
+      ],
+      [
+       1,
+       -2.5
+      ]
+     ],
+     "duration": 700
+    },
+    {
+     "part": "pupilR",
+     "prop": "x",
+     "keys": [
+      [
+       0,
+       -2.5
+      ],
+      [
+       0.5,
+       2.5
+      ],
+      [
+       1,
+       -2.5
+      ]
+     ],
+     "duration": 700
+    },
+    {
+     "part": "pupilL",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       1.2
+      ],
+      [
+       1,
+       1.2
+      ]
+     ],
+     "duration": 1400
+    },
+    {
+     "part": "pupilR",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       1.2
+      ],
+      [
+       1,
+       1.2
+      ]
+     ],
+     "duration": 1400
+    },
+    {
+     "part": "wingL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       18
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 350
+    },
+    {
+     "part": "wingR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -18
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 350,
+     "delay": 175
+    },
+    {
+     "part": "body",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -1.5
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 700
+    }
+   ]
+  },
+  "waiting": {
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -8
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 900,
+     "ease": "out"
+    },
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "keys": [
+      [
+       0,
+       0.94
+      ],
+      [
+       0.15,
+       1.04
+      ],
+      [
+       0.55,
+       1.0
+      ],
+      [
+       0.65,
+       0.94
+      ],
+      [
+       1,
+       0.94
+      ]
+     ],
+     "duration": 900
+    },
+    {
+     "part": "wingL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.15,
+       30
+      ],
+      [
+       0.3,
+       8
+      ],
+      [
+       0.45,
+       24
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 900
+    },
+    {
+     "part": "wingR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.15,
+       -30
+      ],
+      [
+       0.3,
+       -8
+      ],
+      [
+       0.45,
+       -24
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 900
+    },
+    {
+     "part": "bang",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -3
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 900
+    },
+    {
+     "part": "pupilL",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "pupilR",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ],
+     "duration": 1000
+    }
+   ]
+  },
+  "asleep": {
+   "saturation": 0.35,
+   "tracks": [
+    {
+     "part": "body",
+     "prop": "scaleY",
+     "keys": [
+      [
+       0,
+       0.96
+      ],
+      [
+       0.5,
+       1.0
+      ],
+      [
+       1,
+       0.96
+      ]
+     ],
+     "duration": 3600
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       7
+      ],
+      [
+       0.5,
+       9
+      ],
+      [
+       1,
+       7
+      ]
+     ],
+     "duration": 3600
+    },
+    {
+     "part": "tuftL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -14
+      ],
+      [
+       1,
+       -14
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "tuftR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       14
+      ],
+      [
+       1,
+       14
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "zzz",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       5
+      ],
+      [
+       1,
+       -4
+      ]
+     ],
+     "duration": 2400,
+     "ease": "linear"
+    },
+    {
+     "part": "zzz",
+     "prop": "opacity",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       1
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 2400
+    }
+   ]
+  },
+  "hover": {
+   "tracks": [
+    {
+     "part": "head",
+     "prop": "scale",
+     "keys": [
+      [
+       0,
+       1.06
+      ],
+      [
+       1,
+       1.06
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "tuftL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       1,
+       -10
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "tuftR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       10
+      ],
+      [
+       1,
+       10
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "head",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       -1.5
+      ],
+      [
+       1,
+       -1.5
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "wingL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       22
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       0.8,
+       14
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 500,
+     "loop": false
+    },
+    {
+     "part": "wingR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.3,
+       -22
+      ],
+      [
+       0.6,
+       0
+      ],
+      [
+       0.8,
+       -14
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 500,
+     "loop": false
+    }
+   ]
+  },
+  "listening": {
+   "disable": [
+    "lookAt"
+   ],
+   "tracks": [
+    {
+     "part": "head",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -10
+      ],
+      [
+       1,
+       -10
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "body",
+     "prop": "x",
+     "keys": [
+      [
+       0,
+       -2
+      ],
+      [
+       1,
+       -2
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "tuftL",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -4
+      ],
+      [
+       1,
+       -20
+      ]
+     ],
+     "driver": "level"
+    },
+    {
+     "part": "pupilL",
+     "prop": "x",
+     "keys": [
+      [
+       0,
+       -2.2
+      ],
+      [
+       1,
+       -2.2
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "pupilR",
+     "prop": "x",
+     "keys": [
+      [
+       0,
+       -2.2
+      ],
+      [
+       1,
+       -2.2
+      ]
+     ],
+     "duration": 1000
+    },
+    {
+     "part": "waves",
+     "prop": "scale",
+     "keys": [
+      [
+       0,
+       0.8
+      ],
+      [
+       1,
+       1.2
+      ]
+     ],
+     "driver": "level"
+    },
+    {
+     "part": "waves",
+     "prop": "opacity",
+     "keys": [
+      [
+       0,
+       0.65
+      ],
+      [
+       1,
+       1
+      ]
+     ],
+     "driver": "level"
+    }
+   ]
+  },
+  "speaking": {
+   "tracks": [
+    {
+     "part": "beakLower",
+     "prop": "y",
+     "keys": [
+      [
+       0,
+       0.6
+      ],
+      [
+       1,
+       5
+      ]
+     ],
+     "driver": "level",
+     "ease": "out"
+    },
+    {
+     "part": "mouth",
+     "prop": "scaleY",
+     "keys": [
+      [
+       0,
+       0.5
+      ],
+      [
+       1,
+       2.0
+      ]
+     ],
+     "driver": "level",
+     "ease": "out"
+    },
+    {
+     "part": "head",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       -3
+      ],
+      [
+       0.5,
+       3
+      ],
+      [
+       1,
+       -3
+      ]
+     ],
+     "duration": 900,
+     "gain": "level"
+    },
+    {
+     "part": "wingR",
+     "prop": "rotate",
+     "keys": [
+      [
+       0,
+       0
+      ],
+      [
+       0.5,
+       -14
+      ],
+      [
+       1,
+       0
+      ]
+     ],
+     "duration": 700,
+     "gain": "level"
+    }
+   ]
+  }
+ }
+}

@@ -25,6 +25,18 @@ import kotlin.test.assertTrue
  */
 class AndroidChatSeamsTest {
 
+    // ── the on-device recogniser's meter ─────────────────────────────────────
+
+    // SpeechRecognizer reports roughly −2 dB (silence) to 10 dB (loud speech); a listening avatar
+    // wants 0..1, clamped either side.
+    @Test fun recognizerLevelMapsItsDbScaleOntoZeroToOne() {
+        assertEquals(0f, recognizerLevel(-2f))
+        assertEquals(0.5f, recognizerLevel(4f), 0.0001f)
+        assertEquals(1f, recognizerLevel(10f))
+        assertEquals(0f, recognizerLevel(-9f))
+        assertEquals(1f, recognizerLevel(15f))
+    }
+
     // ── AndroidTtsEngine ─────────────────────────────────────────────────────
 
     /** A backend that hands back the completion callback so a test decides when speech ends. */

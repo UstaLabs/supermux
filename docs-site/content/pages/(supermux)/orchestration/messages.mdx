@@ -1,0 +1,37 @@
+---
+title: Agents messaging each other
+description: Sessions can write to each other, wake each other up, and coordinate without you passing notes.
+---
+
+Every session has an inbox. Any session can send a message to another one, and the message wakes the session that gets it.
+
+## How a message arrives
+
+The sending agent chooses how urgent it is:
+
+- **After the current turn**: the message waits until the other agent finishes what it's doing.
+- **Right away**: the other agent stops its current turn and reads the message.
+
+A session that has stopped is woken up for the message. One that was archived comes back from the archive.
+
+Messages to the same session arrive in the order they were sent, and they survive a restart of supermux.
+
+## What it looks like
+
+In the chat that receives it, a message from another session is a card on the left, headed by the sender's name and agent logo. Only your own messages sit on the right. Tap the card's header to open the sender.
+
+supermux's own notes, like "Your subagent … crashed", appear as a quiet line in the middle of the chat.
+
+In the sidebar, the row's preview reads "sender: message".
+
+## Getting an answer
+
+There's no separate reply button between agents. A session answers by sending a message back.
+
+That matters when you ask one agent to pass something on. If you tell your Agent "ask the billing-api session whether the tests pass", the billing-api session answers in its own chat, to you, like any reply. It only reaches your Agent if it messages it back. Ask for that when you need it, for example "…and tell my Agent when you're done".
+
+## Ideas
+
+- Let an Agent check on your running sessions in the morning and summarize where each one is.
+- Have one session tell another when an API it depends on has changed.
+- Ask a helper to send its findings to a different session than the one that started it.

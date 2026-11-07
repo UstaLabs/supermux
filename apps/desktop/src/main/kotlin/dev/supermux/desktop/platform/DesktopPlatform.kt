@@ -73,6 +73,12 @@ class DesktopPlatform : Platform {
         terminal = true,
         // No hardware H.264 decoder: desktop displays are VNC, so `videoDecoder()` is null.
         scrcpy = false,
+        // AWT turns a Mac trackpad's two-finger scroll into wheel events that run on into the
+        // system's momentum, with no "fingers lifted" in between.
+        trackpadMomentum = isMacOs(),
+        // The assistant overlay (#62): the Agent in always-on-top windows over every app, behind its
+        // Appearance switch. macOS and Windows; a Linux compositor may not keep it on top.
+        assistantOverlay = dev.supermux.desktop.overlay.desktopOverlaySupported,
     )
 
     /** The shared Compose terminal. No `SwingPanel` is left on the terminal path: the grid is
@@ -142,6 +148,25 @@ class DesktopPlatform : Platform {
 
     override val mic: MicCapture = DesktopMicCapture()
 
+    /**
+     * The assistant overlay (#62): on macOS and Windows a window may float over other apps without asking;
+     * macOS asks for the mic the first time hold-to-talk records. Elsewhere there is no overlay.
+     */
+    override val assistantOverlay: dev.supermux.ui.platform.AssistantOverlayHost? =
+        if (dev.supermux.desktop.overlay.desktopOverlaySupported) {
+            object : dev.supermux.ui.platform.AssistantOverlayHost {
+                override fun canDrawOverOtherApps(): Boolean = true
+                override fun openPermissionPage() = Unit
+                override suspend fun requestMic(): Boolean = true
+                override val screenNote: String =
+                    "Double-click it to put its glasses on: while it wears them, your screen goes with hold-to-talk. " +
+                        "macOS asks once for Screen Recording; they come off after 5 quiet minutes."
+                override val moreSettings: (@androidx.compose.runtime.Composable () -> Unit)? = {
+                    dev.supermux.desktop.overlay.DesktopOverlaySettings()
+                }
+            }
+        } else null
+
     /** Process-wide, not per-window — see [SharedDesktopTts]. */
     override val tts: TtsEngine get() = SharedDesktopTts
 
@@ -191,7 +216,7 @@ internal fun pickDialogFor(kind: PickKind): FileDialog {
  * Null when cancelled.
  */
 internal fun awtPickDirectory(title: String): String? {
-    if (System.getProperty("os.name").orEmpty().lowercase().contains("mac")) {
+    if (isMacOs()) {
         val key = "apple.awt.fileDialogForDirectories"
         val previous = System.getProperty(key)
         System.setProperty(key, "true")

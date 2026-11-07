@@ -7,7 +7,7 @@ import { getAntigravityCoreHost } from "./core-host-provider"
 import type { AntigravityCoreHost, AntigravityPrepareExtra } from "./core-host"
 import { join } from "path"
 import { randomUUID } from "crypto"
-import { STATE_DIR } from "../../../shared/paths"
+import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import { antigravitySkillsDirs } from "../../plugins"
@@ -104,7 +104,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.antigravityHost)
-  const sessionHome = join(STATE_DIR, "agents", "antigravity", name)
+  const sessionHome = join(STATE_DIR, "agents", "antigravity", homeDirName(name))
   const permissionMode = resolvePermissionMode(AgentKind.Antigravity, args.permissionMode)
   const handle = host.register({
     ...(args.account ? { account: args.account } : {}),
@@ -162,6 +162,8 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
+        parent_session_id: args.parentSessionId,
+        workspace_id: args.workspaceId,
         permissionMode,
         account: args.account,
       } as never)
@@ -197,12 +199,13 @@ export async function resumeAntigravitySession(
     onAntigravitySessionId?: (name: string, sid: string) => void
     antigravityHost?: AntigravityCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; permissionMode?: string },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; permissionMode?: string; account?: string },
 ): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.antigravityHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
   const handle = host.register({
+    ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
     extra: prepareExtra({
@@ -219,6 +222,7 @@ export async function resumeAntigravitySession(
     adapter = createBoundAdapter({
       handle,
       reregister: (fields) => host.register({
+        ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
         extra: prepareExtra({
@@ -285,6 +289,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onAntigravitySessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       antigravityHost: ctx.antigravityHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
   )
 }

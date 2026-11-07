@@ -12,7 +12,7 @@ const log = makeLogger("agents/opencode/auth-ops")
 type RealClient = ReturnType<typeof createOpencodeClient>
 
 // opencode auth is GLOBAL (one native data-dir auth.json shared by every
-// session: XDG data on POSIX, LOCALAPPDATA on Windows). So auth management runs
+// session: its XDG data folder, on Windows too). So auth management runs
 // against a single lazily-started "control"
 // server rather than any per-session server. First boot is ~20s; it's cached
 // after that and torn down implicitly if the process exits.

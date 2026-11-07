@@ -92,6 +92,10 @@ export type SpawnArgs = {
   /** When set (agent-rpc worker), claude is pinned to this strict mcp config
    *  and launched in MUX_RPC_ONLY mode. */
   rpcMcpConfig?: string
+  /** delegate / council (spec §3): the session that creates this one. */
+  parentSessionId?: string
+  /** The workspace a child joins hidden (its parent's). */
+  workspaceId?: string
   /** Reuse this session id instead of minting one (PA respawn path). */
   id?: string
   /** Personal-assistant spawn deltas. Present only on the spawnPA path: keep

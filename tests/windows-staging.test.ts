@@ -8,7 +8,6 @@ const destination = join(root, "apps", "desktop", "resources", "windows-x64")
 const stagedNames = [
   "supermux-broker.exe",
   "mux-sessiond.exe",
-  "frpc.exe",
   "tmux",
   "pty-helper.exe",
 ] as const
@@ -18,11 +17,9 @@ test("Windows staging contains the complete native host runtime and no POSIX hel
   const fixtures = {
     broker: join(fixtureDir, "broker.fixture"),
     sessiond: join(fixtureDir, "sessiond.fixture"),
-    frpc: join(fixtureDir, "frpc.fixture"),
   }
   writeFileSync(fixtures.broker, "BROKER")
   writeFileSync(fixtures.sessiond, "SESSIOND")
-  writeFileSync(fixtures.frpc, "FRPC")
 
   const previous = new Map<string, Buffer | null>()
   for (const name of stagedNames) {
@@ -39,7 +36,6 @@ test("Windows staging contains the complete native host runtime and no POSIX hel
           ...process.env,
           SUPERMUX_BROKER: fixtures.broker,
           SUPERMUX_SESSIOND: fixtures.sessiond,
-          SUPERMUX_FRPC: fixtures.frpc,
           SUPERMUX_SKIP_BROKER: "1",
         },
         stdout: "pipe",
@@ -56,7 +52,7 @@ test("Windows staging contains the complete native host runtime and no POSIX hel
 
     expect(readFileSync(join(destination, "supermux-broker.exe"), "utf8")).toBe("BROKER")
     expect(readFileSync(join(destination, "mux-sessiond.exe"), "utf8")).toBe("SESSIOND")
-    expect(readFileSync(join(destination, "frpc.exe"), "utf8")).toBe("FRPC")
+    expect(existsSync(join(destination, "frpc.exe"))).toBe(false)
     expect(existsSync(join(destination, "tmux"))).toBe(false)
     expect(existsSync(join(destination, "pty-helper.exe"))).toBe(false)
   } finally {

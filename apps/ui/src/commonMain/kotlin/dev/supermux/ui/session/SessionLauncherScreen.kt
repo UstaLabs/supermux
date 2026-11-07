@@ -41,6 +41,8 @@
 package dev.supermux.ui.session
 
 import dev.supermux.chat.parseChatTs
+import dev.supermux.session.isMuxInternalPath
+import dev.supermux.session.withoutMuxInternal
 import dev.supermux.session.projectActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,7 +71,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -101,6 +102,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -170,6 +173,7 @@ import dev.supermux.workspace.launchLocation
 import dev.supermux.workspace.orderProjectCatalog
 import dev.supermux.workspace.projectLocationKey
 import dev.supermux.workspace.projectOwning
+import dev.supermux.util.PerfTrace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -253,7 +257,7 @@ fun SessionLauncherScreen(
         baseBranch: String?,
         replaceDraftId: String?,
         permissionMode: String?,
-        /** Account id for [agent]; null = its system account (the default). */
+        /** Account id for [agent]; null = Auto (the broker picks the account with the most room left). */
         account: String?,
     ) -> String?,
     /** Snapshot catalog keyed by agent (labels + descriptions + default). */
@@ -278,6 +282,13 @@ fun SessionLauncherScreen(
     workspaceLabel: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
+    /** [initialDraft]'s prefill was applied — the shell consumes it, one-shot per navigation like the project below. */
+    onInitialDraftApplied: () -> Unit = {},
+    /**
+     * Names this launcher's state that outlives the screen (a send still in flight) — unique per
+     * launcher: the New Session route, or one pending workspace tab.
+     */
+    retainKey: String = "new-session",
     /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
     micCapture: MicCapture? = null,
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
@@ -315,7 +326,12 @@ fun SessionLauncherScreen(
     var knownProjects by remember { mutableStateOf(emptyList<String>()) }
     /** [knownProjects] is a definite answer (not a failed or unasked `listProjectsOrNull`). */
     var projectsListed by remember { mutableStateOf(false) }
-    var submitting by remember { mutableStateOf(false) }
+    // A send in flight is the launcher's, not this composition's: an Android rotation recreated
+    // the screen mid-spawn and cancelled it with the old scope, so the new session might start
+    // with nothing opening it and the draft (never cleared) came back to be sent twice (#89).
+    val submission = rememberRetained("launcher.submit:$retainKey") { LauncherSubmission() }
+    val submitScope = rememberRetainedScope()
+    var submitting by submission::inFlight
     var error by remember { mutableStateOf<String?>(null) }
     // Dictation's own failure line, hoisted out of the composer so it renders under [error].
     var micError by remember { mutableStateOf<String?>(null) }
@@ -342,6 +358,7 @@ fun SessionLauncherScreen(
         if (!s.reasoningLevel.isNullOrBlank()) reasoningLevel = s.reasoningLevel
         val t = s.draftPayload?.text.orEmpty()
         message = TextFieldValue(t, TextRange(t.length))
+        onInitialDraftApplied()
     }
 
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
@@ -352,16 +369,22 @@ fun SessionLauncherScreen(
     var launcherPermissionModes by remember { mutableStateOf(emptyMap<String, String>()) }
     var permissionMode by remember { mutableStateOf<String?>(null) }
     var permissionMenu by remember { mutableStateOf(false) }
-    // The account for this chat: null = the agent's system login. Nothing is remembered — a new
-    // chat always starts on the system account, and switching agent drops the choice.
+    // The account for this chat: null = Auto, the account with the most room left (decision #18).
+    // Nothing is remembered: a new chat starts on Auto, and switching agent drops the choice.
     var account by remember { mutableStateOf<String?>(null) }
     val accounts by actions.accounts.collectAsState(null)
     LaunchedEffect(actions) { actions.ensureAccounts() }
     LaunchedEffect(agent) { account = null }
+    // The choice as it stands: only an account this agent still has; a removed one is Auto again.
+    // The pill's mark and the submit both read this, so they never disagree with the panel.
+    fun chosenAccount(): String? = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var modelMenu by remember { mutableStateOf(false) }
-    var projectMenu by remember { mutableStateOf(false) }
+    // The project picker, open with what it was opened for, outlives this composition with the
+    // query typed in it (ProjectPicker): a rotation or a width change closed it (#89).
+    val picker = rememberRetained("launcher.picker:$retainKey") { LauncherPicker() }
+    var projectMenu by picker::open
     /** The project heading's width — the picker centres its dropdown under it. */
     var projectHeadingWidth by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current
@@ -373,14 +396,17 @@ fun SessionLauncherScreen(
         if (workspaceWorkdir != null) flowOf(emptyList()) else actions.projectCatalog
     }
     val catalogRaw by catalogFlow.collectAsState(emptyList())
-    val catalog = remember(catalogRaw) { orderProjectCatalog(catalogRaw) }
+    // The mux home and the agents' folders are supermux's own, never projects to pick or default
+    // to (GET /projects already leaves them out; the catalog and session recency don't).
+    val muxHome by remember(actions) { actions.muxHome }.collectAsState(null)
+    val catalog = remember(catalogRaw, muxHome) { orderProjectCatalog(withoutMuxInternal(catalogRaw, muxHome)) }
     val catalogPaths = remember(catalog) { catalog.flatMap { p -> p.locations.map { it.path } }.toHashSet() }
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
     val projectHostKey = selectedHost.orEmpty()
-    var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
+    var catalogLocationsFor by picker::catalogLocationsFor
     // A location-less project waiting for the omnibox to name a folder to register.
-    var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
+    var pendingLocationProject by picker::pendingLocation
     var projectError by remember { mutableStateOf<String?>(null) }
     // "Already in <owner>": the owning project's id and the path that collided, for "Use <owner>".
     var projectConflict by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -425,7 +451,7 @@ fun SessionLauncherScreen(
 
     // ── Is an agent installed? (the "Install an agent" panel) ──
     // Only with [LauncherActions.agentSetup]; without it nothing here gates. Statuses come from the
-    // same call Settings ▸ Agents makes, and the embedded panel reports every list it reloads, so
+    // same call Settings ▸ Providers makes, and the embedded panel reports every list it reloads, so
     // an install that lands swaps the panel back to the composer.
     val agentSetup = actions.agentSetup
     var agentStatuses by remember { mutableStateOf<List<AgentInstallStatus>?>(null) }
@@ -587,9 +613,10 @@ fun SessionLauncherScreen(
     // draft cancels any still-pending delay (draftCleared is a KEY, so flipping it relaunches this
     // effect, cancelling the in-flight coroutine before its delay elapses). Without this a pending
     // save from just before submit would re-write the just-cleared draft — a resurrection race that
-    // must not depend on the caller closing the launcher promptly.
-    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared) {
-        if (launcherRestoring || draftCleared) return@LaunchedEffect
+    // must not depend on the caller closing the launcher promptly. Nor while a send is in flight:
+    // a launcher recreated under one restores the sent text, and must not write it back (#89).
+    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared, submitting) {
+        if (launcherRestoring || draftCleared || submitting) return@LaunchedEffect
         delay(400)
         onDraftChange(
             LauncherDraft(
@@ -606,7 +633,7 @@ fun SessionLauncherScreen(
     // which must not be resurrected.
     DisposableEffect(Unit) {
         onDispose {
-            if (!launcherRestoring && !draftCleared) {
+            if (!launcherRestoring && !draftCleared && !submitting) {
                 onDraftFlush(
                     LauncherDraft(
                         workdir = if (workdirTouched) workdir else null,
@@ -636,8 +663,8 @@ fun SessionLauncherScreen(
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
-    val recentProjectPaths = remember(sessions, lastBySession) {
-        recentWorkdirs(sessionsByRecency(sessions, lastTs))
+    val recentProjectPaths = remember(sessions, lastBySession, muxHome) {
+        recentWorkdirs(sessionsByRecency(sessions, lastTs)).filterNot { isMuxInternalPath(it, muxHome) }
     }
     // The picker tiles' "● 2m": sessions per project and when one last spoke.
     val pickerActivity = remember(sessions, lastBySession) {
@@ -837,6 +864,7 @@ fun SessionLauncherScreen(
             loadVoiceCaps = actions.loadVoiceCaps,
             checkEdit = actions.checkEdit,
             transcribeWarm = actions.transcribeWarm,
+            openDictationStream = actions.openDictationStream,
         )
     }
     val hasProject = !workdir.isNullOrBlank()
@@ -897,39 +925,62 @@ fun SessionLauncherScreen(
             StagedUpload(it.source, it.name, it.mime, if (it.mime.startsWith("audio")) "voice" else null)
         }
         // Cleared BEFORE the spawn, not after: a workspace tab flips to its chat (disposing this
-        // screen and cancelling this coroutine) as soon as the broker binds it, and the dispose
-        // flush must not write the just-sent text back. A failure re-arms the draft save.
+        // screen) as soon as the broker binds it, and the dispose flush must not write the
+        // just-sent text back. A failure re-arms the draft save.
         draftCleared = true
-        scope.launch {
+        // Card #75: one trace from this Send to the first reply on screen.
+        PerfTrace.beginStart(wd.trim(), "agent" to agent, "model" to model, "worktree" to wantsWorktree, "files" to toUpload.size)
+        val sentAgent = agent
+        val sentModel = model
+        val sentLevel = reasoningLevel
+        val sentText = message.text.trim()
+        val replaceDraftId = activeDraftId
+        val sentMode = permissionMode
+        val sentAccount = chosenAccount()
+        // On the fleet's scope (see [submission]): the spawn finishes even if this screen is
+        // recreated under it, and its outcome waits in [submission] for whichever launcher is on
+        // screen when it lands (the effects below), since this one's may be gone by then.
+        submitScope.launch {
             // A retained chip list (Android) outlives this screen, so the next launcher must not
-            // open with this message's files. Kept only on a real failure, for the retry; a
-            // cancellation is this screen being disposed by the very spawn that succeeded.
+            // open with this message's files. Kept only on a real failure, for the retry.
             var failed = false
             try {
-                // Only an account this agent still has; a removed one falls back to the system login.
-                val chosenAccount = account?.takeIf { id -> accounts.orEmpty().any { it.id == id && it.agent == agent } }
                 val sessionId = onSubmit(
-                    wd.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount,
+                    wd.trim(), sentAgent, sentModel, sentLevel, sentText,
+                    toUpload, wantsWorktree, base, replaceDraftId, sentMode, sentAccount,
                 )
                 onClearDraft()
-                if (sessionId != null) onOpenSession?.invoke(sessionId)
+                submission.created = sessionId
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                draftCleared = false
                 failed = true
-                error = e.message ?: "Failed to create session"
-                // The chosen agent's CLI is not on the host: offer the install, not just the text.
-                agentNotInstalled(e)?.let { kind ->
-                    if (agentSetup != null) {
-                        refusedAgent = kind.ifEmpty { agent }
-                        refusedMessage = e.message
-                        agentStatusesReload++
-                    }
-                }
+                submission.failure = e
             } finally {
-                submitting = false
+                submission.inFlight = false
                 if (!failed) staged.clear()
+            }
+        }
+    }
+
+    // A send's outcome, read by the launcher on screen when it lands — the one that sent it, or
+    // the one a rotation put in its place.
+    LaunchedEffect(submission.created) {
+        val id = submission.created ?: return@LaunchedEffect
+        submission.created = null
+        draftCleared = true
+        onOpenSession?.invoke(id)
+    }
+    LaunchedEffect(submission.failure) {
+        val e = submission.failure ?: return@LaunchedEffect
+        submission.failure = null
+        draftCleared = false
+        error = e.message ?: "Failed to create session"
+        // The chosen agent's CLI is not on the host: offer the install, not just the text.
+        agentNotInstalled(e)?.let { kind ->
+            if (agentSetup != null) {
+                refusedAgent = kind.ifEmpty { agent }
+                refusedMessage = e.message
+                agentStatusesReload++
             }
         }
     }
@@ -949,7 +1000,9 @@ fun SessionLauncherScreen(
         BoxWithConstraints(
             outer
                 .fillMaxSize()
-                .background(cs.surfaceContainerHigh)
+                // The tone of the "Start a new session" card that opens it: set off from the
+                // sidebar's frame, and not the chat's either.
+                .background(cs.surfaceContainer)
                 // The soft keyboard shrinks the scroll viewport (as the chat composer dock does),
                 // so a long prompt's growing field scrolls into view instead of under the IME.
                 // The Scaffold shell consumes its own padding first, so the nav bar isn't doubled.
@@ -1083,6 +1136,7 @@ fun SessionLauncherScreen(
                                 onCatalogProject = { applyProject(it) },
                                 onCatalogLocation = { p, path -> pickProjectLocation(p, path) },
                                 onCatalogLocationsBack = { catalogLocationsFor = null },
+                                retainKey = "launcher.project-search:$retainKey",
                             )
                         }
                         pendingLocationProject?.let { p ->
@@ -1148,8 +1202,8 @@ fun SessionLauncherScreen(
                         launcherReasoning = launcherReasoning + (agent to level)
                         onPrefsChange(currentPrefs())
                     }
-                    // ONE pill for who runs the chat and how: the agent row and the account choice
-                    // sit at the top of the run-settings menu, the models and effort below them.
+                    // ONE pill for who runs the chat and how: the agent row sits at the top of the
+                    // run-settings menu, the models and effort below it, the account and mode last.
                     val agentHeader: @Composable (Boolean) -> Unit = { sheet ->
                         dev.supermux.ui.chat.AgentSwitcher(
                             agents = agents,
@@ -1200,17 +1254,6 @@ fun SessionLauncherScreen(
                                     )
                                 } else {
                                     null
-                                },
-                                pillExtra = {
-                                    // The chat will run on an added account, not the system login.
-                                    if (account != null) {
-                                        Icon(
-                                            Icons.Outlined.AccountCircle,
-                                            contentDescription = "On an added account",
-                                            tint = cs.primary,
-                                            modifier = Modifier.size(13.dp).testTag("launcher_agent_account_mark"),
-                                        )
-                                    }
                                 },
                             )
                         }
@@ -1453,7 +1496,7 @@ private fun LauncherHostPill(
         Row(
             modifier = modifier
                 .clip(RoundedCornerShape(20.dp))
-                .background(cs.surfaceContainer)
+                .background(cs.surfaceContainerHighest)
                 .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
                 .clickable(enabled = enabled) { haptic.perform(HapticKind.Tick); expanded = true }
                 .padding(
@@ -1507,7 +1550,7 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
+            .background(cs.surfaceContainerHighest)
             .clickable { haptic.perform(HapticKind.Tick); onClick() }
             .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1672,4 +1715,21 @@ private fun WorktreePicker(
             ) { bodyContent() }
         }
     }
+}
+
+/** A launcher's project picker: open, and what it was opened for (`rememberRetained`, #89). */
+private class LauncherPicker {
+    var open by mutableStateOf(false)
+    var catalogLocationsFor by mutableStateOf<String?>(null)
+    var pendingLocation by mutableStateOf<ProjectDto?>(null)
+}
+
+/**
+ * A launcher's send, kept outside its composition (`rememberRetained`, card #89): whether one is in
+ * flight, and its outcome until a launcher on screen reads it.
+ */
+private class LauncherSubmission {
+    var inFlight by mutableStateOf(false)
+    var created by mutableStateOf<String?>(null)
+    var failure by mutableStateOf<Exception?>(null)
 }

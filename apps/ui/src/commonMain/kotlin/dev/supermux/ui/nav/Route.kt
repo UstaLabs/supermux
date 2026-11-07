@@ -52,7 +52,7 @@ sealed interface Route {
     /** [section] is the rail selection inside the hub; desktop reads/writes it, Android defaults it. */
     @Serializable
     @SerialName("settings")
-    data class Settings(val section: SettingsSection = SettingsSection.Agents) : Route
+    data class Settings(val section: SettingsSection = SettingsSection.Providers) : Route
 
     @Serializable
     @SerialName("usage")

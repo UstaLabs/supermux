@@ -29,6 +29,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.workspace.LayoutNode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 
 /**
  * Extra OS windows hosting slices of a workspace layout.
@@ -182,30 +183,40 @@ class ShellUiState {
     /**
      * When set, the launcher preselects this persistent project (host record id to project id).
      *
-     * ONE-SHOT per navigation: once the launcher applies it, [consumeLauncherProject] marks that
+     * ONE-SHOT per navigation: once the launcher applies it, [consumeLauncherSeeds] marks that
      * very route INSTANCE consumed, so a remount of the launcher (or any later recomposition) no
      * longer overrides whatever the user or a restored draft chose since. A fresh
      * [openLauncherInProject] — even for the same project — pushes a NEW instance, so it applies
      * again. The route itself is left untouched: replacing it would re-key its Nav3 entry and
-     * rebuild the launcher under Compact.
+     * rebuild the launcher under Compact. The [Saver] keeps the mark, so an Android rotation does
+     * not hand the project out again over the one the user switched to (#89).
      */
-    val launcherProject: Pair<String, String>? get() = (currentRoute as? Route.NewSession)
-        ?.takeIf { it.projectId.isNotBlank() && it !== consumedLauncherRoute }
+    val launcherProject: Pair<String, String>? get() = unconsumedLauncherRoute
+        ?.takeIf { it.projectId.isNotBlank() }
         ?.let { it.projectHostId to it.projectId }
+
+    /**
+     * The reopened task-list draft whose text, folder and agent the launcher fills in: one-shot
+     * per navigation like [launcherProject]. Its id stays on [launcherDraftId] (a send replaces the
+     * draft session); only the prefill is consumed, so a rotation does not put the server's copy
+     * back over the user's edits (#89).
+     */
+    val launcherDraftSeed: String? get() = unconsumedLauncherRoute?.draftId?.takeIf { it.isNotBlank() }
+
+    private val unconsumedLauncherRoute: Route.NewSession?
+        get() = (currentRoute as? Route.NewSession)?.takeIf { it !== consumedLauncherRoute }
 
     // Referential: every navigation is a new instance even when it is structurally equal to the last.
     private var consumedLauncherRoute by mutableStateOf<Route?>(null, referentialEqualityPolicy())
 
-    /** The launcher applied [launcherProject]; don't hand it out again for this navigation. */
-    fun consumeLauncherProject() {
+    /** The launcher applied its route's one-shot seed ([launcherProject], [launcherDraftSeed]); don't hand it out again for this navigation. */
+    fun consumeLauncherSeeds() {
         (currentRoute as? Route.NewSession)?.let { consumedLauncherRoute = it }
     }
     /** The Usage card is showing (an anchored popover on a wide host). */
     val usageOpen: Boolean get() = currentRoute is Route.Usage
     val lspSettingsOpen: Boolean
         get() = (currentRoute as? Route.Settings)?.section == SettingsSection.EditorLsp
-    val personalAssistantsOpen: Boolean
-        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.PersonalAssistants
 
     /**
      * Settings rail section. When Settings is on the stack, reads/writes that route's section;
@@ -218,7 +229,7 @@ class ShellUiState {
             val i = backStack.indexOfLast { it is Route.Settings }
             if (i >= 0) backStack[i] = Route.Settings(value)
         }
-    private var lastSettingsSection by mutableStateOf(SettingsSection.Agents)
+    private var lastSettingsSection by mutableStateOf(SettingsSection.Providers)
 
     /**
      * Push [route]. [Route.Home] clears everything above it; any other route REPLACES whatever is
@@ -285,10 +296,9 @@ class ShellUiState {
         if (usageOpen) goBack()
     }
 
-    fun openSettings(section: SettingsSection = SettingsSection.Agents) =
+    fun openSettings(section: SettingsSection = SettingsSection.Providers) =
         navigate(Route.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
-    fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)
     fun openAppUpdate() = navigate(Route.AppUpdate)
 
     /**
@@ -393,9 +403,12 @@ class ShellUiState {
          * Android's holder: the shell survives a rotation AND process death.
          *
          * Only what the user would notice losing is saved — the back stack (as JSON, since every
-         * [Route] is `@Serializable`), the selection and the sidebar chrome. The one-shot headless
-         * hooks and the pane binds are deliberately not: they are consumed within a frame, or
-         * belong to a window that did not survive either.
+         * [Route] is `@Serializable`), the selection, the sidebar chrome, the collapsed project
+         * groups and whether the launcher already applied its route's one-shot seed. Those last two
+         * were left out once, and a rotation then expanded every group (the next toggle wrote that
+         * over the stored set) and put a "+" project or a reopened draft back over the user's own
+         * choice (#89). The one-shot headless hooks and the pane binds are deliberately not saved:
+         * they are consumed within a frame, or belong to a window that did not survive either.
          */
         val Saver: Saver<ShellUiState, Any> = listSaver(
             save = { s ->
@@ -407,6 +420,9 @@ class ShellUiState {
                     s.selectedArchivedWorkspaceId ?: "",
                     s.sidebarCollapsed,
                     s.sidebarWidth.value,
+                    routeJson.encodeToString(ListSerializer(String.serializer()), s.collapsedProjectPaths.toList()),
+                    // By position: the restored stack is made of new instances.
+                    s.backStack.indexOfFirst { it === s.consumedLauncherRoute },
                 )
             },
             restore = { parts ->
@@ -423,6 +439,11 @@ class ShellUiState {
                     selectedArchivedWorkspaceId = (parts.getOrNull(2) as? String)?.takeIf { it.isNotBlank() }
                     sidebarCollapsed = parts.getOrNull(3) as? Boolean ?: false
                     (parts.getOrNull(4) as? Float)?.dp?.let(::setSidebarWidth)
+                    (parts.getOrNull(5) as? String)?.let { raw ->
+                        runCatching { routeJson.decodeFromString(ListSerializer(String.serializer()), raw) }
+                            .getOrNull()?.let { collapsedProjectPaths = it.toSet() }
+                    }
+                    (parts.getOrNull(6) as? Int)?.let { consumedLauncherRoute = backStack.getOrNull(it) }
                 }
             },
         )

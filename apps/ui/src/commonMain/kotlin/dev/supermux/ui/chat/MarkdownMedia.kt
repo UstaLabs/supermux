@@ -13,6 +13,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.layout.ContentScale
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.hostPathFromFileUri
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.normalizeHostPath
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.Attachment
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.ui.MdBlock
@@ -43,27 +48,20 @@ private val schemeRegex = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
 fun resolveMarkdownMediaPath(url: String, baseDir: String?): String? {
     val u = url.trim()
     if (u.isEmpty() || u.startsWith("#")) return null
-    val raw = when {
-        u.startsWith("file://", ignoreCase = true) -> u.substring("file://".length)
-        schemeRegex.containsMatchIn(u) -> return null
-        else -> u
+    if (u.startsWith("file://", ignoreCase = true)) {
+        val file = "file://" + u.substring("file://".length).substringBefore('#').substringBefore('?')
+        return hostPathFromFileUri(file)?.let(::normalizeHostPath)
     }
-    val path = percentDecode(raw.substringBefore('#').substringBefore('?'))
+    // A Windows drive (`C:\proj\shot.png`) is a host path, not a `C:` URL.
+    if (!isWindowsHostPath(u) && schemeRegex.containsMatchIn(u)) return null
+    val path = percentDecode(u.substringBefore('#').substringBefore('?'))
     if (path.isEmpty()) return null
     val joined = when {
-        path.startsWith("/") -> path
-        baseDir.isNullOrEmpty() || !baseDir.startsWith("/") -> return null
-        else -> baseDir.trimEnd('/') + "/" + path
+        path.startsWith("/") || isWindowsHostPath(path) -> path
+        baseDir.isNullOrEmpty() || !(baseDir.startsWith("/") || isWindowsHostPath(baseDir)) -> return null
+        else -> hostJoin(baseDir, path)
     }
-    val out = ArrayList<String>()
-    for (seg in joined.split('/')) {
-        when (seg) {
-            "", "." -> Unit
-            ".." -> if (out.isNotEmpty()) out.removeAt(out.lastIndex)
-            else -> out.add(seg)
-        }
-    }
-    return "/" + out.joinToString("/")
+    return normalizeHostPath(joined)
 }
 
 private fun percentDecode(s: String): String {
@@ -84,7 +82,13 @@ private fun percentDecode(s: String): String {
     return bytes.toByteArray().decodeToString()
 }
 
-/** A host-file image or video at [absPath]; a failed read falls back to the failure link line. */
+/**
+ * A host-file image or video at [absPath]; a failed read falls back to the failure link line.
+ *
+ * In a chat row (a [LocalChatMediaEntry] under a [LocalChatMediaViewer]) a tap on the picture, or
+ * the clip's ⤢, opens the chat's viewer at it — the same set and viewer as the attachments. Outside
+ * one (the editor's markdown preview) the picture keeps its own lightbox.
+ */
 @Composable
 internal fun LocalMarkdownMedia(
     image: MdBlock.Image,
@@ -92,13 +96,17 @@ internal fun LocalMarkdownMedia(
     files: MarkdownFiles,
     onFailedClick: () -> Unit,
 ) {
-    val name = absPath.substringAfterLast('/')
+    val name = pathLeaf(absPath)
     val mime = LocalPlatform.current.files.probeMime(name)
+    val viewer = LocalChatMediaViewer.current
+    val viewerKey = LocalChatMediaEntry.current?.let { markdownMediaKey(it, absPath) }
+    val openInViewer: (() -> Boolean)? = if (viewer != null && viewerKey != null) ({ viewer.open(viewerKey) }) else null
     if (filePreviewKind(absPath) == FilePreviewKind.Video) {
         // The chat's inline player: it reads the bytes only once play is pressed.
         InlineVideo(
             Attachment(file_id = absPath, kind = "video", mime = mime, name = image.alt.ifEmpty { name }),
             media = AttachmentMedia.fromBytes { files.load(it).getOrNull() },
+            onOpenViewer = openInViewer,
         )
         return
     }
@@ -120,7 +128,7 @@ internal fun LocalMarkdownMedia(
                     width = decoded.width,
                     height = decoded.height,
                     tag = "md_image",
-                    onClick = { lightbox = true },
+                    onClick = { if (openInViewer?.invoke() != true) lightbox = true },
                 ) { mod ->
                     Image(
                         painter = decoded.painter,

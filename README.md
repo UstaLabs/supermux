@@ -20,6 +20,7 @@
 
 <p align="center">
   <a href="#download"><strong>Download</strong></a> ·
+  <a href="https://docs.supermux.dev"><strong>Docs</strong></a> ·
   <a href="#headless-linux-and-servers"><strong>Server install</strong></a> ·
   <a href="https://supermux.dev"><strong>Website</strong></a> ·
   <a href="./SETUP.md"><strong>Setup guide</strong></a>
@@ -92,7 +93,7 @@ The same workspace runs on desktop, tablet, and phone.
 | iPhone, iPad | [App Store](https://apps.apple.com/app/supermux/id6782643917) |
 | Android | [supermux-android.apk](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) |
 
-The first launch of a desktop app sets it up and shows a QR code. Scan it with the phone app.
+The first launch of a desktop app sets it up and shows a QR code. Scan it with the phone app. Step by step: the [install guide](https://docs.supermux.dev/getting-started/install/).
 
 ### Headless Linux and servers
 
@@ -100,7 +101,7 @@ The first launch of a desktop app sets it up and shows a QR code. Scan it with t
 curl -fsSL https://supermux.dev/install.sh | sh -s -- --native
 ```
 
-Installs `supermux` as a user service and prints a pairing QR. Docker and source installs are in the [setup guide](./SETUP.md).
+Installs `supermux` as a user service and prints a pairing QR. Docker and source installs are in the [docs](https://docs.supermux.dev/getting-started/server/) and the [setup guide](./SETUP.md).
 
 ## Agent support
 
@@ -128,6 +129,7 @@ No. The Windows app runs agents natively.
 
 ## Docs
 
+- [docs.supermux.dev](https://docs.supermux.dev): installing and using supermux, and building on `@supermux/core`
 - [Setup guide](./SETUP.md): Docker, source install, reverse proxies, configuration
 - [Security policy](./SECURITY.md)
 - [Telemetry](./TELEMETRY.md): every event supermux sends, and how to turn it off

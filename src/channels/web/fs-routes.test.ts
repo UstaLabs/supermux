@@ -7,7 +7,7 @@
 // credential, a forged cookie, and requests addressed to a proxied port (subdomain and
 // path mode, where the proxy's own auth or a public link applies) never reach the host fs.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync, realpathSync, existsSync } from "fs"
+import { mkdirSync, mkdtempSync, writeFileSync, realpathSync, existsSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { WebChannel, type WebChannelOpts } from "./index"
@@ -52,6 +52,23 @@ test("GET /fs/list returns a snapshot for an absolute path", async () => {
   const body: any = await r.json()
   expect(body).toMatchObject({ path: d, real: d })
   expect(body.entries.map((e: any) => e.name)).toEqual(["a.txt"])
+})
+
+// Card #75: a session born asleep has no folder until its first wake checks its worktree out.
+test("/fs/* waits for a folder the broker is making (folderReady) before it answers", async () => {
+  const d = tmp()
+  const later = join(d, "worktree")
+  const asked: string[] = []
+  const { base, auth } = await boot({
+    folderReady: async (path) => {
+      asked.push(path)
+      await new Promise((r) => setTimeout(r, 30))
+      if (path === later && !existsSync(later)) mkdirSync(later)
+    },
+  })
+  const r = await fetch(`${base}/fs/list?path=${encodeURIComponent(later)}`, { headers: auth })
+  expect(r.status).toBe(200)
+  expect(asked).toEqual([later])
 })
 
 test("/fs/* maps errors to status codes and requires a token", async () => {

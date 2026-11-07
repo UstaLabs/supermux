@@ -6,7 +6,7 @@
 // never serves a previous version's files. In source mode callers get the
 // real repo paths directly (no copy) — the exported helpers branch on
 // IS_COMPILED for exactly that.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs"
 import { join, dirname, resolve as resolvePath } from "path"
 import { BUILD_VERSION, IS_COMPILED } from "../shared/build-info"
 
@@ -14,10 +14,10 @@ import { BUILD_VERSION, IS_COMPILED } from "../shared/build-info"
 import ptyHelperEmbedded from "./terminal/pty-helper" with { type: "file" }
 import curatorPromptEmbedded from "../../prompts/knowledge-curator.md" with { type: "file" }
 import environmentMdEmbedded from "../../prompts/environment.md" with { type: "file" }
-import frpcEmbedded from "./relay/frpc-embedded" with { type: "file" }
 import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
 import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
 import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest" with { type: "file" }
+import { files } from "@supermux/platform"
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
@@ -36,7 +36,7 @@ export function materializeAsset(opts: { stateDir: string; name: string; sourceP
   try {
     writeFileSync(tmp, readFileSync(opts.sourcePath))
     if (opts.executable) chmodSync(tmp, 0o755)
-    renameSync(tmp, dest)
+    files.replaceSync(tmp, dest)
   } catch (err) {
     try { unlinkSync(tmp) } catch {}
     throw err
@@ -88,22 +88,6 @@ export function zmxBundleDir(stateDir: string): string {
   materializeAsset({ stateDir, name: "zmx/bin/mux-zmx-helper", sourcePath: zmxHelperEmbedded, executable: true })
   materializeAsset({ stateDir, name: "zmx/manifest.json", sourcePath: zmxManifestEmbedded })
   return dir
-}
-
-/** Resolve the relay helper. Desktop packages provide frpc on PATH; standalone
- * compiled releases fall back to their verified embedded copy. */
-export function frpcPath(stateDir: string, platform: NodeJS.Platform = process.platform): string {
-  const configured = process.env.MUX_FRPC_PATH?.trim()
-  if (configured) return configured
-  const onPath = Bun.which("frpc")
-  if (onPath) return onPath
-  if (!IS_COMPILED) return "frpc"
-  return materializeAsset({ stateDir, name: frpcAssetName(platform), sourcePath: frpcEmbedded, executable: true })
-}
-
-/** The materialized relay helper's file name: Windows only runs a file with an executable extension. */
-export function frpcAssetName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "frpc.exe" : "frpc"
 }
 
 // knowledge-curator.md: the curator hands this path to a spawned claude session.

@@ -56,4 +56,29 @@ class WorkdirPathTest {
         assertEquals("/tmp/b", toEditorPath("/tmp/a/../b", workdir, home))
         assertEquals(true, isAbsoluteEditorPath(toEditorPath("/etc/hosts", workdir, home)!!))
     }
+
+    private val winWorkdir = "C:\\Users\\me\\proj"
+    private val winHome = "C:\\Users\\me"
+
+    @Test fun windows_host_relative_and_absolute_paths() {
+        assertEquals("src/Main.kt", toEditorPath("src/Main.kt", winWorkdir, winHome))
+        assertEquals("src/Main.kt", toEditorPath("src\\Main.kt", winWorkdir, winHome))
+        assertEquals("src/Main.kt", toEditorPath("C:\\Users\\me\\proj\\src\\Main.kt:12", winWorkdir, winHome))
+        assertEquals("src/Main.kt", toEditorPath("c:/users/me/proj/src/Main.kt", winWorkdir, winHome))
+        assertNull(toEditorPath(winWorkdir, winWorkdir, winHome))
+    }
+
+    @Test fun windows_host_paths_outside_the_workdir_stay_absolute() {
+        assertEquals("C:\\Users\\me\\other\\x.kt", toEditorPath("..\\other\\x.kt", winWorkdir, winHome))
+        assertEquals("C:\\Users\\me\\.gitconfig", toEditorPath("~/.gitconfig", winWorkdir, winHome))
+        assertEquals("D:\\x\\a.kt", toEditorPath("D:\\x\\a.kt", winWorkdir, winHome))
+        assertEquals(true, isAbsoluteEditorPath("D:\\x\\a.kt"))
+        assertEquals(false, isAbsoluteEditorPath("src/a.kt"))
+    }
+
+    @Test fun windows_host_relative_form() {
+        assertEquals("src/a.ts", toWorkdirRelativePath("C:\\Users\\me\\proj\\src\\a.ts:10-20", winWorkdir, winHome))
+        assertEquals("", toWorkdirRelativePath("c:\\users\\me\\proj\\", winWorkdir, winHome))
+        assertNull(toWorkdirRelativePath("D:\\elsewhere\\a.ts", winWorkdir, winHome))
+    }
 }

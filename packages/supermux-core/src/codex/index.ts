@@ -13,6 +13,7 @@ import type { ContextChange, RuntimeContextControl } from '../context/types.js'
 import { REASON, SUBAGENT_STATE_METHOD, shortReason } from '../subagent-actions.js'
 import { LIBRARY_VERSION } from '../version.js'
 import { detachedKeeperHooks } from '../keeper/client.js'
+import { msSince, perfMark } from '../perf-marks.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -616,6 +617,11 @@ export function codex(options: CodexOptions): AgentDriver {
       context.onUpdate({ protocol: 'native', value: { method, params } })
     }
     function dispatchNotify(message: any) {
+      // After the first prompt: its first notification of any kind, then its first text (three marks in all).
+      if (firstSeen.size < 3 && firstSeen.has('prompt_written') && typeof message?.method === 'string') {
+        if (!firstSeen.has('first_notify')) { firstSeen.add('first_notify'); perfMark(context.sessionId, 'codex.first_notify', { method: message.method }) }
+        if (message.method === 'item/agentMessage/delta') { firstSeen.add('first_text'); perfMark(context.sessionId, 'codex.first_text') }
+      }
       const params = message?.params
       const threadId = params?.threadId
       if (agentSessionId && typeof threadId === 'string' && threadId !== agentSessionId) {
@@ -746,14 +752,21 @@ export function codex(options: CodexOptions): AgentDriver {
     const sessionContext = context.sessionContext ? codexContextLaunch(context.sessionContext) : undefined
     // The session's policy is per process (C3): child threads spawned by the collab tools
     // (spawnAgent) take their sandbox and approval from the app-server's loaded config, and a `-c`
-    // override is that config for this process only. Nothing is written into CODEX_HOME, which
+    // override is that config for this process only. The policy is not written into CODEX_HOME, which
     // an account can share between sessions (verified on 0.159.2: scripts/codex-policy-probe.ts).
+    // Per-session files that never decide policy do go there, named by session id: see
+    // CodexEnvironmentSpec.readableFiles (a rules file that lets a shell read the session's own inbox).
     // A live setPermissions reaches this thread from its next turn; child threads keep the launch
     // policy until the next launch.
     const baseArgs = [...launchArgs(options.args, context.profile), ...codexPolicyArgs(livePermissions)]
+    const catalogStarted = performance.now()
     const launch = await multiAgentV1Launch(options.command, sessionContext?.args.length ? [...baseArgs, ...sessionContext.args] : baseArgs, env, context.cwd, setupTimeoutMs)
+    perfMark(context.sessionId, 'codex.catalog', { ms: msSince(catalogStarted) })
     const args = launch.args
     let catalogWarning = launch.warning
+    // Startup marks (perf-marks.ts): the first notifications of each kind after the first prompt.
+    const firstSeen = new Set<string>()
+    const transportStarted = performance.now()
     const rpc = await transport({ command: options.command, args, env, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper, fingerprint: context.sessionContext?.fingerprint ?? EMPTY_CONTEXT_FINGERPRINT }, dispatchNotify, fail)
     const close = async (closeOptions: CloseOptions) => {
       const mode = requireCloseMode(closeOptions)
@@ -803,14 +816,19 @@ export function codex(options: CodexOptions): AgentDriver {
         if (fatal) throw fatal
         ready = true
       } else {
+      perfMark(context.sessionId, 'codex.transport', { ms: msSince(transportStarted) })
+      const initializeStarted = performance.now()
       rpc.start()
       await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: LIBRARY_VERSION }, capabilities: { experimentalApi: true } }), failure.promise])
+      perfMark(context.sessionId, 'codex.initialized', { ms: msSince(initializeStarted) })
+      const threadStarted = performance.now()
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
       if (sessionContext?.extraRoots) await Promise.race([rpc.request('skills/extraRoots/set', { extraRoots: sessionContext.extraRoots }), failure.promise])
       const developerInstructions = !context.forkFrom && !context.resumeId ? sessionContext?.developerInstructions : undefined
       const result = await Promise.race([rpc.request(context.forkFrom ? 'thread/fork' : context.resumeId ? 'thread/resume' : 'thread/start', { ...(context.forkFrom ? {threadId: context.forkFrom.agentSessionId, ...(context.forkFrom.at ? {lastTurnId: context.forkFrom.at.nativeTurnId} : {})} : context.resumeId ? { threadId: context.resumeId } : {}), cwd: context.cwd, approvalPolicy: livePermissions.approvalPolicy, sandbox: livePermissions.sandbox, ...(model ? { model } : {}), ...(developerInstructions !== undefined ? { developerInstructions } : {}) }), failure.promise])
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || (context.resumeId && result.thread.id !== context.resumeId)) throw new Error('Codex thread identity mismatch')
+      perfMark(context.sessionId, 'codex.thread', { ms: msSince(threadStarted) })
       captureNativeInitial(result)
       agentSessionId = result.thread.id
       rpc.setMeta({ agentSessionId: result.thread.id, permissions: livePermissions })
@@ -1003,7 +1021,10 @@ export function codex(options: CodexOptions): AgentDriver {
         signal.addEventListener('abort', abort, { once: true })
         try {
           const params = turnOverrides()
+          const promptStarted = performance.now()
+          if (!firstSeen.has('prompt_written')) { firstSeen.add('prompt_written'); perfMark(context.sessionId, 'codex.prompt_written') }
           const result = await rpc.request('turn/start', { threadId: agentSessionId, input: converted, ...params })
+          perfMark(context.sessionId, 'codex.turn_started', { ms: msSince(promptStarted) })
           if ('serviceTier' in params) serviceTierSent = params.serviceTier != null
           if (typeof result?.turn?.id !== 'string' || !result.turn.id) throw new Error('Codex turn identity missing')
           const turnId: string = result.turn.id

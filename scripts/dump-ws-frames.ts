@@ -48,6 +48,28 @@ const frames: Record<string, unknown> = {
       { id: "cmd-ctrl-1", family: "control", name: "mute", sigil: "/", description: "Mute this session", action: { kind: "mute", muted: false } },
     ],
   },
+  // Card #76: live text, as LiveReplies (src/channels/web/live-replies.ts) writes it to apps that sent
+  // subscribe.streams. `at` is the offset of `text` in the stream; `kind` is only present for thinking.
+  reply_stream: { type: "reply_stream", session: "550e8400-e29b-41d4-a716-446655440000", stream: "k3v9q2a8d1f0", at: 0, text: "Streaming replies show " },
+  reply_stream_thinking: { type: "reply_stream", session: "550e8400-e29b-41d4-a716-446655440000", stream: "t7c1aa04be92", kind: "thinking", at: 12, text: " the table." },
+  reply_stream_end: { type: "reply_stream_end", session: "550e8400-e29b-41d4-a716-446655440000", stream: "k3v9q2a8d1f0" },
+  // The stored reply / thinking that takes the live text's place carries the same stream id.
+  message_append_live: {
+    type: "message_append",
+    session: "550e8400-e29b-41d4-a716-446655440000",
+    entry: { id: "out:web:9f1c", ts: "2026-11-05T09:30:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "Streaming replies show the text as it is written.", stream: "k3v9q2a8d1f0" },
+  },
+  activity_append_live: {
+    type: "activity_append",
+    session: "550e8400-e29b-41d4-a716-446655440000",
+    event: { ts: "2026-11-05T09:29:58.000Z", kind: "reasoning", title: "Thinking", detail: "Planning the table.", stream: "t7c1aa04be92", seq: 7 },
+  },
+  // On (re)subscribe with `streams`, the open streams of the chats in fullLogs.
+  snapshot_live: {
+    type: "snapshot",
+    sessions: [],
+    streams: { "550e8400-e29b-41d4-a716-446655440000": [{ stream: "k3v9q2a8d1f0", kind: "reply", text: "Streaming replies show " }] },
+  },
 }
 for (const [name, f] of Object.entries(frames)) writeFileSync(`${dir}/${name}.json`, JSON.stringify(f, null, 2))
 console.log(`wrote ${Object.keys(frames).length} fixtures to ${dir}`)

@@ -1,0 +1,133 @@
+---
+title: Core
+description: supermux(), createCore() and everything on a Core.
+---
+
+## supermux()
+
+```ts
+function supermux(options: SupermuxOptions): Core
+```
+
+Builds a core with defaults for everything you leave out.
+
+<TypeTable
+  type={{
+    stateDirectory: { type: 'string', description: 'Where records, keepers and accounts live. Keep it outside every folder an agent can write. A relative path is resolved against the current directory.', required: true },
+    agents: { type: '{ claude?, codex?, grok?, opencode?, cursor?, antigravity? }', description: 'The agents to turn on, each with its options. An agent left out isn\'t available.', required: true },
+    limits: { type: 'Partial<CoreLimits>', description: 'Override any of the core limits.' },
+    accounts: { type: 'AccountsOptions', description: 'Accounts, including autoSwitch. See Accounts.' },
+    profiles: { type: 'Record<string, AuthProfile>', description: 'Named environment and argument sets for sessions.' },
+    mcpServers: { type: 'HostMcpServer[]', description: 'Your own tools, for every session.' },
+    context: { type: 'SessionContext', description: 'Instructions, skills, plugins and MCP servers for every session.' },
+    onObserverError: { type: '(error: Error) => void', description: 'Called when an observer throws.' },
+    refuseWorkdirsContainingState: { type: 'boolean', description: 'Refuse a cwd that contains the state directory, or sits inside it.', default: 'true' },
+  }}
+/>
+
+Each agent takes its own options, like `model`, `effort` or `permissionMode`. See [Drivers](/core/api/drivers). An unknown option throws a `TypeError` that names it.
+
+## defaults
+
+```ts
+import { defaults } from "@supermux/core"
+console.log(defaults)
+```
+
+A frozen object with every default `supermux()` uses. The core limits default to `interruptTimeoutMs: 10_000`, `maxPending: 128` and `outstandingActivity: 256`.
+
+## createCore()
+
+```ts
+function createCore(options: CoreOptions): Core
+```
+
+The strict form. Nothing has a default.
+
+```ts
+type CoreOptions = {
+  stateDirectory: string
+  agents: AgentDriver[]
+  limits: { interruptTimeoutMs: number; maxPending: number; outstandingActivity: number }
+  profiles?: Record<string, AuthProfile>
+  accounts?: AccountsOptions
+  onObserverError?: (error: Error) => void
+  context?: SessionContext
+  contextPolicy?: ContextPolicy
+  mcpServers?: HostMcpServer[]
+  refuseWorkdirsContainingState?: boolean
+}
+```
+
+The state directory is locked on the first operation, not when the core is built. A second process on the same directory gets `state_locked`.
+
+## core.sessions
+
+| Method | What it does |
+|---|---|
+| `create(options: CreateOptions): Promise<Session>` | Start a new session. |
+| `resume(id: string, options?: ResumeOptions): Promise<Session>` | Get a session back: open, re-attached or relaunched. See [Resuming](/core/guides/resuming). |
+| `live(id: string): Session \| undefined` | The open `Session`, if there is one. Starts nothing. |
+| `get(id: string): Promise<SessionRecord \| undefined>` | A session's record. |
+| `list(filter?: { agent?: string }): Promise<SessionRecord[]>` | Every record. |
+| `adopt(options: AdoptOptions): Promise<SessionRecord>` | Register an existing conversation without starting it. |
+| `close(id: string, options: { mode: "shutdown" \| "detach" }): Promise<void>` | Close a session. `shutdown` also stops a detached agent. |
+| `forget(id: string): Promise<void>` | Delete the record and keeper folder. The agent must be stopped. |
+| `reopening(id: string): boolean` | Whether a resume is in progress. |
+| `updateContext(id, patch, options?)` | Change a session's skills, plugins or MCP servers. |
+
+```ts
+type CreateOptions = {
+  id: string                      // yours; letters, digits, _ and -; must be new
+  agent: string                   // a key from agents
+  cwd: string                     // an existing absolute folder
+  account?: string
+  authProfile?: string            // not together with account
+  configuration?: { model?: string; reasoningEffort?: string; serviceTier?: string }
+  permissions?: PermissionsSpec
+  context?: SessionContext
+  contextPolicy?: ContextPolicy
+}
+
+type ResumeOptions = {
+  configuration?: SessionConfiguration
+  account?: string
+  permissions?: PermissionsSpec
+  context?: SessionContextUpdate
+  adoptInstructions?: string | string[]
+}
+```
+
+`configuration` works on agents that support configure: Codex, Grok Build and Antigravity. Elsewhere it fails with `unsupported_operation`; set `model` per agent instead.
+
+## core.accounts
+
+| Method | What it does |
+|---|---|
+| `list(agent?: string): Promise<Account[]>` | Accounts, including each agent's system account. |
+| `get(id: string): Promise<Account \| undefined>` | One account. |
+| `add(options: AddAccountOptions): Promise<Account>` | Add an account from a key or token. |
+| `login(options: LoginOptions): LoginHandle` | Start a guided sign-in. Returns right away. |
+| `remove(id: string, options?: { deleteHome?: boolean }): Promise<void>` | Remove an account. |
+| `system(agent: string): Promise<Account>` | The agent's system account. |
+| `home(id: string): Promise<string>` | The account's home folder. |
+| `pick(agent: string, exclude?: string[]): Promise<Account \| undefined>` | The account with the most room left. |
+| `usage(id: string): UsageWindow[] \| undefined` | Its usage windows. |
+| `unavailable(id: string): AccountUnavailable \| undefined` | Why it was refused, if it was. |
+| `willSwitch(sessionId: string): Promise<boolean>` | Whether a switch is queued for the session. |
+
+## core.mcp
+
+`register(server)`, `unregister(name)`, `get(name)`, `list()` and `socket()` manage your own [MCP servers](/core/api/mcp) after the core is built.
+
+## core.auth
+
+`methods({ agent, profile? })` and `login({ agent, profile?, methodId })` drive an ACP agent's own sign-in methods (Grok Build, OpenCode, Cursor). Other agents fail with `unsupported_operation`.
+
+## Other members
+
+| Member | What it does |
+|---|---|
+| `subscribe(observer: (event: CoreEvent) => void): () => void` | Get every event. Returns a function that unsubscribes. See [Events](/core/api/events). |
+| `capabilities(agent: string): AgentCapabilities` | What session context the agent supports, and whether tool changes apply live. |
+| `close(options: { agents: "shutdown" \| "detach" }): Promise<void>` | Close the core. `detach` leaves the agents running behind their keepers. |

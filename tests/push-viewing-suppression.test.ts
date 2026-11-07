@@ -23,7 +23,7 @@ const fire = (vt: ViewingTracker, sent: string[], devices: string[], isMuted = (
     sessionId: "S",
     isMuted,
     devices: () => devices,
-    anyPresent: (sid) => vt.isAnyPresentFor(sid),
+    presentOn: (sid) => vt.presentDevicesFor(sid),
   })
 
 test("GLOBAL suppress: if ANY device is present for the session, NO device is notified", async () => {
@@ -35,12 +35,13 @@ test("GLOBAL suppress: if ANY device is present for the session, NO device is no
   expect(sent).toEqual([]) // user is looking at it on the phone → no device buzzes
 })
 
-test("GLOBAL suppress also triggers when any device is on the chat list", async () => {
+// Card #86 part 2: a device sitting on the chat list reads no chat, so it mutes nothing.
+test("a device on the chat list suppresses nothing", async () => {
   const vt = new ViewingTracker()
   vt.update("tablet", { session: null, visible: true }) // on the list
   const sent: string[] = []
   await fire(vt, sent, ["phone", "tablet"])
-  expect(sent).toEqual([])
+  expect(sent.sort()).toEqual(["phone", "tablet"])
 })
 
 test("no device present (or only viewing a DIFFERENT session) → push to ALL devices", async () => {
@@ -68,7 +69,7 @@ test("non-web chat_id is ignored (telegram path untouched)", async () => {
     sessionId: "S",
     isMuted: () => false,
     devices: () => ["a"],
-    anyPresent: () => false,
+    presentOn: () => [],
   })
   expect(sent).toEqual([])
 })

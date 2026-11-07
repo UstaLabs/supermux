@@ -120,32 +120,14 @@ class WorkspaceUiStateTest {
         assertTrue(ui.overlayOpen)
     }
 
-    @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
-        val ui = ShellUiState().apply {
-            openLauncher()
-            navigate(Route.Archived)
-            openUsage()
-            openLspSettings()
-        }
-        ui.openPersonalAssistants()
-        assertTrue(ui.personalAssistantsOpen)
-        assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.PersonalAssistants, ui.settingsSection)
-        assertFalse(ui.launcherOpen)
-        assertFalse(ui.archivedOpen)
-        assertFalse(ui.usageOpen)
-        assertFalse(ui.lspSettingsOpen)
-        assertTrue(ui.overlayOpen)
-    }
-
-    @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
+    @Test fun openSettingsClosesEveryOtherOverlay() {
         val ui = ShellUiState().apply {
             openUsage()
             openLspSettings()
         }
-        ui.openSettings(SettingsSection.Agents)
+        ui.openSettings(SettingsSection.Providers)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
+        assertEquals(SettingsSection.Providers, ui.settingsSection)
         assertFalse(ui.usageOpen)
         assertFalse(ui.lspSettingsOpen)
         assertTrue(ui.overlayOpen)
@@ -203,10 +185,10 @@ class WorkspaceUiStateTest {
     @Test fun navigateIsExclusiveSingleOverlay() {
         val ui = ShellUiState()
         ui.navigate(Route.Archived)
-        ui.navigate(Route.Settings(SettingsSection.Agents))
+        ui.navigate(Route.Settings(SettingsSection.Providers))
         // Exclusive policy: stack is [Home, Settings], not [Home, Archived, Settings]
         assertEquals(
-            listOf(Route.Home, Route.Settings(SettingsSection.Agents)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Providers)),
             ui.backStack.toList(),
         )
         assertFalse(ui.archivedOpen)
@@ -260,6 +242,33 @@ class WorkspaceUiStateTest {
         assertEquals(400.dp, restored.sidebarWidth)
     }
 
+    // Card #89: Android restores the shell from this Saver after every rotation and fold. The
+    // collapsed groups were left out, so every group came back open, and the next toggle wrote
+    // that set over the stored one.
+    @Test fun theSaverKeepsTheCollapsedProjectGroups() {
+        val ui = ShellUiState().apply { collapsedProjectPaths = setOf("/a", "/b") }
+        val restored = ShellUiState.Saver.restore(with(ShellUiState.Saver) { TestSaverScope.save(ui) }!!)!!
+        assertEquals(setOf("/a", "/b"), restored.collapsedProjectPaths)
+    }
+
+    // Card #89: the sidebar "+" preselect is one-shot per navigation. A rotation handed it out
+    // again, over the project the user had switched to since.
+    @Test fun aConsumedLauncherProjectStaysConsumedThroughTheSaver() {
+        val ui = ShellUiState().apply {
+            openLauncherInProject("h1", "p1")
+            consumeLauncherSeeds()
+        }
+        val restored = ShellUiState.Saver.restore(with(ShellUiState.Saver) { TestSaverScope.save(ui) }!!)!!
+        assertEquals(Route.NewSession(projectHostId = "h1", projectId = "p1"), restored.currentRoute)
+        assertNull(restored.launcherProject)
+    }
+
+    @Test fun anUnconsumedLauncherProjectIsStillHandedOutAfterTheSaver() {
+        val ui = ShellUiState().apply { openLauncherInProject("h1", "p1") }
+        val restored = ShellUiState.Saver.restore(with(ShellUiState.Saver) { TestSaverScope.save(ui) }!!)!!
+        assertEquals("h1" to "p1", restored.launcherProject)
+    }
+
     @Test
     fun navigating_to_an_android_only_route_fails_at_the_call_site() {
         // It no longer fails: cluster G8 made ONE root render every member of the union, so the
@@ -285,7 +294,7 @@ class WorkspaceUiStateTest {
         val ui = ShellUiState()
         ui.openLauncherInProject("h1", "p")
         kotlin.test.assertEquals("h1" to "p", ui.launcherProject)
-        ui.consumeLauncherProject()
+        ui.consumeLauncherSeeds()
         kotlin.test.assertNull(ui.launcherProject)
         kotlin.test.assertTrue(ui.launcherOpen)
         ui.openLauncherInProject("h1", "p")

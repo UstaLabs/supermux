@@ -34,3 +34,110 @@ test("newestTs is scoped per session", () => {
   store.append("s2", { id: "m2", ts: "2026-06-13T11:00:00.000Z", ...base })
   expect(store.newestTs("s1")).toBe("2026-06-13T10:00:00.000Z")
 })
+
+test("lastReplyAt: the time of the newest non-empty, non-error reply", () => {
+  const store = setup(["s1"])
+  expect(store.lastReplyAt("s1")).toBeUndefined()
+  store.append("s1", { id: "r1", ts: "2026-10-30T10:00:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "done" })
+  store.append("s1", { id: "r2", ts: "2026-10-30T10:01:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "  " })
+  store.append("s1", { id: "m1", ts: "2026-10-30T10:02:00.000Z", ...base })
+  expect(store.lastReplyAt("s1")).toBe("2026-10-30T10:00:00.000Z")
+})
+
+test("lastUserInbound: the newest message the user sent (web, telegram), not an inbox message or a reply", () => {
+  const store = setup(["s1"])
+  expect(store.lastUserInbound("s1")).toBeUndefined()
+  store.append("s1", { id: "m1", ts: "2026-10-30T10:00:00.000Z", ...base })
+  store.append("s1", { id: "m2", ts: "2026-10-30T10:01:00.000Z", direction: "inbound", channel: "telegram", chat_id: "42" })
+  store.append("s1", { id: "m3", ts: "2026-10-30T10:02:00.000Z", direction: "inbound", channel: "inbox", chat_id: "" })
+  store.append("s1", { id: "m4", ts: "2026-10-30T10:03:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "ok" })
+  expect(store.lastUserInbound("s1")).toBe("2026-10-30T10:01:00.000Z")
+})
+
+test("from_session_id round-trips (an inbox message's sender)", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-28T00:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "hi", from_session_id: "s0",
+  })
+  expect(store.get("s1")[0]?.from_session_id).toBe("s0")
+})
+
+test("from_session_name and from_agent round-trip (who sent an inbox message, as delivered); a row without them has none", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-30T10:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "hi", from_session_id: "s0", from_session_name: "personal-4", from_agent: "codex",
+  })
+  store.append("s1", { id: "m2", ts: "2026-10-30T10:01:00.000Z", ...base })
+  const [inbox, plain] = store.get("s1")
+  expect(inbox).toMatchObject({ from_session_id: "s0", from_session_name: "personal-4", from_agent: "codex" })
+  expect(plain?.from_session_name).toBeUndefined()
+  expect(plain?.from_agent).toBeUndefined()
+})
+
+test("council_id, council_round and council_letter round-trip (a council's forward to its caller); a row without them has none", () => {
+  const store = setup(["s1"])
+  store.append("s1", {
+    id: "in:inbox:m_1", ts: "2026-10-29T10:00:00.000Z", direction: "inbound", channel: "inbox",
+    chat_id: "", message_id: "m_1", text: "report", council_id: "c1", council_round: 2, council_letter: "B",
+  })
+  store.append("s1", { id: "m2", ts: "2026-10-29T10:01:00.000Z", ...base })
+  const [tagged, plain] = store.get("s1")
+  expect(tagged).toMatchObject({ council_id: "c1", council_round: 2, council_letter: "B" })
+  expect(plain?.council_id).toBeUndefined()
+  expect(plain?.council_round).toBeUndefined()
+  expect(plain?.council_letter).toBeUndefined()
+})
+
+test("lastReply is the newest non-empty, non-error assistant reply", () => {
+  const sid = "s1"
+  const store = setup([sid])
+  expect(store.lastReply(sid)).toBeUndefined()
+  store.append(sid, { id: "o1", ts: "2026-10-29T10:00:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "first" } as never)
+  store.append(sid, { id: "i1", ts: "2026-10-29T10:01:00.000Z", direction: "inbound", channel: "web", chat_id: "web", text: "a question" } as never)
+  store.append(sid, { id: "o2", ts: "2026-10-29T10:02:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "second" } as never)
+  store.append(sid, { id: "o3", ts: "2026-10-29T10:03:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "boom", error: true } as never)
+  store.append(sid, { id: "o4", ts: "2026-10-29T10:04:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "  " } as never)
+  expect(store.lastReply(sid)).toBe("second")
+})
+
+test("recentUserTexts: the user's own words across sessions, newest first, without broker-made rows", () => {
+  const store = setup(["s1", "s2"])
+  store.append("s1", { id: "a", ts: "2026-11-01T10:00:00.000Z", ...base, message_id: "1", text: "selam" })
+  store.append("s2", { id: "b", ts: "2026-11-01T10:01:00.000Z", ...base, channel: "telegram", chat_id: "telegram:1", message_id: "2", text: "nasılsın" })
+  store.append("s1", { id: "c", ts: "2026-11-01T10:02:00.000Z", ...base, message_id: "broker-9", text: "broker note" })
+  store.append("s1", { id: "d", ts: "2026-11-01T10:03:00.000Z", ...base, message_id: "review-9", text: "📝 review" })
+  store.append("s1", { id: "e", ts: "2026-11-01T10:04:00.000Z", direction: "outbound", channel: "web", chat_id: "web", op: "reply", text: "agent reply" })
+  store.append("s1", { id: "f", ts: "2026-11-01T10:05:00.000Z", ...base, message_id: "3", text: "   " })
+  expect(store.recentUserTexts(5)).toEqual(["nasılsın", "selam"])
+  expect(store.recentUserTexts(1)).toEqual(["nasılsın"])
+})
+
+// ── Media fields on attachments (migration 045) ─────────────────────────────────────────────────
+
+test("an appended message's attachments carry their file's size, length and poster; the poster is kept from GC", async () => {
+  const { mkdtempSync, readFileSync } = await import("fs")
+  const { join } = await import("path")
+  const { tmpdir } = await import("os")
+  const { FileStore } = await import("../files/store")
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  new SessionStore(db).register({ id: "s1", name: "s1", workdir: "/wt", pid: 1, agent: "claude" })
+  const files = new FileStore(db, mkdtempSync(join(tmpdir(), "mux-msg-media-")))
+  const fix = (n: string) => readFileSync(join(import.meta.dir, "../../../tests/fixtures/media", n))
+  const clip = await files.put({ kind: "video", mime: "video/mp4", name: "c.mp4", origin: "web-upload", device: "phone", bytes: fix("mp4-faststart-64x48.mp4") })
+  const poster = await files.put({ kind: "photo", mime: "image/jpeg", name: "p.jpg", origin: "web-upload", device: "phone", bytes: fix("jpeg-64x48.jpg") })
+  expect(await files.setPoster(clip.file_id, poster.file_id, "phone")).toBe(true)
+  const store = new MessageStore(db, files)
+  const entry = { id: "m1", ts: "2026-11-02T10:00:00.000Z", ...base, attachments: [{ file_id: clip.file_id, kind: "video", mime: "video/mp4", name: "c.mp4" }] }
+  store.append("s1", entry)
+  const [att] = store.get("s1")[0]!.attachments!
+  expect(att).toMatchObject({ file_id: clip.file_id, width: 64, height: 48, poster_file_id: poster.file_id })
+  // The same object the channels send on (WebChannel.send gets `entry` right after append).
+  expect(entry.attachments[0]).toMatchObject({ width: 64, poster_file_id: poster.file_id })
+  const refs = (id: string) => (db.prepare("SELECT ref_count FROM attachments WHERE file_id = ?").get(id) as { ref_count: number }).ref_count
+  expect(refs(poster.file_id)).toBe(1)
+  store.removeSession("s1")
+  expect(refs(poster.file_id)).toBe(0)
+})

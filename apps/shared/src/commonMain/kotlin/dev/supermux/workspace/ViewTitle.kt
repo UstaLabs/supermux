@@ -1,5 +1,6 @@
 package dev.supermux.workspace
 
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
@@ -20,7 +21,7 @@ fun viewTitle(view: ViewDto, sessionName: (String) -> String? = { null }): Strin
         // The three editor panes name themselves differently: a file tab is its FILENAME, which is
         // the whole point of the tab row being one row (spec §7.2).
         "editor" -> when (view.stateString("mode")) {
-            "file" -> view.stateString("path")?.substringAfterLast('/')?.ifBlank { null } ?: "File"
+            "file" -> view.stateString("path")?.let(::pathLeaf)?.ifBlank { null } ?: "File"
             "diff" -> "Changes"
             // "Files", not "Explorer": the tab says what it holds, the way Changes does.
             else -> "Files"

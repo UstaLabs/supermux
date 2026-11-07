@@ -33,6 +33,10 @@ data class SessionInfo(
     val permissionMode: String? = null,
     val repo_root: String? = null,
     val role: String? = null,
+    /** The default Agent (where messages without a target land). */
+    val isDefault: Boolean? = null,
+    /** An Agent's avatar content hash; fetch GET /agents/<id>/avatar when it changes. Null = none. */
+    val avatar: String? = null,
     /** Worktree session's pinned branch (present only for worktree-backed sessions). */
     val session_branch: String? = null,
     /** At-a-glance worktree-vs-base (or branch-vs-remote) divergence; null when not a git repo. */
@@ -99,6 +103,20 @@ data class LogEntry(
      * text): which subagent it went to. Absent on every other entry and on an older broker.
      */
     val subagent_id: String? = null,
+    /** An inbox message (channel "inbox"): the sending session's id, or "supermux", or a council's id. */
+    val from_session_id: String? = null,
+    /** The sender's display name when it was delivered (a session's name, "supermux", a council's name). */
+    val from_session_name: String? = null,
+    /** The sending session's agent kind ("claude", "codex", …), when the sender is a session. */
+    val from_agent: String? = null,
+    /** A council's forwarded report: which council, round and member letter. */
+    val council_id: String? = null,
+    val council_round: Int? = null,
+    val council_letter: String? = null,
+    /** The agent's turn ended in this error (the broker's error reply). */
+    val error: Boolean = false,
+    /** Card #76: the live stream this stored reply replaces (only on the live `message_append`; never stored). */
+    val stream: String? = null,
 )
 
 @Serializable
@@ -108,6 +126,16 @@ data class Attachment(
     val mime: String? = null,
     val size: Long? = null,
     val name: String? = null,
+    /**
+     * The DISPLAYED size (EXIF orientation and a clip's rotation applied) and a clip's length,
+     * read by the broker from the file's own header — known before anything is downloaded. Absent
+     * for a file that is not media, and from a broker older than these fields.
+     */
+    val width: Int? = null,
+    val height: Int? = null,
+    val duration_ms: Long? = null,
+    /** The picture the sending phone made of a clip: another broker file, fetched like any picture. */
+    val poster_file_id: String? = null,
 )
 
 /** Composer text + attachments saved on a draft session. */
@@ -167,6 +195,8 @@ data class ActivityEvent(
     val direction: String? = null,
     /** `subagent_message` rows with direction "to": "user" | "parent". */
     val sender: String? = null,
+    /** Card #76: on a reasoning row, the live thinking stream it replaces. */
+    val stream: String? = null,
 )
 
 /** A subagent's own counters, as far as the agent reports them (or the broker derives them). */
@@ -234,6 +264,68 @@ data class Subagent(
     val label: String get() = description?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: id.take(8)
 }
 
+/**
+ * A council as its caller sees it (broker `CouncilView`, spec 2026-10-28 §5): snapshot `councils`
+ * (caller session id → its councils) and the `council_update` frame, which carries the FULL view
+ * (upsert by [id]). [members]' statuses are for the current [round]; [rounds] hold every report.
+ */
+@Serializable
+data class CouncilView(
+    val id: String,
+    val name: String = "",
+    val question: String = "",
+    val round: Int = 1,
+    /** The current round's focus (round 1 has none). */
+    val focus: String? = null,
+    /** "open" or "ended" (its caller's council_end, the user's Stop council, or no member left). */
+    val status: String = "open",
+    /** Who ended it: "caller", "user" or "empty". */
+    val endedBy: String? = null,
+    /** The caller's conclusion, given when it ended the council. */
+    val verdict: String? = null,
+    /** ISO-8601. */
+    val endedAt: String? = null,
+    /** The caller's `council` tool call that opened it, when the agent reported one. */
+    val callId: String? = null,
+    /** ISO-8601. */
+    val createdAt: String = "",
+    val members: List<CouncilMember> = emptyList(),
+    val rounds: List<CouncilRound> = emptyList(),
+)
+
+@Serializable
+data class CouncilMember(
+    val letter: String,
+    /** The member's session id. */
+    val session: String,
+    val name: String = "",
+    /** Agent kind ("claude", "codex", …). */
+    val agent: String = "",
+    val model: String? = null,
+    /** How the caller sees it: its model's name, else the agent's ("GPT-6", "Grok"). */
+    val label: String = "",
+    /** In the current round: reported | failed | crashed | killed | working. */
+    val status: String = "working",
+)
+
+@Serializable
+data class CouncilRound(
+    val round: Int,
+    val focus: String? = null,
+    val startedAt: String = "",
+    val completedAt: String? = null,
+    val reports: List<CouncilReport> = emptyList(),
+)
+
+@Serializable
+data class CouncilReport(
+    val id: String,
+    val letter: String,
+    val seq: Int = 0,
+    val text: String = "",
+    val at: String = "",
+)
+
 @Serializable
 data class AgentStatus(
     val phase: String,               // legacy alias (idle|thinking|running|stalled)
@@ -245,7 +337,11 @@ data class AgentStatus(
     val workingSince: Long? = null,
     val waiting: Boolean = false,    // idle but background tasks still open
     val bgOpen: Int = 0,             // open background-task count
-)
+    val agentsRunning: Int = 0,      // background subagents still running — filled in by HostStore, not sent
+) {
+    /** Shown as working: the agent's own turn, or subagents it started that are still running. */
+    val busy: Boolean get() = working || agentsRunning > 0
+}
 
 @Serializable
 data class SendArgs(val text: String = "", val attachments: List<String>? = null)
@@ -261,8 +357,27 @@ data class SlashCommand(
     val sigil: String = "/",
     val description: String? = null,
     val insertText: String? = null,
+    /** The agent's own hint for the arguments, e.g. "[interval] [prompt]". */
+    val argumentHint: String? = null,
+    /** Other names the agent accepts for the command ("review" for "code-review"). */
+    val aliases: List<String> = emptyList(),
+    /**
+     * Where the command comes from — [SOURCE_BUILTIN], [SOURCE_PLUGIN], [SOURCE_PROJECT] or
+     * [SOURCE_USER] — and only when the agent (or the folder it was read from) says so. Null means
+     * nobody vouched for one, and the menu shows none rather than a guess.
+     */
+    val source: String? = null,
+    /** With [source] "plugin": the plugin's name. */
+    val plugin: String? = null,
     val action: ControlAction? = null,
-)
+) {
+    companion object {
+        const val SOURCE_BUILTIN = "builtin"
+        const val SOURCE_PLUGIN = "plugin"
+        const val SOURCE_PROJECT = "project"
+        const val SOURCE_USER = "user"
+    }
+}
 
 /**
  * The workspace layout tree (spec §5.3). A polymorphic sealed interface keyed by
@@ -374,6 +489,10 @@ data class PermissionModeInfo(
     val default: Boolean = false,
 )
 
+/** Card #76: an open live stream handed over in the snapshot (`streams`), so a reconnect shows the text so far. */
+@Serializable
+data class LiveStreamDto(val stream: String, val kind: String = "reply", val text: String = "")
+
 @Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
@@ -384,6 +503,8 @@ sealed interface ServerFrame {
         val bgTasks: Map<String, List<BgTask>> = emptyMap(),
         /** Session id → its subagents (running + recent finished). Empty from an older broker. */
         val subagents: Map<String, List<Subagent>> = emptyMap(),
+        /** Caller session id → the councils it called. Empty from an older broker. */
+        val councils: Map<String, List<CouncilView>> = emptyMap(),
         val agentState: Map<String, AgentStatus> = emptyMap(),
         val commands: Map<String, List<SlashCommand>> = emptyMap(),
         val commandsResolved: Map<String, Boolean> = emptyMap(),
@@ -406,6 +527,13 @@ sealed interface ServerFrame {
         val onboarded: Boolean = false,
         /** Persistent project catalog. Empty from a broker older than persistent projects. */
         val projects: List<ProjectDto> = emptyList(),
+        /**
+         * The broker's mux home (`MUX_HOME`, in the host's own path form) — see
+         * `isMuxInternalPath`. Null from an older broker.
+         */
+        val muxHome: String? = null,
+        /** The broker host's home folder, in the host's own path form. Null from an older broker. */
+        val homeDir: String? = null,
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
         val requests: Map<String, List<PromptRequest>> = emptyMap(),
@@ -422,6 +550,20 @@ sealed interface ServerFrame {
          * `trimExtras`); fetched on chat open. Null from a broker that ignores `trimExtras`.
          */
         val partialExtras: List<String>? = null,
+        /** The broker is tracing load times (card #54): ship ours (`client_logs`, category "perf"). */
+        val perf: Boolean = false,
+        /**
+         * The `subscribe` asked for `lazyArchived` and the broker left [archivedWorkspaces] (and
+         * their [projectMembership]) out; fetch `GET /archived-workspaces?slim=1` (card #54).
+         */
+        val archivedLazy: Boolean = false,
+        /** Card #76: session → its open live streams (only when `subscribe` asked for `streams`). */
+        val streams: Map<String, List<LiveStreamDto>> = emptyMap(),
+        /**
+         * Card #62: the optional client frames this broker takes ([ClientFrame.Live]). An older broker answers a frame
+         * it doesn't know with an error, so the app sends one of these only when the broker lists it here.
+         */
+        val accepts: List<String> = emptyList(),
     ) : ServerFrame
 
     /**
@@ -547,11 +689,24 @@ sealed interface ServerFrame {
         /** The session switched account (manually or on a usage limit). */
         val account: String? = null,
         val accountLabel: String? = null,
+        /** Card #75: its lifecycle status changed (active once woken, suspended when put back to sleep). */
+        val status: String? = null,
     ) : ServerFrame
 
     /** An account was added or removed: the cached GET /accounts is stale (no payload). */
     @Serializable @SerialName("accounts_changed")
     data object AccountsChanged : ServerFrame
+
+    /**
+     * The Agent list changed (created, killed/archived, made default, renamed). No payload — a
+     * client showing the Agents screen reloads GET /api/pas.
+     */
+    @Serializable @SerialName("agents_changed")
+    data object AgentsChanged : ServerFrame
+
+    /** An Agent's avatar changed (set_avatar or an edit on disk); [avatar] is the new hash, null = none. */
+    @Serializable @SerialName("agent_avatar_changed")
+    data class AgentAvatarChanged(val id: String = "", val avatar: String? = null) : ServerFrame
 
     /** Progress of a guided account login (POST /accounts/login); same shape as AccountLoginStateDto. */
     @Serializable @SerialName("account_login_state")
@@ -596,6 +751,17 @@ sealed interface ServerFrame {
     data class MessageAppend(val session: String, val entry: LogEntry) : ServerFrame
 
     /**
+     * Card #76: more of a reply (or, `kind` "thinking", of the agent's thinking) while it is written. [at] is the
+     * offset of [text] in the stream; `at` 0 is the whole text so far.
+     */
+    @Serializable @SerialName("reply_stream")
+    data class ReplyStream(val session: String, val stream: String, val kind: String = "reply", val at: Int = 0, val text: String = "") : ServerFrame
+
+    /** Card #76: a live stream ended with nothing stored for it: drop it. */
+    @Serializable @SerialName("reply_stream_end")
+    data class ReplyStreamEnd(val session: String, val stream: String) : ServerFrame
+
+    /**
      * Read-status advance for one session. Broadcast when any device views a chat
      * (or POST /sessions/:id/read). Clients compare [last_read_at] to the last
      * message timestamp to decide unread (web/watch parity).
@@ -633,6 +799,10 @@ sealed interface ServerFrame {
     /** The session's subagent list was dropped (session archived/killed). */
     @Serializable @SerialName("subagents_cleared")
     data class SubagentsCleared(val session: String) : ServerFrame
+
+    /** One of [session]'s councils changed; [council] is its full latest view (upsert by id). */
+    @Serializable @SerialName("council_update")
+    data class CouncilUpdate(val session: String, val council: CouncilView) : ServerFrame
 
     @Serializable @SerialName("commands_changed")
     data class CommandsChanged(
@@ -849,6 +1019,15 @@ sealed interface ClientFrame {
         val sessions: List<String>? = null,
     ) : ClientFrame
 
+    /**
+     * Card #62: live text (`reply_stream`) for [sessions] without their being on screen: the assistant overlay
+     * floats its Agent's reply over other apps as it is written. Replaces the last such set. Unlike [Viewing] it
+     * is presence for nothing, so nothing is read and pushes still go out. An older broker ignores it, and the
+     * overlay shows the stored reply instead.
+     */
+    @Serializable @SerialName("live")
+    data class Live(val sessions: List<String>) : ClientFrame
+
     @Serializable @SerialName("set_permission_mode")
     data class SetPermissionMode(val session: String, val mode: String) : ClientFrame
 
@@ -865,10 +1044,16 @@ sealed interface ClientFrame {
         @OptIn(ExperimentalSerializationApi::class)
         @EncodeDefault(EncodeDefault.Mode.ALWAYS) val op: String = "reply",
         val args: SendArgs,
+        /** Card #75: the app's own id for this message (`web-<uuid>`); the broker logs and dedupes it under it. */
+        @SerialName("client_message_id") val clientMessageId: String? = null,
     ) : ClientFrame
 
     @Serializable @SerialName("fs_sub")
     data class FsSub(val path: String, val since: String? = null) : ClientFrame
+
+    /** App log lines for the broker's log; category "perf" is the load-time trace (card #54). */
+    @Serializable @SerialName("client_logs")
+    data class ClientLogs(val entries: List<ClientLogEntry>, val meta: JsonObject? = null) : ClientFrame
 
     @Serializable @SerialName("fs_unsub")
     data class FsUnsub(val path: String) : ClientFrame
@@ -888,3 +1073,7 @@ sealed interface ClientFrame {
     @Serializable @SerialName("lsp_close")
     data class LspClose(val session: String, val serverId: String) : ClientFrame
 }
+
+/** One `client_logs` entry: [ts] is the app's own clock (ms since launch for "perf"). */
+@Serializable
+data class ClientLogEntry(val category: String, val event: String, val ts: Long, val data: JsonObject? = null)

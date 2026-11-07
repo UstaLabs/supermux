@@ -16,6 +16,24 @@ describe("claude normalizer", () => {
     ])
   })
 
+  test("commands_changed and a control reply with commands become commands-update", () => {
+    // Shapes from Claude Code 2.1.308: the initialize reply and the commands_changed push.
+    const n = createClaudeNormalizer()
+    const commands = [
+      { name: "code-review", description: "Review", argumentHint: "[pr]", aliases: ["review"], builtin: true },
+      { name: "proj-cmd", description: "A project command (project)", argumentHint: "" },
+      { description: "nameless rows are skipped" },
+    ]
+    const expected = [
+      { name: "code-review", description: "Review", argumentHint: "[pr]", aliases: ["review"], builtin: true },
+      { name: "proj-cmd", description: "A project command (project)" },
+    ]
+    expect(n(native({ type: "system", subtype: "commands_changed", commands }))).toEqual([{ kind: "commands-update", commands: expected }])
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { commands, models: [] } } })))
+      .toEqual([{ kind: "commands-update", commands: expected }])
+    expect(n(native({ type: "control_response", response: { subtype: "success", request_id: "r", response: { mode: "plan" } } }))).toEqual([])
+  })
+
   test("hooks and command_lifecycle produce no event", () => {
     const n = createClaudeNormalizer()
     expect(n(native({ type: "system", subtype: "hook_started" }))).toEqual([])
@@ -165,6 +183,20 @@ describe("claude normalizer", () => {
     expect(err.map(e => e.kind)).toEqual(["usage", "error"])
     expect(err[1]).toMatchObject({ kind: "error", message: "boom" })
     expect(err[1]).not.toHaveProperty("errorType")
+  })
+
+  test("result: a turn Claude ended because it was interrupted is not an error (real 2.1.308 frames)", () => {
+    // After an interrupt control request: error_during_execution with Claude's own diagnostic, and terminal_reason
+    // aborted_streaming (stopped while the model answered) or aborted_tools (stopped while a tool ran).
+    const n = createClaudeNormalizer()
+    for (const [terminal_reason, stop_reason] of [["aborted_streaming", "tool_use"], ["aborted_tools", "tool_use"], ["aborted_streaming", null]] as const) {
+      const out = n(native({
+        type: "result", subtype: "error_during_execution", is_error: true, terminal_reason, stop_reason,
+        errors: [`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=${stop_reason}`],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }))
+      expect(out.map(e => e.kind)).toEqual(["usage"])
+    }
   })
 
   test("result: a 401/403 API error marks the account unavailable (real cancelled-subscription frame)", () => {
