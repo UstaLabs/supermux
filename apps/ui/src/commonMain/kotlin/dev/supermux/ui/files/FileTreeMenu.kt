@@ -29,9 +29,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
@@ -188,6 +186,7 @@ private fun InlineEditField(
             siblings = siblingNames(fileSystem, edit.parent),
             inFolder = edit.parent,
             placeholder = if (edit.folder) "Folder name" else "File name",
+            typed = view.typedName { nameFieldValue("", edit.folder) },
             onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
             onDone = { name, refocus ->
                 afterCreate(view, edit.parent, name, edit.folder, onOpenFile)
@@ -199,13 +198,15 @@ private fun InlineEditField(
         is InlineEdit.Rename -> {
             val old = edit.path
             val oldName = displayName(old)
+            val folder = view.isExpanded(old) || isFolderRow(fileSystem, old)
             InlineNameField(
                 initial = oldName,
                 current = oldName,
-                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                folder = folder,
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
                 inFolder = parentOf(old),
                 placeholder = null,
+                typed = view.typedName { nameFieldValue(oldName, folder) },
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name, refocus ->
                     afterRename(view, old, name, onEntryMoved)
@@ -349,6 +350,7 @@ fun FileTreeDialogs(
                 folder = dialog.folder,
                 siblings = siblingNames(fileSystem, parent),
                 inFolder = parent,
+                typed = view.typedName { nameFieldValue("", dialog.folder) },
                 onSubmit = { name -> createEntry(fileSystem, parent, name, dialog.folder) },
                 onDone = { name ->
                     afterCreate(view, parent, name, dialog.folder, onOpenFile)
@@ -360,14 +362,16 @@ fun FileTreeDialogs(
         is FileTreeDialog.Rename -> {
             val old = dialog.path
             val oldName = displayName(old)
+            val folder = view.isExpanded(old) || isFolderRow(fileSystem, old)
             NameDialog(
                 title = "Rename",
                 confirmLabel = "Rename",
                 initial = oldName,
                 current = oldName,
-                folder = view.isExpanded(old) || isFolderRow(fileSystem, old),
+                folder = folder,
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
                 inFolder = parentOf(old),
+                typed = view.typedName { nameFieldValue(oldName, folder) },
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name ->
                     afterRename(view, old, name, onEntryMoved)
@@ -400,13 +404,18 @@ private fun NameDialog(
     siblings: List<String>,
     /** The folder the name goes in: its host's name rules apply. */
     inFolder: String? = null,
+    /** Where the name being typed is kept: the pane's, which outlives this composition (#89). */
+    typed: TypedName? = null,
     onSubmit: suspend (String) -> Result<Unit>,
     onDone: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    // A rename pre-selects the stem, so typing replaces "name" but keeps ".kt".
-    var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
+    // A rename pre-selects the stem, so typing replaces "name" but keeps ".kt". Kept in [typed]
+    // when the pane gives one: a rotation reopened the dialog with what was typed gone.
+    val own = remember { TypedName(nameFieldValue(initial, folder)) }
+    val kept = typed ?: own
+    var field by kept::value
     var serverError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -474,7 +483,8 @@ private fun DeleteDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     // The trash is on another filesystem (409 EXDEV): the second step asks for a permanent delete.
-    var permanent by remember { mutableStateOf(false) }
+    // Kept in the pane's edits, with the dialog: a rotation must not take the user back a step (#89).
+    var permanent by view.edits::permanent
     val scope = rememberCoroutineScope()
     val what = if (dialog.folder) "This folder and everything in it" else "This file"
     AlertDialog(

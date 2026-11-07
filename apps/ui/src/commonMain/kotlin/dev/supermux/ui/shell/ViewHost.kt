@@ -19,6 +19,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import dev.supermux.fs.hostJoin
 import dev.supermux.ui.editor.repoPath
 import dev.supermux.ui.isAbsoluteEditorPath
+import dev.supermux.ui.terminal.LocalTerminalFindKey
 import dev.supermux.ui.terminal.LocalTerminalTitleSink
 import dev.supermux.ui.terminal.TerminalTitles
 import androidx.compose.animation.core.tween
@@ -71,6 +72,7 @@ import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerPane
+import dev.supermux.ui.files.TreeViewEdits
 import dev.supermux.ui.files.TreeViewStates
 import dev.supermux.ui.files.editorAbsolutePath
 import dev.supermux.ui.files.fileNotFoundNotice
@@ -82,6 +84,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toEditorPath
@@ -246,10 +249,12 @@ fun ViewHost(
                 else AgentTerminalForSession(actions, sessionId, terminalId, modifier)
             } else {
                 key(workspaceId, terminalId) {
-                    // The program's title goes to this view's TAB, which the pane strip draws.
+                    // The program's title goes to this view's TAB, which the pane strip draws. The
+                    // terminal's name keeps its find bar through a rotation or a width change (#89).
                     val viewId = view.id
                     CompositionLocalProvider(
                         LocalTerminalTitleSink provides { title -> TerminalTitles.set(viewId, title) },
+                        LocalTerminalFindKey provides "$workspaceId:$terminalId",
                     ) {
                         workspaceTerminalContent(
                             { actions.connectWorkspaceTerminal(workspaceId, terminalId).orFail(workspaceId) },
@@ -592,17 +597,20 @@ private fun AgentTerminalForSession(
 ) {
     val terminals = LocalPlatform.current.terminalView()
     key(sessionId, terminalId) {
-        terminals.TerminalView(
-            connect = {
-                if (terminalId == "agent") actions.connectAgentTerminal(sessionId).orFail(sessionId)
-                else actions.connectTerminal(sessionId, terminalId).orFail(sessionId)
-            },
-            modifier = modifier.fillMaxSize().testTag(
-                if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
-            ),
-            active = true,
-            onExit = null,
-        )
+        // Named, so its find bar outlives a rotation or a width change (#89).
+        CompositionLocalProvider(LocalTerminalFindKey provides "$sessionId:$terminalId") {
+            terminals.TerminalView(
+                connect = {
+                    if (terminalId == "agent") actions.connectAgentTerminal(sessionId).orFail(sessionId)
+                    else actions.connectTerminal(sessionId, terminalId).orFail(sessionId)
+                },
+                modifier = modifier.fillMaxSize().testTag(
+                    if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
+                ),
+                active = true,
+                onExit = null,
+            )
+        }
     }
 }
 
@@ -640,8 +648,11 @@ private fun ExplorerPaneForWorkspace(
     modifier: Modifier,
 ) {
     // Per-VIEW state held outside the pane (the holder outlives it): two explorer panes may sit at
-    // different roots/depths, and a drag or split must not reset either.
-    val view = remember(treeStates, viewId, workdir) { treeStates.forView(viewId, workdir) }
+    // different roots/depths, and a drag or split must not reset either. Its open dialog or
+    // in-place field, the name typed in it and the "Go to file…" query outlive the workspace's
+    // composition too, which a rotation or a width change rebuilds (#89).
+    val edits = rememberRetained("files:$workspaceId:$viewId:$workdir") { TreeViewEdits() }
+    val view = remember(treeStates, viewId, workdir, edits) { treeStates.forView(viewId, workdir, edits) }
     ExplorerPane(
         fileSystem = actions.fileSystemFor(workspaceId),
         view = view,
@@ -772,6 +783,8 @@ private fun DiffPaneForWorkspace(
         writeDiffFile = { repo, path, text -> actions.workspaceFsWrite(workspaceId, repoPath(repo, path), text) },
         diffDocuments = documents,
         baseText = actions.workspaceChangesBlob?.let { f -> { repo, sha, force -> f(workspaceId, repo, sha, force) } },
+        // The review drafts outlive the workspace's composition, which a rotation rebuilds (#89).
+        retainKey = "diff:$workspaceId:$viewId",
         modifier = modifier.fillMaxSize(),
     )
 }

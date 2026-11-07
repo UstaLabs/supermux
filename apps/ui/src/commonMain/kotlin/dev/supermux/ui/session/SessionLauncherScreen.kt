@@ -381,7 +381,10 @@ fun SessionLauncherScreen(
 
     var models by remember { mutableStateOf(emptyList<ModelInfo>()) }
     var modelMenu by remember { mutableStateOf(false) }
-    var projectMenu by remember { mutableStateOf(false) }
+    // The project picker, open with what it was opened for, outlives this composition with the
+    // query typed in it (ProjectPicker): a rotation or a width change closed it (#89).
+    val picker = rememberRetained("launcher.picker:$retainKey") { LauncherPicker() }
+    var projectMenu by picker::open
     /** The project heading's width — the picker centres its dropdown under it. */
     var projectHeadingWidth by remember { mutableStateOf(0.dp) }
     val density = LocalDensity.current
@@ -401,9 +404,9 @@ fun SessionLauncherScreen(
     // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
     val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
     val projectHostKey = selectedHost.orEmpty()
-    var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
+    var catalogLocationsFor by picker::catalogLocationsFor
     // A location-less project waiting for the omnibox to name a folder to register.
-    var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
+    var pendingLocationProject by picker::pendingLocation
     var projectError by remember { mutableStateOf<String?>(null) }
     // "Already in <owner>": the owning project's id and the path that collided, for "Use <owner>".
     var projectConflict by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -1133,6 +1136,7 @@ fun SessionLauncherScreen(
                                 onCatalogProject = { applyProject(it) },
                                 onCatalogLocation = { p, path -> pickProjectLocation(p, path) },
                                 onCatalogLocationsBack = { catalogLocationsFor = null },
+                                retainKey = "launcher.project-search:$retainKey",
                             )
                         }
                         pendingLocationProject?.let { p ->
@@ -1711,6 +1715,13 @@ private fun WorktreePicker(
             ) { bodyContent() }
         }
     }
+}
+
+/** A launcher's project picker: open, and what it was opened for (`rememberRetained`, #89). */
+private class LauncherPicker {
+    var open by mutableStateOf(false)
+    var catalogLocationsFor by mutableStateOf<String?>(null)
+    var pendingLocation by mutableStateOf<ProjectDto?>(null)
 }
 
 /**

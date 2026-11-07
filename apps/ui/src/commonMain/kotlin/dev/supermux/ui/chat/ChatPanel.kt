@@ -677,7 +677,9 @@ fun ChatPanel(
             }
     }
     val density = LocalDensity.current
-    val find = remember(session.id) { ChatFindState() }
+    // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
+    // change closed it and dropped what was typed (#89).
+    val find = rememberRetained("chat.find:${session.id}") { ChatFindState() }
     // This chat's hits; All chats leaves the transcript alone.
     val findMatches = remember(timelineItems, find.open, find.query, find.scope) {
         if (find.open && find.scope == ChatSearchScope.ThisChat) chatFindMatches(timelineItems, find.query) else emptyList()
@@ -685,15 +687,17 @@ fun ChatPanel(
 
     // ── Subagents ─────────────────────────────────────────────────────────────────────────────
     // Cards are collapsed by default; the set of open ones is hoisted here so the running strip can
-    // open one and scroll to it.
-    var openSubagents by remember(session.id) { mutableStateOf(setOf<String>()) }
-    val subagentActions = remember(actions) {
-        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent)
+    // open one and scroll to it. Kept outside this composition with the replies seen below: a
+    // rebuilt panel (a rotation, a width change) closed every card and marked every reply read (#89).
+    val cards = rememberRetained("chat.subagents:${session.id}") { SubagentCards() }
+    var openSubagents by cards::open
+    val subagentActions = remember(actions, session.id) {
+        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent, sessionId = session.id)
     }
     // Unread replies are client-side: the reply count the user has "seen" per subagent. A subagent
     // first seen counts as read (a reload does not light every card up); an OPEN card keeps up with
     // its replies; a collapsed one falls behind, and the gap is its "N new replies" badge.
-    var seenReplies by remember(session.id) { mutableStateOf(mapOf<String, Int>()) }
+    var seenReplies by cards::seen
     LaunchedEffect(subagents, openSubagents) {
         var next = seenReplies
         for (s in subagents) {
@@ -1576,4 +1580,10 @@ private class TranscriptPlace {
     /** Rows already shown; -1 before the first content, which jumps to the end. */
     var rows by mutableIntStateOf(-1)
     var autoFollow by mutableStateOf(true)
+}
+
+/** One session's open subagent cards and the replies seen, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class SubagentCards {
+    var open by mutableStateOf(setOf<String>())
+    var seen by mutableStateOf(mapOf<String, Int>())
 }

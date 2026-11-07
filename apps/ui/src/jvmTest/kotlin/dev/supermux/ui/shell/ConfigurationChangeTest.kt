@@ -9,16 +9,10 @@
 // holds it, and a width-class flip inside one composition for the swap, which is all iOS gets.
 package dev.supermux.ui.shell
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
-import androidx.compose.runtime.saveable.SaveableStateRegistry
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -42,7 +36,6 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
-import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.LauncherDraft
 import dev.supermux.ui.adaptive.InputMode
@@ -76,84 +69,12 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/**
- * What an Android configuration change does to a composition: all of it is disposed, and the new one
- * gets back only what lives outside it (here, what a test builds before `setContent`: the fleet,
- * the platform, the prefs) and its `rememberSaveable` state, saved and restored by key. Plain
- * `remember` is gone. (`StateRestorationTester` stages the same thing, but its desktop
- * `emulateSaveAndRestore` is a `TODO()` in CMP 1.12.)
- */
-@OptIn(ExperimentalTestApi::class)
-private class Recreation(private val test: ComposeUiTest) {
-    private var registry by mutableStateOf(SaveableStateRegistry(null) { true })
-    private var shown by mutableStateOf(true)
-
-    fun setContent(content: @Composable () -> Unit) = test.setContent {
-        // The same call site before and after, so every rememberSaveable finds its key again.
-        if (shown) CompositionLocalProvider(LocalSaveableStateRegistry provides registry, content = content)
-    }
-
-    fun recreate() {
-        val saved = test.runOnIdle { registry.performSave() }
-        shown = false
-        test.waitForIdle()
-        registry = SaveableStateRegistry(saved) { true }
-        shown = true
-        test.waitForIdle()
-    }
-}
-
 @OptIn(ExperimentalTestApi::class)
 class ConfigurationChangeTest {
-
-    private fun oneChatWorkspace(
-        respondTo: MockRequestHandler = { respond("{}", HttpStatusCode.OK) },
-    ): HostStore = testHostStore(respondTo).also { app ->
-        app.reduce(
-            ServerFrame.Snapshot(
-                sessions = listOf(SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude")),
-                workspaces = listOf(
-                    WorkspaceDto(
-                        id = "w1", name = "proj", workdir = "/w",
-                        primarySessionId = "s1",
-                        layout = singleViewLayout("g1", "v1").toDto(),
-                        views = listOf(
-                            ViewDto(
-                                id = "v1", workspaceId = "w1", kind = "chat",
-                                state = JsonObject(mapOf("sessionId" to JsonPrimitive("s1"))),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        )
-    }
-
-    private fun SemanticsNodeInteraction.editableText(): String =
-        fetchSemanticsNode().config[SemanticsProperties.EditableText].text
 
     /** The transcript's list (inside `chat_body`; the sidebar list has the same scroll action). */
     private fun ComposeUiTest.transcript(): SemanticsNodeInteraction =
         onNode(hasScrollToIndexAction() and hasAnyAncestor(hasTestTag("chat_body")))
-
-    /**
-     * The shell at a width the test can flip, the way a phone turned to landscape or a Fold opened
-     * flips it — one composition, so this is the swap alone, as iOS gets it.
-     */
-    private fun ComposeUiTest.swappableShell(
-        fleet: FleetStore,
-        ui: ShellUiState,
-        platform: FakePlatform = FakePlatform(),
-        prefs: UiPrefs = UiPrefs(FakeSettingsStore()),
-    ): MutableState<WindowWidthClass> {
-        val width = mutableStateOf(WindowWidthClass.Compact)
-        setContent {
-            PlatformTestProviders(platform, pointer = false, widthClass = width.value, inputMode = InputMode.Touch, uiPrefs = prefs) {
-                SupermuxApp(fleet = fleet, ui = ui)
-            }
-        }
-        return width
-    }
 
     /** A host that transcribes any recording as "words said while turning". */
     private val transcribes: MockRequestHandler = { request ->

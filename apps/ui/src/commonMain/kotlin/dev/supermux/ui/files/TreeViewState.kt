@@ -9,27 +9,48 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.TextFieldValue
 
 @Stable
-class TreeViewState(rootPath: String) {
+class TreeViewState(
+    rootPath: String,
+    /** What must outlive the pane's composition; a pane that keeps it (#89) passes its own. */
+    val edits: TreeViewEdits = TreeViewEdits(),
+) {
     /** The workspace workdir this state was created for; [rootPath] may move above it. */
     val workdir: String = rootPath
     var rootPath by mutableStateOf(rootPath)
     var expanded by mutableStateOf<Set<String>>(emptySet())
         private set
     var selected by mutableStateOf<String?>(null)
-    var query by mutableStateOf("")
+    var query by edits::query
     /**
      * The row-action dialog this pane has open (New file / Rename / Delete), or null. Here rather
      * than inside the tree so the pane header's ⋮ menu can open New file… / New folder… too.
+     * Opening or closing one starts its name (and its delete step) afresh.
      */
-    var dialog by mutableStateOf<FileTreeDialog?>(null)
+    var dialog: FileTreeDialog?
+        get() = edits.dialog
+        set(value) {
+            edits.dialog = value
+            edits.typed = null
+            edits.permanent = false
+        }
     /**
      * The in-place New file / New folder / Rename field this pane has open, or null — the
      * hardware-keyboard counterpart of [dialog] (see [startAction]).
      */
-    var inlineEdit by mutableStateOf<InlineEdit?>(null)
+    var inlineEdit: InlineEdit?
+        get() = edits.inlineEdit
+        set(value) {
+            edits.inlineEdit = value
+            edits.typed = null
+        }
     val list = LazyListState()
+
+    /** The name being typed in the open [dialog] or [inlineEdit]: [initial] until something is. */
+    fun typedName(initial: () -> TextFieldValue): TypedName =
+        edits.typed ?: TypedName(initial()).also { edits.typed = it }
 
     /**
      * Open [action]: in place when [inline] (a hardware keyboard is available — see
@@ -92,14 +113,37 @@ class TreeViewState(rootPath: String) {
 
 const val RecentMax = 10
 
+/**
+ * The part of a [TreeViewState] that must outlive its pane's composition: a rotation or a width
+ * change rebuilt the Files pane with its open dialog or in-place field, the name typed in it and
+ * the "Go to file…" query gone (#89). Plain values only; the scroll stays in [TreeViewState.list].
+ */
+class TreeViewEdits {
+    var query by mutableStateOf("")
+    /** "Go to file…"'s last hits, shown again at once by a rebuilt pane (then searched afresh). */
+    var results by mutableStateOf<List<GoToEntry>?>(null)
+    var dialog by mutableStateOf<FileTreeDialog?>(null)
+    var inlineEdit by mutableStateOf<InlineEdit?>(null)
+    /** The name typed in [dialog] or [inlineEdit] (see [TreeViewState.typedName]). */
+    var typed: TypedName? = null
+    /** The delete dialog's second step: the trash is on another filesystem. */
+    var permanent by mutableStateOf(false)
+}
+
+/** A name being typed in a Files dialog or in-place field. */
+class TypedName(initial: TextFieldValue) {
+    var value by mutableStateOf(initial)
+}
+
 /** Per-host, in-memory holder: one [TreeViewState] per Files view id. */
 class TreeViewStates {
     private val byView = HashMap<String, TreeViewState>()
 
-    fun forView(viewId: String, workdir: String): TreeViewState {
+    /** [edits] is what a new state keeps beyond the pane's composition (see [TreeViewEdits]). */
+    fun forView(viewId: String, workdir: String, edits: TreeViewEdits = TreeViewEdits()): TreeViewState {
         val cur = byView[viewId]
         if (cur != null && cur.workdir == workdir) return cur
-        return TreeViewState(workdir).also { byView[viewId] = it }
+        return TreeViewState(workdir, edits).also { byView[viewId] = it }
     }
 
     fun forget(viewId: String) { byView.remove(viewId) }
