@@ -81,8 +81,10 @@ export const RULES: Rule[] = [
       /from\s*["'](?:node:)?child_process["']/,
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
-    allowed: ["packages/platform/", "src/core/process/launcher.ts"],
-    use: "start processes through src/core/process/launcher.ts: spawnProcess / spawnProcessSync (Bun's options) or spawnCommand / spawnCommandSync (node's, with Windows .cmd/.ps1 shims). They apply proc.spawnDefaults; without them the child gets the startup env and, on Windows, a console window",
+    // src/core/git/exec.ts is the git family's async runner, every call there starting from proc.spawnDefaults. Its
+    // synchronous twin, exec-sync.ts, goes through the launcher.
+    allowed: ["packages/platform/", "src/core/process/launcher.ts", "src/core/git/exec.ts"],
+    use: "start processes through src/core/process/launcher.ts: spawnProcess / spawnProcessSync (Bun's options) or spawnCommand / spawnCommandSync (node's, with Windows .cmd/.ps1 shims). Git goes through src/core/git/exec.ts (or exec-sync.ts, where a caller cannot await). Both apply proc.spawnDefaults; without them the child gets the startup env and, on Windows, a console window",
   },
   {
     id: "which-path",

@@ -1,14 +1,10 @@
 // src/core/git/branches.ts
-import { execFileSync } from "child_process"
 import { realpathSync } from "fs"
 import { mergeInProgress } from "./integrate"
+import { gitSync } from "./exec-sync"
 
 function git(cwd: string, args: string[], timeout = 30_000): { ok: boolean; out: string } {
-  try {
-    return { ok: true, out: execFileSync("git", args, { cwd, encoding: "utf-8", timeout, stdio: ["pipe", "pipe", "pipe"] }).trim() }
-  } catch (e: any) {
-    return { ok: false, out: `${e?.stdout?.toString?.() ?? ""}${e?.stderr?.toString?.() ?? ""}`.trim() }
-  }
+  return gitSync(cwd, args, timeout)
 }
 
 export interface LocalBranch { name: string; checkedOutAt: string | null }

@@ -1,8 +1,8 @@
 // src/core/git/clone.ts
-import { execFileSync } from "child_process"
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
+import { runSync } from "./exec-sync"
 
 export function projectDir(root: string, host: string, owner: string, name: string): string {
   return join(root, host, owner, name)
@@ -34,11 +34,11 @@ export async function gitClone(opts: CloneOpts): Promise<{ localPath: string; re
   if (opts.sshCommand) env.GIT_SSH_COMMAND = opts.sshCommand
 
   try {
-    execFileSync("git", ["-c", "credential.helper=", "clone", opts.url, opts.targetDir],
-      { env, timeout: 300_000, stdio: ["pipe", "pipe", "pipe"] })
-  } catch (e: any) {
-    rmSync(opts.targetDir, { recursive: true, force: true }) // remove the half-clone
-    throw new Error(`${e?.stdout ?? ""}${e?.stderr ?? ""}`.trim() || "git clone failed")
+    const r = runSync("git", ["-c", "credential.helper=", "clone", opts.url, opts.targetDir], { env, timeoutMs: 300_000 })
+    if (!r.ok) {
+      rmSync(opts.targetDir, { recursive: true, force: true }) // remove the half-clone
+      throw new Error(r.out || "git clone failed")
+    }
   } finally {
     if (askpassDir) rmSync(askpassDir, { recursive: true, force: true })
   }
