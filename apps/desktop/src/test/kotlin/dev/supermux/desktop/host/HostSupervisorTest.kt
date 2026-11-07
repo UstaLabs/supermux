@@ -1473,6 +1473,18 @@ class HostSupervisorTest {
         assertNull(h.sup.gitRequirement.value)
     }
 
+    @Test fun aCheckoutThatMovedFollowsTheBrokerAndClearsWhenHostingStops() = runTest {
+        val h = Harness(this)
+        assertNull(h.sup.checkoutMoved.value)
+        val moved = "This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code."
+        h.probeFn = { if (h.liveChild != null) h.desktop().copy(checkoutMoved = moved) else HostProbeResult.PortFree }
+        h.sup.ensure()
+        assertEquals(moved, h.sup.checkoutMoved.value)
+        h.probeFn = { HostProbeResult.PortFree }
+        h.sup.setHosting(false)
+        assertNull(h.sup.checkoutMoved.value)
+    }
+
     // ── the supervisor's log on success paths ──
 
     private fun Harness.logs() = events.filter { it.startsWith("log:") }.map { it.removePrefix("log:") }

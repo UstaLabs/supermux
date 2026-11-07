@@ -31,6 +31,8 @@ sealed interface HostProbeResult {
         val requirements: HostRequirements? = null,
         /** "Keep this computer awake" as the broker holds it; null from a broker older than keep-awake. */
         val keepAwake: KeepAwakeState? = null,
+        /** The broker's "restart it to run the new code" sentence when its checkout moved under it; null otherwise. */
+        val checkoutMoved: String? = null,
     ) : HostProbeResult {
         /**
          * The broker's git requirement. An older broker that only said `gitAvailable: false` was a
@@ -150,7 +152,10 @@ object HostProber {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
         if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
-        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements, id.keepAwake)
+        return HostProbeResult.Supermux(
+            id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements, id.keepAwake,
+            checkoutMoved = id.checkoutMoved?.message?.takeIf { it.isNotBlank() },
+        )
     }
 
     private fun tcpConnectable(host: String, port: Int): Boolean =
