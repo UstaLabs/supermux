@@ -50,8 +50,17 @@ import dev.supermux.ui.chat.rememberDecodedImage
 import dev.supermux.ui.chat.saveOrOpenAttachment
 import dev.supermux.ui.files.parentOf
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.work.handOverAsTapped
+import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.Download
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** What a file tab shows instead of the text editor, decided by the file's extension. */
@@ -193,19 +202,34 @@ private fun PreviewMessage(text: String) {
 
 /**
  * A binary file with no in-app preview (the text reader refused it): its name, and a button that
- * hands the bytes to the OS — open in the system viewer on a phone, save-and-open on a desktop.
+ * hands the file to the OS — open in the system viewer on a phone, save-and-open on a desktop.
+ *
+ * With [download] (#95) the button downloads the file as one of the fleet's downloads: closing the
+ * tab lets go of it and it carries on, waiting in the activity bar; still open when it finishes,
+ * the FILE is handed over at once, as a tap always did (R1). The button says "Downloading…" while
+ * it runs. Without one, or when it answers null (a host that keeps no downloads), the bytes path
+ * stays: the whole file read on this tab's coroutine.
  */
 @Composable
 fun BinaryFileCard(
     absPath: String,
     loadBytes: suspend (String) -> Result<ByteArray>,
     modifier: Modifier = Modifier,
+    download: ((String) -> Pair<String, DownloadSource>?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     var busy by remember(absPath) { mutableStateOf(false) }
+    // The download this card started last, by its key: a host file's key is new with every start
+    // (the editor does not know the file's version), so the card keeps its own.
+    var key by remember(absPath) { mutableStateOf<String?>(null) }
+    // This card waits for that download: one tap, one hand-over.
+    var waiting by remember(absPath) { mutableStateOf(false) }
+    val running by remember(downloads, key) { downloads.items.map { all -> all.isRunning(key) } }
+        .collectAsState(downloads.items.value.isRunning(key))
     val name = pathLeaf(absPath)
     Column(
         modifier.fillMaxSize().padding(Space.xl).testTag("editor_binary_card"),
@@ -216,8 +240,23 @@ fun BinaryFileCard(
         Text(name, color = cs.onSurface, fontSize = 14.sp, textAlign = TextAlign.Center)
         Text("Binary file — no text to show", color = cs.onSurfaceVariant, fontSize = 12.sp)
         FilledTonalButton(
-            enabled = !busy,
+            enabled = !busy && !waiting && !running,
             onClick = {
+                val started = download?.invoke(absPath)
+                if (started != null) {
+                    val (startedKey, source) = started
+                    key = startedKey
+                    waiting = true
+                    // The card's scope holds only the claim: closing the tab lets go, the download goes on.
+                    scope.launch {
+                        try {
+                            downloadHostFile(downloads, startedKey, source, name, platform, pointer)
+                        } finally {
+                            waiting = false
+                        }
+                    }
+                    return@FilledTonalButton
+                }
                 busy = true
                 scope.launch {
                     loadBytes(absPath)
@@ -228,7 +267,46 @@ fun BinaryFileCard(
             },
             modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag("editor_binary_open"),
         ) {
-            Text(if (pointer) "Save and open…" else "Open", style = MaterialTheme.typography.labelLarge)
+            Text(
+                when {
+                    running -> "Downloading…"
+                    pointer -> "Save and open…"
+                    else -> "Open"
+                },
+                style = MaterialTheme.typography.labelLarge,
+            )
         }
+    }
+}
+
+/** Whether the download [key] is listed and still running. */
+private fun List<Download>.isRunning(key: String?): Boolean =
+    any { it.key == key && it.state is DownloadState.Running }
+
+/**
+ * Start (or join) the host file [name]'s download [key] in [downloads] and, while this caller is
+ * still here when it finishes, hand it over as a tap does (R1). Leaving releases the claim: the
+ * download carries on and waits in the bar. A failure while it waits is said here, in the host's
+ * words, as the bytes path said it; the bar's Cancel is no failure.
+ */
+private suspend fun downloadHostFile(
+    downloads: DownloadCenter,
+    key: String,
+    source: DownloadSource,
+    name: String,
+    platform: Platform,
+    pointer: Boolean,
+) {
+    val claim = downloads.start(key, name, platform.files.probeMime(name), DownloadPurpose.File, source)
+    try {
+        val file = claim.await()
+        val item = downloads.items.value.firstOrNull { it.key == key }
+        val state = item?.state
+        when {
+            file == null -> if (state is DownloadState.Failed) platform.notices.show(state.message)
+            item != null -> handOverAsTapped(platform, pointer, downloads, item)
+        }
+    } finally {
+        claim.release()
     }
 }

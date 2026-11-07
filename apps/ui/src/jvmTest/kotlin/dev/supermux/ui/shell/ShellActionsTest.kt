@@ -6,10 +6,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.state.BrowserDownload
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NO_CAPS
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,6 +71,44 @@ class ShellActionsTest {
         assertTrue(actions.sessions.value.isEmpty())
         assertTrue(actions.finishJobs.value.isEmpty())
         assertTrue(actions.display.displays.value.isEmpty())
+        // No host keeps downloads: Files "Save and open…" stays on its bytes path.
+        assertNull(actions.hostFileDownloadFor("w1", "/w/report.bin"))
+    }
+
+    /**
+     * Files "Save and open…" downloads a host file in the fleet's downloads (#95), from the host that owns the
+     * workspace — here the fleet's one host, `h1`, which keeps downloads (the web's way: a browser download). Both
+     * builders hand over its key and source; the editor knows no version, so the key ends in a fresh one.
+     */
+    @Test
+    fun `a host file downloads from the host that owns the workspace`() = runComposeUiTest {
+        val store = HostStore(
+            baseUrl = "ws://test:9898",
+            token = "t",
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            deps = HostStoreDeps(
+                httpFactory = { HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) }) },
+                settings = ShellFakeSettings(),
+                clock = ShellFixedClock(),
+                browserDownload = BrowserDownload { _, _, _ -> null },
+            ),
+            connectOnInit = false,
+        )
+        // Dialled by the fleet as its host h1: that is what names it in a download's key.
+        val fleet = testFleet(store)
+        var single: ShellActions? = null
+        var fleetWide: ShellActions? = null
+        setContent {
+            CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = NO_CAPS)) {
+                single = rememberShellActions(store)
+                fleetWide = rememberShellActions(fleet)
+            }
+        }
+        waitForIdle()
+        for (actions in listOf(single, fleetWide)) {
+            val (key, _) = assertNotNull(assertNotNull(actions).hostFileDownloadFor("w1", "/w/report.bin"))
+            assertTrue(key.startsWith("fs:h1:/w/report.bin@"), key)
+        }
     }
 
     @Test
