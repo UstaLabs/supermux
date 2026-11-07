@@ -175,7 +175,9 @@ fun FileSearch(
     val cs = MaterialTheme.colorScheme
     val focusManager = LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf<List<GoToEntry>?>(null) }
+    // With the query in the pane's edits, which outlive this composition (#89): a rebuilt pane
+    // shows the hits at once, then searches afresh (the effect below).
+    var results by view.edits::results
     var failed by remember { mutableStateOf(false) }
     var selectedIdx by remember { mutableIntStateOf(0) }
     val q = view.query.trim()

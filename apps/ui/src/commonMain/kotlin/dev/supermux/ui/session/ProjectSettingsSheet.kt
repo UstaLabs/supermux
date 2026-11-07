@@ -61,6 +61,8 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.Dialog
@@ -148,6 +150,42 @@ data class ProjectSettingsActions(
 /** A 409 on "Add location": [path] (normalized) already belongs to [owner]. */
 private data class LocationConflict(val path: String, val owner: ProjectRef)
 
+/** What is typed in one project's settings, kept for a sheet rebuilt by a rotation (`rememberRetained`, #89). */
+private class ProjectSettingsForm {
+    /** A new opening: [open] starts it from the project's name. */
+    var fresh by mutableStateOf(true)
+    var name by mutableStateOf("")
+    var nameEdited by mutableStateOf(false)
+    var newPath by mutableStateOf("")
+    var conflict by mutableStateOf<LocationConflict?>(null)
+
+    fun open(projectName: String) {
+        name = projectName
+        nameEdited = false
+        newPath = ""
+        conflict = null
+        fresh = false
+    }
+}
+
+/** The "New project" prompt's name, host and a create in flight, kept for a rebuilt dialog (`rememberRetained`, #89). */
+private class NewProjectForm {
+    /** A new opening: [open] starts it empty, on the host given. */
+    var fresh by mutableStateOf(true)
+    var name by mutableStateOf("")
+    var host by mutableStateOf<String?>(null)
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+
+    fun open(initialHost: String?) {
+        name = ""
+        host = initialHost
+        busy = false
+        error = null
+        fresh = false
+    }
+}
+
 /**
  * Settings for the project `(hostId, projectId)`, looked up in the live [projects] catalog on
  * every frame. Dismisses itself if the project disappears (host forgotten, catalog reset).
@@ -163,16 +201,20 @@ fun ProjectSettingsSheet(
     loadImage: suspend (ProjectRef) -> ByteArray? = { null },
 ) {
     val ref = projects.firstOrNull { it.hostId == hostId && it.project.id == projectId }
+    // What is typed here outlives this composition: a rotation rebuilt the sheet with the name and
+    // the folder being typed gone (#89). Every way out marks it, so the next opening starts afresh.
+    val form = rememberRetained("project.settings:$hostId:$projectId") { ProjectSettingsForm() }
+    val close: () -> Unit = { form.fresh = true; onDismiss() }
     // A just-created project may reach the merged fleet catalog a frame after the sheet opens:
     // wait for it, and only dismiss once a project we HAVE shown is gone.
     var seen by remember(hostId, projectId) { mutableStateOf(false) }
     if (ref == null) {
-        if (seen) LaunchedEffect(Unit) { onDismiss() }
+        if (seen) LaunchedEffect(Unit) { close() }
         return
     }
     SideEffect { seen = true }
-    AdaptiveProjectContainer(tag = ProjectSettingsTestIds.SHEET, onDismiss = onDismiss) {
-        ProjectSettingsBody(ref, projects, home, actions, loadImage, onDismiss)
+    AdaptiveProjectContainer(tag = ProjectSettingsTestIds.SHEET, onDismiss = close) {
+        ProjectSettingsBody(ref, projects, home, actions, loadImage, form, close)
     }
 }
 
@@ -183,6 +225,7 @@ private fun ProjectSettingsBody(
     home: String,
     actions: ProjectSettingsActions,
     loadImage: suspend (ProjectRef) -> ByteArray?,
+    form: ProjectSettingsForm,
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -192,15 +235,16 @@ private fun ProjectSettingsBody(
     val hostId = ref.hostId
     val latestRef by rememberUpdatedState(ref)
 
-    var name by remember(hostId, project.id) { mutableStateOf(project.name) }
+    if (form.fresh) form.open(project.name)
+    var name by form::name
     // True once the user typed a name that differs from the live one; until then the field
     // follows the catalog, so a rename from another client never leaves a stale, saveable name.
-    var nameEdited by remember(hostId, project.id) { mutableStateOf(false) }
+    var nameEdited by form::nameEdited
     LaunchedEffect(project.name) { if (!nameEdited) name = project.name }
     var busy by remember(hostId, project.id) { mutableStateOf(false) }
     var message by remember(hostId, project.id) { mutableStateOf<String?>(null) }
-    var newPath by remember(hostId, project.id) { mutableStateOf("") }
-    var conflict by remember(hostId, project.id) { mutableStateOf<LocationConflict?>(null) }
+    var newPath by form::newPath
+    var conflict by form::conflict
 
     val trimmedName = name.trim()
     val canSaveName = !busy && trimmedName.isNotEmpty() && trimmedName != project.name
@@ -538,11 +582,17 @@ fun NewProjectDialog(
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var host by remember { mutableStateOf(initialHost ?: hosts.singleOrNull()?.recordId) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // The name, the host picked and a create in flight outlive this composition: a rotation
+    // reopened the dialog empty, or dropped it with the create cancelled halfway (#89). The create
+    // runs on the fleet's scope; every way out marks the form, so the next opening starts afresh.
+    val scope = rememberRetainedScope()
+    val form = rememberRetained("project.new") { NewProjectForm() }
+    if (form.fresh) form.open(initialHost ?: hosts.singleOrNull()?.recordId)
+    val dismiss: () -> Unit = { form.fresh = true; onDismiss() }
+    var name by form::name
+    var host by form::host
+    var busy by form::busy
+    var error by form::error
     val askHost = initialHost == null && hosts.size > 1
     val canCreate = !busy && name.isNotBlank() && host != null
 
@@ -553,12 +603,17 @@ fun NewProjectDialog(
         error = null
         scope.launch {
             val created = try { onCreate(h, name.trim()) } finally { busy = false }
-            if (created != null) onCreated(h, created.id) else error = "Couldn't create the project."
+            if (created != null) {
+                form.fresh = true
+                onCreated(h, created.id)
+            } else {
+                error = "Couldn't create the project."
+            }
         }
     }
 
     AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
+        onDismissRequest = { if (!busy) dismiss() },
         modifier = Modifier.testTag(ProjectSettingsTestIds.NEW_PROJECT),
         title = { Text("New project") },
         text = {
@@ -604,7 +659,7 @@ fun NewProjectDialog(
             ) { Text("Create") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+            TextButton(onClick = dismiss, enabled = !busy) { Text("Cancel") }
         },
     )
 }

@@ -457,6 +457,8 @@ fun DiffPane(
     diffDocuments: DocumentStore? = null,
     /** A lazy file's base text by blob (repo, sha, force). */
     baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
+    /** Names the review drafts kept through a rotation or a width change (see [DiffView], #89). */
+    retainKey: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -559,6 +561,7 @@ fun DiffPane(
             postComment = onReviewAddComment,
             documents = diffDocuments,
             baseText = baseText,
+            retainKey = retainKey,
         )
         }
     }

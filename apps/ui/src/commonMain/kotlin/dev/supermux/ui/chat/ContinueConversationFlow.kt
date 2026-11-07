@@ -64,6 +64,8 @@ import dev.supermux.state.spawnFailureMessage
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -116,6 +118,9 @@ fun rememberContinueSheetState(): MutableState<Boolean> = remember { mutableStat
  *
  * [onContinue] returns the new session id (or null / throws on failure); [onContinued] hands it to
  * the shell so it can select it.
+ *
+ * [retainKey] names the form kept for a flow that a rotation or a width change rebuilds (#89): the
+ * text, the picks and a spawn in flight. Null keeps all of it in this composition.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,36 +132,51 @@ fun ContinueConversationFlow(
     loadModels: suspend (String) -> List<ModelInfo>,
     loadReasoning: suspend (String, String?) -> ReasoningResponse?,
     onDismiss: () -> Unit,
+    retainKey: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
-    var text by remember(session.id) { mutableStateOf(HandoffPrefill.build(session.name, session.id)) }
-    var agent by remember(session.id) { mutableStateOf(HandoffPrefill.defaultAgent(session.agent)) }
+    // Kept outside this composition when [retainKey] names it (#89), and so is a spawn in flight:
+    // it runs on the fleet's scope, and its outcome waits in the form for the flow on screen when
+    // it lands. A new opening starts from the prefill, as a new composition did.
+    val form = if (retainKey != null) rememberRetained(retainKey) { ContinueForm() } else remember(session.id) { ContinueForm() }
+    if (form.fresh) form.open(session)
+    val scope = if (retainKey != null) rememberRetainedScope() else rememberCoroutineScope()
+    var text by form::text
+    var agent by form::agent
     var agents by remember { mutableStateOf(CONTINUE_AGENT_FALLBACK) }
-    var model by remember(session.id) { mutableStateOf<String?>(null) }
+    var model by form::model
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
-    var reasoning by remember(session.id) { mutableStateOf<String?>(null) }
+    var reasoning by form::reasoning
     var reasoningLevels by remember { mutableStateOf<List<ReasoningLevel>>(emptyList()) }
     var reasoningVisible by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var busy by form::busy
+    var error by form::error
     // Desktop's seeding guard: hold the model/reasoning loads until the agent list has settled, so
     // a carried-over model isn't cleared by a load against the pre-seed agent.
     var seeding by remember(session.id) { mutableStateOf(true) }
+    // Every way out marks the form, so the next opening starts from the prefill again.
+    val close: () -> Unit = {
+        form.fresh = true
+        onDismiss()
+    }
 
     LaunchedEffect(session.id) {
         seeding = true
         val installed = runCatching { loadAgents() }.getOrNull().orEmpty()
             .map { it.lowercase() }.filter { it.isNotBlank() }
         agents = installed.ifEmpty { CONTINUE_AGENT_FALLBACK }
-        val next = HandoffPrefill.defaultAgent(session.agent)
-        agent = if (next in agents) next else agents.first()
-        // Same agent → carry the source session's model/thinking level over as the default.
-        val sameAgent = session.agent.equals(agent, ignoreCase = true)
-        model = if (sameAgent) session.model?.takeIf { it.isNotBlank() } else null
-        reasoning = if (sameAgent) session.reasoningLevel?.takeIf { it.isNotBlank() } else null
+        // Once per opening: a flow rebuilt under the user's picks keeps them (#89).
+        if (!form.seeded) {
+            val next = HandoffPrefill.defaultAgent(session.agent)
+            agent = if (next in agents) next else agents.first()
+            // Same agent → carry the source session's model/thinking level over as the default.
+            val sameAgent = session.agent.equals(agent, ignoreCase = true)
+            model = if (sameAgent) session.model?.takeIf { it.isNotBlank() } else null
+            reasoning = if (sameAgent) session.reasoningLevel?.takeIf { it.isNotBlank() } else null
+            form.seeded = true
+        }
         seeding = false
     }
     LaunchedEffect(agent, seeding) {
@@ -189,13 +209,20 @@ fun ContinueConversationFlow(
             }.getOrElse { e -> error = spawnFailureMessage(e); null }
             busy = false
             if (id != null) {
-                onContinued(id)
-                onDismiss()
+                form.created = id
             } else if (error == null) {
                 error = "Couldn't start — check the agent is installed and signed in."
             }
         }
         Unit
+    }
+    // The spawn's outcome, read by the flow on screen when it lands: the one that started it, or
+    // the one a rotation put in its place.
+    LaunchedEffect(form, form.created) {
+        val id = form.created ?: return@LaunchedEffect
+        form.created = null
+        onContinued(id)
+        close()
     }
     val canStart = !busy && text.isNotBlank() && session.workdir.isNotBlank()
 
@@ -237,7 +264,7 @@ fun ContinueConversationFlow(
 
     if (compact) {
         ModalBottomSheet(
-            onDismissRequest = { if (!busy) onDismiss() },
+            onDismissRequest = { if (!busy) close() },
             modifier = Modifier.testTag("continue_sheet"),
         ) {
             Column(
@@ -260,7 +287,7 @@ fun ContinueConversationFlow(
                 errorLine()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(
-                        onClick = onDismiss,
+                        onClick = close,
                         enabled = !busy,
                         modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CANCEL),
                     ) { Text("Cancel") }
@@ -275,7 +302,7 @@ fun ContinueConversationFlow(
         }
     } else {
         AlertDialog(
-            onDismissRequest = { if (!busy) onDismiss() },
+            onDismissRequest = { if (!busy) close() },
             title = { Text("Continue in new conversation") },
             text = {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
@@ -300,12 +327,40 @@ fun ContinueConversationFlow(
             },
             dismissButton = {
                 TextButton(
-                    onClick = onDismiss,
+                    onClick = close,
                     enabled = !busy,
                     modifier = Modifier.testTag(ContinueTestIds.CONTINUE_CANCEL),
                 ) { Text("Cancel") }
             },
         )
+    }
+}
+
+/** The continue form, kept for a flow rebuilt by a rotation or a width change (`rememberRetained`, #89). */
+private class ContinueForm {
+    /** A new opening: [open] fills the prefill in. */
+    var fresh by mutableStateOf(true)
+    var text by mutableStateOf("")
+    var agent by mutableStateOf("")
+    var model by mutableStateOf<String?>(null)
+    var reasoning by mutableStateOf<String?>(null)
+    /** The agent list has seeded this opening's picks; from then on they are the user's. */
+    var seeded by mutableStateOf(false)
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    /** The session a spawn answered, until the flow on screen opens it. */
+    var created by mutableStateOf<String?>(null)
+
+    fun open(session: SessionInfo) {
+        text = HandoffPrefill.build(session.name, session.id)
+        agent = HandoffPrefill.defaultAgent(session.agent)
+        model = null
+        reasoning = null
+        seeded = false
+        busy = false
+        error = null
+        created = null
+        fresh = false
     }
 }
 

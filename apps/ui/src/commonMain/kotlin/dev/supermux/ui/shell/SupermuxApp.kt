@@ -558,9 +558,12 @@ fun SupermuxApp(
     }
 
     // ── Persistent project settings (the header ⋮ → Settings) and "New project" (the list ⋮) ──
+    // Kept by the fleet, not by this composition: an Android rotation recreated the shell with
+    // both closed (#89). Read straight from the fleet: this is above where the shell provides it.
+    val projectDialogs = remember(fleet) { fleet.retainedUi.getOrPut("shell.project-dialogs") { ProjectDialogs() } }
     /** (hostId, projectId) of the open settings sheet. */
-    var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var newProjectOpen by remember { mutableStateOf(false) }
+    var projectSettingsTarget by projectDialogs::settingsTarget
+    var newProjectOpen by projectDialogs::newProjectOpen
     val catalogHosts by fleet.projectCatalogHosts.collectAsState()
     /** Each host's own home folder: a host's folders shorten under ITS home (the single [home] is the fallback). */
     val homeDirs by fleet.homeDirs.collectAsState()
@@ -581,30 +584,34 @@ fun SupermuxApp(
             validatePath = { h, path -> fleet.validatePathOn(h, path) },
         )
     }
-    projectSettingsTarget?.let { (hostId, projectId) ->
-        ProjectSettingsSheet(
-            hostId = hostId,
-            projectId = projectId,
-            projects = projectRefs,
-            home = home,
-            actions = projectSettingsActions,
-            onDismiss = { projectSettingsTarget = null },
-            loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
-        )
-    }
-    if (newProjectOpen) {
-        // The filtered host, else the only host; with several and no filter the dialog asks.
-        val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
-        NewProjectDialog(
-            hosts = newProjectHosts,
-            initialHost = singleHost,
-            onCreate = { h, name -> fleet.createProject(h, name) },
-            onCreated = { h, id ->
-                newProjectOpen = false
-                projectSettingsTarget = h to id
-            },
-            onDismiss = { newProjectOpen = false },
-        )
+    // Drawn above where the shell provides the fleet's retained state, so given it here: what is
+    // typed in either outlives the composition too (#89).
+    CompositionLocalProvider(dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi) {
+        projectSettingsTarget?.let { (hostId, projectId) ->
+            ProjectSettingsSheet(
+                hostId = hostId,
+                projectId = projectId,
+                projects = projectRefs,
+                home = home,
+                actions = projectSettingsActions,
+                onDismiss = { projectSettingsTarget = null },
+                loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
+            )
+        }
+        if (newProjectOpen) {
+            // The filtered host, else the only host; with several and no filter the dialog asks.
+            val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+            NewProjectDialog(
+                hosts = newProjectHosts,
+                initialHost = singleHost,
+                onCreate = { h, name -> fleet.createProject(h, name) },
+                onCreated = { h, id ->
+                    newProjectOpen = false
+                    projectSettingsTarget = h to id
+                },
+                onDismiss = { newProjectOpen = false },
+            )
+        }
     }
 
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
@@ -2036,4 +2043,10 @@ internal fun gitBannerFor(
             }
         }
     }
+}
+
+/** The project settings sheet's target and whether "New project" is open, kept by the fleet (#89). */
+private class ProjectDialogs {
+    var settingsTarget by mutableStateOf<Pair<String, String>?>(null)
+    var newProjectOpen by mutableStateOf(false)
 }

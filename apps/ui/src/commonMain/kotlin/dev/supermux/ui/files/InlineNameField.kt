@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -70,9 +71,13 @@ fun InlineNameField(
     modifier: Modifier = Modifier,
     /** The folder the name goes in: its host's name rules apply. */
     inFolder: String? = null,
+    /** Where the name being typed is kept: the pane's, which outlives this composition (#89). */
+    typed: TypedName? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
+    val own = remember { TypedName(nameFieldValue(initial, folder)) }
+    val kept = typed ?: own
+    var field by kept::value
     var serverError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     // Once committed or cancelled, the field ignores everything (the blur its own removal causes).
@@ -142,7 +147,17 @@ fun InlineNameField(
                             if (st.isFocused) {
                                 hadFocus = true
                             } else if (hadFocus && !finished && !busy) {
-                                if (commitsOnBlur(name, invalid, current)) commit(refocus = false) else cancel(refocus = false)
+                                // Decided on the next frame, on this field's own scope: the blur of
+                                // its own removal (a rotation or a width change rebuilding the
+                                // tree, #89) is not the user's, and that removal cancels the scope
+                                // before any frame, so the edit stays open, with its name, for the
+                                // new tree. A frame, not just a launch: on an immediate dispatcher
+                                // the launch runs inside the removal and committed the name.
+                                scope.launch {
+                                    withFrameNanos { }
+                                    if (finished || busy) return@launch
+                                    if (commitsOnBlur(name, invalid, current)) commit(refocus = false) else cancel(refocus = false)
+                                }
                             }
                         }
                         .onPreviewKeyEvent { e ->
@@ -178,3 +193,7 @@ fun InlineNameField(
         }
     }
 }
+
+/** A name field's first value: [initial], with a rename's stem selected (see [renameSelectionEnd]). */
+internal fun nameFieldValue(initial: String, folder: Boolean): TextFieldValue =
+    TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))

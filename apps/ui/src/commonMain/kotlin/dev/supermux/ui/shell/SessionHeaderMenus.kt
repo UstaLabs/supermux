@@ -100,6 +100,7 @@ import dev.supermux.ui.chat.FinishBindings
 import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.session.SessionStatusRail
@@ -409,16 +410,19 @@ fun OverflowMenu(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
-    var showRename by remember(session.id) { mutableStateOf(false) }
-    var renameText by remember(session.id) { mutableStateOf(session.name) }
-    var showKill by remember(session.id) { mutableStateOf(false) }
-    var showContinue by remember(session.id) { mutableStateOf(false) }
+    // This session's dialogs, and the name being typed, live outside this composition: a rotation
+    // or a width change rebuilt the header with every one of them closed (#89).
+    val dialogs = rememberRetained("chat.header:${session.id}") { HeaderDialogs(session.name) }
+    var showRename by dialogs::rename
+    var renameText by dialogs::renameText
+    var showKill by dialogs::kill
+    var showContinue by dialogs::continueOpen
     val muted = session.mute ?: false
-    // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks
-    // (a stale open Kill would otherwise target the wrong session).
+    // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks.
+    // The dialogs are keyed by the session (above), so an open Kill can only target its own; and
+    // closing them here would close them on every rebuild too, which is this effect's first run.
     LaunchedEffect(session.id) {
         expanded = false
-        showContinue = false
     }
     LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
 
@@ -591,8 +595,17 @@ fun OverflowMenu(
             loadModels = loadContinueModels,
             loadReasoning = loadContinueReasoning,
             onDismiss = { showContinue = false },
+            retainKey = "chat.continue:${session.id}",
         )
     }
+}
+
+/** One session's header dialogs and the name being typed, kept for a rebuilt [OverflowMenu] (`rememberRetained`, #89). */
+private class HeaderDialogs(name: String) {
+    var rename by mutableStateOf(false)
+    var renameText by mutableStateOf(name)
+    var kill by mutableStateOf(false)
+    var continueOpen by mutableStateOf(false)
 }
 
 /** One git row of [OverflowMenu] — Android's shape (label + leading glyph), Material icons. */
