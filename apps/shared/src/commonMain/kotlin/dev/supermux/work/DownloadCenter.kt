@@ -126,12 +126,16 @@ class DownloadCenter(private val scope: CoroutineScope) {
 
     /** The user's Cancel. The source keeps what arrived, so [retry] continues from there. */
     fun cancel(key: String) {
-        val job = synchronized(lock) {
-            if (stateOf(key) !is DownloadState.Running) return
+        val (source, job) = synchronized(lock) {
+            val entry = entries[key]
+            if (entry == null || stateOf(key) !is DownloadState.Running) return
             set(key) { DownloadState.Cancelled }
-            entries[key]?.job
+            entry.source to entry.job
         }
-        // The job's own catch tells the source: a transfer it shares with the media cache would run on otherwise.
+        // Told here, at once: a transfer the source shares with the media cache runs on that cache's own scope,
+        // and the job's catch runs only later, on the dispatcher — after the fleet's close() has gone on to close
+        // the hosts, while that transfer carried on until its next range failed.
+        source.cancel()
         job?.cancel()
     }
 
@@ -160,7 +164,7 @@ class DownloadCenter(private val scope: CoroutineScope) {
         }
     }
 
-    /** The fleet is closing: cancel every download, each source told as with the user's Cancel. */
+    /** The fleet is closing: cancel every download, each source told at once, as with the user's Cancel. */
     fun close() {
         synchronized(lock) { entries.keys.toList() }.forEach { cancel(it) }
     }
@@ -189,9 +193,10 @@ class DownloadCenter(private val scope: CoroutineScope) {
             if (currentCoroutineContext().isActive) {
                 DownloadState.Failed(c.message ?: FAILED)
             } else {
-                // The source's transfer may live on another scope (the media cache's): it has to be told.
-                source.cancel()
-                end(key, me, DownloadState.Cancelled)
+                // A Cancel or close() has told the source already. A job its scope ended alone is still listed
+                // Running here, and its source is told now: the transfer may live on another scope (the media
+                // cache's). Never twice: a late second word could stop the transfer a Retry has started since.
+                if (end(key, me, DownloadState.Cancelled)) source.cancel()
                 throw c
             }
         } catch (e: Throwable) {
@@ -208,16 +213,17 @@ class DownloadCenter(private val scope: CoroutineScope) {
 
     /**
      * Settle [me]'s run of [key] — unless a Cancel, a restart or [clearFinished] came first — and announce a
-     * finish that no screen waits for.
+     * finish that no screen waits for. True when this call settled it.
      */
-    private fun end(key: String, me: Job, state: DownloadState) {
+    private fun end(key: String, me: Job, state: DownloadState): Boolean {
         val unclaimed = synchronized(lock) {
-            val entry = entries[key] ?: return
-            if (entry.job !== me || stateOf(key) !is DownloadState.Running) return
+            val entry = entries[key] ?: return false
+            if (entry.job !== me || stateOf(key) !is DownloadState.Running) return false
             set(key) { state }
             if (state is DownloadState.Done && entry.claims == 0) listed.value.first { it.key == key } else null
         }
         unclaimed?.let { completions.tryEmit(it) }
+        return true
     }
 
     private fun stateOf(key: String): DownloadState? = listed.value.firstOrNull { it.key == key }?.state

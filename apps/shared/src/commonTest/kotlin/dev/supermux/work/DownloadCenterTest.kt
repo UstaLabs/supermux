@@ -157,6 +157,32 @@ class DownloadCenterTest {
         assertEquals(listOf(1, 1), listOf(a.cancels, b.cancels))
     }
 
+    // The source hears a Cancel when it is pressed, not when the job's catch gets its turn on the dispatcher: by
+    // then the fleet has closed its hosts, and the media cache's transfer would run on until its next range failed.
+    @Test fun cancelTellsTheSharedTransferAtOnce() = runTest {
+        val c = center()
+        val s = FakeSource()
+        c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s)
+        runCurrent()
+        c.cancel("k")
+        assertEquals(1, s.cancels, "told before the job's catch has run")
+        runCurrent()
+        assertEquals(1, s.cancels, "and told once")
+    }
+
+    @Test fun closeTellsEverySharedTransferAtOnce() = runTest {
+        val c = center()
+        val a = FakeSource()
+        val b = FakeSource()
+        c.start("a", "a.pdf", "application/pdf", DownloadPurpose.File, a)
+        c.start("b", "b.pdf", "application/pdf", DownloadPurpose.File, b)
+        runCurrent()
+        c.close()
+        assertEquals(listOf(1, 1), listOf(a.cancels, b.cancels), "told before the jobs' catches have run")
+        runCurrent()
+        assertEquals(listOf(1, 1), listOf(a.cancels, b.cancels), "and told once")
+    }
+
     @Test fun retryFetchesTheSameSourceAgain() = runTest {
         val c = center()
         val s = FakeSource()

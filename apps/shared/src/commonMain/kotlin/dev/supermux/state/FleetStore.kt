@@ -1160,8 +1160,8 @@ class FleetStore(
 
     /** Stop every host's connection + fold, and release the throwaway claim/probe HttpClient. */
     fun close() {
-        // Downloads first, as the user's Cancel does them: each is listed Cancelled at once, and its job tells its
-        // source as it ends.
+        // Downloads first, as the user's Cancel does them: each is listed Cancelled and its source told at once,
+        // before the hosts below close under a transfer the media cache runs on its own scope.
         downloads.close()
         fleetScope.cancel()
         // Detach first, then tear the sockets down WITHOUT [lock]: `HostStore.close()` cancels
