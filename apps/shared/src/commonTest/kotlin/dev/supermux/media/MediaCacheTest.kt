@@ -4,6 +4,7 @@ import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.proto.Attachment
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -103,6 +104,26 @@ class MediaCacheTest {
         assertContentEquals(png, a.await())
         assertContentEquals(png, b.await())
         assertEquals(1, fetches)
+    }
+
+    // #95: a chat row awaits this from its own scope, and leaving the chat cancels that caller. The
+    // download itself runs on the cache's scope and must finish, so the file is there next time.
+    @Test fun aDownloadOutlivesTheCallerThatStartedIt() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val gate = CompletableDeferred<Unit>()
+        val slow: RangeDownload = { from, to, sink ->
+            gate.await()
+            rangeServer(png)(from, to, sink)
+        }
+        val cache = cache(store)
+        val caller = launch { cache.bytes(host, att(), Network(null).fetch, slow) }
+        runCurrent()
+        caller.cancel()
+        gate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertTrue(caller.isCancelled)
+        assertContentEquals(png, store.entries["$host/$id.png"])
+        assertContentEquals(png, cache.peek(host, att()))
     }
 
     @Test fun aFailedDownloadIsNullAndKeepsNothing() = runTest {
