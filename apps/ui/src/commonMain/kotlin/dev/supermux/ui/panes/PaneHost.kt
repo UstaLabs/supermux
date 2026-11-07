@@ -43,6 +43,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -1016,6 +1017,11 @@ fun PaneTabStrip(
     val end = LocalStripEnd.current?.takeIf { groupId.isNotEmpty() && it.groupId == groupId }
     val endWidth = end?.width ?: 0.dp
     val endPx = with(density) { endWidth.toPx() }
+    // The part of the strip its chrome keeps clear (the window's own buttons over a strip in the
+    // top band): the tabs share only the rest, so the + never scrolls out of view beside them.
+    // Measured by the strip below, a frame after the chrome's own inset lands.
+    var chromeKeepsPx by remember { mutableStateOf(0) }
+    val boundedStripPx = if (constraints.hasBoundedWidth) constraints.maxWidth else null
     // Chrome's widths: the strip shared out equally between TabMinWidth and TabMaxWidth, and past
     // that it scrolls. While the pointer is on the strip, a closed tab's room is not handed out
     // (room is only taken, for a new tab), so the next tab's × stays under the pointer.
@@ -1023,7 +1029,7 @@ fun PaneTabStrip(
     // cut it, and the others split what is left.
     val minPx = with(density) { TabMinWidth.toPx() }
     val maxPx = with(density) { TabMaxWidth.toPx() }
-    val availablePx = stripWidthPx - addSlotPx - rowPadPx - endPx
+    val availablePx = stripWidthPx - chromeKeepsPx - addSlotPx - rowPadPx - endPx
     val tabCount = displayIds.size.coerceAtLeast(1)
     val textMeasurer = rememberTextMeasurer()
     val activeTitle = titleFor(activeViewId)
@@ -1115,6 +1121,13 @@ fun PaneTabStrip(
             .then(chrome.strip("strip-$chromeKey"))
             .testTag("view-tab-strip"),
     ) {
+        // As wide as the room the chrome leaves the strip's content.
+        Spacer(
+            Modifier.fillMaxSize().onGloballyPositioned {
+                val keeps = boundedStripPx?.let { strip -> (strip - it.size.width).coerceAtLeast(0) } ?: 0
+                if (keeps != chromeKeepsPx) chromeKeepsPx = keeps
+            },
+        )
         // Absolute-positioned tabs: each id keeps composition identity and slides
         // (graphicsLayer translation) to its live-order slot — "transforms into"
         // the place the neighbour vacated.
