@@ -1466,13 +1466,15 @@ private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClic
  *
  * Nothing is fetched until the user opts into playback — a transcript must never eagerly download
  * every clip. The media cache's own file then plays in place ([AttachmentMedia.playableUri]): it was
- * downloaded straight to disk, so a long clip never passes through memory. Without one (the web, a
- * memory-only cache) the bytes are staged through `Platform.files.stageTemp` as before, so the
+ * downloaded straight to disk, so a long clip never passes through memory. A media that downloads
+ * files and has none for it shows the file card ([resolvePlayableClip]); one without downloads (a
+ * preview's in-memory media) stages the bytes through `Platform.files.stageTemp` as before, so the
  * native backend can open them by URI. A failed download, or a backend error, falls back to the
  * ordinary [AttachmentFileCard] so save + the OS player stay reachable.
  *
  * [onOpenViewer] opens the clip in the chat's fullscreen viewer (the ⤢ button; the inline player
- * pauses first); false — or no viewer at all — keeps the old "open in the system player".
+ * pauses first); false — or no viewer at all — keeps the old "open in the system player", which
+ * hands over the clip's FILE through the fleet's downloads ([startDownload]).
  *
  * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
  * libraries in a headless worker.
@@ -1491,6 +1493,7 @@ internal fun InlineVideo(
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     var playing by remember(att.file_id) { mutableStateOf(false) }
     var uri by remember(att.file_id) { mutableStateOf<String?>(null) }
     var staged by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
@@ -1561,7 +1564,9 @@ internal fun InlineVideo(
                 {
                     if (onOpenViewer?.invoke() != true) {
                         scope.launch {
-                            // A clip played from the cache's file was never read into memory: read it now.
+                            // The clip's FILE, through the fleet's downloads: leaving the chat lets go of it, and it waits in the bar.
+                            if (startDownload(downloads, media, att, platform, pointer)) return@launch
+                            // No download here (a preview): the staged bytes, else read them now.
                             val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
                             if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
                         }
@@ -1578,11 +1583,16 @@ internal class PlayableClip(val uri: String, val staged: ByteArray?)
 
 /**
  * Where a clip plays from: the media cache's own file first (downloaded straight to disk, played in
- * place — a long clip never passes through memory); without one (the web, a memory-only cache) the
- * bytes are staged through `Platform.files.stageTemp`. Null when neither works.
+ * place — a long clip never passes through memory). A media that downloads files (#95: a host with a
+ * file store, the web's browser download) plays from that file or not at all: no file is a failure,
+ * and the caller shows the file card. Its transfer is the one a download of the same file shares, so
+ * after the user cancelled that download in the bar, reading the bytes here would fetch the whole
+ * clip again, into memory. Without a download (a preview's in-memory media) the bytes are staged
+ * through `Platform.files.stageTemp`. Null when nothing works.
  */
 internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia, platform: Platform): PlayableClip? {
     runCatching { media.playableUri(att) }.getOrNull()?.let { return PlayableClip(it, staged = null) }
+    if (media.downloadKey(att) != null) return null
     val bytes = runCatching { media.bytes(att) }.getOrNull() ?: return null
     // Name by the unique file_id so two clips never collide in the staging dir, and keep the
     // original extension — the native backends pick their demuxer from it.
