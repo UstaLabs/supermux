@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,15 +84,7 @@ fun ActivityBar(
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         ActivityGlyph(shown.state)
-        Text(
-            activityLine(shown),
-            color = cs.onSurface,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            // The extension and the percentage stay in view: "very-long-rep…final.pdf · 42%".
-            overflow = TextOverflow.MiddleEllipsis,
-            modifier = Modifier.weight(1f),
-        )
+        ActivityLine(shown, Modifier.weight(1f))
         if (items.size > 1) {
             Text(
                 "+${items.size - 1}",
@@ -158,7 +151,6 @@ fun ActivityList(
 /** One item of the list: its line, its progress while it runs, and [buttons] under them at the end. */
 @Composable
 private fun ActivityRow(item: Download, buttons: @Composable RowScope.() -> Unit) {
-    val cs = MaterialTheme.colorScheme
     val state = item.state
     Column(
         Modifier
@@ -174,14 +166,7 @@ private fun ActivityRow(item: Download, buttons: @Composable RowScope.() -> Unit
             horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
             StateGlyph(state)
-            Text(
-                activityLine(item),
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-                modifier = Modifier.weight(1f),
-            )
+            ActivityLine(item, Modifier.weight(1f))
         }
         if (state is DownloadState.Running) {
             // Under the line, not under the glyph.
@@ -231,13 +216,51 @@ private fun StateGlyph(state: DownloadState) {
     Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(Sizes.iconSm))
 }
 
-/** The one line an item reads as, in the bar and in the list. */
-internal fun activityLine(item: Download): String = when (val state = item.state) {
-    is DownloadState.Running -> "${item.name} · ${state.percent()?.let { "$it%" } ?: formatFileSize(state.received)}"
-    is DownloadState.Done ->
-        if (item.purpose == DownloadPurpose.Installer) "${item.name} is ready to install" else "${item.name} downloaded"
-    is DownloadState.Failed -> "${item.name} — download failed"
-    DownloadState.Cancelled -> "${item.name} — cancelled"
+/**
+ * The line an item reads as, in the bar and in the list: its name, then what became of it — "big-video.mp4 · 42%",
+ * "notes.pdf downloaded". The name gives way when there is no room ("big-video-from-the-dem… · 42%"); the status
+ * never does. One Text with a middle ellipsis does not hold on a desktop: in the sidebar's footer it drew
+ * "big-video-from-the-demo-day.mp4 · …", the percentage lost.
+ */
+@Composable
+private fun ActivityLine(item: Download, modifier: Modifier = Modifier) {
+    val color = MaterialTheme.colorScheme.onSurface
+    val style = MaterialTheme.typography.bodyMedium
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ActivityBarTokens.WordGap)) {
+        Text(
+            item.name,
+            color = color,
+            style = style,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            // No wider than the name, so the status follows it; never so wide that the status has no room.
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        activitySeparator(item.state)?.let {
+            // Between the two, for the eye: nothing to read aloud.
+            Text(it, color = color, style = style, maxLines = 1, softWrap = false, modifier = Modifier.clearAndSetSemantics {})
+        }
+        Text(activityStatus(item), color = color, style = style, maxLines = 1, softWrap = false)
+    }
+}
+
+/** The one line an item reads as, in words: what the collapsed rail's tile says for its ring. */
+internal fun activityLine(item: Download): String =
+    listOfNotNull(item.name, activitySeparator(item.state), activityStatus(item)).joinToString(" ")
+
+/** What became of an item, after its name: how far it got, or how it ended. */
+private fun activityStatus(item: Download): String = when (val state = item.state) {
+    is DownloadState.Running -> state.percent()?.let { "$it%" } ?: formatFileSize(state.received)
+    is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) "is ready to install" else "downloaded"
+    is DownloadState.Failed -> "download failed"
+    DownloadState.Cancelled -> "cancelled"
+}
+
+/** A dot before how far it got, a dash before a failure or a cancel; a finished one reads on: "notes.pdf downloaded". */
+private fun activitySeparator(state: DownloadState): String? = when (state) {
+    is DownloadState.Running -> "·"
+    is DownloadState.Failed, DownloadState.Cancelled -> "—"
+    is DownloadState.Done -> null
 }
 
 /** Whole percent, counted in bytes so 42 of 100 reads 42 (a float would make it 41). Null without a total. */
@@ -266,4 +289,7 @@ private object ActivityBarTokens {
 
     /** In the sidebar's footer, as tall as the update card's buttons. */
     val HeightPointer = 36.dp
+
+    /** Between the words of a line drawn in pieces (name · status): a space's width. */
+    val WordGap = 4.dp
 }

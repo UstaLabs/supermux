@@ -1,5 +1,8 @@
 package dev.supermux.ui.work
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -8,6 +11,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasProgressBarRangeInfo
@@ -31,6 +35,7 @@ import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The activity bar and its list (#95). Both are pure — the caller hands in the items and the callbacks — so
@@ -94,7 +99,8 @@ class ActivityBarTest {
     @Test fun aRunningItemShowsItsPercentageOnARingAndNoClear() = runDesktopComposeUiTest {
         bar(listOf(running("r", "big-video.mp4", received = 42, total = 100)))
         onNodeWithTag("activity_bar").assertIsDisplayed()
-        onNodeWithText("big-video.mp4 · 42%", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("big-video.mp4", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("42%", useUnmergedTree = true).assertIsDisplayed()
         onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)), useUnmergedTree = true).assertExists()
         onNodeWithTag("activity_bar_more", useUnmergedTree = true).assertDoesNotExist()
         onNodeWithTag("activity_bar_clear").assertDoesNotExist()
@@ -102,17 +108,54 @@ class ActivityBarTest {
 
     @Test fun withoutATotalItShowsTheBytesSoFarOnASpinner() = runDesktopComposeUiTest {
         bar(listOf(running("r", "big-video.mp4", received = 12_897_485, total = null)))
-        onNodeWithText("big-video.mp4 · 12.3 MB", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("big-video.mp4", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("12.3 MB", useUnmergedTree = true).assertIsDisplayed()
         onNode(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate), useUnmergedTree = true).assertExists()
     }
 
     @Test fun aRunningItemOutranksANewerFinishedOneAndTheRestAreCounted() = runDesktopComposeUiTest {
         // Newest first: the finished one is newer.
         bar(listOf(done("d", "notes.pdf"), running("r", "big-video.mp4", received = 42, total = 100)))
-        onNodeWithText("big-video.mp4 · 42%", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText("notes.pdf downloaded", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithText("big-video.mp4", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("42%", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("notes.pdf", useUnmergedTree = true).assertDoesNotExist()
         onNodeWithTag("activity_bar_more", useUnmergedTree = true).assertTextEquals("+1")
         onNodeWithTag("activity_bar_clear").assertDoesNotExist()
+    }
+
+    // The sidebar's footer is narrow, and a desktop does not keep a middle ellipsis: one Text for the whole line
+    // drew "big-video-from-the-demo-day.mp4 · …", the percentage lost. The name gives way; the status never does.
+    @Test fun aLongNameNeverPushesThePercentageOutOfTheBar() = runDesktopComposeUiTest {
+        setPlatformContent(FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                Box(Modifier.width(240.dp)) {
+                    ActivityBar(listOf(running("r", LONG_NAME, received = 42, total = 100)), onOpen = {}, onClearFinished = {})
+                }
+            }
+        }
+        val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val status = onNodeWithText("42%", useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(status.left >= bar.left && status.right <= bar.right, "the status ($status) runs out of the bar ($bar)")
+    }
+
+    @Test fun aLongNameNeverPushesThePercentageOutOfAListRow() = runDesktopComposeUiTest {
+        setPlatformContent(FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                Box(Modifier.width(240.dp)) {
+                    ActivityList(
+                        listOf(running("r", LONG_NAME, received = 42, total = 100)),
+                        actions = emptySet(),
+                        onCancel = {},
+                        onRetry = {},
+                        onAction = { _, _ -> },
+                        onInstall = {},
+                    )
+                }
+            }
+        }
+        val row = onNodeWithTag("activity_item").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val status = onNodeWithText("42%", useUnmergedTree = true).assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(status.left >= row.left && status.right <= row.right, "the status ($status) runs out of the row ($row)")
     }
 
     @Test fun withNothingRunningTheNewestShowsAndClearCallsBack() = runDesktopComposeUiTest {
@@ -123,7 +166,8 @@ class ActivityBarTest {
             onOpen = { opened++ },
             onClearFinished = { cleared++ },
         )
-        onNodeWithText("notes.pdf downloaded", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("notes.pdf", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("downloaded", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("activity_bar_more", useUnmergedTree = true).assertTextEquals("+2")
         onNodeWithContentDescription("Clear finished downloads").assertIsDisplayed()
         onNodeWithTag("activity_bar_clear").performClick()
@@ -132,7 +176,7 @@ class ActivityBarTest {
         assertEquals(0, opened, "clearing does not open the list")
     }
 
-    @Test fun eachStateReadsAsOneLine() = runDesktopComposeUiTest {
+    @Test fun eachStateReadsAsItsNameThenWhatBecameOfIt() = runDesktopComposeUiTest {
         list(
             listOf(
                 running("r", "big-video.mp4", received = 42, total = 100),
@@ -142,11 +186,12 @@ class ActivityBarTest {
                 cancelled("c", "b.zip"),
             ),
         )
-        onNodeWithText("big-video.mp4 · 42%").assertIsDisplayed()
-        onNodeWithText("notes.pdf downloaded").assertIsDisplayed()
-        onNodeWithText("Supermux 1.2.0 is ready to install").assertIsDisplayed()
-        onNodeWithText("a.zip — download failed").assertIsDisplayed()
-        onNodeWithText("b.zip — cancelled").assertIsDisplayed()
+        onNode(hasItemKey("r")).assertTextEquals("big-video.mp4", "42%")
+        onNode(hasItemKey("d")).assertTextEquals("notes.pdf", "downloaded")
+        onNode(hasItemKey("u")).assertTextEquals("Supermux 1.2.0", "is ready to install")
+        onNode(hasItemKey("f")).assertTextEquals("a.zip", "download failed")
+        onNode(hasItemKey("c")).assertTextEquals("b.zip", "cancelled")
+        onNodeWithText("42%", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun tappingTheBarOpensTheList() = runDesktopComposeUiTest {
@@ -208,7 +253,7 @@ class ActivityBarTest {
     @Test fun aRowReadsAsWhatItShowsNeverAsItsKey() = runDesktopComposeUiTest {
         list(listOf(done("att:host/0123", "notes.pdf")))
         onAllNodes(hasContentDescription("att:host", substring = true), useUnmergedTree = true).assertCountEquals(0)
-        onNode(hasItemKey("att:host/0123")).assertTextEquals("notes.pdf downloaded")
+        onNode(hasItemKey("att:host/0123")).assertTextEquals("notes.pdf", "downloaded")
         onNode(hasTestTag("activity_open") and hasAnyAncestor(hasItemKey("att:host/0123"))).assertTextEquals("Open")
     }
 
@@ -239,5 +284,10 @@ class ActivityBarTest {
             listOf("cancel:r", "retry:c", "Open:d", "Save:d", "Share:d", "install:u"),
             calls,
         )
+    }
+
+    private companion object {
+        /** Wider than the sidebar's footer, as a real recording's name is. */
+        const val LONG_NAME = "big-video-from-the-demo-day-and-the-whole-of-the-afternoon-session.mp4"
     }
 }
