@@ -12,11 +12,13 @@ function Resolve-SupermuxInstall {
         return (Resolve-Path -LiteralPath $InstallDir).Path
     }
 
-    $candidates = @(
+    # @( ... ) around the whole pipeline: one match would otherwise be a bare string, and Windows PowerShell 5.1
+    # under StrictMode Latest has no .Count on it.
+    $candidates = @(@(
         (Join-Path $env:ProgramFiles "supermux"),
         (Join-Path ${env:ProgramFiles(x86)} "supermux"),
         (Join-Path $env:LOCALAPPDATA "Programs\supermux")
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) })
 
     if ($candidates.Count -ne 1) {
         throw "Expected exactly one supermux install directory; found $($candidates.Count): $($candidates -join ', ')"
