@@ -222,10 +222,11 @@ class LinuxWindowChromeTest {
     // ── geometry ──
 
     @Test
-    fun onlyTheTopRightElementAvoidsTheButtons() {
-        assertTrue(touchesTopEnd(top = 0f, right = 800f, rootWidth = 800f, bandPx = 32f))
-        assertFalse(touchesTopEnd(top = 0f, right = 500f, rootWidth = 800f, bandPx = 32f), "a left split")
-        assertFalse(touchesTopEnd(top = 400f, right = 800f, rootWidth = 800f, bandPx = 32f), "a lower split")
+    fun onlyWhatRunsUnderTheTopRightButtonsAvoidsThem() {
+        assertEquals(104f, underTopEnd(top = 0f, right = 800f, rootWidth = 800f, endPx = 104f, bandPx = 32f), "flush with the edge")
+        assertEquals(98f, underTopEnd(top = 0f, right = 794f, rootWidth = 800f, endPx = 104f, bandPx = 32f), "set in by the gutter")
+        assertEquals(0f, underTopEnd(top = 0f, right = 500f, rootWidth = 800f, endPx = 104f, bandPx = 32f), "a left split")
+        assertEquals(0f, underTopEnd(top = 400f, right = 800f, rootWidth = 800f, endPx = 104f, bandPx = 32f), "a lower split")
     }
 
     @Test
