@@ -95,10 +95,16 @@ class Fixture {
     }
   }
 
-  async start(): Promise<void> {
+  async start(extraEnv: Record<string, string> = {}): Promise<void> {
     const log = join(this.dir, `broker-${++this.boots}.log`)
-    this.broker = Bun.spawn(["bun", "src/main.ts"], { cwd: REPO, stdout: Bun.file(log), stderr: Bun.file(log), env: this.brokerEnv() })
+    this.broker = Bun.spawn(["bun", "src/main.ts"], { cwd: REPO, stdout: Bun.file(log), stderr: Bun.file(log), env: { ...this.brokerEnv(), ...extraEnv } })
     await this.answers()
+  }
+
+  /** The running broker catches SIGTERM: its graceful-shutdown listener is registered (/proc/<pid>/status SigCgt). */
+  catchesSigterm(): boolean {
+    const caught = readFileSync(`/proc/${this.broker!.pid}/status`, "utf8").match(/^SigCgt:\s*([0-9a-f]+)$/m)?.[1]
+    return caught !== undefined && ((BigInt(`0x${caught}`) >> 14n) & 1n) === 1n
   }
 
   /** The web port opens after the boot resume. */
@@ -318,4 +324,58 @@ test.skipIf(!userSystemd)("under systemd a restart keeps the agents running; a p
   await until("every keeper to exit", () => (f.keeperPid(WORKER_A) === undefined && f.keeperPid(AGENT) === undefined) || undefined, 20_000)
   expect(agentKeeper === undefined || !f.agentRuns(AGENT)).toBe(true)
   expect(f.agentRuns(WORKER_A)).toBe(false)
+}, 240_000)
+
+/** A Telegram Bot API for a broker configured with a bot token: getMe, a long poll that never has updates, ok to the rest. */
+function stubTelegram(): { root: string; polled: () => boolean; stop: () => void } {
+  let polled = false
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const method = new URL(req.url).pathname.split("/").pop()
+      if (method === "getMe") {
+        return Response.json({ ok: true, result: { id: 1, is_bot: true, first_name: "stub", username: "stub_bot", can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false } })
+      }
+      if (method === "getUpdates") {
+        polled = true
+        await Bun.sleep(500)
+        return Response.json({ ok: true, result: [] })
+      }
+      return Response.json({ ok: true, result: true })
+    },
+  })
+  return { root: `http://127.0.0.1:${server.port}`, polled: () => polled, stop: () => server.stop(true) }
+}
+
+// #29: with Telegram configured, the broker's last boot step is grammy's long poll, which returns only at shutdown, and
+// main.ts registered its SIGTERM/SIGINT listeners after it, so they never were. Every SIGTERM was a hard kill: no
+// graceful shutdown, broker.pid left behind, the agents left to their parked deadline, and a restart could not be told
+// from a stop. The listeners now come before the channels start.
+test("with Telegram on, SIGTERM still runs the graceful shutdown: an announced restart keeps the agents, a plain stop stops them", async () => {
+  const telegram = stubTelegram()
+  const f = new Fixture()
+  try {
+    const env = { MUX_TELEGRAM_BOT_TOKEN: "123456:stub-token", MUX_TELEGRAM_API_ROOT: telegram.root }
+    await f.start(env)
+    await until("the broker's Telegram long poll", () => telegram.polled() || undefined)
+    expect(f.catchesSigterm()).toBe(true)
+
+    // An announced restart (the desktop app's Restart, a deploy that says so first): the agents stay for the next broker.
+    expect(await f.converse(WORKER_A, "before the restart")).toContain("before the restart")
+    const keeper = f.keeperPid(WORKER_A)
+    expect(keeper).toBeDefined()
+    expect(await f.internal("expect-restart")).toBe(204)
+    await f.stop("SIGTERM")
+    expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+    await f.start(env)
+    expect(await f.converse(WORKER_A, "after the restart")).toContain("after the restart")
+    expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+
+    // A plain stop: the graceful shutdown runs, and the agents stop with the broker.
+    await f.stop("SIGTERM")
+    await until("every keeper to exit", () => (f.keeperPid(WORKER_A) === undefined && f.keeperPid(AGENT) === undefined) || undefined, 20_000)
+  } finally {
+    telegram.stop()
+  }
 }, 240_000)
