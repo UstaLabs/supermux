@@ -123,9 +123,19 @@ class HostStoreDeps(
     val media: dev.supermux.media.MediaCache? = null,
     /** Which app this is, told to each broker on connect (TELEMETRY.md). Null = say nothing. */
     val clientInfo: dev.supermux.net.ClientInfo? = null,
+    /** The web's downloads (#95), which have no files to land in. Null everywhere else. */
+    val browserDownload: BrowserDownload? = null,
 ) {
     fun nowIso(): String = clock.now().toString()
     fun nowMs(): Long = clock.now().toEpochMilliseconds()
+}
+
+/**
+ * The web's download: the browser fetches [url] with [headers] straight into a Blob it holds (#95) — the bytes
+ * never enter the Wasm heap. Answers the Blob (opaque here) and its size, or null on failure.
+ */
+fun interface BrowserDownload {
+    suspend fun fetch(url: String, headers: Map<String, String>, progress: (received: Long, total: Long?) -> Unit): Pair<Any, Long>?
 }
 
 /** Card #76: the stored "Show replies as they're written" answer; on unless it says "false". */

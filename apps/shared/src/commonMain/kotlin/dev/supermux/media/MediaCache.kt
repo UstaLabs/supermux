@@ -128,6 +128,27 @@ class MediaCache(
         return follow(fileSlot(host, key, att, download), onProgress)
     }
 
+    /**
+     * A file that is not an attachment — a host file (#95: Files "Save and open…"), under the synthetic id its [key]
+     * carries — kept in the store like one, so it is not fetched twice and Storage › Clear covers it. Answered at once
+     * when already stored. Else [fill] writes it and answers whether what it appended is whole; nothing is kept when
+     * it is not, nor when a Clear (or a forget of its host) came meanwhile. Null where entries are not files.
+     *
+     * What [fill] or the store throws reaches the caller: here the store is where the file goes, so a failure is
+     * that download's own, not a cache problem the network could stand in for.
+     */
+    internal suspend fun storeFile(key: MediaKey, fill: suspend (append: suspend (ByteArray, Int) -> Unit) -> Boolean): StoredFile? {
+        if (!store.hasFiles) return null
+        stored(key)?.let {
+            log("[media] ${key.fileId} <- disk (file)")
+            return it
+        }
+        val stamp = stamp(key.host)
+        if (!store.writeStream(key, fill) || !keepIfCurrent(key, stamp)) return null
+        log("[media] ${key.fileId} <- network (file)")
+        return stored(key)
+    }
+
     /** The user's Cancel: stop [fileId]'s file download, keeping what arrived for a retry. */
     fun cancelFile(host: String, fileId: String) {
         val transfer = synchronized(lock) {

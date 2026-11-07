@@ -9,9 +9,15 @@ import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -203,5 +209,25 @@ class FleetStoreTest {
         testScheduler.advanceUntilIdle()
         assertEquals(setOf("h2/$id.png"), disk.entries.keys)
         f.close()
+    }
+
+    // The app is closing: a download still running is cancelled before anything else goes, and its source is
+    // told — an attachment's transfer runs on the media cache's own scope, which the fleet's cancel never reaches.
+    @Test fun closingTheFleetCancelsItsDownloadsAndTellsTheirSources() = runTest {
+        val f = fleet(store(), this)
+        var cancels = 0
+        val source = object : DownloadSource {
+            override suspend fun fetch(progress: (Long, Long?) -> Unit): DownloadedFile? = awaitCancellation()
+
+            override fun cancel() {
+                cancels++
+            }
+        }
+        f.downloads.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, source)
+        runCurrent()
+        f.close()
+        assertEquals(DownloadState.Cancelled, f.downloads.items.value.single().state, "cancelled as the fleet closes")
+        runCurrent()
+        assertEquals(1, cancels)
     }
 }
