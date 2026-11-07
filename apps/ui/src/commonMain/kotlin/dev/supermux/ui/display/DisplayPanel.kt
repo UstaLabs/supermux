@@ -333,8 +333,8 @@ private fun VncView(
     source: Any,
     modifier: Modifier = Modifier,
 ) {
-    val secret = rememberVncSecret(retainKey, streamId, source)
-    val client = remember(streamId) { connectVnc(streamId).also { c -> secret.accepted?.let(c::setPassword) } }
+    val kept = rememberVncKept(retainKey, streamId, source)
+    val client = remember(streamId) { connectVnc(streamId).also { c -> kept.accepted?.let(c::setPassword) } }
     val fb = remember(streamId) { VncFramebuffer() }
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
@@ -348,16 +348,16 @@ private fun VncView(
     // The client's verdict on the password it holds: one the screen refused is never handed to a
     // rebuilt view, and a connection that drops ends what the user gave, as it ended the client's
     // own before #89 kept a copy. What is typed into an open prompt stays.
-    LaunchedEffect(client, secret) {
+    LaunchedEffect(client, kept) {
         var connected = false
         client.status.collect { now ->
             when (now) {
                 VncStatus.CONNECTED -> connected = true
                 // Raised only without a password, or for a refused one.
-                VncStatus.NEEDS_PASSWORD -> secret.accepted = null
+                VncStatus.NEEDS_PASSWORD -> kept.accepted = null
                 VncStatus.DISCONNECTED -> if (connected) {
                     connected = false
-                    secret.accepted = null
+                    kept.accepted = null
                 }
                 VncStatus.CONNECTING -> Unit
             }
@@ -370,7 +370,8 @@ private fun VncView(
     var showPassword by remember { mutableStateOf(false) }
     LaunchedEffect(status) { if (status == VncStatus.NEEDS_PASSWORD) showPassword = true }
 
-    var keyboardActive by remember { mutableStateOf(false) }
+    // Up again after a rebuild, with the rest of what the view keeps ([VncKept]).
+    var keyboardActive by kept::keyboard
     val keyboardFocus = remember { FocusRequester() }
 
     // The Box's own on-screen pixel size (NOT the remote framebuffer size, which is `size`):
@@ -445,16 +446,16 @@ private fun VncView(
     if (showPassword) {
         VncPasswordPrompt(
             provider = provider,
-            password = secret.typed,
-            onPasswordChange = { secret.typed = it },
+            password = kept.typed,
+            onPasswordChange = { kept.typed = it },
             onSubmit = { pw ->
-                secret.accepted = pw
-                secret.typed = ""
+                kept.accepted = pw
+                kept.typed = ""
                 client.setPassword(pw)
                 showPassword = false
             },
             onDismiss = {
-                secret.typed = ""
+                kept.typed = ""
                 showPassword = false
             },
         )
@@ -462,21 +463,23 @@ private fun VncView(
 }
 
 /**
- * A display's VNC password: what is typed into the prompt, and the one the user sent. In memory
- * only, never saved.
+ * What a VNC view keeps for its own rebuild: the password (what is typed into the prompt, and the
+ * one the user sent) and whether the soft keyboard is up. In memory only, never saved.
  *
- * Kept for the client of a REBUILT view, and for nothing else (#89): an Android recreation
- * (rotate, fold, dark mode…) and the Compact↔wide swap replace the view and its client, which
- * asked for the password again and dropped what was half typed. Every other way a view goes
+ * Kept for a REBUILT view, and for nothing else (#89): an Android recreation (rotate, fold, dark
+ * mode…) and the Compact↔wide swap replace the view and its client, which asked for the password
+ * again, dropped what was half typed and put the keyboard away. Every other way a view goes
  * (closed, another tab shown, its stream stopped, its host forgotten) forgets it, so the next one
- * asks as it always did. A security behavior, so a view takes it over only when it can tell that
- * it IS the rebuild ([VncSecretHold]); when it cannot, it asks.
+ * asks as it always did. The password is a security behavior, so a view takes this over only when
+ * it can tell that it IS the rebuild ([VncHold]); when it cannot, it asks.
  */
-private class VncSecret {
+private class VncKept {
     /** The one the user sent: the client's own for reconnects, and a rebuilt view's client's. */
     var accepted: String? = null
     /** What is typed in the prompt, until it is sent or dismissed. */
     var typed by mutableStateOf("")
+    /** The soft keyboard is up (a touch client's toggle). */
+    var keyboard by mutableStateOf(false)
     /** The token of the view holding this, which that view's saved state carries through a recreation. */
     var token: String? = null
     /** That view's host connection: a forgotten and re-added host never gets this back. */
@@ -489,24 +492,25 @@ private class VncSecret {
     fun forget() {
         accepted = null
         if (typed.isNotEmpty()) typed = ""
+        if (keyboard) keyboard = false
     }
 }
 
 /**
- * One view's hold on its [VncSecret], from the composition that makes it until the view goes. Taken
+ * One view's hold on its [VncKept], from the composition that makes it until the view goes. Taken
  * DURING composition: the swap composes the new layout before it disposes the old one, so the new
  * view still finds the old one holding (#89).
  */
-private class VncSecretHold(private val secret: VncSecret, token: String, source: Any) : RememberObserver {
+private class VncHold(private val kept: VncKept, token: String, source: Any) : RememberObserver {
     init {
         // The old view is still there (the swap), or this one's saved token came back from the same
         // host (a recreation): the same open display, rebuilt. Anything else opens it anew.
-        val rebuilt = secret.holders > 0 || (secret.token == token && secret.source === source)
-        if (!rebuilt) secret.forget()
-        secret.token = token
-        secret.source = source
-        secret.holders++
-        secret.saved = false
+        val rebuilt = kept.holders > 0 || (kept.token == token && kept.source === source)
+        if (!rebuilt) kept.forget()
+        kept.token = token
+        kept.source = source
+        kept.holders++
+        kept.saved = false
     }
 
     override fun onRemembered() = Unit
@@ -514,38 +518,38 @@ private class VncSecretHold(private val secret: VncSecret, token: String, source
     override fun onAbandoned() = release()
 
     private fun release() {
-        secret.holders--
+        kept.holders--
         // Saved just before it went: an activity being recreated, whose new view takes this back.
         // Otherwise nothing will: the view was closed, hidden or emptied. Not a rebuild, so forget.
-        if (secret.holders == 0 && !secret.saved) secret.forget()
+        if (kept.holders == 0 && !kept.saved) kept.forget()
     }
 }
 
 /**
- * The [VncSecret] of the VNC view named [retainKey] showing [streamId] (#89). Without a name it
+ * The [VncKept] of the VNC view named [retainKey] showing [streamId] (#89). Without a name it
  * lives as long as this composition, as it did before. With one, it is the fleet's, under that
- * name, and a [VncSecretHold] decides whether this view inherits it.
+ * name, and a [VncHold] decides whether this view inherits it.
  */
 @Composable
-private fun rememberVncSecret(retainKey: String?, streamId: String, source: Any): VncSecret {
-    if (retainKey == null) return remember(streamId) { VncSecret() }
+private fun rememberVncKept(retainKey: String?, streamId: String, source: Any): VncKept {
+    if (retainKey == null) return remember(streamId) { VncKept() }
     val key = "vnc:$retainKey:$streamId"
-    val secret = rememberRetained(key) { VncSecret() }
+    val kept = rememberRetained(key) { VncKept() }
     // Saved under the display's own name rather than its place in the tree: a rotation can bring the
     // display back in the other layout, and its token must still find it there.
     val registry = LocalSaveableStateRegistry.current
     val token = remember(registry, key) { registry?.consumeRestored(key) as? String ?: newRetainedPageOpening() }
-    remember(secret, token) { VncSecretHold(secret, token, source) }
-    DisposableEffect(registry, key, token, secret) {
+    remember(kept, token) { VncHold(kept, token, source) }
+    DisposableEffect(registry, key, token, kept) {
         val entry = registry?.registerProvider(key) {
-            secret.saved = true
+            kept.saved = true
             token
         }
         onDispose { entry?.unregister() }
     }
     // Composed again after a save: that save was the app going to the background, not a recreation.
-    SideEffect { secret.saved = false }
-    return secret
+    SideEffect { kept.saved = false }
+    return kept
 }
 
 /**

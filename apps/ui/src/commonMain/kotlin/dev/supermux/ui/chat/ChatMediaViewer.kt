@@ -187,9 +187,11 @@ internal fun ChatMediaViewer(
     onDismiss: () -> Unit,
     caption: (ChatMediaItem) -> String? = { null },
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit = ViewerPlayer,
+    /** The item on screen, each time it changes: where a rebuilt viewer starts. */
+    onCurrentChange: (key: String) -> Unit = {},
 ) {
     Dialog(onDismissRequest = onDismiss, properties = viewerDialogProperties()) {
-        ChatMediaViewerContent(items, startKey, resolve, onDismiss, caption = caption, renderPlayer = renderPlayer)
+        ChatMediaViewerContent(items, startKey, resolve, onDismiss, caption = caption, renderPlayer = renderPlayer, onCurrentChange = onCurrentChange)
     }
 }
 
@@ -215,6 +217,7 @@ internal fun ChatMediaViewerContent(
     onDismiss: () -> Unit,
     caption: (ChatMediaItem) -> String? = { null },
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit = ViewerPlayer,
+    onCurrentChange: (key: String) -> Unit = {},
 ) {
     if (items.isEmpty()) {
         LaunchedEffect(Unit) { onDismiss() }
@@ -232,8 +235,14 @@ internal fun ChatMediaViewerContent(
     // The open item, by key: a list that changes under the viewer (older history loads in front, a
     // new message lands) must leave the same picture on screen.
     var currentKey by remember { mutableStateOf(startKey) }
+    val currentChanged by rememberUpdatedState(onCurrentChange)
     LaunchedEffect(pager) {
-        snapshotFlow { pager.currentPage }.collect { page -> latest.getOrNull(page)?.let { currentKey = it.key } }
+        snapshotFlow { pager.currentPage }.collect { page ->
+            latest.getOrNull(page)?.let {
+                currentKey = it.key
+                currentChanged(it.key)
+            }
+        }
     }
     LaunchedEffect(items) {
         val at = reanchorIndex(items, currentKey, pager.currentPage)

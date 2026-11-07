@@ -146,6 +146,8 @@ import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.ui.terminal.liveViewTitle
+import dev.supermux.ui.retain.newRetainedPageOpening
+import dev.supermux.ui.retain.rememberRetained
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -248,7 +250,9 @@ fun WorkspacePanes(
     val documents = ws.documents
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
-    var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
+    // Kept with the workspace for a rebuilt layout (see [WorkspacePanesKept]).
+    val kept = rememberWorkspacePanesKept(current.id)
+    var walkthroughSessionId by kept::walkthroughSessionId
     val windowsSeam = LocalPlatform.current.windows
     val notices = LocalPlatform.current.notices
     TrackFocusedFileView(ws)
@@ -423,6 +427,7 @@ fun WorkspacePanes(
                         reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                     }
                 },
+                retainKey = kept.closingKey,
             )
         }
     }
@@ -468,20 +473,21 @@ fun PhoneWorkspacePanes(
     )
     val tabs = phoneTabModel(layout, current.activeViewId)
     val viewsById = ws.viewsById
-    var showAdd by remember { mutableStateOf(false) }
-    var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
-    var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
+    val kept = rememberWorkspacePanesKept(current.id)
+    var showAdd by kept::addViewOpen
+    val closeCandidate = kept.closingViewId?.let { viewsById[it] }
+    var walkthroughSessionId by kept::walkthroughSessionId
 
     fun closeOrConfirm(view: ViewDto) {
-        if (view.closeNeedsConfirmation()) closeCandidate = view
+        if (view.closeNeedsConfirmation()) kept.askToClose(view)
         else app.closeWorkspaceView(current.id, view.id)
     }
 
     // Same as the wide strip: a bulk close feeds each tab to its own close, one at a time.
     val bulkQueue = remember(current.id) { mutableStateListOf<String>() }
-    LaunchedEffect(closeCandidate == null, bulkQueue.size) {
+    LaunchedEffect(kept.closingViewId == null, bulkQueue.size) {
         // An editor closes on the spot (no candidate), so keep going until one needs its question.
-        while (closeCandidate == null) closeOrConfirm(nextBulkClose(bulkQueue) { viewsById[it] } ?: break)
+        while (kept.closingViewId == null) closeOrConfirm(nextBulkClose(bulkQueue) { viewsById[it] } ?: break)
     }
 
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
@@ -491,8 +497,9 @@ fun PhoneWorkspacePanes(
         }
 
     // The switcher (see PhoneTabSwitcher.kt) replaced the tab strip: the views live behind one
-    // count button, and each card shows the frame its view last drew.
-    var switcherOpen by remember(current.id) { mutableStateOf(false) }
+    // count button, and each card shows the frame its view last drew. Whether it is open is kept
+    // with the workspace ([WorkspacePanesKept]); one that comes back open starts shown, unanimated.
+    var switcherOpen by kept::gridOpen
     val thumbnails = remember(current.id) { mutableStateMapOf<String, ImageBitmap>() }
     val layers = remember(current.id) { mutableMapOf<String, GraphicsLayer>() }
     suspend fun snapshot(id: String): ImageBitmap? {
@@ -516,13 +523,13 @@ fun PhoneWorkspacePanes(
     var morph by remember(current.id) { mutableStateOf<TabMorph?>(null) }
     val morphProgress = remember(current.id) { Animatable(0f) }
     val morphAlpha = remember(current.id) { Animatable(1f) }
-    val gridAlpha = remember(current.id) { Animatable(0f) }
+    val gridAlpha = remember(current.id) { Animatable(if (switcherOpen) 1f else 0f) }
     var root by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var page by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val thumbSlots = remember(current.id) { mutableMapOf<String, LayoutCoordinates>() }
     // The live view under the grid is hidden once something opaque covers it, so a platform view
     // (iOS UIKitView) can never draw over the grid.
-    var hideUnderGrid by remember(current.id) { mutableStateOf(false) }
+    var hideUnderGrid by remember(current.id) { mutableStateOf(switcherOpen) }
     var morphJob by remember { mutableStateOf<Job?>(null) }
     // While a picked card grows into the page the grid keeps showing the OLD selection, and the
     // picked card's own frame is hidden: otherwise its header flips to the selected (teal) fill
@@ -896,23 +903,58 @@ fun PhoneWorkspacePanes(
         CloseViewDialog(
             view = v,
             sessionNames = sessionNames,
-            onDismiss = { closeCandidate = null },
+            onDismiss = { kept.askToClose(null) },
             onConfirm = {
                 app.closeWorkspaceView(current.id, v.id)
-                closeCandidate = null
+                kept.askToClose(null)
             },
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
             worktreeForWorkdir = { app.worktreeForWorkdir(it) },
             worktreeSize = { app.worktreeSize(it) },
             onConfirmDeletingWorktree = { ids ->
-                closeCandidate = null
+                kept.askToClose(null)
                 app.closeViewAndDeleteWorktree(current.id, v.id, ids) {
                     reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                 }
             },
+            retainKey = kept.closingKey,
         )
     }
 }
+
+/**
+ * What a workspace's panes had open, kept by the fleet for a layout that a rotation or a width
+ * change rebuilds (#89): whose walkthrough the Changes pane shows, the close question with its
+ * worktree choice, and on a phone the tab grid and its "add a view" sheet. Both layouts read the
+ * same one, so the layout a swap builds finds what the other had open.
+ */
+internal class WorkspacePanesKept {
+    var walkthroughSessionId by mutableStateOf<String?>(null)
+    /**
+     * The view whose close is being asked about. Resolved against the live views, so a view that
+     * goes away takes its question with it.
+     */
+    var closingViewId by mutableStateOf<String?>(null)
+        private set
+    /** Names this asking: its worktree choice is kept under it, so the next asking starts unticked. */
+    private var closingOpening: String? = null
+    var gridOpen by mutableStateOf(false)
+    var addViewOpen by mutableStateOf(false)
+
+    /** Ask about closing [view], or drop the question (null). */
+    fun askToClose(view: ViewDto?) {
+        closingOpening = view?.let { newRetainedPageOpening() }
+        closingViewId = view?.id
+    }
+
+    /** What the close dialog keeps its worktree choice under, while a question is open. */
+    val closingKey: String? get() = closingOpening?.let { "closeView:$it" }
+}
+
+/** The [WorkspacePanesKept] of [workspaceId]. */
+@Composable
+internal fun rememberWorkspacePanesKept(workspaceId: String): WorkspacePanesKept =
+    rememberRetained("workspace:$workspaceId:panes") { WorkspacePanesKept() }
 
 /** Chrome's page ⇄ card morph and the grid's fade, measured off a screen recording of it. */
 private const val SWITCHER_MORPH_MS = 260

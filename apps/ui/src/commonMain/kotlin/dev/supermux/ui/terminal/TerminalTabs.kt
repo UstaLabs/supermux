@@ -69,6 +69,7 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.isTertiaryButtonPress
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -87,6 +88,12 @@ const val TERMINAL_CREATE_GRACE_MS = 15_000L
 
 /** How often the strip re-syncs with the broker while visible (Android's `ScratchTerminalPanel`). */
 private const val TERMINAL_RESYNC_MS = 3_000L
+
+/** One session's selected terminal tab and the one before it, kept by the fleet (see [TerminalTabs]). */
+private class TerminalTabsKept {
+    var activeId by mutableStateOf("")
+    var lastActiveId by mutableStateOf<String?>(null)
+}
 
 /**
  * Reconcile the broker-owned terminal list with short-lived local UI operations. The broker list
@@ -209,8 +216,11 @@ fun TerminalTabs(
 
     // State is keyed on sessionId so a session switch (ChatView reuse) resets the strip cleanly.
     val tabs = remember(sessionId) { mutableStateListOf<String>() }
-    var activeId by remember(sessionId) { mutableStateOf("") }
-    var lastActiveId by remember(sessionId) { mutableStateOf<String?>(null) }
+    // Which tab is selected (and the one before it) is kept outside this composition: a rotation or
+    // a width change put the strip back on its first tab (#89). The tabs themselves re-hydrate.
+    val kept = rememberRetained("terminal.tabs:$sessionId") { TerminalTabsKept() }
+    var activeId by kept::activeId
+    var lastActiveId by kept::lastActiveId
     var hydrated by remember(sessionId) { mutableStateOf(false) }
     // Local operations the broker has not caught up with yet (Android's reconciliation inputs).
     val pendingCreates = remember(sessionId) { mutableStateMapOf<String, Long>() }
