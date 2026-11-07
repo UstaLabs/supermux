@@ -111,6 +111,16 @@ class KeymapConflictTest {
         }
     }
 
+    /** The editor keeps the keys it shares with the app because the app's binding waits for the bubble: an appFirst ⌘/ would take comment-line from it. */
+    @Test fun theEditorsOverlapsNeverGoFirst() {
+        // Paste-image is exempt: it is never registered as a handler (Composer.kt runs its key itself).
+        val shared = editorAllowed.filter { (id, _) -> id != AppCommands.PasteImage.id }.toSet()
+        for (os in KeyOs.entries) {
+            val first = DefaultKeymap.bindings.filter { it.appFirst && isAllowed(it, os, shared) }
+            assertTrue(first.isEmpty(), "$os: $first")
+        }
+    }
+
     @Test fun everyKeyNameIsARealKey() {
         val unknown = DefaultKeymap.bindings.flatMap { listOfNotNull(it.apple, it.other) }.filter { composeKeyOf(it.key) == null }
         assertTrue(unknown.isEmpty(), "no Compose key for $unknown")
