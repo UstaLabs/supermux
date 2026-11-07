@@ -499,6 +499,12 @@ export interface WebChannelOpts {
    * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
    */
   onRestartRequest?: () => boolean
+  /**
+   * With [stopToken]: POST /internal/expect-restart says the broker's next stop is a restart (update/apply.ts
+   * expectRestart), so its graceful shutdown leaves the agents running. The desktop app's Restart sends it before it
+   * restarts the broker itself.
+   */
+  onExpectRestart?: () => void
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -2556,7 +2562,8 @@ export class WebChannel implements Channel {
     }
 
     // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
-    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it;
+    // /internal/expect-restart says the stop coming next is a restart.
     const stopTokenGiven = (kind: string): boolean => {
       const given = req.headers.get("x-supermux-stop-token") ?? ""
       const expected = this.opts.stopToken ?? ""
@@ -2579,6 +2586,13 @@ export class WebChannel implements Channel {
       if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
       log.info("restart_request_accepted")
       return new Response("restarting", { status: 202 })
+    }
+    if (path === "/internal/expect-restart" && this.opts.stopToken && this.opts.onExpectRestart) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("expect_restart")) return new Response("forbidden", { status: 403 })
+      this.opts.onExpectRestart()
+      log.info("restart_expected")
+      return new Response(null, { status: 204 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {

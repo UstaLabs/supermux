@@ -131,7 +131,7 @@ import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
-import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
+import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -2718,6 +2718,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onStopRequest: () => { void gracefulShutdown("stop-request") },
     // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
     onRestartRequest: () => restartService(),
+    // The desktop app's Restart (it restarts this broker itself): its stop, coming next, leaves the agents running.
+    onExpectRestart: () => expectRestart(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())
@@ -4938,7 +4940,10 @@ if (telegram) await telegram.start()
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
-  log.info("graceful_shutdown", { signal })
+  // A restart (one this broker scheduled, or one the desktop app announced before restarting it) leaves the agents to
+  // the broker that comes back; a plain stop shuts them down.
+  const agents = agentsCloseMode()
+  log.info("graceful_shutdown", { signal, agents })
   try {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
@@ -4974,22 +4979,22 @@ async function gracefulShutdown(signal: string) {
     brokerAccounts.close()
   } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeGrokCoreHost()
+    await closeGrokCoreHost(agents)
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeAntigravityCoreHost()
+    await closeAntigravityCoreHost(agents)
   } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCodexCoreHost()
+    await closeCodexCoreHost(agents)
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeOpenCodeCoreHost()
+    await closeOpenCodeCoreHost(agents)
   } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCursorCoreHost()
+    await closeCursorCoreHost(agents)
   } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeClaudeCoreHost()
+    await closeClaudeCoreHost(agents)
   } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
