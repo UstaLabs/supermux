@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AccountUsage
+import dev.supermux.net.AntigravityUsage
+import dev.supermux.net.AntigravityWindow
 import dev.supermux.net.ClaudeExtraUsage
 import dev.supermux.net.ClaudeResetGrant
 import dev.supermux.net.ClaudeResetResult
@@ -315,6 +317,7 @@ class UsageScreenTest {
                 "cursor" to "request timed out",
                 "opencode" to "no local usage",
                 "grok" to "no credits",
+                "antigravity" to "Not signed in to Antigravity.",
             ),
         )
         usageContent {
@@ -339,8 +342,8 @@ class UsageScreenTest {
         waitForIdle()
         // Every card falls back to "Not available" — assert the count, not a single node
         // (onNodeWithText requires a UNIQUE match). One per card UsageScreen renders:
-        // claude, codex, cursor, opencode, grok. Bump this when a card is added.
-        onAllNodesWithText("Not available").assertCountEquals(5)
+        // claude, codex, cursor, opencode, grok, antigravity. Bump this when a card is added.
+        onAllNodesWithText("Not available").assertCountEquals(6)
     }
 
     @Test fun fetched_at_renders_a_per_provider_as_of_caption() = runComposeUiTest {
@@ -914,5 +917,95 @@ class UsageScreenTest {
         onNodeWithText("20% used").assertExists()
         onNodeWithText("Cursor sign-in expired").assertExists()
         onNodeWithTag("usage_sign_in_cursor").assertExists()
+    }
+
+    // ── Antigravity (#103): agy's own buckets, one bar each; agy reports no plan ─────────────────────
+
+    private val antigravity = AntigravityUsage(
+        windows = listOf(
+            AntigravityWindow(id = "gemini-5h", label = "Gemini Models · 5-hour", used = 60.0, resetsAt = null),
+            AntigravityWindow(id = "gemini-weekly", label = "Gemini Models · weekly", used = 25.0, resetsAt = null),
+            AntigravityWindow(id = "3p-5h", label = "Claude and GPT models · 5-hour", used = 0.0, resetsAt = null),
+        ),
+    )
+
+    @Test fun antigravity_card_draws_one_bar_per_limit_under_agys_names() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AntigravityUsageCard(antigravity = antigravity, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_card_antigravity").assertExists()
+        onNodeWithText("Antigravity").assertExists()
+        onNodeWithText("unknown").assertExists()
+        onNodeWithText("Gemini Models · 5-hour").assertExists()
+        onNodeWithText("60% used").assertExists()
+        onNodeWithText("Gemini Models · weekly").assertExists()
+        onNodeWithText("25% used").assertExists()
+        onNodeWithText("Claude and GPT models · 5-hour").assertExists()
+        onNodeWithText("0% used").assertExists()
+    }
+
+    @Test fun antigravity_card_with_no_limits_says_so() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AntigravityUsageCard(antigravity = AntigravityUsage(), error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Antigravity reported no usage limits for this account.").assertExists()
+    }
+
+    @Test fun antigravity_card_without_numbers_shows_the_brokers_words() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AntigravityUsageCard(antigravity = null, error = "Not signed in to Antigravity.")
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Not signed in to Antigravity.").assertExists()
+    }
+
+    @Test fun the_usage_screen_offers_sign_in_again_when_agy_has_no_sign_in() = runComposeUiTest {
+        val signIns = mutableListOf<Pair<String, String?>>()
+        val usage = UsageResponse(
+            errors = mapOf("antigravity" to "Antigravity sign-in expired — sign in to Antigravity again."),
+            errorCodes = mapOf("antigravity" to "account_expired"),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = usage, loading = false, onBack = {}, onRedeem = { null },
+                    onSignIn = { agent, account -> signIns += agent to account },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_sign_in_antigravity").performScrollTo().performClick()
+        onNodeWithText("Antigravity sign-in expired").assertExists()
+        assertEquals(listOf<Pair<String, String?>>("antigravity" to null), signIns)
+    }
+
+    @Test fun an_added_antigravity_account_says_usage_shows_for_the_system_login_only() = runComposeUiTest {
+        val usage = fixtureUsage().copy(
+            antigravity = antigravity,
+            accounts = listOf(
+                AccountUsage(id = "agy-work", agent = "antigravity", label = "Work", method = "subscription", quota = false),
+                AccountUsage(id = "agy-key", agent = "antigravity", label = "Key", method = "api_key", quota = false),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Antigravity · System login").assertExists()
+        onNodeWithTag("usage_card_antigravity_agy-work").performScrollTo()
+        onNodeWithText("Antigravity · Work").assertExists()
+        onNodeWithText("Usage shows for the system login only.").assertExists()
+        // An API key really is billed per token.
+        onAllNodesWithText("Billed per token, so there is no usage limit to show.").assertCountEquals(1)
     }
 }
