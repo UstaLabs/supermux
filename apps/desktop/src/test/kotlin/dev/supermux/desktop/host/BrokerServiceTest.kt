@@ -278,6 +278,45 @@ class BrokerServiceTest {
         assertTrue(enable >= 0 && restart > enable)
     }
 
+    // #29 step 9: systemd --user and the XDG autostart read $XDG_CONFIG_HOME when it is set, so a unit written to
+    // ~/.config never loaded there while the app believed it installed.
+    @Test fun linuxInstallWritesTheUnitWhereXdgConfigHomeSays() {
+        assumePosixHost()
+        val home = createTempDirectory()
+        val config = home.resolve("cfg")
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000",
+            envVars = mapOf("XDG_CONFIG_HOME" to config.toString()))
+        BrokerService.install(spec, env, me)
+        assertTrue(Files.exists(config.resolve("systemd/user/supermux-host.service")))
+        assertFalse(Files.exists(home.resolve(".config/systemd/user/supermux-host.service")))
+        assertTrue(BrokerService.isInstalled(env))
+        assertEquals(config.resolve("autostart/supermux-host.desktop"), BrokerService.xdgAutostartPath(env))
+    }
+
+    @Test fun linuxXdgFallbackKeepsItsEntryAndEnvFileUnderXdgConfigHome() {
+        assumePosixHost()
+        val home = createTempDirectory()
+        val config = home.resolve("cfg")
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = null,
+            envVars = mapOf("XDG_CONFIG_HOME" to config.toString()))
+        BrokerService.install(spec, env, me)
+        val entry = config.resolve("autostart/supermux-host.desktop")
+        val envFile = config.resolve("supermux/broker.env")
+        assertTrue(Files.exists(entry))
+        assertTrue(envFile.toString() in Files.readString(entry), "the entry sources the env file where it is")
+        BrokerService.remove(env, me)
+        assertFalse(Files.exists(entry))
+        assertFalse(Files.exists(envFile))
+    }
+
+    @Test fun aRelativeXdgConfigHomeIsIgnored() {
+        // The XDG spec: a relative value is invalid and must be ignored.
+        val home = createTempDirectory()
+        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, envVars = mapOf("XDG_CONFIG_HOME" to "cfg"))
+        assertEquals(home.resolve(".config/autostart/supermux-host.desktop"), BrokerService.xdgAutostartPath(env))
+        assertEquals(home.resolve(".config/supermux/broker.env"), BrokerService.xdgEnvPath(env))
+    }
+
     @Test fun linuxXdgFallbackIsNotEnabledAndRemoveCleansUp() {
         assumePosixHost()
         val home = createTempDirectory()

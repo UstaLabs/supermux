@@ -31,7 +31,7 @@ object BrokerService {
      */
     const val WINDOWS_ENV_FILE = "Supermux/broker-env.ps1"
     /** The XDG autostart's env, sourced by its `Exec` line (0600): the values never appear in an argv. */
-    const val XDG_ENV_FILE = ".config/supermux/broker.env"
+    const val XDG_ENV_FILE = "supermux/broker.env"
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
     internal const val UAC_DECLINED_EXIT = 1223
 
@@ -338,7 +338,7 @@ Terminal=false
         fun file(p: Path) = if (Files.isRegularFile(p)) Files.readString(p) else null
         when (env.os) {
             OsEnv.Os.MAC -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
-            OsEnv.Os.LINUX -> file(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
+            OsEnv.Os.LINUX -> file(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
                 file(xdgAutostartPath(env))?.let(::isLegacyXdgEntry) == true
             OsEnv.Os.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
             OsEnv.Os.OTHER -> false
@@ -419,7 +419,7 @@ Terminal=false
     }
 
     private fun unitSlot(env: OsEnv): Slot? {
-        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
         val text = readIfFile(unit) ?: return null
         return Slot(Kind.UNIT, unit, text, unit, text, MANAGED_MARKER in text, isLegacyDefinition(text))
     }
@@ -565,8 +565,8 @@ Terminal=false
      */
     fun isInstalled(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
         OsEnv.Os.MAC -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
-        OsEnv.Os.LINUX -> Files.exists(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) ||
-            Files.exists(env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE"))
+        OsEnv.Os.LINUX -> Files.exists(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")) ||
+            Files.exists(xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE"))
         OsEnv.Os.WINDOWS -> when (windowsTaskState(env)) {
             TaskState.PRESENT -> true
             TaskState.ABSENT -> false
@@ -629,10 +629,20 @@ Terminal=false
     }.getOrDefault(false)
 
     /** The XDG autostart fallback file (Linux without systemd --user). */
-    fun xdgAutostartPath(env: OsEnv): Path = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+    fun xdgAutostartPath(env: OsEnv): Path = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
 
     /** The XDG autostart's env file ([xdgEnvFile]). */
-    fun xdgEnvPath(env: OsEnv): Path = env.home.resolve(XDG_ENV_FILE)
+    fun xdgEnvPath(env: OsEnv): Path = xdgConfigHome(env).resolve(XDG_ENV_FILE)
+
+    /**
+     * `$XDG_CONFIG_HOME`, or `~/.config` when it is unset or not absolute (the XDG rule): where systemd --user reads its
+     * units and the desktop its autostart entries. Writing to ~/.config while it pointed elsewhere installed a unit that
+     * never loaded (#29).
+     */
+    internal fun xdgConfigHome(env: OsEnv): Path =
+        env.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Path.of(it) }.getOrNull() }?.takeIf { it.isAbsolute }
+            ?: env.home.resolve(".config")
 
     /** The Windows task loop's env file ([windowsEnvFile]). */
     fun windowsEnvPath(env: OsEnv): Path = env.localAppData.resolve(WINDOWS_ENV_FILE)
@@ -726,7 +736,7 @@ Terminal=false
 
     private fun installSystemd(spec: Spec, env: OsEnv, asJob: Boolean): Result {
         if (!usesSystemd(env)) return installXdgAutostart(spec, env)
-        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
         return runCatching {
             Files.createDirectories(unit.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
@@ -753,7 +763,7 @@ Terminal=false
     }
 
     private fun installXdgAutostart(spec: Spec, env: OsEnv): Result {
-        val file = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+        val file = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
         val envFile = xdgEnvPath(env)
         return runCatching {
             writePrivate(envFile, xdgEnvFile(spec))
@@ -763,8 +773,8 @@ Terminal=false
     }
 
     private fun removeSystemd(env: OsEnv, asJob: Boolean, me: Owner): Result {
-        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
-        val autostart = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
+        val autostart = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
         return runCatching {
             // Either one may be another copy's: that one stays, with all that belongs to it.
             val unitOther = unitSlot(env)?.ownership(me) == Ownership.OTHER
@@ -773,7 +783,7 @@ Terminal=false
             // As the job, never --now: that stops this app. The unit ends with the app.
             if (systemd) env.run(listOf("systemctl", "--user", "disable") + (if (asJob) emptyList() else listOf("--now")) + SYSTEMD_NAME)
             val a = !unitOther && Files.deleteIfExists(unit)
-            if (!unitOther) Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
+            if (!unitOther) Files.deleteIfExists(xdgConfigHome(env).resolve("systemd/user/default.target.wants/$SYSTEMD_UNIT"))
             val b = !autostartOther && Files.deleteIfExists(autostart)
             if (!autostartOther) Files.deleteIfExists(xdgEnvPath(env))
             if (systemd) env.run(listOf("systemctl", "--user", "daemon-reload"))

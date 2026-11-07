@@ -26,7 +26,7 @@ fun main(args: Array<String>) = runBlocking {
     // The first copy's definition files, read from copies: a removal (which must not happen) deletes a copy.
     val home = work.resolve("home")
     for (f in listOf("Library/LaunchAgents/${BrokerService.LAUNCHD_LABEL}.plist", ".config/systemd/user/${BrokerService.SYSTEMD_UNIT}",
-        ".config/autostart/${BrokerService.XDG_AUTOSTART_FILE}", BrokerService.XDG_ENV_FILE)) copyTree(real.home.resolve(f), home.resolve(f))
+        ".config/autostart/${BrokerService.XDG_AUTOSTART_FILE}", ".config/${BrokerService.XDG_ENV_FILE}")) copyTree(real.home.resolve(f), home.resolve(f))
     val appData = work.resolve("localappdata").also { copyTree(real.localAppData.resolve("Supermux"), it.resolve("Supermux")) }
     val guarded = GuardedOsEnv(real, home, appData)
     val stateDir = BrokerPaths.defaultStateDir()

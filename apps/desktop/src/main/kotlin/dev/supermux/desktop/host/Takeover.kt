@@ -64,7 +64,7 @@ object Takeover {
         OsEnv.Os.MAC -> MAC_LABELS.map { env.home.resolve("Library/LaunchAgents/$it.plist") }
             .filter { Files.exists(it) && isOldPlist(read(it), me) }
             .map { OldService(Kind.LAUNCHD, it.fileName.toString().removeSuffix(".plist"), it.toString()) }
-        OsEnv.Os.LINUX -> LINUX_UNITS.map { env.home.resolve(".config/systemd/user/$it") }
+        OsEnv.Os.LINUX -> LINUX_UNITS.map { BrokerService.xdgConfigHome(env).resolve("systemd/user/$it") }
             .filter { Files.exists(it) && isOldUnit(read(it), me) }
             .map { OldService(Kind.SYSTEMD, it.fileName.toString(), it.toString()) }
         else -> emptyList()
