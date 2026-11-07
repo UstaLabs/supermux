@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
  */
 internal interface WpeView : FrameSource {
     val id: Long
+    // platform-ok: WebKit's user-agent setting; not an OS check
     fun configure(relay: String?, shim: String?, world: String, handler: String, pageScripts: Boolean, inspectable: Boolean, background: Int, userAgent: String?)
     /** Process-wide on WPE (W9). */
     fun setDark(dark: Boolean)
@@ -41,8 +42,10 @@ internal interface WpeView : FrameSource {
 }
 
 internal class NativeWpeView(override val id: Long) : WpeView {
+    // platform-ok: WebKit's user-agent setting; not an OS check
     override fun configure(relay: String?, shim: String?, world: String, handler: String, pageScripts: Boolean, inspectable: Boolean, background: Int, userAgent: String?) =
         WpeNative.configure(id, relay, shim, world, handler,
+            // platform-ok: WebKit's user-agent setting; not an OS check
             (if (pageScripts) WpeNative.CONF_PAGE_SCRIPTS else 0) or (if (inspectable) WpeNative.CONF_INSPECTABLE else 0), background, userAgent)
 
     override fun setDark(dark: Boolean) = WpeNative.setDark(dark)

@@ -216,6 +216,7 @@ internal class LinuxWebEngine(
         floorDone = null
         if (!loaded || released || crashed) return false
         floorState = view.saveState()
+        // platform-ok: the page's user agent, read to add the app's suffix; not an OS check
         baseUserAgent = evaluateIn(WebEngineWorld.WORLD, "navigator.userAgent")
             ?.let { (Json.parseToJsonElement(it) as? JsonPrimitive)?.contentOrNull }
         // Nothing from before the first lease reaches it: as after a reset.
@@ -1390,6 +1391,7 @@ internal class LinuxWebEngine(
         /** A chosen file as WebKit takes it, a local path: a `file:` URI's, or an absolute path. Null for anything else. */
         fun localPath(uri: String): String? = when {
             uri.startsWith("file:") -> runCatching { File(URI(uri)).path }.getOrNull()
+            // platform-ok: the Linux engine's own paths, POSIX
             uri.startsWith("/") -> uri
             else -> null
         }

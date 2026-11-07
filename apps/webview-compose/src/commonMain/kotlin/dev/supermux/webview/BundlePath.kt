@@ -21,6 +21,7 @@ internal fun normalizeBundlePath(rawPath: String): String? {
     val decoded = percentDecode(path) ?: return null
     if (decoded.any { it == '\\' || it == '%' || it.code < 0x20 || it.code == 0x7f }) return null
     val segments = ArrayList<String>()
+    // platform-ok: url (a bundle URL's path)
     for (segment in decoded.split('/')) {
         when {
             segment == "" || segment == "." -> Unit

@@ -126,6 +126,7 @@ internal object WpeRuntime {
      */
     fun sandboxPathProblem(dir: File, home: File?): String? {
         val path = dir.path
+        // platform-ok: a POSIX path, for the Linux engine's WebKit sandbox
         val first = path.removePrefix("/").substringBefore('/')
         return when {
             !dir.isAbsolute -> "the runtime's path $path isn't absolute"

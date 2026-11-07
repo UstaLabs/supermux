@@ -123,6 +123,7 @@ internal object WebKitUrls {
             else -> null
         }
         val hostPort = if (defaultPort != null && authority.endsWith(defaultPort)) authority.dropLast(defaultPort.length) else authority
+        // platform-ok: url
         val rest = rawPath(cleaned).ifEmpty { "/" }.let { if (it.startsWith("/")) it else "/$it" }
         return "$scheme://$hostPort$rest"
     }

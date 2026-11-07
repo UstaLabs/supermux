@@ -1590,6 +1590,7 @@ internal class WindowsWebEngine(
             val path = when {
                 uri.startsWith("file:", ignoreCase = true) -> runCatching { java.net.URI(uri).path }.getOrNull() ?: return null
                 else -> uri
+            // platform-ok: url (a file: URI's path)
             }.removePrefix("/").takeIf { it.length > 2 && it[1] == ':' } ?: return null
             return path.replace('/', '\\')
         }

@@ -21,7 +21,7 @@ internal interface PageGlue {
     val token: Long
 
     /** A lease's setup (D1): theme, background, user agent, inspector, the relay and (with JavaScript on) the shim. */
-    fun configure(dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?)
+    fun configure(dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?) // platform-ok: WebKit's user-agent setting; not an OS check
 
     fun loadUrl(epoch: Int, url: String, headers: Map<String, String>)
     fun loadHtml(epoch: Int, html: String, baseUrl: String)
@@ -123,7 +123,9 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
         return if (page == 0L) otherwise else block(page)
     }
 
+    // platform-ok: WebKit's user-agent setting; not an OS check
     override fun configure(dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?) =
+        // platform-ok: WebKit's user-agent setting; not an OS check
         live(Unit) { MacGlue.configure(it, dark, transparent, userAgent, inspectable, relay, shim) }
 
     override fun loadUrl(epoch: Int, url: String, headers: Map<String, String>) = live(Unit) {

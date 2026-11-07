@@ -319,6 +319,7 @@ internal class IosWebEngine private constructor(
         floorDone = null
         if (!loaded || released || crashed) return false
         floorState = webView.interactionState
+        // platform-ok: the page's user agent, read to add the app's suffix; not an OS check
         baseUserAgent = evaluateIn(WKContentWorld.defaultClientWorld, "navigator.userAgent")
             ?.let { (Json.parseToJsonElement(it) as? JsonPrimitive)?.content }
         // Nothing from before the first lease reaches it: as after a reset.

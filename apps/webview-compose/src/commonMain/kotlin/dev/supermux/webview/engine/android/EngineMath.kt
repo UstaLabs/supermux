@@ -72,7 +72,9 @@ internal class MemorySignals(
 internal fun pageTitle(title: String?, url: String?): String? {
     if (title.isNullOrBlank()) return null
     if (url != null) {
+        // platform-ok: url
         val bare = url.substringAfter("://").removeSuffix("/")
+        // platform-ok: url
         if (title == url || title.removeSuffix("/") == bare) return null
     }
     return title

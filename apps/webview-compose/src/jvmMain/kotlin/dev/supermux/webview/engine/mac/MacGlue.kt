@@ -78,6 +78,7 @@ internal object MacGlue {
         floorHtml: String,
     )
 
+    // platform-ok: WebKit's user-agent setting; not an OS check
     @JvmStatic external fun configure(page: Long, dark: Boolean, transparent: Boolean, userAgent: String?, inspectable: Boolean, relay: String, shim: String?)
 
     @JvmStatic external fun loadUrl(page: Long, epoch: Int, url: String, headerNames: Array<String>, headerValues: Array<String>)

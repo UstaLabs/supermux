@@ -129,7 +129,9 @@ internal object WpeExtractor {
             longLink = null
             paxName = null
             paxLink = null
+            // platform-ok: a tar entry's name, '/'-separated on every OS
             if (name.startsWith("/")) throw IOException("an absolute path in the archive: $name")
+            // platform-ok: a tar entry's name, '/'-separated on every OS
             val parts = name.removePrefix("./").split('/').filter { it.isNotEmpty() && it != "." }
             if (".." in parts) throw IOException("a .. in the archive: $name")
             if (parts.isEmpty()) {
@@ -159,6 +161,7 @@ internal object WpeExtractor {
                     written[relative] = digest.digest().joinToString("") { "%02x".format(it) }
                 }
                 '2' -> {
+                    // platform-ok: a tar entry's name, '/'-separated on every OS
                     if (link.startsWith("/")) throw IOException("a symlink outside the runtime: $name -> $link")
                     val resolved = target.toPath().toAbsolutePath().parent.resolve(link).normalize()
                     if (!resolved.startsWith(rootPath)) throw IOException("a symlink outside the runtime: $name -> $link")

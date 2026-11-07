@@ -266,6 +266,7 @@ internal class MacWebEngine(
         val loaded = withTimeoutOrNull(WARM_UP_MILLIS) { done.await() } ?: false
         floorDone = null
         if (!loaded || released || crashed) return false
+        // platform-ok: the page's user agent, read to add the app's suffix; not an OS check
         baseUserAgent = evaluateIn(pageWorld = false, script = "navigator.userAgent")
             ?.let { (Json.parseToJsonElement(it) as? JsonPrimitive)?.content }
         // Nothing from before the first lease reaches it: as after a reset.
@@ -285,6 +286,7 @@ internal class MacWebEngine(
         glue.configure(
             dark = setup.dark,
             transparent = setup.transparentBackground,
+            // platform-ok: WebKit's user-agent setting; not an OS check
             userAgent = setup.userAgentSuffix?.let { suffix -> listOfNotNull(baseUserAgent, suffix).joinToString(" ") },
             inspectable = setup.inspectable,
             relay = scripts.relay(origins),

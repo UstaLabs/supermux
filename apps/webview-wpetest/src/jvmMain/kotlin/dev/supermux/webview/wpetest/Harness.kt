@@ -79,6 +79,7 @@ class Lab(val options: LabOptions, val host: LabHost, val stage: Stage, val repo
 data class Proc(val pid: Long, val name: String, val pssKb: Long)
 
 fun webkitProcesses(): List<Proc> = File("/proc").listFiles { f -> f.name.all(Char::isDigit) }.orEmpty().mapNotNull { dir ->
+    // platform-ok: a Linux process's argv[0] from /proc, in a Linux-only lab
     val name = runCatching { File(dir, "cmdline").readText().substringBefore('\u0000').substringAfterLast('/') }.getOrNull()
     if (name != "WPEWebProcess" && name != "WPENetworkProcess") null else Proc(dir.name.toLong(), name, pssKb(dir))
 }

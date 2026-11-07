@@ -133,6 +133,7 @@ internal object WpeNative {
     @JvmStatic external fun createView(profile: Int, profileDir: String?, mediaGesture: Boolean, width: Int, height: Int, scale: Double): Long
     @JvmStatic external fun destroyView(view: Long)
     @JvmStatic external fun registerScheme(scheme: String, secure: Boolean)
+    // platform-ok: WebKit's user-agent setting; not an OS check
     @JvmStatic external fun configure(view: Long, relay: String?, shim: String?, world: String?, handler: String?, flags: Int, background: Int, userAgent: String?)
     @JvmStatic external fun setDark(dark: Boolean)
     @JvmStatic external fun load(view: Long, kind: Int, text: String, base: String?, headers: Array<String>?)

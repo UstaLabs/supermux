@@ -83,10 +83,12 @@ class EngineCounter(private val delegate: WebEngineFactory) : WebEngineFactory {
 
         override fun load(content: WebContent) {
             loads++
+            // platform-ok: url (a content key's last segment)
             timed("engine $number load ${content.key.substringAfterLast('/')}") { engine.load(content) }
         }
 
         override fun restoreState(state: ByteArray, content: WebContent): Boolean =
+            // platform-ok: url (a content key's last segment)
             timed("engine $number restore ${content.key.substringAfterLast('/')}") { engine.restoreState(state, content) }.also { if (it) loads++ }
 
         override suspend fun snapshot(): ImageBitmap? = timed("engine $number snapshot") { engine.snapshot() }?.also { snapshots++ }
