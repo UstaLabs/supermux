@@ -8,16 +8,9 @@ import dev.supermux.fs.hostJoin
 import dev.supermux.fs.hostParent
 import dev.supermux.fs.hostRelativePath
 import dev.supermux.fs.hostRoot
-import dev.supermux.fs.isDriveSegment
 import dev.supermux.fs.pathLeaf
 import dev.supermux.fs.sameHostPath
-
-/** [p] without a trailing separator, but a root as it is: `/`, and `C:\` (`C:` alone is the drive's current folder). */
-internal fun trimEnd(p: String): String {
-    if (p.startsWith('/')) return p.trimEnd('/').ifEmpty { "/" }
-    val t = p.trimEnd('/', '\\')
-    return if (t.length == 2 && isDriveSegment(t) && p.length > 2) p.substring(0, 3) else t
-}
+import dev.supermux.fs.trimHostPath
 
 fun parentOf(path: String): String? = hostParent(path)
 
@@ -51,11 +44,11 @@ fun relativeToWorkdir(workdir: String, path: String): String? =
  * it (see [dev.supermux.ui.toEditorPath]). A key starting with `/` is always absolute.
  */
 fun editorPathFor(workdir: String, abs: String): String =
-    relativeToWorkdir(workdir, abs)?.takeIf { it != "." && it.isNotEmpty() } ?: trimEnd(abs)
+    relativeToWorkdir(workdir, abs)?.takeIf { it != "." && it.isNotEmpty() } ?: trimHostPath(abs)
 
 /** The absolute path of the editor key [path]: an absolute key as it is, a relative one under [workdir]. */
 fun editorAbsolutePath(workdir: String, path: String): String =
-    if (dev.supermux.ui.isAbsoluteEditorPath(path)) trimEnd(path) else absoluteInWorkdir(workdir, path)
+    if (dev.supermux.ui.isAbsoluteEditorPath(path)) trimHostPath(path) else absoluteInWorkdir(workdir, path)
 
 /** The name the tree shows for [path]: its last segment, or a root (`/`, `C:\`) as it is. */
 fun displayName(path: String): String {
@@ -78,8 +71,8 @@ data class MovedOpenPath(val oldPath: String, val newPath: String?)
  * `srcx`). Order follows [open]; duplicates collapse. A no-op rename or `/` itself touch nothing.
  */
 fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Collection<String>): List<MovedOpenPath> {
-    val from = trimEnd(oldAbs)
-    val to = newAbs?.let(::trimEnd)
+    val from = trimHostPath(oldAbs)
+    val to = newAbs?.let(::trimHostPath)
     if (hostParent(from) == null || (to != null && sameHostPath(from, to))) return emptyList()
     val out = ArrayList<MovedOpenPath>()
     val seen = HashSet<String>()

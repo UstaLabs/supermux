@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ internal class DesktopFileAccess : FileAccess {
  * trailing dot or space (Windows drops them), no device name (`CON`, `NUL`, `COM1`...).
  */
 internal fun safeFileName(name: String, windows: Boolean = isWindowsOs()): String {
-    val last = name.substringAfterLast('/').substringAfterLast('\\')
+    val last = fileNameOf(name)
     val clean = if (windows) last.replace(WINDOWS_RESERVED, "-").trimEnd('.', ' ') else last
     return when {
         clean.isBlank() || clean == "." || clean == ".." -> "file"

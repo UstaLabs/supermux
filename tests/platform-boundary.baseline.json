@@ -56,19 +56,6 @@
     "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt": 3,
     "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt": 4
   },
-  "host-path-kt": {
-    "apps/android/src/main/kotlin/dev/supermux/android/platform/AndroidChatSeams.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 1,
-    "apps/ios/src/iosMain/kotlin/dev/supermux/ios/IosChatSeams.kt": 1,
-    "apps/shared/src/commonMain/kotlin/dev/supermux/media/MediaKey.kt": 1,
-    "apps/shared/src/commonMain/kotlin/dev/supermux/ui/WorkdirPath.kt": 2,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/ChatMedia.kt": 1,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/MarkdownMedia.kt": 2,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/chat/Timeline.kt": 2,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/files/FileChangeTracker.kt": 1,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/files/TreePaths.kt": 1,
-    "apps/ui/src/commonMain/kotlin/dev/supermux/ui/session/ProjectSettingsSheet.kt": 2
-  },
   "links-perms": {
     "packages/supermux-core/examples/chat/server.ts": 1,
     "packages/supermux-core/examples/kanban/server.ts": 1,

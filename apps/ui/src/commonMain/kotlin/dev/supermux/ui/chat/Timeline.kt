@@ -151,6 +151,7 @@ import kotlinx.coroutines.launch
 import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.chat.previewFilename
+import dev.supermux.fs.fileNameOf
 
 // ---------------------------------------------------------------------------
 // Reading width
@@ -1589,7 +1590,8 @@ internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia
  * back to [defaultExt] — both OS viewers and the video backends pick their decoder from the suffix.
  */
 internal fun attachmentTempName(base: String, extensionFrom: String?, defaultExt: String): String {
-    val safeBase = base.substringAfterLast('/').substringBeforeLast('.', base).take(64).ifBlank { "file" }
+    val leaf = fileNameOf(base)
+    val safeBase = leaf.substringBeforeLast('.', leaf).take(64).ifBlank { "file" }
     val ext = (extensionFrom ?: "").substringAfterLast('.', "").ifBlank { defaultExt }
     return "$safeBase.$ext"
 }
@@ -2118,7 +2120,7 @@ internal suspend fun saveOrOpenAttachment(
 ) {
     // Give the saved file an extension the host's viewer can identify, or a PDF/log downloaded
     // under a bare `file_id` opens as an unrecognised blob.
-    val safeName = previewFilename(name.substringAfterLast('/'), mime)
+    val safeName = previewFilename(fileNameOf(name), mime)
     val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
     if (pointer) {
         platform.files.saveAs(safeName, type, bytes)?.let { platform.files.openSaved(it) }

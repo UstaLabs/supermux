@@ -41,6 +41,7 @@ import platform.UIKit.UIImpactFeedbackStyle
 import platform.UIKit.UINotificationFeedbackGenerator
 import platform.UIKit.UINotificationFeedbackType
 import platform.UIKit.UIPasteboard
+import dev.supermux.fs.fileNameOf
 
 // ── haptics ──────────────────────────────────────────────────────────────────
 
@@ -191,7 +192,7 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
  * same guard exists on desktop (`safeFileName` there) for the same reason.
  */
 internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+    fileNameOf(name).ifBlank { "file" }
 
 // ── mic + read-aloud (cluster H3) ────────────────────────────────────────────
 

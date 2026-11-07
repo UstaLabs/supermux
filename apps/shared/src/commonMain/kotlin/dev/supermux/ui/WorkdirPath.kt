@@ -5,6 +5,7 @@ import dev.supermux.fs.hostRelativePath
 import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.isWindowsHostPath
 import dev.supermux.fs.normalizeHostPath
+import dev.supermux.fs.isAbsoluteHostPath
 
 /** Neither absolute on either host nor under `~`: relative to the workdir. */
 private fun isRelativeChatPath(path: String): Boolean =
@@ -40,20 +41,9 @@ fun toEditorPath(path: String, workdir: String, homeDir: String?): String? {
         else -> "$root/$trimmed"
     }
     if (!isAbsoluteEditorPath(joined)) return null // `~` with no home to expand it against
-    val abs = if (isWindowsHostPath(joined)) normalizeHostPath(joined) else collapseDotSegments(joined)
+    val abs = normalizeHostPath(joined)
     val rel = toWorkdirRelativePath(abs, workdir, home) ?: return abs
     return rel.ifEmpty { null }
-}
-
-/** `/a/./b/../c` → `/a/c` (an absolute path; `..` never climbs above `/`). */
-private fun collapseDotSegments(abs: String): String {
-    val out = ArrayList<String>()
-    for (seg in abs.split('/')) when (seg) {
-        "", "." -> {}
-        ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
-        else -> out += seg
-    }
-    return "/" + out.joinToString("/")
 }
 
 /**
@@ -61,7 +51,7 @@ private fun collapseDotSegments(abs: String): String {
  * POSIX host, `C:\…` or `\\server\share\…` on Windows. Workdir-relative keys never start with `/`: every
  * open path strips it.
  */
-fun isAbsoluteEditorPath(path: String): Boolean = path.startsWith("/") || isWindowsHostPath(path)
+fun isAbsoluteEditorPath(path: String): Boolean = isAbsoluteHostPath(path)
 
 /** Port of normalizeWorkdirKey: expand ~, repair home-prefixed tilde, collapse // , drop trailing /. */
 fun normalizeWorkdirKey(workdir: String, homeDir: String?): String {
