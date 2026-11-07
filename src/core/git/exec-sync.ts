@@ -23,3 +23,14 @@ export function runSync(
 export function gitSync(cwd: string, args: string[], timeoutMs: number): { ok: boolean; out: string } {
   return runSync("git", args, { cwd, timeoutMs })
 }
+
+/** [runSync]'s stdout, trimmed; when the command fails, an error with what it said (or that it failed). */
+export function runSyncOrThrow(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs: number; env?: Record<string, string | undefined> },
+): string {
+  const r = runSync(cmd, args, opts)
+  if (!r.ok) throw new Error(r.out || `${cmd} ${args[0] ?? ""} failed`.trim())
+  return r.out
+}

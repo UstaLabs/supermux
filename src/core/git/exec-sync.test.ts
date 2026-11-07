@@ -2,7 +2,7 @@ import { test, expect } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { gitSync, runSync } from "./exec-sync"
+import { gitSync, runSync, runSyncOrThrow } from "./exec-sync"
 
 // #29: branches, integrate, remote, pr, clone and the editor's repo scan each ran git through a copy of the same
 // execFileSync wrapper, without a hidden window or the live env. runSync is that wrapper, once, beside exec.ts
@@ -29,4 +29,11 @@ test("gitSync runs git in a folder", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// The forge's git config, ssh-keygen and gh/glab calls want the output, or an error that says why.
+test("runSyncOrThrow answers stdout trimmed, or throws with what the command said", () => {
+  expect(runSyncOrThrow("bash", ["-c", "echo ' key '"], { timeoutMs: 10_000 })).toBe("key")
+  expect(() => runSyncOrThrow("bash", ["-c", "echo nope >&2; exit 1"], { timeoutMs: 10_000 })).toThrow("nope")
+  expect(() => runSyncOrThrow("no-such-command-supermux", ["x"], { timeoutMs: 10_000 })).toThrow("no-such-command-supermux x failed")
 })
