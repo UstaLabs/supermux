@@ -48,14 +48,10 @@ class ProcessHandleChild(private val h: ProcessHandle) : ChildHandle {
 data class ChildLaunch(val argv: List<String>, val env: Map<String, String>, val workDir: Path?, val log: Path)
 
 fun defaultStartChild(l: ChildLaunch): ChildHandle {
-    val pb = ProcessBuilder(l.argv)
-    l.workDir?.let { pb.directory(it.toFile()) }
-    pb.environment().clear()
-    pb.environment().putAll(l.env)
     l.log.parent?.let { Files.createDirectories(it) }
-    pb.redirectOutput(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-    pb.redirectError(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-    return ProcessChild(pb.start())
+    // Its whole environment is ours ([ChildLaunch.env]); stdout and stderr both go to its log.
+    val command = dev.supermux.desktop.platform.OsCommand(l.argv, l.env, replaceEnv = true, workDir = l.workDir)
+    return ProcessChild(command.start(output = ProcessBuilder.Redirect.appendTo(l.log.toFile())))
 }
 
 /** A live process as the OS reports it. */

@@ -237,12 +237,6 @@
     "src/main.ts": 15,
     "src/shared/preflight.ts": 3
   },
-  "os-check-kt": {
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/DesktopHostBootstrap.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt": 1
-  },
   "path-shape": {
     "packages/supermux-core/examples/kanban/server.ts": 1,
     "packages/supermux-core/examples/recipes/same-task-three-agents.ts": 1,
@@ -369,10 +363,6 @@
     "src/main.ts": 2
   },
   "spawn-kt": {
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/AppSleepInhibitor.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/BrokerVersion.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/ChildProcess.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
     "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1
   }
 }

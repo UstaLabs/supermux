@@ -4,7 +4,7 @@
 // parses. Card #40 is why: read-aloud spliced agent text into a PowerShell script, and opening an
 // attachment handed its name to `cmd /c start`. Still to merge in step 9: `OsCommand.start` beside
 // `host/OsEnv` (the audit's one process runner), `which` beside `OsEnv.hasCommand`, and this enum
-// with `OsEnv.Os`, whose `OTHER` `LINUX` stands in for here.
+// with `DesktopOs`, whose `OTHER` `LINUX` stands in for here.
 package dev.supermux.desktop.platform
 
 import java.util.Locale
@@ -13,7 +13,7 @@ import java.util.Locale
  * Which OS the desktop app runs on. [LINUX] also stands for any other Unix: the freedesktop tools
  * are the only guess there, as they always were in the openers this replaces.
  */
-internal enum class DesktopOs {
+enum class DesktopOs {
     WINDOWS, MACOS, LINUX;
 
     companion object {
@@ -32,21 +32,27 @@ internal enum class DesktopOs {
 }
 
 /**
- * A program to start: [argv] as separate arguments, [env] added to this process's environment. An
- * untrusted value rides in [env] (PowerShell reads it as `$env:NAME`) or as one whole argument,
- * never inside a script.
+ * A program to start, the desktop app's one way to start one (#29): [argv] as separate arguments, [env] added to this
+ * process's environment, or the child's whole environment when [replaceEnv], run in [workDir] when set. An untrusted
+ * value rides in [env] (PowerShell reads it as `$env:NAME`) or as one whole argument, never inside a script.
  */
-internal data class OsCommand(val argv: List<String>, val env: Map<String, String> = emptyMap()) {
+internal data class OsCommand(
+    val argv: List<String>,
+    val env: Map<String, String> = emptyMap(),
+    val replaceEnv: Boolean = false,
+    val workDir: java.nio.file.Path? = null,
+) {
     /**
-     * Start it, stdout and stderr to [output]. Stdin is closed at once: nothing is ever written to
-     * these children, so none may wait for input that will not come.
+     * Start it, stdout to [output] and stderr to [errors], or into [output] as well when null. Stdin is closed at once:
+     * nothing is ever written to these children, so none may wait for input that will not come.
      */
-    fun start(output: ProcessBuilder.Redirect = ProcessBuilder.Redirect.DISCARD): Process {
-        val process = ProcessBuilder(argv)
-            .redirectErrorStream(true)
-            .redirectOutput(output)
-            .apply { environment().putAll(env) }
-            .start()
+    fun start(output: ProcessBuilder.Redirect = ProcessBuilder.Redirect.DISCARD, errors: ProcessBuilder.Redirect? = null): Process {
+        val builder = ProcessBuilder(argv).redirectOutput(output)
+        if (errors == null) builder.redirectErrorStream(true) else builder.redirectError(errors)
+        workDir?.let { builder.directory(it.toFile()) }
+        if (replaceEnv) builder.environment().clear()
+        builder.environment().putAll(env)
+        val process = builder.start()
         process.outputStream.close()
         return process
     }
