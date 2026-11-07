@@ -17,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 /**
  * The Wayland hold-to-talk key (#62) against a stand-in GlobalShortcuts portal on a private session bus: what
@@ -68,13 +69,19 @@ class WaylandHotKeyTest {
     }
 
     // GNOME before 48, older KDE: no GlobalShortcuts, and Settings says so.
-    @Test fun withoutThePortalThereIsNothingToAsk() =
-        assertEquals(WaylandHotKey.Outcome.NO_PORTAL, WaylandHotKey({}, {}, env).register(ctrlAltSpace, "Hold to talk"))
+    @Test fun withoutThePortalThereIsNothingToAsk() {
+        val told = outcomes()
+        WaylandHotKey({}, {}, { told += it }, env).register(ctrlAltSpace, "Hold to talk")
+        assertEquals(listOf(WaylandHotKey.Outcome.NO_PORTAL), told.toList())
+    }
 
     @Test fun theDesktopBindsItAndItsPressAndReleaseComeBack() = withPortal(answer = 0) { portal ->
         val events = Collections.synchronizedList(mutableListOf<String>())
-        val key = WaylandHotKey({ events += "press" }, { events += "release" }, env)
-        assertEquals(WaylandHotKey.Outcome.BOUND, key.register(ctrlAltSpace, "Hold to talk to Anya"))
+        val told = outcomes()
+        val key = WaylandHotKey({ events += "press" }, { events += "release" }, { told += it }, env)
+        key.register(ctrlAltSpace, "Hold to talk to Anya")
+        waitFor { told.size == 2 }
+        assertEquals(listOf(WaylandHotKey.Outcome.ASKING, WaylandHotKey.Outcome.BOUND), told.toList())
         assertEquals(listOf("talk"), portal.asked.map { it.id })
         assertEquals("CTRL+ALT+space", portal.asked.single().properties["preferred_trigger"]?.value)
         assertEquals("Hold to talk to Anya", portal.asked.single().properties["description"]?.value)
@@ -86,17 +93,59 @@ class WaylandHotKeyTest {
     }
 
     @Test fun theUserCanSayNo() = withPortal(answer = 1) {
-        assertEquals(WaylandHotKey.Outcome.DECLINED, WaylandHotKey({}, {}, env).register(ctrlAltSpace, "Hold to talk"))
+        val told = outcomes()
+        WaylandHotKey({}, {}, { told += it }, env).register(ctrlAltSpace, "Hold to talk")
+        waitFor { told.size == 2 }
+        assertEquals(listOf(WaylandHotKey.Outcome.ASKING, WaylandHotKey.Outcome.DECLINED), told.toList())
+    }
+
+    // The desktop's dialog waits for the user, who may take minutes: asking returns at once and says it is asking,
+    // nothing calls the wait a failure, and the key is bound whenever the yes comes.
+    @Test fun theDesktopsDialogMayTakeAsLongAsTheUserNeeds() = withPortal(answer = null) { portal ->
+        val told = outcomes()
+        val key = WaylandHotKey({}, {}, { told += it }, env)
+        val asking = thread { key.register(ctrlAltSpace, "Hold to talk to Anya") }
+        asking.join(5_000)
+        assertFalse(asking.isAlive, "asking waited for the user's answer")
+        waitFor { portal.binds.isNotEmpty() }
+        Thread.sleep(1_500)
+        assertEquals(listOf(WaylandHotKey.Outcome.ASKING), told.toList())
+        portal.answerBind(0)
+        waitFor { told.size == 2 }
+        assertEquals(listOf(WaylandHotKey.Outcome.ASKING, WaylandHotKey.Outcome.BOUND), told.toList())
+        key.unregister()
+    }
+
+    // Picked again while the first dialog is still up: the first one's late answer is no longer news.
+    @Test fun anAnswerToAnEarlierAskChangesNothing() = withPortal(answer = null) { portal ->
+        val told = outcomes()
+        val key = WaylandHotKey({}, {}, { told += it }, env)
+        key.register(ctrlAltSpace, "Hold to talk")
+        key.register(ctrlAltSpace, "Hold to talk")
+        waitFor { portal.binds.size == 2 }
+        portal.answerBind(0, which = 0)
+        Thread.sleep(500)
+        assertEquals(listOf(WaylandHotKey.Outcome.ASKING, WaylandHotKey.Outcome.ASKING), told.toList())
+        portal.answerBind(1, which = 1)
+        waitFor { told.size == 3 }
+        assertEquals(WaylandHotKey.Outcome.DECLINED, told.last())
+        key.unregister()
     }
 
     // A recent xdg-desktop-portal (1.21) gives the key only to an app it can name. Started from the desktop's
     // launcher, the app's systemd scope names it; from a terminal nothing does, unless the app names its launcher entry.
     @Test fun theAppNamesItsLauncherEntrySoADesktopThatMustKnowWhoAsksBindsIt() = withPortal(answer = 0, namesApps = true) { portal ->
-        assertEquals(WaylandHotKey.Outcome.BOUND, WaylandHotKey({}, {}, env).register(ctrlAltSpace, "Hold to talk"))
+        val told = outcomes()
+        WaylandHotKey({}, {}, { told += it }, env).register(ctrlAltSpace, "Hold to talk")
+        waitFor { told.size == 2 }
+        assertEquals(WaylandHotKey.Outcome.BOUND, told.last())
         assertEquals(listOf("supermux-supermux"), (portal as NamingPortal).registered.values.toList())
     }
 
-    private fun withPortal(answer: Int, namesApps: Boolean = false, body: (FakePortal) -> Unit) {
+    private fun outcomes() = Collections.synchronizedList(mutableListOf<WaylandHotKey.Outcome>())
+
+    /** A stand-in portal on the bus for [body]; it answers each BindShortcuts with [answer], or waits to be told (null). */
+    private fun withPortal(answer: Int?, namesApps: Boolean = false, body: (FakePortal) -> Unit) {
         val conn = DBusConnectionBuilder.forAddress(env.getValue("DBUS_SESSION_BUS_ADDRESS")).withShared(false).build()
         try {
             val portal = if (namesApps) NamingPortal(conn, answer) else FakePortal(conn, answer)
@@ -117,8 +166,10 @@ class WaylandHotKeyTest {
      * Answers like xdg-desktop-portal does (a Response on the request path), and fires the shortcut on demand. Like
      * an older portal it has no app registry, and doesn't ask who an app is.
      */
-    open class FakePortal(private val conn: DBusConnection, private val bindAnswer: Int) : PortalGlobalShortcuts, Properties {
+    open class FakePortal(private val conn: DBusConnection, private val bindAnswer: Int?) : PortalGlobalShortcuts, Properties {
         val asked = Collections.synchronizedList(mutableListOf<PortalShortcut>())
+        /** The request path of each BindShortcuts, in order: where its answer goes. */
+        val binds = Collections.synchronizedList(mutableListOf<String>())
         @Volatile var session = ""
 
         override fun getObjectPath() = WaylandHotKey.DESKTOP_PATH
@@ -144,9 +195,13 @@ class WaylandHotKeyTest {
         override fun BindShortcuts(session: DBusPath, shortcuts: List<PortalShortcut>, parentWindow: String, options: Map<String, Variant<*>>): DBusPath {
             asked += shortcuts
             val path = "/org/freedesktop/portal/desktop/request/${sender()}/${options["handle_token"]!!.value}"
-            answer(path, bindAnswer, emptyMap())
+            binds += path
+            bindAnswer?.let { answer(path, it, emptyMap()) }
             return DBusPath(path)
         }
+
+        /** The user answers the dialog of BindShortcuts number [which] (the latest by default): 0 yes, 1 no. */
+        fun answerBind(code: Int, which: Int = binds.size - 1) = answer(binds[which], code, emptyMap())
 
         fun fire(down: Boolean) {
             val at = UInt64(System.currentTimeMillis())
@@ -168,7 +223,7 @@ class WaylandHotKeyTest {
      * A recent portal (1.21), to an app outside a sandbox: one it can't name from its systemd scope (started from a
      * terminal) is told "An app id is required", unless it first registered its launcher entry.
      */
-    class NamingPortal(conn: DBusConnection, bindAnswer: Int) : FakePortal(conn, bindAnswer), PortalRegistry {
+    class NamingPortal(conn: DBusConnection, bindAnswer: Int?) : FakePortal(conn, bindAnswer), PortalRegistry {
         val registered: MutableMap<String, String> = Collections.synchronizedMap(linkedMapOf())
 
         override fun Register(appId: String, options: Map<String, Variant<*>>) {

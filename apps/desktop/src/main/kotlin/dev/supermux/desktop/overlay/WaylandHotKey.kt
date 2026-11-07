@@ -19,6 +19,7 @@ import org.freedesktop.dbus.types.UInt64
 import org.freedesktop.dbus.types.Variant
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** One shortcut, as the portal takes it: its id, and its description and preferred trigger. `(sa{sv})` */
 class PortalShortcut(
@@ -53,26 +54,33 @@ interface PortalRequest : DBusInterface {
 }
 
 /**
- * The hold-to-talk key on Wayland. [register] asks the desktop for [KeyCombo] as a global shortcut (the desktop
- * asks the user once, so it can take a while) and returns what came of it; from then on [onPress] and
- * [onRelease] come on a bus thread. [env] gives the session bus; [appId] is the launcher entry the portal knows
- * the app by.
+ * The hold-to-talk key on Wayland. [register] asks the desktop for [KeyCombo] as a global shortcut, and [onOutcome]
+ * says what came of it: [Outcome.ASKING] while the desktop's dialog waits for the user, however long that takes,
+ * then its answer. From then on [onPress] and [onRelease] come on a bus thread, as [onOutcome]'s answers do. [env]
+ * gives the session bus; [appId] is the launcher entry the portal knows the app by.
  */
 internal class WaylandHotKey(
     private val onPress: () -> Unit,
     private val onRelease: () -> Unit,
+    private val onOutcome: (Outcome) -> Unit,
     private val env: Map<String, String> = System.getenv(),
     private val appId: String = DesktopNotification.DESKTOP_ENTRY,
 ) {
-    enum class Outcome { BOUND, NO_PORTAL, DECLINED, FAILED }
+    enum class Outcome { ASKING, BOUND, NO_PORTAL, DECLINED, FAILED }
 
     private var conn: DBusConnection? = null
     private val handlers = mutableListOf<AutoCloseable>()
+    /** Which asking is the latest: an answer to an earlier one is no longer news. */
+    private val asking = AtomicInteger()
 
-    fun register(combo: KeyCombo, description: String): Outcome {
+    /** Asks for [combo]; returns once the desktop's dialog is up, its answer comes to [onOutcome] later. */
+    fun register(combo: KeyCombo, description: String) {
         unregister()
-        val address = SessionBus.address(env) ?: return Outcome.NO_PORTAL
-        val c = runCatching { DBusConnectionBuilder.forAddress(address).withShared(false).build() }.getOrNull() ?: return Outcome.NO_PORTAL
+        val mine = asking.get()
+        val tell = { outcome: Outcome -> if (asking.get() == mine) onOutcome(outcome) }
+        val address = SessionBus.address(env) ?: return tell(Outcome.NO_PORTAL)
+        val c = runCatching { DBusConnectionBuilder.forAddress(address).withShared(false).build() }.getOrNull()
+            ?: return tell(Outcome.NO_PORTAL)
         conn = c
         // A recent xdg-desktop-portal (1.21 checked) gives the key only to an app it can name ("An app id is
         // required"). Started from the desktop's launcher, the app's systemd scope names it; from a terminal nothing
@@ -81,18 +89,22 @@ internal class WaylandHotKey(
         runCatching { c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, PortalRegistry::class.java).Register(appId, emptyMap()) }
         // No GlobalShortcuts interface (GNOME before 48, older KDE): nothing to ask.
         val props = c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, Properties::class.java)
-        if (runCatching { props.Get<Any?>(IFACE, "version") }.isFailure) return Outcome.NO_PORTAL
-        val responses = LinkedBlockingQueue<PortalRequest.Response>()
-        // Listening before asking: the answer may come before the call returns.
-        handlers += c.addSigHandler(PortalRequest.Response::class.java) { responses.add(it) }
-        val portal = c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, PortalGlobalShortcuts::class.java)
+        if (runCatching { props.Get<Any?>(IFACE, "version") }.isFailure) return tell(Outcome.NO_PORTAL)
         val token = "supermux${System.nanoTime()}"
+        val responses = LinkedBlockingQueue<PortalRequest.Response>()
+        // Listening before asking: an answer may come before its call returns. The dialog's answer is taken
+        // whenever the user gives it: a clock on it would call a slow yes a failure.
+        handlers += c.addSigHandler(PortalRequest.Response::class.java) { r ->
+            if (r.path.endsWith("/${token}b")) tell(answered(r.response.toInt())) else responses.add(r)
+        }
+        val portal = c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, PortalGlobalShortcuts::class.java)
         val created = runCatching {
             portal.CreateSession(mapOf("handle_token" to Variant(token + "c"), "session_handle_token" to Variant(token + "s")))
-        }.getOrNull() ?: return Outcome.FAILED
-        val opened = await(responses, created.path, CREATE_WAIT_S) ?: return Outcome.FAILED
-        if (opened.response.toInt() != 0) return Outcome.FAILED
-        val session = opened.results["session_handle"]?.value?.toString() ?: return Outcome.FAILED
+        }.getOrNull() ?: return tell(Outcome.FAILED)
+        // Opening a session asks the user nothing: a portal that doesn't answer it soon won't.
+        val opened = await(responses, created.path, CREATE_WAIT_S) ?: return tell(Outcome.FAILED)
+        if (opened.response.toInt() != 0) return tell(Outcome.FAILED)
+        val session = opened.results["session_handle"]?.value?.toString() ?: return tell(Outcome.FAILED)
         handlers += c.addSigHandler(PortalGlobalShortcuts.Activated::class.java) { s ->
             if (s.session.path == session && s.shortcutId == TALK) onPress()
         }
@@ -100,19 +112,15 @@ internal class WaylandHotKey(
             if (s.session.path == session && s.shortcutId == TALK) onRelease()
         }
         val shortcut = PortalShortcut(TALK, mapOf("description" to Variant(description), "preferred_trigger" to Variant(trigger(combo))))
-        val asked = runCatching {
+        // Said before asking, so the answer can't come first.
+        tell(Outcome.ASKING)
+        runCatching {
             portal.BindShortcuts(DBusPath(session), listOf(shortcut), "", mapOf("handle_token" to Variant(token + "b")))
-        }.getOrNull() ?: return Outcome.FAILED
-        // The desktop shows its dialog here: the user has time to read it.
-        val bound = await(responses, asked.path, BIND_WAIT_S) ?: return Outcome.FAILED
-        return when (bound.response.toInt()) {
-            0 -> Outcome.BOUND
-            1 -> Outcome.DECLINED
-            else -> Outcome.FAILED
-        }
+        }.onFailure { tell(Outcome.FAILED) }
     }
 
     fun unregister() {
+        asking.incrementAndGet()
         handlers.forEach { runCatching { it.close() } }
         handlers.clear()
         // The portal session lives as long as this connection.
@@ -136,7 +144,13 @@ internal class WaylandHotKey(
         const val IFACE = "org.freedesktop.portal.GlobalShortcuts"
         const val TALK = "talk"
         private const val CREATE_WAIT_S = 10L
-        private const val BIND_WAIT_S = 180L
+
+        /** The dialog's answer: 0 yes, 1 the user said no, anything else it ended some other way. */
+        fun answered(response: Int): Outcome = when (response) {
+            0 -> Outcome.BOUND
+            1 -> Outcome.DECLINED
+            else -> Outcome.FAILED
+        }
 
         /** [combo] as the XDG shortcuts spec writes a trigger: CTRL+ALT+space. */
         fun trigger(combo: KeyCombo): String {

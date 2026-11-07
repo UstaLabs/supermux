@@ -94,8 +94,10 @@ internal fun DesktopOverlaySettings() {
 /** What Settings says about the Wayland key, as its portal answered: what the desktop can't do, and what instead. */
 internal fun waylandKeyNote(outcome: WaylandHotKey.Outcome?): String? = when (outcome) {
     WaylandHotKey.Outcome.NO_PORTAL -> "Hold-to-talk from any app needs GNOME 48+ or KDE Plasma 5.27+; hold your Agent to talk."
+    // Its dialog is up, for as long as the user takes: the key comes once they approve it.
+    WaylandHotKey.Outcome.ASKING -> "Waiting for you to approve the shortcut…"
     WaylandHotKey.Outcome.DECLINED -> "The desktop wasn't allowed to give supermux this key. Pick it again here to be asked again."
-    // It answered but couldn't hand the key over: its backend failed, or its dialog went unanswered.
+    // It answered but couldn't hand the key over: its backend failed.
     WaylandHotKey.Outcome.FAILED -> "The desktop couldn't give supermux this key; hold your Agent to talk, or pick it again here to try again."
     WaylandHotKey.Outcome.BOUND, null -> null
 }
