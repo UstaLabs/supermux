@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./mux-core"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
+import { listOpenCodePluginJs } from "./index"
 
 test("ensureMuxCoreSkills writes manifests and removes the retired soul and new-personal-agent skills", () => {
   const root = mkdtempSync(join(tmpdir(), "mux-core-sync-"))
@@ -17,10 +18,8 @@ test("ensureMuxCoreSkills writes manifests and removes the retired soul and new-
     expect(existsSync(join(pluginDir, ".claude-plugin", "plugin.json"))).toBe(true)
     expect(existsSync(join(pluginDir, ".codex-plugin", "plugin.json"))).toBe(true)
     expect(existsSync(join(pluginDir, ".cursor-plugin", "plugin.json"))).toBe(true)
-    expect(existsSync(join(pluginDir, ".opencode", "plugins", "mux.js"))).toBe(true)
-    const muxJs = readFileSync(join(pluginDir, ".opencode", "plugins", "mux.js"), "utf8")
-    expect(muxJs).toContain("skills.paths")
-    expect(muxJs).not.toContain("bootstrap")
+    // No OpenCode JS plugin: the core already maps skills/ to OpenCode's skills.paths (#102).
+    expect(existsSync(join(pluginDir, ".opencode"))).toBe(false)
     expect(existsSync(join(pluginDir, "skills"))).toBe(true)
     expect(existsSync(join(pluginDir, "skills", "soul"))).toBe(false)
     expect(existsSync(join(pluginDir, "skills", "new-personal-agent"))).toBe(false)
@@ -51,6 +50,40 @@ test("ensureMuxCoreSkills is idempotent when files already match", () => {
     const pluginDir = join(root, "mux-core")
     expect(ensureMuxCoreSkills({ pluginDir })).toBe(true)
     expect(ensureMuxCoreSkills({ pluginDir })).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ── #102: any OpenCode `plugin` entry makes OpenCode install @opencode-ai/plugin (62 MB) into the
+//    session's own config dir before it answers initialize (44–82 s per new session, measured). mux.js
+//    only re-added mux-core/skills to skills.paths, which the core already maps, so it is removed. ────
+
+test("ensureMuxCoreSkills removes the OpenCode JS plugin an older broker wrote", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-mux-js-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    mkdirSync(join(pluginDir, ".opencode", "plugins"), { recursive: true })
+    writeFileSync(join(pluginDir, ".opencode", "plugins", "mux.js"), "export const MuxPlugin = async () => ({})\n")
+    expect(ensureMuxCoreSkills({ pluginDir })).toBe(true)
+    expect(existsSync(join(pluginDir, ".opencode"))).toBe(false)
+    expect(listOpenCodePluginJs(pluginDir)).toEqual([])
+    expect(ensureMuxCoreSkills({ pluginDir })).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("ensureMuxCoreSkills removes only mux.js from .opencode/plugins", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-mux-js-other-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    mkdirSync(join(pluginDir, ".opencode", "plugins"), { recursive: true })
+    writeFileSync(join(pluginDir, ".opencode", "plugins", "mux.js"), "old")
+    writeFileSync(join(pluginDir, ".opencode", "plugins", "other.js"), "someone else's")
+    ensureMuxCoreSkills({ pluginDir })
+    expect(existsSync(join(pluginDir, ".opencode", "plugins", "mux.js"))).toBe(false)
+    expect(readFileSync(join(pluginDir, ".opencode", "plugins", "other.js"), "utf8")).toBe("someone else's")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

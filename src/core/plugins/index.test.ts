@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { antigravitySkillsDirs, ensureAntigravityPluginScopes, ensureGrokPluginScopes, ensureOpenCodePluginScopes, loadPluginsRegistry, sessionPlugins } from "./index"
 import { AgentKind } from "../../shared/agents"
+import { savePluginsRegistry } from "./registry"
 
 function setup(): { root: string; file: string } {
   const root = mkdtempSync(join(tmpdir(), "plugins-index-"))
@@ -54,6 +55,48 @@ test("ensureOpenCodePluginScopes still adds opencode via the shared engine", () 
     expect(ensureOpenCodePluginScopes({ file, pluginsDir: root })).toBe(true)
     expect(loadPluginsRegistry({ file, pluginsDir: root }).plugins[0]!.scopes).toEqual(["claude", "opencode"])
     expect(ensureOpenCodePluginScopes({ file, pluginsDir: root })).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// #102: these boot helpers are a migration for registries written before an agent was supported. They ran on
+// every boot, so a plugin narrowed to ["codex"] came back as codex+opencode+grok+antigravity after each restart.
+const SCOPE_MIGRATIONS = [ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes]
+
+test("the boot scope migration runs once per agent kind: a scope narrowed afterwards stays narrowed", () => {
+  const { root, file } = setup()
+  try {
+    const dir = writeSkillPlugin(root, "sp")
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      plugins: [{ name: "sp", source: { type: "local", path: dir }, enabled: true, scopes: ["claude"] }],
+    }))
+    for (const migrate of SCOPE_MIGRATIONS) expect(migrate({ file, pluginsDir: root })).toBe(true)
+    expect(loadPluginsRegistry({ file, pluginsDir: root }).plugins[0]!.scopes).toEqual(["claude", "opencode", "grok", "antigravity"])
+
+    const reg = loadPluginsRegistry({ file, pluginsDir: root })
+    savePluginsRegistry({ ...reg, plugins: reg.plugins.map((p) => ({ ...p, scopes: ["codex"] })) }, { file, pluginsDir: root })
+
+    for (const migrate of SCOPE_MIGRATIONS) expect(migrate({ file, pluginsDir: root })).toBe(false)
+    expect(loadPluginsRegistry({ file, pluginsDir: root }).plugins[0]!.scopes).toEqual(["codex"])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a plugin added after the boot scope migration keeps the scopes it was given", () => {
+  const { root, file } = setup()
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, plugins: [] }))
+    for (const migrate of SCOPE_MIGRATIONS) migrate({ file, pluginsDir: root })
+
+    const dir = writeSkillPlugin(root, "late")
+    const reg = loadPluginsRegistry({ file, pluginsDir: root })
+    savePluginsRegistry({ ...reg, plugins: [{ name: "late", source: { type: "local", path: dir }, enabled: true, scopes: ["codex"], dir }] }, { file, pluginsDir: root })
+
+    for (const migrate of SCOPE_MIGRATIONS) expect(migrate({ file, pluginsDir: root })).toBe(false)
+    expect(loadPluginsRegistry({ file, pluginsDir: root }).plugins[0]!.scopes).toEqual(["codex"])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

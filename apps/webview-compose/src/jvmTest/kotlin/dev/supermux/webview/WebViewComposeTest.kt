@@ -1124,10 +1124,24 @@ class WebViewComposeTest {
             }
         }
         waitFor("live and sized") { state.phase == WebViewPhase.Live && state.contentSize != null }
+        // Each growth step crosses the runtime's dispatcher, the UI thread, which frames alone don't wait for: on a
+        // loaded runner the view was sampled a step before the loop is caught (CI, 2026-11-07: 176 px, then 192). A
+        // round runs a second of frames, then lets the UI thread catch up; three rounds that leave the height as it
+        // was mean the view has stopped.
+        fun height() = onNodeWithTag("view").fetchSemanticsNode().size.height
+        var settled = height()
+        var steady = 0
+        var rounds = 0
+        while (steady < 3) {
+            assertTrue(++rounds <= 30, "still growing after 30 rounds, at ${height()} px")
+            mainClock.advanceTimeBy(1_000)
+            runOnUiThread { }
+            val now = height()
+            if (now == settled) steady++ else { settled = now; steady = 0 }
+        }
         mainClock.advanceTimeBy(5_000)
-        val settled = onNodeWithTag("view").fetchSemanticsNode().size.height
-        mainClock.advanceTimeBy(5_000)
-        assertEquals(settled, onNodeWithTag("view").fetchSemanticsNode().size.height)
+        runOnUiThread { }
+        assertEquals(settled, height())
         assertTrue(settled < with(density) { 300.dp.roundToPx() }, "settled at $settled px")
         assertTrue(ui { factory.created.single().calls.count { it.startsWith("load") } } == 1)
         assertNoViolations(factory)

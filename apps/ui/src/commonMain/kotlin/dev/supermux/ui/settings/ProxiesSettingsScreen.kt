@@ -56,9 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import dev.supermux.net.CreateProxyResponse
@@ -584,7 +582,6 @@ private fun ProxyRow(
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
     // Touch bump: LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard attached is
     // still a finger-sized target. The row breathes AND the two icon buttons grow to the 48dp
@@ -630,7 +627,7 @@ private fun ProxyRow(
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     IconButton(
-                        onClick = { clipboard.setText(AnnotatedString(url)) },
+                        onClick = { platform.copyToClipboard(url) },
                         modifier = Modifier
                             .size(iconButtonSize)
                             .testTag("proxy_url_copy_$tagSafe"),

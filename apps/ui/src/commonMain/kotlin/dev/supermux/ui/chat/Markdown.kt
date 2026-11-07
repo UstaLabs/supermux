@@ -69,7 +69,6 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -322,7 +321,7 @@ internal fun AnnotatedString.Builder.appendLinkified(
 @Composable
 fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composable () -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val accent = cs.primary.copy(alpha = 0.4f)
@@ -348,7 +347,7 @@ fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composabl
             extraAction?.invoke()
             IconButton(
                 onClick = {
-                    clipboard.setText(AnnotatedString(code))
+                    platform.copyToClipboard(code)
                     copied = true
                     scope.launch { delay(1500); copied = false }
                 },
