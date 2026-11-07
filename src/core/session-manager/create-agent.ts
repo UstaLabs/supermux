@@ -4,6 +4,8 @@ import { AgentKind, isAgentKind } from "../../shared/agents"
 import { agentWorkdir } from "../../shared/paths"
 import { ensureAgentMemoryFiles } from "../memory/agent-memory"
 import type { SessionRole } from "./policy"
+import { folderTaken } from "./naming"
+import { paths } from "@supermux/platform"
 
 /** The ONE way an Agent is created (spec §3): web, Telegram and the create_agent tool all call it.
  *  Later the workspace/announce half folds into the orchestration Plan 4 shared create function. */
@@ -29,14 +31,19 @@ export class CreateAgentError extends Error {
 
 const MAX_NAME = 80
 
-export function validateAgentName(raw: string, taken: Set<string>): { ok: true; name: string } | { ok: false; error: string; status: number; code: string } {
+export function validateAgentName(raw: string, taken: Set<string>, platform?: NodeJS.Platform): { ok: true; name: string } | { ok: false; error: string; status: number; code: string } {
   const name = (raw ?? "").trim()
   if (!name) return { ok: false, error: "name required", status: 400, code: "name_invalid" }
   if (name.length > MAX_NAME) return { ok: false, error: `name longer than ${MAX_NAME} characters`, status: 400, code: "name_invalid" }
   // It becomes a folder name under ~/.mux/workspace: no separators, no dot-names.
   // Control characters (U+0000–U+001F, U+007F) would break Telegram menus, logs and paths.
   if (/[\/\\\x00-\x1f\x7f]/.test(name) || name.startsWith(".")) return { ok: false, error: "name must not contain / or \\ or control characters, or start with a dot", status: 400, code: "name_invalid" }
-  if (taken.has(name)) return { ok: false, error: `name already in use: ${name}`, status: 409, code: "name_taken" }
+  // On Windows also nothing Windows cannot name a folder (paths.safeFolderName; elsewhere a name maps to itself).
+  if (paths.safeFolderName(name, platform) !== name) {
+    return { ok: false, error: "name is not a folder name on this computer: Windows refuses : ? * < > | \" and names like CON, and a trailing dot or space", status: 400, code: "name_invalid" }
+  }
+  // macOS and Windows ignore letter case: "Atlas" and "atlas" would share one workspace folder.
+  if (folderTaken(name, taken, platform)) return { ok: false, error: `name already in use: ${name}`, status: 409, code: "name_taken" }
   return { ok: true, name }
 }
 

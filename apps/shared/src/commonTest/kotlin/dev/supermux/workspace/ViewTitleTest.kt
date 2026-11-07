@@ -30,4 +30,9 @@ class ViewTitleTest {
         // A pending "+ → Chat" tab has no session yet.
         assertEquals("New Chat", viewTitle(view("chat", emptyMap()), sessionName = { "unused" }))
     }
+
+    @Test
+    fun aFileTabOnAWindowsHostIsNamedAfterItsFile() {
+        assertEquals("Main.kt", viewTitle(view("editor", mapOf("mode" to "file", "path" to "C:\\Users\\me\\proj\\src\\Main.kt"))))
+    }
 }

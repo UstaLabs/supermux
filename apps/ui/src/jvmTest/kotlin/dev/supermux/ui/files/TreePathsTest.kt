@@ -104,4 +104,54 @@ class TreePathsTest {
             affectedOpenPaths("/w", "/w", null, listOf("a.kt")),
         )
     }
+
+    // A Windows host: the broker answers with `\` and names a folder whatever its letter case.
+    @Test fun parentAndChildOnAWindowsHost() {
+        assertEquals("C:\\Users\\me", parentOf("C:\\Users\\me\\proj"))
+        assertEquals("C:\\", parentOf("C:\\Users"))
+        assertNull(parentOf("C:\\"))
+        assertEquals("C:\\Users\\me\\proj\\src", childOf("C:\\Users\\me\\proj", "src"))
+        assertEquals("C:\\Users", childOf("C:\\", "Users"))
+        assertEquals("\\\\server\\share\\a", childOf("\\\\server\\share", "a"))
+    }
+
+    @Test fun aPosixNameWithABackslashIsOneName() {
+        assertEquals("/w", parentOf("/w/a\\b"))
+        assertEquals("/w/a\\b", childOf("/w", "a\\b"))
+        assertEquals("a\\b", displayName("/w/a\\b"))
+    }
+
+    @Test fun withinOnAWindowsHostIgnoresLetterCase() {
+        assertTrue(isWithin("C:\\Users\\me\\proj", "c:\\users\\me\\proj\\src\\a.kt"))
+        assertTrue(isWithin("C:\\", "C:\\anything"))
+        assertFalse(isWithin("C:\\Users\\me\\proj", "C:\\Users\\me\\project\\a.kt"))
+        assertFalse(isWithin("C:\\w", "D:\\w\\a.kt"))
+    }
+
+    @Test fun ancestorsOnAWindowsHost() {
+        assertEquals(
+            listOf("C:\\w", "C:\\w\\src"),
+            ancestorsWithin("C:\\w", "C:\\w\\src\\A.kt"),
+        )
+    }
+
+    @Test fun displayNameOnAWindowsHost() {
+        assertEquals("proj", displayName("C:\\Users\\me\\proj"))
+        assertEquals("C:\\", displayName("C:\\"))
+    }
+
+    @Test fun editorPathsOnAWindowsHost() {
+        assertEquals("C:\\w\\src\\a.kt", editorAbsolutePath("C:\\w", "src/a.kt"))
+        assertEquals("D:\\x\\a.kt", editorAbsolutePath("C:\\w", "D:\\x\\a.kt"))
+        assertEquals("src/a.kt", editorPathFor("C:\\w", "c:\\W\\src\\a.kt"))
+    }
+
+    @Test fun movesOnAWindowsHost() {
+        assertEquals(
+            listOf(MovedOpenPath("src/a.kt", "lib/a.kt"), MovedOpenPath("D:\\x\\b.kt", null)),
+            affectedOpenPaths("C:\\w", "C:\\w\\src", "C:\\w\\lib", listOf("src/a.kt", "srcx/c.kt")) +
+                affectedOpenPaths("C:\\w", "d:\\X", null, listOf("D:\\x\\b.kt")),
+        )
+        assertEquals(emptyList(), affectedOpenPaths("C:\\w", "C:\\", null, listOf("a.kt")))
+    }
 }

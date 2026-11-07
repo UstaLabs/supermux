@@ -66,25 +66,35 @@ test("mintPairLink builds a /pair?t= URL and writes devices.json", () => {
   expect(existsSync(join(dir, "devices.json"))).toBe(true)
 })
 
-test("restartBroker runs systemctl --user restart on linux", async () => {
-  if (process.platform === "darwin") return
-  const calls: string[][] = []
-  const run: Run = async (argv) => {
-    calls.push(argv)
-    return { code: 0, stdout: "", stderr: "" }
-  }
-  const ok = await restartBroker(run, () => {})
+// The CLI guessed the service: `systemctl --user restart supermux` / launchd `dev.supermux.broker`, the names `supermux
+// setup` installs, never the desktop app's (supermux-host.service, dev.supermux.host, the "Supermux Host" task), and
+// systemctl on Windows. It asks the running broker instead, which knows what runs it (update/apply.ts restartService).
+function brokerAt(status: number, seen: Array<{ url: string; token: string | null }> = []) {
+  return (async (url: string, init?: RequestInit) => {
+    seen.push({ url, token: new Headers(init?.headers).get("x-supermux-stop-token") })
+    return new Response(null, { status })
+  }) as unknown as typeof fetch
+}
+
+test("restartBroker asks the running broker to restart itself, with the state directory's token", async () => {
+  const dir = tmp()
+  writeFileSync(join(dir, "stop-token"), "tok-123")
+  const seen: Array<{ url: string; token: string | null }> = []
+  const ok = await restartBroker(dir, "8787", () => {}, brokerAt(202, seen))
   expect(ok).toBe(true)
-  expect(calls[0]).toEqual(["systemctl", "--user", "restart", "supermux"])
+  expect(seen).toEqual([{ url: "http://127.0.0.1:8787/internal/restart", token: "tok-123" }])
 })
 
-test("restartBroker reports failure (non-zero) without throwing", async () => {
-  if (process.platform === "darwin") return
-  const run: Run = async () => ({ code: 1, stdout: "", stderr: "boom" })
+test("restartBroker says what to do when nothing would bring the broker back, or it is not running", async () => {
+  const dir = tmp()
+  writeFileSync(join(dir, "stop-token"), "tok-123")
   const out: string[] = []
-  const ok = await restartBroker(run, (s) => out.push(s))
-  expect(ok).toBe(false)
-  expect(out.join("\n")).toContain("journalctl")
+  expect(await restartBroker(dir, "8787", (s) => out.push(s), brokerAt(409))).toBe(false)
+  expect(out.join("\n")).toContain("restart it yourself")
+  const down = (async () => { throw new TypeError("Unable to connect") }) as unknown as typeof fetch
+  expect(await restartBroker(dir, "8787", (s) => out.push(s), down)).toBe(false)
+  expect(await restartBroker(tmp(), "8787", (s) => out.push(s), brokerAt(202))).toBe(false)
+  expect(out.join("\n")).toContain("not running")
 })
 
 test("writeEnvPublicUrl sets MUX_PROXY_BASE_DOMAIN when a base domain is given", () => {
@@ -101,4 +111,15 @@ test("writeEnvPublicUrl clears a stale MUX_PROXY_BASE_DOMAIN when none is given,
   const env = readFileSync(join(dir, ".env"), "utf8")
   expect(env).not.toContain("MUX_PROXY_BASE_DOMAIN")
   expect(env).toContain("FOO=bar")
+})
+
+// A .env a Windows editor saved (CRLF): the old reader skipped every such line, so this rewrite dropped them all.
+test("writeEnvPublicUrl keeps the keys of a .env saved with CRLF line ends", () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".env"), "MUX_TELEGRAM_BOT_TOKEN=123:abc\r\nMUX_RELAY_DOMAIN=relay.example\r\n")
+  writeEnvPublicUrl(dir, "8787", "https://x.trycloudflare.com")
+  const text = readFileSync(join(dir, ".env"), "utf8")
+  expect(text).toContain("MUX_TELEGRAM_BOT_TOKEN=123:abc\n")
+  expect(text).toContain("MUX_RELAY_DOMAIN=relay.example\n")
+  expect(text).toContain("MUX_WEB_PUBLIC_URL=https://x.trycloudflare.com\n")
 })

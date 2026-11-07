@@ -1,4 +1,3 @@
-import { homedir } from "os"
 import { join } from "path"
 import { createHost, type AccountsOptions, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { antigravity, type AntigravityOptions } from "../../../../packages/supermux-core/src/antigravity/index.js"
@@ -13,6 +12,7 @@ import { MUX_HOST_SERVERS } from "../../mux-tools/server"
 import { makeLogger } from "../../../shared/log"
 import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("agents/antigravity/core-host")
 
@@ -25,7 +25,7 @@ export type AntigravityCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
-  /** The real HOME the shadow HOME mirrors (read only). Default: os.homedir(). */
+  /** The real HOME the shadow HOME mirrors (read only). Default: the user's home (home()). */
   userHome?: string
 }
 
@@ -71,7 +71,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
-  const userHome = options.userHome ?? homedir()
+  const userHome = options.userHome ?? home()
   return createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },

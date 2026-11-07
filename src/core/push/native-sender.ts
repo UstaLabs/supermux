@@ -2,7 +2,8 @@ import type { PushPayload } from "./sender"
 import type { DevicePushTokenStore } from "./device-tokens"
 
 export interface PlatformPushAdapter {
-  send(token: string, payload: PushPayload, opts?: { silent?: boolean }): Promise<{ ok: true } | { ok: false; gone: boolean }>
+  /** `reason` names why Apple or Google refused it, e.g. "apns_400_BadDeviceToken". */
+  send(token: string, payload: PushPayload, opts?: { silent?: boolean }): Promise<{ ok: true } | { ok: false; gone: boolean; reason?: string }>
 }
 
 export interface NativePushSender {

@@ -79,4 +79,9 @@ class ToolCallAdapterTest {
     private fun thinking(n: Int, redacted: Boolean) = TimelineItem.Activity(
         ActivityEvent(ts = "2026-10-27T12:00:0$n.000Z", kind = "reasoning", title = "Thinking", redacted = redacted, detail = if (redacted) null else "Because…"),
     )
+
+    // Claude on a Windows host names files `C:\…\src\a.ts`: the label is the file, not the whole path.
+    @Test fun aWindowsHostsFileIsLabelledByItsName() {
+        assertEquals("Read Timeline.kt", ev("Read", "C:\\Users\\me\\proj\\src\\Timeline.kt").toToolCallData(ToolStatus.DONE).title)
+    }
 }

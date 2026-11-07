@@ -1,5 +1,7 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.host.PairedHost
 
 import kotlinx.serialization.Serializable
@@ -32,11 +34,20 @@ data class HostingPrefs(
 class HostingPrefsStore(
     private val file: Path = defaultFile(),
     private val legacyPortFile: Path = BrokerPaths.defaultStateDir().resolve("desktop-sidecar.json"),
+    /**
+     * Where versions before #77 kept hosting.json: the home's `.config`, even where the app's other
+     * data lives in %APPDATA% or `$XDG_CONFIG_HOME`. Read until the first save writes [file], and never
+     * written: an older copy of the app may still read it. Null: it is [file].
+     */
+    private val oldFile: Path? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    private fun read(p: Path): HostingPrefs? =
+        runCatching { json.decodeFromString(HostingPrefs.serializer(), Files.readString(p)) }.getOrNull()
+
     fun load(): HostingPrefs {
-        val stored = runCatching { json.decodeFromString(HostingPrefs.serializer(), Files.readString(file)) }.getOrNull()
+        val stored = read(file) ?: oldFile?.let(::read)
         if (stored != null) return if (stored.port in 1..65535) stored else stored.copy(port = HostingPrefs.DEFAULT_PORT)
         val legacyPort = runCatching {
             json.decodeFromString(LegacyPort.serializer(), Files.readString(legacyPortFile)).alternatePort
@@ -44,8 +55,8 @@ class HostingPrefsStore(
         return HostingPrefs(port = legacyPort ?: HostingPrefs.DEFAULT_PORT)
     }
 
-    /** True once `hosting.json` has been written (an upgrade from a pre-hosting build has none). */
-    fun exists(): Boolean = Files.exists(file)
+    /** True once `hosting.json` has been written, here or where an older version kept it (an upgrade from a pre-hosting build has none). */
+    fun exists(): Boolean = Files.exists(file) || oldFile?.let(Files::exists) == true
 
     /** Atomic write (unique tmp → move) so a crash or a concurrent save never leaves a half-written file. */
     @Synchronized
@@ -63,8 +74,26 @@ class HostingPrefsStore(
     @Serializable private data class LegacyPort(val alternatePort: Int? = null)
 
     companion object {
-        fun defaultFile(): Path =
-            Path.of(System.getProperty("user.home") ?: ".", ".config", "supermux-desktop", "hosting.json")
+        fun defaultFile(): Path = thisUser().first
+
+        /** This user's store: hosting.json beside the app's other data, read from the old place until saved. */
+        fun ofThisUser(): HostingPrefsStore = thisUser().let { (now, before) -> HostingPrefsStore(now, oldFile = before) }
+
+        private fun thisUser() = paths(DesktopOs.current, System::getenv, System.getProperty("user.home") ?: ".")
+
+        /**
+         * hosting.json beside the app's other data ([DesktopHostStores.defaultDir]: hosts, tokens, the
+         * install id), and where versions before #77 kept it; null when that is the same place.
+         */
+        fun paths(osName: String, getenv: (String) -> String?, home: String): Pair<Path, Path?> =
+            paths(DesktopOs.of(osName), getenv, home)
+
+        /** [paths] on [os], the platform's one answer for this computer ([thisUser]). */
+        internal fun paths(os: DesktopOs, getenv: (String) -> String?, home: String): Pair<Path, Path?> {
+            val now = DesktopTokenStore.configBase(os, getenv, home).resolve("supermux-desktop").resolve("hosting.json")
+            val before = Path.of(home, ".config", "supermux-desktop", "hosting.json")
+            return now to before.takeIf { it != now }
+        }
     }
 }
 /**

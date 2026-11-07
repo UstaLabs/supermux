@@ -1,8 +1,9 @@
-import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises"
+import { chmod, mkdir, open, readFile, rm } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { isAbsolute, join } from "node:path"
 import { CoreError } from "../errors.js"
 import type { Vault } from "./types.js"
+import { files } from "@supermux/platform"
 
 const VAULT_ID = /^[a-zA-Z0-9_-]{1,128}$/
 
@@ -38,7 +39,7 @@ export function fileVault(directory: string): Vault {
       try {
         const file = await open(temp, "wx", 0o600)
         try { await file.writeFile(secret); await file.sync() } finally { await file.close() }
-        await rename(temp, target)
+        await files.replace(temp, target)
       } finally { await rm(temp, { force: true }) }
     },
     async delete(id) { await rm(path(id), { force: true }) },

@@ -262,20 +262,33 @@ fun FileTreeView(
     }
 
     // ── reveal the active file ────────────────────────────────────────────────────────────────
+    // A pane rebuilt by a rotation or a width change keeps its selection and scroll (#89), so the
+    // file it already revealed is not revealed again over them: only a newly active one is.
     LaunchedEffect(activePath, revealActive, view) {
-        if (revealActive && activePath != null && isWithin(view.rootPath, activePath)) view.reveal(activePath)
+        if (revealActive && activePath != null && isWithin(view.rootPath, activePath) && view.edits.revealed != activePath) {
+            view.reveal(activePath)
+        }
     }
     // Scroll once per activePath, as soon as its row exists (its folders may still be loading).
     // Waiting inside one effect (not keying on the row count) so later listings can't cancel the
     // scroll mid-animation.
     LaunchedEffect(activePath, revealActive, view) {
         val target = activePath ?: return@LaunchedEffect
-        if (!revealActive || !isWithin(view.rootPath, target)) return@LaunchedEffect
+        if (!revealActive || !isWithin(view.rootPath, target) || view.edits.revealed == target) return@LaunchedEffect
         val index = snapshotFlow { lines.indexOfFirst { it.isRow && it.row.path == target } }.first { it >= 0 }
         // The list must have LAID OUT the new rows first, or the scroll clamps to the old count.
         snapshotFlow { view.list.layoutInfo.totalItemsCount > index }.first { it }
         val visible = view.list.layoutInfo.visibleItemsInfo
         if (visible.none { it.index == index && it.offset >= 0 }) view.list.animateScrollToItem(index)
+        view.edits.revealed = target
+    }
+    // The scroll, as two numbers a rebuilt pane's list starts from (see [TreeViewEdits]).
+    LaunchedEffect(view) {
+        snapshotFlow { view.list.firstVisibleItemIndex to view.list.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                view.edits.scrollIndex = index
+                view.edits.scrollOffset = offset
+            }
     }
 
     // ── clicks ────────────────────────────────────────────────────────────────────────────────

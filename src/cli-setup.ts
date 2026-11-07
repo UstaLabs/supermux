@@ -7,17 +7,18 @@
 //   - is idempotent: a re-run adds only MISSING .env keys and never clobbers an
 //     existing key's value (a user's custom MUX_WEB_PORT survives a re-run).
 //
-// State-dir resolution is done by re-reading the environment HERE rather than
-// importing the STATE_DIR constant from shared/paths.ts. paths.ts resolves
-// MUX_HOME/MUX_STATE_DIR at import time, which a test process can't change after
-// the fact; re-deriving per-call lets a test point MUX_STATE_DIR at a tmpdir and
-// see the .env land there. The derivation below mirrors shared/paths.ts +
-// shared/home.ts exactly.
+// State-dir resolution is done by re-reading the environment per call (muxHomeNow)
+// rather than importing the STATE_DIR constant from shared/paths.ts. paths.ts
+// resolves MUX_HOME/MUX_STATE_DIR at import time, which a test process can't change
+// after the fact; re-deriving per-call lets a test point MUX_STATE_DIR at a tmpdir
+// and see the .env land there.
 import { existsSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
+import { envText, readEnvText } from "./shared/env-file"
+import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
-import { username } from "./shared/home"
+import { home, username } from "./shared/home"
+import { proc } from "@supermux/platform"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -78,28 +79,9 @@ function parseFlags(args: string[]): Flags {
   return flags
 }
 
-/** Resolve the state dir from the CURRENT env (mirrors shared/paths.ts). */
+/** Resolve the state dir from the CURRENT env (shared/paths.ts's rule, per call). */
 function resolveStateDir(): string {
-  const home = process.env.HOME || homedir()
-  const muxHome = process.env.MUX_HOME ?? join(home, ".mux")
-  return process.env.MUX_STATE_DIR ?? join(muxHome, "state")
-}
-
-/** Parse `KEY=value` lines into a map (mirrors how the broker reads .env). */
-function parseEnvFile(text: string): Map<string, string> {
-  const map = new Map<string, string>()
-  for (const line of text.split("\n")) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m) map.set(m[1]!, m[2]!)
-  }
-  return map
-}
-
-/** Serialize a key→value map back to `.env` text (insertion order). */
-function serializeEnv(map: Map<string, string>): string {
-  let out = ""
-  for (const [k, v] of map) out += `${k}=${v}\n`
-  return out
+  return process.env.MUX_STATE_DIR ?? join(muxHomeNow().path, "state")
 }
 
 const UNIT_TEMPLATE = (execPath: string): string =>
@@ -126,7 +108,7 @@ WantedBy=default.target
 function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // Detect a usable `systemctl --user`. (The shared source-mode guard lives in
   // the installService dispatcher, alongside the macOS LaunchAgent path.)
-  const hasSystemctl = Bun.which("systemctl") !== null
+  const hasSystemctl = Bun.which("systemctl", { PATH: process.env.PATH }) !== null
   const runtimeDir = process.env.XDG_RUNTIME_DIR
   if (!hasSystemctl || !runtimeDir) {
     println(`No systemd --user available; run the broker manually: ${process.execPath}`)
@@ -134,8 +116,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   }
 
   // 3. Write the unit.
-  const home = process.env.HOME || homedir()
-  const unitDir = join(home, ".config", "systemd", "user")
+  const unitDir = join(home(), ".config", "systemd", "user")
   const unitFile = join(unitDir, UNIT_NAME)
   try {
     mkdirSync(unitDir, { recursive: true })
@@ -149,7 +130,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // 4. daemon-reload + enable --now, each guarded.
   const sc = (sub: string[]): boolean => {
     try {
-      const r = Bun.spawnSync(["systemctl", "--user", ...sub])
+      const r = Bun.spawnSync(["systemctl", "--user", ...sub], { ...proc.spawnDefaults() })
       return r.exitCode === 0
     } catch {
       return false
@@ -167,7 +148,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   Bun.sleepSync(2000)
   let active = false
   try {
-    active = Bun.spawnSync(["systemctl", "--user", "is-active", "--quiet", "supermux"]).exitCode === 0
+    active = Bun.spawnSync(["systemctl", "--user", "is-active", "--quiet", "supermux"], { ...proc.spawnDefaults() }).exitCode === 0
   } catch {
     active = false
   }
@@ -190,7 +171,7 @@ function enableLinger(println: (s: string) => void): void {
   const user = username()
   if (user) {
     try {
-      if (Bun.spawnSync(["loginctl", "enable-linger", user]).exitCode === 0) {
+      if (Bun.spawnSync(["loginctl", "enable-linger", user], { ...proc.spawnDefaults() }).exitCode === 0) {
         println("Enabled lingering so the broker survives logout ✔")
         return
       }
@@ -261,8 +242,7 @@ const PLIST_TEMPLATE = (
  * over installSystemdUnit only on darwin.
  */
 export function installLaunchdAgent(_flags: Flags, println: (s: string) => void): void {
-  const home = process.env.HOME || homedir()
-  const agentsDir = join(home, "Library", "LaunchAgents")
+  const agentsDir = join(home(), "Library", "LaunchAgents")
   const plistFile = join(agentsDir, `${LAUNCHD_LABEL}.plist`)
   const stateDir = resolveStateDir()
   const outLog = join(stateDir, "supermux.out.log")
@@ -272,7 +252,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
     process.env.PATH,
     "/opt/homebrew/bin",
     "/usr/local/bin",
-    join(home, ".local", "bin"),
+    join(home(), ".local", "bin"),
   ]
     .filter(Boolean)
     .join(":")
@@ -298,7 +278,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
 
   // 2. Need launchctl to load it. Absent (e.g. non-macOS) → plist is in place and
   //    will load on next login; nothing more we can do here.
-  if (Bun.which("launchctl") === null) {
+  if (Bun.which("launchctl", { PATH: process.env.PATH }) === null) {
     println("launchctl not found; the plist is installed and will load on next login.")
     return
   }
@@ -310,7 +290,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   const target = `${domain}/${LAUNCHD_LABEL}`
   const lc = (sub: string[]): boolean => {
     try {
-      return Bun.spawnSync(["launchctl", ...sub]).exitCode === 0
+      return Bun.spawnSync(["launchctl", ...sub], { ...proc.spawnDefaults() }).exitCode === 0
     } catch {
       return false
     }
@@ -330,7 +310,7 @@ export function installLaunchdAgent(_flags: Flags, println: (s: string) => void)
   Bun.sleepSync(2000)
   let running = false
   try {
-    const r = Bun.spawnSync(["launchctl", "print", target])
+    const r = Bun.spawnSync(["launchctl", "print", target], { ...proc.spawnDefaults() })
     running =
       r.exitCode === 0 && new TextDecoder().decode(r.stdout).includes("state = running")
   } catch {
@@ -390,7 +370,7 @@ export async function runSetupCommand(
   }
 
   const existed = existsSync(envPath)
-  const map = existed ? parseEnvFile(readFileSync(envPath, "utf8")) : new Map<string, string>()
+  const map = existed ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
 
   // Desired keys. Token only if one was supplied.
   const desired: Array<[string, string]> = [
@@ -419,7 +399,7 @@ export async function runSetupCommand(
 
   // Write only if we added something or the file didn't exist yet.
   if (changed || !existed) {
-    writeFileSync(envPath, serializeEnv(map))
+    writeFileSync(envPath, envText(map))
   }
   // Always tighten perms (cheap, and fixes a stray loose mode on re-run).
   chmodSync(envPath, 0o600)
@@ -435,7 +415,7 @@ export async function runSetupCommand(
   println("Agent CLIs on PATH:")
   let anyAgent = false
   for (const cli of AGENT_CLIS) {
-    const found = Bun.which(cli) !== null
+    const found = Bun.which(cli, { PATH: process.env.PATH }) !== null
     if (found) anyAgent = true
     println(`  ${found ? "✔" : "–"} ${cli}`)
   }

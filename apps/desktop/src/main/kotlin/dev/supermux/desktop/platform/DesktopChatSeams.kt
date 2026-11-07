@@ -108,21 +108,42 @@ internal class DesktopFileAccess : FileAccess {
         }
 }
 
-/** Strip any directory part and refuse an empty name — the attachment name is broker-supplied. */
-internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+/**
+ * The attachment's name (broker-supplied) as one file this OS can store: no directory part, never empty, `.` or `..`.
+ * On Windows also the broker's own rules (`paths.safeFolderName`, the shared vectors in
+ * packages/platform/tests/windows-names.json): no reserved character (`:` would write an NTFS alternate stream), no
+ * trailing dot or space (Windows drops them), no device name (`CON`, `NUL`, `COM1`...).
+ */
+internal fun safeFileName(name: String, windows: Boolean = isWindowsOs()): String {
+    val last = name.substringAfterLast('/').substringAfterLast('\\')
+    val clean = if (windows) last.replace(WINDOWS_RESERVED, "-").trimEnd('.', ' ') else last
+    return when {
+        clean.isBlank() || clean == "." || clean == ".." -> "file"
+        windows && WINDOWS_DEVICE.matches(clean) -> "_$clean"
+        else -> clean
+    }
+}
+
+private val WINDOWS_RESERVED = Regex("[<>:\"|?*\\u0000-\\u001f]")
+private val WINDOWS_DEVICE = Regex("(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\\..*)?")
 
 /**
- * Stage [bytes] under the JVM temp dir so the OS handler has a real path to open.
+ * Stage [bytes] in this process's private folder under the JVM temp dir, so the OS handler has a real path to open.
  *
  * `internal` (aliased as `stageAttachmentForTest`) because it is the only half of
  * [DesktopFileAccess.openExternally] a test can exercise — actually opening would fork a real
  * viewer on the developer's desktop.
  */
 internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
-    val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
-    File(dir, name).also { it.writeBytes(bytes) }
+    File(attachmentsDir, name).also { it.writeBytes(bytes) }
 }.getOrNull()
+
+/**
+ * This process's staging folder, made on first use. [java.nio.file.Files.createTempDirectory] gives it a name no one
+ * can guess and, on POSIX, owner-only permissions. A fixed `<tmp>/supermux-attachments` was shared on Linux, where /tmp
+ * belongs to every user: another one could make it first, read what was staged there, or plant a link in it.
+ */
+private val attachmentsDir: File by lazy { java.nio.file.Files.createTempDirectory("supermux-attachments-").toFile() }
 
 /**
  * Open a local file with the OS default handler (viewer / player / folder).

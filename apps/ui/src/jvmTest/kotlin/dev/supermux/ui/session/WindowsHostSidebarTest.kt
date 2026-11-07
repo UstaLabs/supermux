@@ -19,6 +19,7 @@ import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.projectGroupKey
 import kotlin.test.Test
+import dev.supermux.proto.SessionInfo
 
 /** The Windows host from the report (DESKTOP-OMQ5AMQ): three folders, `\` paths, home under C:\Users. */
 internal object WindowsHost {
@@ -92,5 +93,33 @@ class WindowsHostSidebarTest {
             onNodeWithText(name).assertIsDisplayed()
             onNodeWithText(path).assertDoesNotExist()
         }
+    }
+
+    // An Agent's folder is not a project. A Windows Agent's workdir has no `/`: its parent was never found, and every
+    // Agent showed as an empty project row.
+    @Test fun aWindowsAgentsFolderIsNotAProject() = runComposeUiTest {
+        val agentDir = "C:\\Users\\hatic\\.mux\\workspace\\home"
+        val agentProject = ProjectRef(
+            WindowsHost.HOST,
+            ProjectDto(id = "pa", name = "AgentFolder", sortOrder = 9, locations = listOf(ProjectLocationDto("la", agentDir))),
+        )
+        setContent {
+            CompositionLocalProvider(LocalInputMode provides InputMode.Touch, LocalPointerAvailable provides false) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    SessionListScreen(
+                        home = WindowsHost.HOME,
+                        activeId = null,
+                        onOpen = {},
+                        workspaces = WindowsHost.workspaces(filed = true),
+                        sessions = listOf(SessionInfo(id = "s-pa", name = "Home", workdir = agentDir, agent = "claude", role = "personal_assistant")),
+                        projects = WindowsHost.projects + agentProject,
+                        workspaceHost = { WindowsHost.HOST },
+                        onNavigate = {},
+                    )
+                }
+            }
+        }
+        onNodeWithText("TunnelWho").assertIsDisplayed()
+        onNodeWithText("AgentFolder").assertDoesNotExist()
     }
 }

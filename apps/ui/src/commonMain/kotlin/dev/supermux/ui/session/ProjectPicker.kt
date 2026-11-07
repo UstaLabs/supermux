@@ -90,6 +90,7 @@ import dev.supermux.session.looksLikePath
 import dev.supermux.session.fuzzyMatch
 import dev.supermux.session.projectFolderName
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Size
 import dev.supermux.ui.theme.Space
@@ -200,6 +201,8 @@ fun ProjectPicker(
     anchorWidth: Dp = 0.dp,
     /** The native folder dialog, only when the host is this computer: the chosen path, or null. */
     pickFolder: (suspend () -> String?)? = null,
+    /** Names the query kept through a rotation or a width change (#89); null keeps it here. */
+    retainKey: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     /** No mouse/touchpad → the sheet. Never the width class: see the container note above. */
@@ -208,7 +211,15 @@ fun ProjectPicker(
     // Read inside the resolve coroutine, which outlives a dismiss (the picker stays composed).
     val expandedNow by rememberUpdatedState(expanded)
     val searchFocus = remember { FocusRequester() }
-    var search by remember(expanded) { mutableStateOf("") }
+    // What is typed (a path, a project to find) outlives this composition when [retainKey] names
+    // it: a rotation or a width change emptied it (#89). Still cleared on every open and close,
+    // as `remember(expanded)` cleared it.
+    val typed = if (retainKey != null) rememberRetained(retainKey) { PickerQuery() } else remember { PickerQuery() }
+    if (typed.openedAs != expanded) {
+        typed.openedAs = expanded
+        typed.text = ""
+    }
+    var search by typed::text
     var validating by remember(expanded) { mutableStateOf(false) }
     var validationError by remember(expanded) { mutableStateOf<String?>(null) }
     var connections by remember(expanded) { mutableStateOf(emptyList<ForgeConnection>()) }
@@ -1035,4 +1046,10 @@ fun ProjectPicker(
             MenuBody()
         }
     }
+}
+
+/** The picker's typed query, with the open state it was typed under (`rememberRetained`, #89). */
+private class PickerQuery {
+    var openedAs by mutableStateOf(false)
+    var text by mutableStateOf("")
 }

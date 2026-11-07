@@ -7,9 +7,7 @@ import type { DisplayProvider, DisplayInstance, DisplayStreamInfo, ProviderName 
 const log = makeLogger("display.manager")
 
 function hasBin(bin: string): boolean {
-  // `which` works on both Linux and macOS; Bun.spawnSync returns exitCode 0 when found.
-  const r = Bun.spawnSync(["which", bin], { stdout: "ignore", stderr: "ignore" })
-  return r.exitCode === 0
+  return Bun.which(bin, { PATH: process.env.PATH }) !== null
 }
 
 interface Entry {

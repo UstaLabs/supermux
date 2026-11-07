@@ -63,6 +63,13 @@ class BrokerApiPushTest {
         assertEquals("https://relay.example", r.relayUrl)
     }
 
+    @Test fun me_response_parses_pushRelayUrl() {
+        val r = json.decodeFromString<MeResponse>(
+            """{"paired":true,"relayUrl":"https://h-x.relay.example","pushRelayUrl":"https://push.example"}"""
+        )
+        assertEquals("https://push.example", r.pushRelayUrl)
+    }
+
     @Test fun me_response_null_relayUrl_when_absent() {
         val r = json.decodeFromString<MeResponse>("""{"paired":true,"device":"iphone"}""")
         assertNull(r.relayUrl)
@@ -88,6 +95,17 @@ class BrokerApiPushTest {
         assertEquals(HttpMethod.Get, r.method)
         assertEquals("http://broker.example/me", r.url.toString())
         assertEquals("https://relay.example", result)
+    }
+
+    // Card #86: with the hosted connectivity relay on, `relayUrl` names the tunnel, which
+    // answers /register with a 404. The push relay has its own field.
+    @Test fun pushRelayUrl_prefers_the_push_relay_over_the_connectivity_relay() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(
+            body = """{"paired":true,"relayUrl":"https://h-x.relay.example","pushRelayUrl":"https://push.example"}""",
+            sink = reqs,
+        )
+        assertEquals("https://push.example", api.pushRelayUrl())
     }
 
     @Test fun pushRelayUrl_returns_null_when_field_absent() = runTest {

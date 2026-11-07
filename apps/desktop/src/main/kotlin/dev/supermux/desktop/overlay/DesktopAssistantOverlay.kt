@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.overlay.CompanionGesture
 import dev.supermux.ui.overlay.CompanionPlacement
@@ -97,15 +98,14 @@ internal const val HEAD_TITLE = "supermux assistant"
 internal const val BUBBLE_TITLE = "supermux assistant bubble"
 internal const val CHAT_TITLE = "supermux assistant chat"
 
-private val os = System.getProperty("os.name").orEmpty()
-internal val desktopOs = desktopOsOf(os)
-internal val isMac = desktopOs == DesktopOs.MAC
+internal val desktopOs = DesktopOs.current
+internal val isMac = desktopOs == DesktopOs.MACOS
 /** A Wayland session: no global key grabs for apps there (only through its GlobalShortcuts portal). */
 internal val waylandSession = desktopOs == DesktopOs.LINUX &&
     (System.getenv("XDG_SESSION_TYPE") == "wayland" || !System.getenv("WAYLAND_DISPLAY").isNullOrEmpty())
 
 /** Where the overlay can float ([overlaySupportedOn]). */
-val desktopOverlaySupported: Boolean = overlaySupportedOn(os)
+val desktopOverlaySupported: Boolean = overlaySupportedOn(desktopOs)
 
 /**
  * The overlay, while the Appearance switch is on. [themed] wraps a window's content in the app's theme

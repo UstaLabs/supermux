@@ -71,6 +71,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
 import dev.supermux.fs.SearchHit
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.pathLeaf
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import kotlinx.coroutines.delay
@@ -133,9 +135,9 @@ fun toGoToEntry(workdir: String, hit: SearchHit): GoToEntry? {
 
 /** A recently opened workdir-relative file as a list entry (nothing highlighted). */
 fun recentEntry(workdir: String, relativePath: String): GoToEntry = GoToEntry(
-    absolutePath = relativePath.split('/').filter { it.isNotEmpty() }.fold(workdir) { acc, seg -> childOf(acc, seg) },
+    absolutePath = hostJoin(workdir, relativePath),
     relativePath = relativePath,
-    name = relativePath.substringAfterLast('/'),
+    name = pathLeaf(relativePath),
     folder = relativePath.substringBeforeLast('/', ""),
     isDir = false,
 )
@@ -173,7 +175,9 @@ fun FileSearch(
     val cs = MaterialTheme.colorScheme
     val focusManager = LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
-    var results by remember { mutableStateOf<List<GoToEntry>?>(null) }
+    // With the query in the pane's edits, which outlive this composition (#89): a rebuilt pane
+    // shows the hits at once, then searches afresh (the effect below).
+    var results by view.edits::results
     var failed by remember { mutableStateOf(false) }
     var selectedIdx by remember { mutableIntStateOf(0) }
     val q = view.query.trim()

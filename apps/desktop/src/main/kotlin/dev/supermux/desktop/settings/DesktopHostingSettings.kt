@@ -1,6 +1,7 @@
 // Desktop's Settings ▸ Hosting: builds the shared page's state from the app-wide HostSupervisor.
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.platform.DesktopOs
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -260,7 +261,7 @@ internal suspend fun installGitOnThisComputer(
     wizardToken = wizardToken,
     log = sup.log,
 ).also { started ->
-    if (started && SystemOsEnv.os == OsEnv.Os.MAC) {
+    if (started && SystemOsEnv.os == DesktopOs.MACOS) {
         hostingScope.launch(Dispatchers.IO) {
             if (!AppleInstaller.bringToFront()) sup.log("install git: Apple's installer didn't come up to bring to the front")
         }

@@ -64,6 +64,8 @@ import dev.supermux.state.accountLoginPhaseRank
 import dev.supermux.ui.chat.CardButton
 import dev.supermux.ui.chat.CardButtonStyle
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -74,6 +76,7 @@ import dev.supermux.ui.widgets.CopyableCommand
 import dev.supermux.ui.widgets.SecretField
 import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.submitOnEnter
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -142,8 +145,56 @@ internal class AccountLoginFlow(private val agent: String, private val actions: 
 }
 
 /**
+ * The add-account sheet's state (#89): its step, the guided sign-in, the key being added and the
+ * code being pasted. Kept for the page on display when the sheet has a `retainKey`; closing the
+ * sheet [reset]s it, so the next one starts over, as a new composition did.
+ */
+private class AddAccountForm(private val agent: String, private val actions: AccountsActions) {
+    var step by mutableStateOf(firstStep())
+    var flow by mutableStateOf(AccountLoginFlow(agent, actions))
+    var secret by mutableStateOf("")
+    var label by mutableStateOf("")
+    var saving by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    /** The account was added: the sheet on screen closes. */
+    var added by mutableStateOf(false)
+    var code by mutableStateOf("")
+    var codeSubmitting by mutableStateOf(false)
+    var codeSubmitted by mutableStateOf(false)
+    var codeError by mutableStateOf<String?>(null)
+
+    private fun firstStep(): AddStep =
+        addAccountOptions(agent).let { if (it.size == 1) AddStep.Secret(it.single()) else AddStep.Choose }
+
+    fun newSecret() {
+        secret = ""
+        label = ""
+        saving = false
+        error = null
+        added = false
+    }
+
+    fun clearCode() {
+        code = ""
+        codeSubmitting = false
+        codeSubmitted = false
+        codeError = null
+    }
+
+    fun reset() {
+        step = firstStep()
+        flow = AccountLoginFlow(agent, actions)
+        newSecret()
+        clearCode()
+    }
+}
+
+/**
  * The add-account modal for [agent]. [existing] are that agent's accounts (to name an
  * `account_exists` collision).
+ *
+ * [retainKey] names the sheet's state kept for the page on display (#89): its step, a sign-in in
+ * flight and what is typed. Null keeps all of it in this composition.
  */
 @Composable
 fun AddAccountSheet(
@@ -151,13 +202,24 @@ fun AddAccountSheet(
     actions: AccountsActions,
     existing: List<AccountDto>,
     onDismiss: () -> Unit,
+    retainKey: String? = null,
 ) {
-    val scope = rememberCoroutineScope()
     val options = remember(agent) { addAccountOptions(agent) }
-    var step by remember(agent) {
-        mutableStateOf(if (options.size == 1) AddStep.Secret(options.single()) else AddStep.Choose)
+    // With [retainKey], a rotation finds the sheet where it was: it went back to the first step in
+    // the middle of a sign-in that went on on the host. The sign-in, a key being added and a cancel
+    // then run on the fleet's scope, and closing the sheet starts the next one afresh.
+    val form = if (retainKey != null) {
+        rememberRetainedOnPage(retainKey) { AddAccountForm(agent, actions) }
+    } else {
+        remember(agent, actions) { AddAccountForm(agent, actions) }
     }
-    val flow = remember(agent, actions) { AccountLoginFlow(agent, actions) }
+    val scope = if (retainKey != null) rememberRetainedScope() else rememberCoroutineScope()
+    var step by form::step
+    val flow = form.flow
+    val close: () -> Unit = {
+        form.reset()
+        onDismiss()
+    }
 
     LaunchedEffect(flow) { actions.loginFrames.collect { flow.onState(it) } }
     // The fallback poll — only while a login is live, and never backwards.
@@ -175,10 +237,10 @@ fun AddAccountSheet(
         if (step == AddStep.Login && flow.loginId != null && !flow.terminal) {
             scope.launch {
                 withTimeoutOrNull(3_000L) { flow.cancel() }
-                onDismiss()
+                close()
             }
         } else {
-            onDismiss()
+            close()
         }
     }
 
@@ -192,31 +254,37 @@ fun AddAccountSheet(
                         step = AddStep.Login
                         scope.launch { flow.start() }
                     } else {
+                        // What was typed for another method does not carry over (it was keyed on it).
+                        form.newSecret()
                         step = AddStep.Secret(option)
                     }
                 },
-                onCancel = onDismiss,
+                onCancel = close,
             )
             is AddStep.Secret -> SecretStep(
                 agent = agent,
                 method = s.method,
                 canGoBack = options.size > 1,
                 onBack = { step = AddStep.Choose },
-                onCancel = onDismiss,
+                onCancel = close,
+                form = form,
+                scope = scope,
                 onSave = { secret, label ->
                     val method = if (s.method == AddAccountOption.Token) "token" else "api_key"
                     actions.addAccount(agent, method, secret, label)
                 },
-                onAdded = onDismiss,
+                onAdded = close,
             )
             AddStep.Login -> LoginStep(
                 agent = agent,
                 flow = flow,
                 existing = existing,
+                form = form,
+                scope = scope,
                 onSubmitCode = { code -> flow.loginId?.let { actions.sendLoginCode(it, code) } },
                 onRetry = { scope.launch { flow.start() } },
                 onCancel = dismiss,
-                onDone = onDismiss,
+                onDone = close,
             )
         }
     }
@@ -318,15 +386,16 @@ private fun SecretStep(
     canGoBack: Boolean,
     onBack: () -> Unit,
     onCancel: () -> Unit,
+    form: AddAccountForm,
+    scope: CoroutineScope,
     onSave: suspend (secret: String, label: String?) -> AccountResult<AccountDto>,
     onAdded: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var secret by remember(method) { mutableStateOf("") }
-    var label by remember(method) { mutableStateOf("") }
-    var saving by remember(method) { mutableStateOf(false) }
-    var error by remember(method) { mutableStateOf<String?>(null) }
+    var secret by form::secret
+    var label by form::label
+    var saving by form::saving
+    var error by form::error
     val token = method == AddAccountOption.Token
     val canSave = secret.isNotBlank() && !saving
 
@@ -334,15 +403,23 @@ private fun SecretStep(
         if (!canSave) return
         saving = true
         error = null
+        val typed = secret.trim()
+        val name = label.trim().ifBlank { null }
         scope.launch {
-            when (val r = onSave(secret.trim(), label.trim().ifBlank { null })) {
-                is AccountResult.Ok -> onAdded()
+            when (val r = onSave(typed, name)) {
+                is AccountResult.Ok -> form.added = true
                 is AccountResult.Failed -> {
-                    saving = false
-                    error = r.message ?: "Couldn't add the account — check the connection and try again."
+                    form.saving = false
+                    form.error = r.message ?: "Couldn't add the account — check the connection and try again."
                 }
             }
         }
+    }
+    // The account was added: the sheet on screen closes (#89: it may not be the one that saved).
+    LaunchedEffect(form, form.added) {
+        if (!form.added) return@LaunchedEffect
+        form.added = false
+        onAdded()
     }
 
     SheetTitle(agent, addOptionTitle(agent, method), onBack = if (canGoBack) onBack else null)
@@ -400,6 +477,8 @@ private fun LoginStep(
     agent: String,
     flow: AccountLoginFlow,
     existing: List<AccountDto>,
+    form: AddAccountForm,
+    scope: CoroutineScope,
     onSubmitCode: suspend (String) -> AccountResult<Unit>?,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
@@ -407,6 +486,9 @@ private fun LoginStep(
 ) {
     val cs = MaterialTheme.colorScheme
     val view = loginView(flow.state, agent, existing)
+    // The code step's fields go when the step does, as they went with its composition before.
+    val awaiting = view is LoginView.AwaitingUser
+    LaunchedEffect(awaiting) { if (!awaiting) form.clearCode() }
     LaunchedEffect(view is LoginView.Done) {
         if (view is LoginView.Done) {
             delay(DONE_CLOSE_MS)
@@ -420,7 +502,7 @@ private fun LoginStep(
             startError != null -> FailedBlock(startError)
             else -> when (view) {
                 LoginView.Starting -> ProgressLine("Starting the sign-in…", "account-login-starting")
-                is LoginView.AwaitingUser -> AwaitingBlock(agent, view, onSubmitCode)
+                is LoginView.AwaitingUser -> AwaitingBlock(agent, view, form, scope, onSubmitCode)
                 LoginView.Verifying -> ProgressLine("Checking the sign-in…", "account-login-verifying")
                 is LoginView.Done -> DoneBlock(view.label)
                 is LoginView.Failed -> FailedBlock(view.message)
@@ -486,14 +568,19 @@ private fun StepItem(number: Int, text: String, content: @Composable () -> Unit 
 }
 
 @Composable
-private fun AwaitingBlock(agent: String, view: LoginView.AwaitingUser, onSubmitCode: suspend (String) -> AccountResult<Unit>?) {
+private fun AwaitingBlock(
+    agent: String,
+    view: LoginView.AwaitingUser,
+    form: AddAccountForm,
+    scope: CoroutineScope,
+    onSubmitCode: suspend (String) -> AccountResult<Unit>?,
+) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
-    val scope = rememberCoroutineScope()
-    var code by remember { mutableStateOf("") }
-    var submitting by remember { mutableStateOf(false) }
-    var submitted by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var code by form::code
+    var submitting by form::codeSubmitting
+    var submitted by form::codeSubmitted
+    var error by form::codeError
     var copied by remember { mutableStateOf(false) }
     val url = view.url
 
@@ -504,10 +591,10 @@ private fun AwaitingBlock(agent: String, view: LoginView.AwaitingUser, onSubmitC
         error = null
         scope.launch {
             when (val r = onSubmitCode(c)) {
-                is AccountResult.Failed -> error = r.message ?: "Couldn't send the code."
-                else -> submitted = true
+                is AccountResult.Failed -> form.codeError = r.message ?: "Couldn't send the code."
+                else -> form.codeSubmitted = true
             }
-            submitting = false
+            form.codeSubmitting = false
         }
     }
 

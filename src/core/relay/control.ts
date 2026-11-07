@@ -1,9 +1,10 @@
 import { createPublicKey, randomBytes, verify as verifySignature } from "crypto"
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { dirname } from "path"
 import { hostIdFromPublicKey } from "../host-identity"
 import { handleAuthOp, type AuthRejectionEvent } from "./auth-plugin"
 import { mintLease } from "./lease"
+import { files } from "@supermux/platform"
 
 const HOST_ID = /^[a-z2-7]{26}$/
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex")
@@ -46,7 +47,7 @@ export class FileKnownHostRegistry extends MapKnownHostRegistry {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
     const tmp = `${this.path}.${process.pid}.tmp`
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.hosts), null, 2) + "\n", { mode: 0o600 })
-    renameSync(tmp, this.path)
+    files.replaceSync(tmp, this.path)
     chmodSync(this.path, 0o600)
   }
 }

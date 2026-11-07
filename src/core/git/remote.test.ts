@@ -1,10 +1,14 @@
 // src/core/git/remote.test.ts
-import { test, expect } from "bun:test"
+import { test, expect, setDefaultTimeout } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "./remote"
+
+// Each test starts 10-20 git processes. On the Windows runner they take 0.4-4.5 s a test, so the slowest crossed
+// Bun's 5 s default there.
+setDefaultTimeout(30_000)
 
 function g(cwd: string, ...a: string[]) {
   return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim()

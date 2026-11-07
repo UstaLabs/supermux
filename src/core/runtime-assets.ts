@@ -6,7 +6,7 @@
 // never serves a previous version's files. In source mode callers get the
 // real repo paths directly (no copy) — the exported helpers branch on
 // IS_COMPILED for exactly that.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs"
 import { join, dirname, resolve as resolvePath } from "path"
 import { BUILD_VERSION, IS_COMPILED } from "../shared/build-info"
 
@@ -17,6 +17,7 @@ import environmentMdEmbedded from "../../prompts/environment.md" with { type: "f
 import zmxEmbedded from "./terminal/zmx/embedded/zmx" with { type: "file" }
 import zmxHelperEmbedded from "./terminal/zmx/embedded/mux-zmx-helper" with { type: "file" }
 import zmxManifestEmbedded from "./terminal/zmx/embedded/manifest" with { type: "file" }
+import { files } from "@supermux/platform"
 
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
@@ -35,7 +36,7 @@ export function materializeAsset(opts: { stateDir: string; name: string; sourceP
   try {
     writeFileSync(tmp, readFileSync(opts.sourcePath))
     if (opts.executable) chmodSync(tmp, 0o755)
-    renameSync(tmp, dest)
+    files.replaceSync(tmp, dest)
   } catch (err) {
     try { unlinkSync(tmp) } catch {}
     throw err

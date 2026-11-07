@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -32,7 +33,7 @@ object DesktopHostBootstrap {
 
     /** Every supported desktop OS hosts natively; unknown platforms fall back to client onboarding. */
     fun isNativeHostPlatform(env: OsEnv = SystemOsEnv): Boolean =
-        env.os == OsEnv.Os.MAC || env.os == OsEnv.Os.LINUX || env.os == OsEnv.Os.WINDOWS
+        env.os == DesktopOs.MACOS || env.os == DesktopOs.LINUX || env.os == DesktopOs.WINDOWS
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a
@@ -68,7 +69,7 @@ object DesktopHostBootstrap {
      * Before the supervisor exists: write the first `hosting.json` when [initialHostingPrefs] says
      * so (an upgrade paired only to other computers starts with hosting OFF). Best-effort.
      */
-    fun seedHostingPrefs(hosts: List<PairedHost>, store: HostingPrefsStore = HostingPrefsStore()) {
+    fun seedHostingPrefs(hosts: List<PairedHost>, store: HostingPrefsStore = HostingPrefsStore.ofThisUser()) {
         runCatching {
             initialHostingPrefs(hosts, store.exists(), store.load())?.let(store::save)
         }.onFailure { System.err.println("supermux host: seeding hosting prefs failed: ${it.message}") }
@@ -86,13 +87,15 @@ object DesktopHostBootstrap {
     /** One supervisor per process: two would each think they own the broker. */
     private val sharedSupervisor: Lazy<HostSupervisor> = lazy {
         val stateDir = BrokerPaths.defaultStateDir()
-        val prefsStore = HostingPrefsStore()
+        val prefsStore = HostingPrefsStore.ofThisUser()
         HostSupervisor(
             stateDir = stateDir,
             loadPrefs = prefsStore::load,
             savePrefs = prefsStore::save,
             osEnv = SystemOsEnv,
             materialize = { HostBinaries.resolve(stateDir) },
+            identity = InstallIdentity(InstallIdentity.defaultFile()),
+            appDataPredatesIds = { Files.exists(DesktopHostStores.defaultDir().resolve(DesktopHostPersistence.META_FILE)) },
         )
     }
 
@@ -164,7 +167,7 @@ object DesktopHostBootstrap {
             token = token,
             directUrl = directUrl,
             hostId = hostId,
-            platform = System.getProperty("os.name"),
+            platform = System.getProperty("os.name"), // platform-ok: the OS's own name, kept as the host record's label
         )
         runCatching(onStoreChanged).onFailure { System.err.println("supermux host: fleet refresh failed: ${it.message}") }
     }
@@ -302,6 +305,8 @@ object DesktopHostBootstrap {
             // A broker set up outside the app is not ours to move into or out of the background.
             if (!isReadOnly(supervisor.status.value)) scope.launch { supervisor.setBackground(keepRunning) }
         },
+        // A host this app doesn't manage pairs no new device without its token: say whose it is.
+        whyNoClaim = { HOST_WIZARD_SET_UP_ELSEWHERE.takeIf { isReadOnly(supervisor.status.value) } },
     )
 
     /** What [buildModel] does with a freshly minted trust-on-first-connect token. */
@@ -318,11 +323,25 @@ object DesktopHostBootstrap {
 
     internal fun isReadOnly(s: HostingStatus): Boolean = s is HostingStatus.Running && s.readOnly
 
-    /** The machine's actual hostname; fleet clients must not see every host as "This". */
-    fun defaultHostName(): String {
-        val h = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
-        return h ?: "Desktop host"
+    /**
+     * The hostname lookup, started once on a daemon thread ([prefetchHostName] at app start, else the first use):
+     * InetAddress.getLocalHost() resolves the name and can stall ~5 s on macOS, which must never be the UI thread's (#29).
+     */
+    private val hostNameLookup: Lazy<java.util.concurrent.CompletableFuture<String>> = lazy {
+        java.util.concurrent.CompletableFuture.supplyAsync(
+            { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Desktop host" },
+            { task -> Thread(task, "host-name").apply { isDaemon = true }.start() },
+        )
     }
+
+    /** Starts the hostname lookup off the UI thread: the app calls it first thing, so nothing later waits on it. */
+    fun prefetchHostName() {
+        hostNameLookup.value
+    }
+
+    /** The machine's actual hostname; fleet clients must not see every host as "This". "Desktop host" if it takes over 10 s. */
+    fun defaultHostName(): String =
+        runCatching { hostNameLookup.value.get(10, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() ?: "Desktop host"
 
     @kotlinx.serialization.Serializable
     private data class ClaimBody(val deviceName: String)

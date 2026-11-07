@@ -344,4 +344,23 @@ class FileTreeMenuTest {
         assertEquals(JsonPrimitive("touch"), op["op"])
         assertEquals(JsonPrimitive("/w/n.kt"), op["path"])
     }
+
+    // A Windows host refuses these characters and names, and names a file whatever its letter case; the folder the
+    // name goes in says which host's rules apply.
+    @Test fun aWindowsHostsNameRules() {
+        val win = "C:\\Users\\me\\proj"
+        assertEquals("A name can't contain “:”", validateNewName("a:b", emptyList(), inFolder = win))
+        assertEquals("A name can't contain “\\”", validateNewName("a\\b", emptyList(), inFolder = win))
+        assertEquals("A name can't contain “?”", validateNewName("why?.md", emptyList(), inFolder = win))
+        assertEquals("“CON” is reserved on Windows", validateNewName("CON", emptyList(), inFolder = win))
+        assertEquals("“nul.txt” is reserved on Windows", validateNewName("nul.txt", emptyList(), inFolder = win))
+        assertEquals("A name can't end with “.”", validateNewName("a.", emptyList(), inFolder = win))
+        assertEquals("A file with that name already exists", validateNewName("readme.md", listOf("README.md"), inFolder = win))
+        // A rename that only changes the letter case is the same file: allowed.
+        assertNull(validateNewName("Readme.md", listOf("readme.md"), current = "readme.md", inFolder = win))
+        assertNull(validateNewName("CONSOLE.md", emptyList(), inFolder = win))
+        // A POSIX host keeps its own rules: `:` and `\` are ordinary there, and README.md is not readme.md.
+        assertNull(validateNewName("a:b", emptyList(), inFolder = "/home/me/proj"))
+        assertNull(validateNewName("readme.md", listOf("README.md"), inFolder = "/home/me/proj"))
+    }
 }

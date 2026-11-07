@@ -106,6 +106,78 @@ class HostingPrefsTest {
     }
 }
 
+/**
+ * hosting.json moves next to the app's other data (#77): every copy of the app has its own hosting
+ * choices, and one copy's "hosting off" can no longer turn off another's. An update keeps reading
+ * where older versions kept it until its first save.
+ */
+class HostingPrefsMoveTest {
+    private fun store(dir: java.nio.file.Path) =
+        HostingPrefsStore(dir.resolve("appdata/hosting.json"), legacyPortFile = dir.resolve("none.json"), oldFile = dir.resolve("home/.config/supermux-desktop/hosting.json"))
+
+    private fun writeOld(dir: java.nio.file.Path, text: String) {
+        val old = dir.resolve("home/.config/supermux-desktop/hosting.json")
+        Files.createDirectories(old.parent)
+        Files.writeString(old, text)
+    }
+
+    @Test fun anUpdateReadsTheOldFileUntilItsFirstSave() {
+        val dir = createTempDirectory()
+        writeOld(dir, """{"hosting":true,"background":true,"relay":false,"port":9912,"leftAloneHostIds":["h1"]}""")
+        val s = store(dir)
+        assertEquals(HostingPrefs(hosting = true, background = true, relay = false, port = 9912, leftAloneHostIds = setOf("h1")), s.load())
+        assertTrue(s.exists(), "the user's choice stands: no upgrade seed over it")
+        s.save(s.load().copy(relay = true))
+        assertEquals(HostingPrefs(relay = true, port = 9912, leftAloneHostIds = setOf("h1")), s.load())
+        assertTrue(Files.exists(dir.resolve("appdata/hosting.json")))
+        assertEquals(
+            """{"hosting":true,"background":true,"relay":false,"port":9912,"leftAloneHostIds":["h1"]}""",
+            Files.readString(dir.resolve("home/.config/supermux-desktop/hosting.json")),
+            "the old file is never written: an older copy may still read it",
+        )
+    }
+
+    @Test fun theNewFileWinsOverTheOld() {
+        val dir = createTempDirectory()
+        writeOld(dir, """{"hosting":true,"port":9912}""")
+        store(dir).save(HostingPrefs(hosting = false))
+        assertEquals(HostingPrefs(hosting = false), store(dir).load())
+    }
+
+    @Test fun theUpgradeSeedNeverTurnsHostingOffForAUserWhoHosts() {
+        // A user who hosts but unpaired "This computer": paired only to other computers now.
+        val dir = createTempDirectory()
+        writeOld(dir, """{"hosting":true,"background":true}""")
+        val s = store(dir)
+        DesktopHostBootstrap.seedHostingPrefs(
+            listOf(dev.supermux.host.PairedHost(recordId = "r", displayName = "r", directUrl = "http://192.168.1.5:9898", token = "t")), s,
+        )
+        assertEquals(true, s.load().hosting)
+        assertTrue(!Files.exists(dir.resolve("appdata/hosting.json")), "nothing written")
+    }
+
+    @Test fun onWindowsItMovesFromTheProfileToAppData() {
+        val env = mapOf("APPDATA" to "C:\\Users\\T\\AppData\\Roaming")
+        val (now, before) = HostingPrefsStore.paths("Windows 11", env::get, "C:\\Users\\T")
+        assertEquals(java.nio.file.Path.of("C:\\Users\\T\\AppData\\Roaming").resolve("supermux-desktop").resolve("hosting.json"), now)
+        assertEquals(java.nio.file.Path.of("C:\\Users\\T", ".config", "supermux-desktop", "hosting.json"), before)
+    }
+
+    @Test fun withXdgConfigHomeItMovesThere() {
+        val (now, before) = HostingPrefsStore.paths("Linux", mapOf("XDG_CONFIG_HOME" to "/x")::get, "/h")
+        assertEquals(java.nio.file.Path.of("/x/supermux-desktop/hosting.json"), now)
+        assertEquals(java.nio.file.Path.of("/h/.config/supermux-desktop/hosting.json"), before)
+    }
+
+    @Test fun onAMacOrLinuxByDefaultNothingMoves() {
+        for (os in listOf("Mac OS X", "Linux")) {
+            val (now, before) = HostingPrefsStore.paths(os, { null }, "/h")
+            assertEquals(java.nio.file.Path.of("/h/.config/supermux-desktop/hosting.json"), now, os)
+            assertEquals(null, before, os)
+        }
+    }
+}
+
 class MovePortTest {
     @Test fun aMovedPortIsTheFirstFreeOneAboveTheDefault() {
         kotlin.test.assertEquals(9899, firstFreePort { true })

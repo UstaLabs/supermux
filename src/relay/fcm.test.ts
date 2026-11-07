@@ -11,17 +11,24 @@ test("maps 200 → ok", async () => {
 
 test("maps 404 (UNREGISTERED) → gone", async () => {
   const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response('{"error":{"status":"UNREGISTERED"}}', { status: 404 })) })
-  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true, reason: "fcm_404_UNREGISTERED" })
 })
 
 test("maps 400 (INVALID_ARGUMENT) → gone", async () => {
   const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response('{"error":{"status":"INVALID_ARGUMENT"}}', { status: 400 })) })
-  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: true, reason: "fcm_400_INVALID_ARGUMENT" })
 })
 
 test("maps 503 (transient) → not gone", async () => {
   const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response("upstream unavailable", { status: 503 })) })
-  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false, reason: "fcm_503" })
+})
+
+// Card #86: an app built against another Firebase project fails every push with
+// SENDER_ID_MISMATCH; that has to reach the broker's log by name.
+test("names Google's reason for a refused message", async () => {
+  const a = createFcmAdapter({ ...deps, fetchImpl: mkFetch(new Response('{"error":{"status":"SENDER_ID_MISMATCH"}}', { status: 403 })) })
+  expect(await a.send("tok", { ciphertext: "blob" } as any)).toEqual({ ok: false, gone: false, reason: "fcm_403_SENDER_ID_MISMATCH" })
 })
 
 // --- service-account OAuth2 path (fully offline) ---

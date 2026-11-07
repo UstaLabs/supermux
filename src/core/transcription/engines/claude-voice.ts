@@ -17,11 +17,11 @@
 // prefersCleanup is false (cloud STT quality + coding keyterms).
 
 import { readFileSync, writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { makeLogger } from "../../../shared/log"
 import { readPcm16 } from "../wav"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("stt-claude-voice")
 
@@ -36,7 +36,7 @@ const PCM_CHUNK_BYTES = (PCM_RATE * 2) / 10
 const KEEPALIVE_MS = 8_000
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_MODEL = "deepgram-nova3"
-const DEFAULT_CREDS = () => join(homedir(), ".claude", ".credentials.json")
+const DEFAULT_CREDS = () => join(home(), ".claude", ".credentials.json")
 
 export type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 export type ReadFileFn = (path: string) => string

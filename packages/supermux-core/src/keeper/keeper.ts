@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
+import { files, proc } from '@supermux/platform'
 
 const STATUS_COALESCE_MS = 250
 /** How much of the agent's stderr the keeper keeps for its exit report (a crash usually says why there). */
@@ -65,10 +66,8 @@ function deadlineReply(shape: FrameShape, id: string | number): string {
   return JSON.stringify({ id, error: { code: -32001, message: 'no client attached within deadline' } })
 }
 
-function alive(pid: number): boolean {
-  if (!pid || pid < 1) return false
-  try { process.kill(pid, 0); return true } catch { return false }
-}
+/** Whether [pid] is a live process: the platform's rule, where EPERM (someone else's live process) is alive. */
+const alive = (pid: number): boolean => proc.isAlive(pid)
 
 async function main() {
   const sessionDir = requiredEnv(KEEPER_ENV.sessionDir)
@@ -188,7 +187,7 @@ async function main() {
     journalFile = staging
     journalRewrites += 1
     try {
-      renameSync(staging, journalPath)
+      files.replaceSync(staging, journalPath)
       journalFile = journalPath
     } finally {
       if (previous !== journalPath && previous !== journalFile) { try { unlinkSync(previous) } catch { /* */ } }

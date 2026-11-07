@@ -532,6 +532,8 @@ sealed interface ServerFrame {
          * `isMuxInternalPath`. Null from an older broker.
          */
         val muxHome: String? = null,
+        /** The broker host's home folder, in the host's own path form. Null from an older broker. */
+        val homeDir: String? = null,
         /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
         val projectMembership: Map<String, String> = emptyMap(),
         val requests: Map<String, List<PromptRequest>> = emptyMap(),

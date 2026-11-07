@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs"
-import { dirname, isAbsolute, join, resolve, sep } from "node:path"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { requireSpec } from "./spec.js"
 import type { AntigravityEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
+import { Unsupported, files, paths } from "@supermux/platform"
 
 /**
  * agy finds its config only through $HOME and its shell tool inherits $HOME, so each session runs
@@ -21,10 +22,6 @@ import { lstatSafe, writeFileNoFollow } from "./write.js"
 export const ANTIGRAVITY_RESERVED_PREFIX = "supermux-"
 
 const DEFAULT_SHARED_HISTORY = ["conversations", "brain"]
-
-function dirLinkType(platform: NodeJS.Platform): "junction" | "dir" {
-  return platform === "win32" ? "junction" : "dir"
-}
 
 function readdirSafe(dir: string): string[] {
   try {
@@ -54,15 +51,9 @@ function realpathLoose(path: string): string {
   }
 }
 
-function norm(path: string, platform: NodeJS.Platform): string {
-  return platform === "win32" ? path.toLowerCase() : path
-}
-
-/** `child` equals `parent` or is inside it. */
+/** `child` equals `parent` or is inside it, by [platform]'s rules (Windows: either separator, any letter case). */
 function within(child: string, parent: string, platform: NodeJS.Platform): boolean {
-  const c = norm(child, platform)
-  const p = norm(parent, platform)
-  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep)
+  return paths.isInside(child, parent, paths.flavor(platform))
 }
 
 /** The real ~/.gemini locations (literal and resolved — it may itself be a dotfiles symlink). */
@@ -102,12 +93,27 @@ export function assertShadowHome(shadowHome: string, userHome: string, platform:
   refuseRealLocation(realpathSync(shadowHome), shadowHome, userHome, platform)
 }
 
-function linkOrSkip(target: string, path: string, type: "junction" | "dir" | "file", platform: NodeJS.Platform): void {
+/** The file-link call, a seam for tests (the package's files.linkFile). */
+export const antigravityLinks = {
+  linkFile: (target: string, path: string, platform: NodeJS.Platform): void => files.linkFile(target, path, { platform }),
+}
+
+/** Above this a file the host cannot link is left out rather than copied (it is not a config file). */
+const COPY_LIMIT = 1024 * 1024
+
+/**
+ * Links [path] to [target]: a folder as a junction (any Windows user may make one), a file as a file link. Where this
+ * host cannot link files (Windows without Developer Mode, #37) a small file is copied instead, so agy's shell keeps
+ * .gitconfig, .npmrc and the like (they used to be dropped). The copy is made once: syncLinks leaves real entries
+ * alone, so a later edit of the original reaches agy when the copy is removed.
+ */
+function linkOrCopy(target: string, path: string, platform: NodeJS.Platform): void {
+  if (isDirSafe(target)) return files.linkDirectory(target, path)
   try {
-    symlinkSync(target, path, type)
+    antigravityLinks.linkFile(target, path, platform)
   } catch (err) {
-    if (platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") return
-    throw err
+    if (!(err instanceof Unsupported)) throw err
+    if ((lstatSafe(target)?.size ?? Infinity) <= COPY_LIMIT) copyFileSync(target, path)
   }
 }
 
@@ -148,7 +154,7 @@ function syncLinks(
     } else if (current) {
       continue
     }
-    linkOrSkip(target, path, isDirSafe(target) ? dirLinkType(platform) : "file", platform)
+    linkOrCopy(target, path, platform)
   }
   for (const name of readdirSafe(dir)) {
     if (skip(name) || keep(name)) continue
@@ -218,7 +224,7 @@ export function linkAntigravityCli(
   } else if (current) {
     throw new Error(`refusing to replace non-symlink ${path}`)
   }
-  linkOrSkip(cliDir, path, dirLinkType(platform), platform)
+  files.linkDirectory(cliDir, path)
 }
 
 /**
@@ -255,7 +261,7 @@ export function shareAntigravityHistory(
       if (!current.isDirectory() || readdirSafe(path).length > 0) continue
       rmdirSync(path)
     }
-    linkOrSkip(target, path, dirLinkType(platform), platform)
+    files.linkDirectory(target, path)
   }
 }
 
@@ -352,7 +358,7 @@ export function writeAntigravityPlugins(opts: {
     const path = join(dir, w.name)
     mkdirSync(path, { recursive: true, mode: 0o700 })
     writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n", 0o600)
-    if (w.skills) linkOrSkip(w.skills, join(path, "skills"), dirLinkType(platform), platform)
+    if (w.skills) files.linkDirectory(w.skills, join(path, "skills"))
     if (w.mcpServers.length) {
       const mcpServers = Object.fromEntries(w.mcpServers.map((s) => [s.name, nativeServer(s)]))
       writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600)

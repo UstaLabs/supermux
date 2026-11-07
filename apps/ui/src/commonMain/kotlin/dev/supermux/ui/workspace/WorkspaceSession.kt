@@ -15,6 +15,8 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.stateString
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.files.affectedOpenPaths
+import dev.supermux.ui.retain.LocalRetainedUiState
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.WorkspaceFileOpener
 import dev.supermux.workspace.groupIdOf
@@ -188,15 +190,23 @@ fun rememberWorkspaceSession(
     // panes on one path must share one buffer, so a split shows the same
     // unsaved text on both sides and dragging a file tab between groups
     // cannot lose an edit (spec §7.2 / §18).
-    val documents = remember(workspace.id) {
+    //
+    // Kept by the fleet, keyed by the workspace (#89): an Android rotation or fold recreated this
+    // whole composition, and a width-class change rebuilds it somewhere else in the tree, and either
+    // one silently reloaded every open file from disk over its unsaved edits. Its saves run on the
+    // fleet's scope too, so a save in flight lands. The native views still go with this composition
+    // (just below): the text stays, and the next pane to show a document makes new ones.
+    val retainedScope = LocalRetainedUiState.current?.scope ?: overlayScope
+    val documents = rememberRetained("workspace:${workspace.id}:documents") {
         DocumentStore(
             fsRead = fsRead,
             fsWrite = fsWrite,
-            scope = overlayScope,
+            scope = retainedScope,
         )
     }
-    // The native editor's views live as long as the store, not as long as a pane (M5): they go
-    // with it, so every language server gets its didClose and every syntax worker is freed.
+    // The native editor's views live as long as this composition, not as long as a pane (M5): they
+    // go with it, so every language server gets its didClose and every syntax worker is freed (and
+    // an Android activity's views never outlive it). The texts stay in the store.
     androidx.compose.runtime.DisposableEffect(documents) { onDispose { documents.disposeNative() } }
     // A file whose last pane closed leaves the store (unless it has unsaved edits).
     val viewedFiles = viewsById.values
@@ -212,7 +222,7 @@ fun rememberWorkspaceSession(
     // Markdown preview per view id. It used to be local state inside
     // FilePane, driven by a button in that pane's action row; the row is
     // gone and the tab owns the toggle, so the state lives out here.
-    val previewModes = remember(workspace.id) { mutableStateMapOf<String, Boolean>() }
+    val previewModes = rememberRetained("workspace:${workspace.id}:preview") { mutableStateMapOf<String, Boolean>() }
     // Files-pane view state per view id — held here, beside the documents, so it outlives panes.
     val treeStates = remember(workspace.id) { TreeViewStates() }
     LaunchedEffect(treeStates, viewsById.keys) { treeStates.retainOnly(viewsById.keys) }

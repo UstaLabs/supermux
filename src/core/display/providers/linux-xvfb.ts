@@ -1,6 +1,7 @@
 import { makeLogger } from "../../../shared/log"
 import { allocateFreePort, allocateDisplayNumber } from "../ports"
 import type { DisplayProvider, DisplayInstance, ProvisionOpts } from "../types"
+import { proc } from "@supermux/platform"
 
 const log = makeLogger("display.linux-xvfb")
 
@@ -35,6 +36,7 @@ export class LinuxXvfbProvider implements DisplayProvider {
     const vncPort = await allocateFreePort()
 
     const xvfb = Bun.spawn(["Xvfb", display, "-screen", "0", `${width}x${height}x24`, "-nolisten", "tcp"], {
+      ...proc.spawnDefaults(),
       stdout: "ignore",
       stderr: "pipe",
     })
@@ -55,7 +57,7 @@ export class LinuxXvfbProvider implements DisplayProvider {
         ["x11vnc", "-display", display, "-rfbport", String(vncPort),
          "-listen", "127.0.0.1", "-listen6", "::1",
          "-forever", "-shared", "-nopw", "-quiet", "-noxdamage"],
-        { stdout: "ignore", stderr: "pipe" },
+        { ...proc.spawnDefaults(), stdout: "ignore", stderr: "pipe" },
       )
     } catch (err) {
       try { xvfb.kill() } catch {}

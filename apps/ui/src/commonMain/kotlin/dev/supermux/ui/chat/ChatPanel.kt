@@ -111,6 +111,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
 import dev.supermux.chat.parseChatTs
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ProxyDto
@@ -123,12 +124,12 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import kotlinx.serialization.json.JsonObject
-import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.state.HostStore
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.TestIds
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -644,9 +645,19 @@ fun ChatPanel(
     // Who sent each one and when, for the viewer's line under its counter.
     val mediaEntries = remember(timelineItems) { timelineItems.mapNotNull { (it as? TimelineItem.Msg)?.entry }.associateBy { it.id } }
     val mediaAgentName = remember(session.agent) { dev.supermux.ui.accounts.agentDisplayName(session.agent) }
-    var viewerKey by remember(session.id) { mutableStateOf<String?>(null) }
-    val mediaOpener = remember(session.id) {
-        ChatMediaOpener { key -> latestMedia.any { it.key == key }.also { found -> if (found) viewerKey = key } }
+    // The open viewer and the item it shows, kept outside this composition: a rotation or a width
+    // change closed it (#89). Zoom and a clip's playback position still start afresh.
+    val viewer = rememberRetained("chat.viewer:${session.id}") { MediaViewerPlace() }
+    var viewerKey by viewer::open
+    val mediaOpener = remember(session.id, viewer) {
+        ChatMediaOpener { key ->
+            latestMedia.any { it.key == key }.also { found ->
+                if (found) {
+                    viewer.current = key
+                    viewer.open = key
+                }
+            }
+        }
     }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
@@ -663,9 +674,22 @@ fun ChatPanel(
     }
 
     // ── Autoscroll ────────────────────────────────────────────────────────────────────────────
-    val listState = rememberLazyListState()
+    // Where the reader is, kept outside this composition: an Android rotation rebuilds the panel,
+    // and a width-class change rebuilds it somewhere else in the tree, and either one used to put a
+    // reader who had scrolled up back at the end (#89).
+    val place = rememberRetained("chat.place:${session.id}") { TranscriptPlace() }
+    val listState = rememberLazyListState(place.index, place.offset)
+    LaunchedEffect(listState, place) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                place.index = index
+                place.offset = offset
+            }
+    }
     val density = LocalDensity.current
-    val find = remember(session.id) { ChatFindState() }
+    // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
+    // change closed it and dropped what was typed (#89).
+    val find = rememberRetained("chat.find:${session.id}") { ChatFindState() }
     // This chat's hits; All chats leaves the transcript alone.
     val findMatches = remember(timelineItems, find.open, find.query, find.scope) {
         if (find.open && find.scope == ChatSearchScope.ThisChat) chatFindMatches(timelineItems, find.query) else emptyList()
@@ -673,15 +697,17 @@ fun ChatPanel(
 
     // ── Subagents ─────────────────────────────────────────────────────────────────────────────
     // Cards are collapsed by default; the set of open ones is hoisted here so the running strip can
-    // open one and scroll to it.
-    var openSubagents by remember(session.id) { mutableStateOf(setOf<String>()) }
-    val subagentActions = remember(actions) {
-        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent)
+    // open one and scroll to it. Kept outside this composition with the replies seen below: a
+    // rebuilt panel (a rotation, a width change) closed every card and marked every reply read (#89).
+    val cards = rememberRetained("chat.subagents:${session.id}") { SubagentCards() }
+    var openSubagents by cards::open
+    val subagentActions = remember(actions, session.id) {
+        SubagentActions(message = actions.messageSubagent, stop = actions.stopSubagent, sessionId = session.id)
     }
     // Unread replies are client-side: the reply count the user has "seen" per subagent. A subagent
     // first seen counts as read (a reload does not light every card up); an OPEN card keeps up with
     // its replies; a collapsed one falls behind, and the gap is its "N new replies" badge.
-    var seenReplies by remember(session.id) { mutableStateOf(mapOf<String, Int>()) }
+    var seenReplies by cards::seen
     LaunchedEffect(subagents, openSubagents) {
         var next = seenReplies
         for (s in subagents) {
@@ -714,8 +740,10 @@ fun ChatPanel(
         // bottom edge on screen, give or take [FOLLOW_SLOP]. Anywhere above stays put, inside a reply
         // taller than the screen too: "one of the last two rows is on screen" used to count as the
         // bottom, so scrolling back into a long last reply jumped the reader to its end.
-        var prevSize by remember(session.id) { mutableIntStateOf(-1) }
-        var autoFollow by remember(session.id) { mutableStateOf(true) }
+        // In [place], so a rebuilt panel knows the rows it already showed and whether the reader was
+        // following them: it does not jump a reader who had scrolled up back to the end.
+        var prevSize by place::rows
+        var autoFollow by place::autoFollow
         // Our own follow scrolls moving the transcript (a new row's, the glide): the positions they pass are not the
         // reader's. A count, not a flag (card #76): the glide takes the scroll from a new row's follow, and the follow
         // that stops must not unmark the glide still moving, or its positions read as the reader leaving the end.
@@ -1261,12 +1289,16 @@ fun ChatPanel(
         viewerKey?.let { key ->
             ChatMediaViewer(
                 items = mediaItems,
-                startKey = key,
+                startKey = viewer.current ?: key,
                 resolve = { item -> chatMediaHandle(item, actions.media, markdownFiles, platform.files::probeMime) },
-                onDismiss = { viewerKey = null },
+                onDismiss = {
+                    viewerKey = null
+                    viewer.current = null
+                },
                 caption = { item ->
                     mediaEntries[item.entryId]?.let { mediaCaption(it, mediaAgentName, Clock.System.now().toEpochMilliseconds()) }
                 },
+                onCurrentChange = { viewer.current = it },
             )
         }
 
@@ -1553,4 +1585,27 @@ private fun StatusRow(label: String, color: androidx.compose.ui.graphics.Color, 
             }
         }
     }
+}
+
+/** Where a reader is in one session's transcript, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class TranscriptPlace {
+    var index = 0
+    var offset = 0
+    /** Rows already shown; -1 before the first content, which jumps to the end. */
+    var rows by mutableIntStateOf(-1)
+    var autoFollow by mutableStateOf(true)
+}
+
+/** One session's open media viewer, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class MediaViewerPlace {
+    /** The item the viewer was opened on; null when it is closed. */
+    var open by mutableStateOf<String?>(null)
+    /** The item on screen as the user pages, where a rebuilt viewer starts. Read once, so not observed. */
+    var current: String? = null
+}
+
+/** One session's open subagent cards and the replies seen, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class SubagentCards {
+    var open by mutableStateOf(setOf<String>())
+    var seen by mutableStateOf(mapOf<String, Int>())
 }

@@ -772,8 +772,9 @@ jobs:
         run: ./gradlew.bat :editor-syntax:jvmResourceLoadTest --console=plain --no-daemon
       - uses: oven-sh/setup-bun@v2
         with:
-          # Bun's ConPTY/EOF behavior is a native-Windows release gate.
-          bun-version: "1.3.14"
+          # Bun's ConPTY/EOF behavior is a native-Windows release gate, checked on every PR by ci.yml's windows lane
+          # at this same version. 1.4.x refuses a .cmd argument cmd.exe would split into a second command; 1.3.14 ran it.
+          bun-version: "1.4.4"
       - name: Install broker dependencies
         working-directory: .
         run: bun install
@@ -806,7 +807,7 @@ jobs:
       - name: Test desktop native-host integration
         # DesktopOsTest runs read-aloud's and the file opener's real scripts in Windows
         # PowerShell 5.1 (#40); every other OS only ever runs them in pwsh 7.
-        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --console=plain --no-daemon
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --tests 'dev.supermux.desktop.platform.ScreenWatchTest' --console=plain --no-daemon
       - name: Stage native host helpers
         # Git Bash provides sh/curl/tar; the canonical staging path compiles the
         # Windows x64 broker + sessiond.

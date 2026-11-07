@@ -43,6 +43,23 @@ test("header memory rule is relevance-triggered and digest-first", () => {
   expect(h).toContain("Never edit `*.digest.md`")
 })
 
+test("the memory rule reads the history every session appends to: all of it when there is no digest (the curator is off by default)", () => {
+  for (const h of [worker(), agentHeader()]) {
+    const rule = h.split("\n").find((l) => l.startsWith("- MEMORY:"))!
+    expect(rule).toContain("`~/.mux/domains/<topic>.digest.md`")
+    expect(rule).toContain("if it exists")
+    expect(rule).toContain("`~/.mux/domains/<topic>.md`")
+    expect(rule).toContain("all of it when there is no digest")
+    expect(rule).toContain("newest entries")
+  }
+})
+
+test("an Agent reads its own history too: all of it while its digest is empty", () => {
+  const history = agentHeader().split("\n").find((l) => l.includes("`/home/u/.mux/agent-memory/3f9c.md`"))!
+  expect(history).toContain("read all of it while the digest is empty")
+  expect(history).toContain("newest entries")
+})
+
 test("header includes the working directory for scope", () => {
   expect(worker()).toContain("/srv/app")
 })

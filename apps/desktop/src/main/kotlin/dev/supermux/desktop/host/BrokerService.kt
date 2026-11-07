@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.platform.windowsPowerShell
 import java.nio.file.Files
 import java.nio.file.Path
@@ -18,6 +19,9 @@ object BrokerService {
     const val XDG_AUTOSTART_FILE = "supermux-host.desktop"
     const val WINDOWS_TASK_NAME = "Supermux Host"
     const val WINDOWS_BROKER_EXE = "supermux-broker.exe"
+    /** The broker's per-boot stop token (src/core/session-manager/stop-token.ts) and the header that carries it. */
+    const val STOP_TOKEN_FILE = "stop-token"
+    const val STOP_TOKEN_HEADER = "x-supermux-stop-token"
     /** Written by app versions before the env moved out of the task; deleted on install / remove (it held the env). */
     const val WINDOWS_TASK_XML = "Supermux/supermux-host-task.xml"
     /**
@@ -28,7 +32,7 @@ object BrokerService {
      */
     const val WINDOWS_ENV_FILE = "Supermux/broker-env.ps1"
     /** The XDG autostart's env, sourced by its `Exec` line (0600): the values never appear in an argv. */
-    const val XDG_ENV_FILE = ".config/supermux/broker.env"
+    const val XDG_ENV_FILE = "supermux/broker.env"
     /** ERROR_CANCELLED: what the elevated batch exits with when the UAC prompt is declined. */
     internal const val UAC_DECLINED_EXIT = 1223
 
@@ -68,6 +72,8 @@ object BrokerService {
          * the user declined the UAC prompt for a changed task definition.
          */
         data class Failed(val message: String, val previousStillRunning: Boolean = false) : Result
+        /** Another copy of the app's definition is at [path]: left exactly as it is (#77). */
+        data class NotOurs(val path: Path) : Result
     }
 
     /** Every definition we write carries these so [Takeover] can never mistake it for an old service. */
@@ -314,8 +320,8 @@ Terminal=false
     fun appRunsAsService(env: OsEnv = SystemOsEnv): Boolean {
         if (env.getenv(LEGACY_KEEP_ALIVE_ENV) == "1") return true
         return when (env.os) {
-            OsEnv.Os.MAC -> env.getenv("XPC_SERVICE_NAME") == LAUNCHD_LABEL
-            OsEnv.Os.LINUX -> env.selfCgroup()?.lineSequence()?.any { it.trimEnd().endsWith("/$SYSTEMD_UNIT") } == true
+            DesktopOs.MACOS -> env.getenv("XPC_SERVICE_NAME") == LAUNCHD_LABEL
+            DesktopOs.LINUX -> env.selfCgroup()?.lineSequence()?.any { it.trimEnd().endsWith("/$SYSTEMD_UNIT") } == true
             else -> false
         }
     }
@@ -332,88 +338,305 @@ Terminal=false
     fun isLegacyInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
         fun file(p: Path) = if (Files.isRegularFile(p)) Files.readString(p) else null
         when (env.os) {
-            OsEnv.Os.MAC -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
-            OsEnv.Os.LINUX -> file(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
+            DesktopOs.MACOS -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
+            DesktopOs.LINUX -> file(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
                 file(xdgAutostartPath(env))?.let(::isLegacyXdgEntry) == true
-            OsEnv.Os.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
-            OsEnv.Os.OTHER -> false
+            DesktopOs.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
         }
     }.getOrDefault(false)
 
     private fun registeredTaskXml(env: OsEnv): String? =
         env.runCapture(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/XML"))
 
+    // ── whose definition is it? (#77) ────────────────────────────────────────────────────────
+    //
+    // Every copy of the app on a computer uses the names above: a dev build next to the installed
+    // app, a reinstall with fresh app data. So each definition carries the id of the copy that wrote
+    // it ([INSTALL_ENV], from [InstallIdentity]), and a copy replaces, restarts or removes only a
+    // definition that carries its own: the app never stops or reconfigures a broker it did not start.
+
+    /** The env key naming the copy of the app ([InstallIdentity]) a definition belongs to. */
+    const val INSTALL_ENV = "MUX_DESKTOP_INSTALL"
+
     /**
-     * Install (or re-install, which restarts) the service. [alreadyStopped]: the caller just stopped
-     * our running service broker itself ([stop], Windows), so don't stop it again. When the app runs
-     * as the job ([appRunsAsService]) nothing running is touched: see [Result.Installed.nextLogin].
+     * The copy of the app asking ([InstallIdentity]). [ownsUnstamped]: a definition from before
+     * install ids (marked, no [INSTALL_ENV]) is this copy's; its first id-aware launch decided so.
+     * [persisted]: false when the id could not be saved or read back, so no definition may carry it.
      */
-    fun install(spec: Spec, env: OsEnv = SystemOsEnv, alreadyStopped: Boolean = false): Result {
+    data class Owner(val id: String, val ownsUnstamped: Boolean = false, val persisted: Boolean = true)
+
+    /** Why an [Owner] that isn't [Owner.persisted] installs nothing. */
+    const val UNSAVED_ID = "this copy of the app couldn't keep its install id, so it sets up no background service"
+
+    /** What an [Owner] may do with a definition under our names. */
+    enum class Ownership {
+        /** It carries the owner's id: replace, restart or remove it. */
+        OURS,
+
+        /** 1.0.0's keep-alive, which runs the app, not a broker: replaced or removed as before. */
+        LEGACY,
+
+        /** Another copy's (another id, or none), or not the app's at all: never touched. */
+        OTHER,
+    }
+
+    /**
+     * Pure. [env] is the text that holds a definition's env (null: not on disk); [marked]: the app
+     * wrote the definition ([MANAGED_MARKER]); [legacy]: it is 1.0.0's keep-alive.
+     */
+    internal fun ownership(env: String?, marked: Boolean, legacy: Boolean, me: Owner): Ownership = when {
+        legacy -> Ownership.LEGACY
+        env != null && INSTALL_ENV in env -> if (me.id in env) Ownership.OURS else Ownership.OTHER
+        marked && me.ownsUnstamped -> Ownership.OURS
+        else -> Ownership.OTHER
+    }
+
+    /** Pure, for [Takeover]: true iff a definition holding its own env is another copy's. */
+    internal fun isAnotherCopys(definition: String, me: Owner): Boolean =
+        ownership(definition, marked = true, legacy = isLegacyDefinition(definition), me = me) == Ownership.OTHER
+
+    private enum class Kind { PLIST, UNIT, XDG, TASK }
+
+    /**
+     * One definition under our names. [env] is the text its env lives in ([envPath]): the definition
+     * itself, the XDG env file, the Windows task loop's env file (null when missing). [marked]: the app
+     * wrote it; a registered task's XML keeps no comment, so every task that isn't 1.0.0's counts.
+     */
+    private class Slot(
+        val kind: Kind, val path: Path, val text: String, val envPath: Path, val env: String?, val marked: Boolean, val legacy: Boolean,
+    ) {
+        val unstamped: Boolean get() = marked && !legacy && (env == null || INSTALL_ENV !in env)
+
+        fun ownership(me: Owner): Ownership = BrokerService.ownership(env, marked, legacy, me)
+    }
+
+    private fun readIfFile(p: Path): String? = if (Files.isRegularFile(p)) Files.readString(p) else null
+
+    private fun launchdSlot(env: OsEnv): Slot? {
+        val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
+        val text = readIfFile(plist) ?: return null
+        return Slot(Kind.PLIST, plist, text, plist, text, MANAGED_MARKER in text, isLegacyDefinition(text))
+    }
+
+    private fun unitSlot(env: OsEnv): Slot? {
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
+        val text = readIfFile(unit) ?: return null
+        return Slot(Kind.UNIT, unit, text, unit, text, MANAGED_MARKER in text, isLegacyDefinition(text))
+    }
+
+    private fun xdgSlot(env: OsEnv): Slot? {
+        val entry = xdgAutostartPath(env)
+        val text = readIfFile(entry) ?: return null
+        return Slot(Kind.XDG, entry, text, xdgEnvPath(env), readIfFile(xdgEnvPath(env)), MANAGED_MARKER in text, isLegacyXdgEntry(text))
+    }
+
+    /** The registered task: its XML says whether it is 1.0.0's, its loop's env file whose it is. */
+    private fun taskSlot(env: OsEnv): Slot? {
+        if (!isInstalled(env)) return null
+        val xml = registeredTaskXml(env).orEmpty()
+        val envFile = windowsEnvPath(env)
+        return Slot(Kind.TASK, WINDOWS_TASK_PATH, xml, envFile, readIfFile(envFile), marked = true, legacy = isLegacyDefinition(xml))
+    }
+
+    /** systemd --user needs both systemctl and a runtime dir; otherwise the XDG autostart stands in. */
+    private fun usesSystemd(env: OsEnv): Boolean = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
+
+    private fun slots(env: OsEnv): List<Slot> = when (env.os) {
+        DesktopOs.MACOS -> listOfNotNull(launchdSlot(env))
+        DesktopOs.LINUX -> listOfNotNull(unitSlot(env), xdgSlot(env))
+        DesktopOs.WINDOWS -> listOfNotNull(taskSlot(env))
+    }
+
+    /** The definition [install] would write over. */
+    private fun installSlot(env: OsEnv): Slot? = when (env.os) {
+        DesktopOs.MACOS -> launchdSlot(env)
+        DesktopOs.LINUX -> if (usesSystemd(env)) unitSlot(env) else xdgSlot(env)
+        DesktopOs.WINDOWS -> taskSlot(env)
+    }
+
+    /**
+     * True iff a definition from before install ids is installed and runs [stateDir]'s broker: what
+     * an earlier version of this app wrote, if anything did (HostSupervisor's first id-aware launch).
+     * The bin dir as each format writes it, then a separator: as is, XML-escaped (plist), systemd-quoted
+     * (Environment=, ExecStart=), sh-quoted (XDG env file) and inside the XDG Exec= line, a PowerShell literal.
+     */
+    fun unstampedRuns(env: OsEnv = SystemOsEnv, stateDir: Path): Boolean = runCatching {
+        val bin = stateDir.resolve(HostBinaries.BIN_SUBDIR).toString()
+        val sh = shQuote(bin).removeSurrounding("'")
+        val forms = listOf(
+            bin, xml(bin), sdQuote(bin).removeSurrounding("\""), sdExecQuote(bin).removeSurrounding("\""),
+            sh, xdgQuote(sh).removeSurrounding("\""), powershellLiteral(bin).removeSurrounding("'"),
+        )
+        val names = forms.distinct().joinToString("|") { Regex.escape(it) }
+        val runs = Regex("""(?:$names)[\\/;:'"<]""")
+        slots(env).any { it.unstamped && (runs.containsMatchIn(it.text) || runs.containsMatchIn(it.env.orEmpty())) }
+    }.getOrDefault(false)
+
+    /**
+     * Writes [me]'s id into the definitions from before install ids that [me] adopted, in place, so no
+     * other copy can adopt them too. Nothing running is reloaded or restarted: launchd and the Windows
+     * task loop read them at the next start, systemd is told to re-read its units. True iff every one
+     * of them carries the id now.
+     */
+    fun stampInPlace(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        var all = true
+        for (slot in slots(env).filter { it.unstamped && it.ownership(me) == Ownership.OURS }) {
+            val text = slot.env
+            val stamped = when {
+                text == null -> null
+                slot.kind == Kind.PLIST -> Regex("""<key>EnvironmentVariables</key>\s*<dict>""").find(text)?.let {
+                    text.replaceRange(it.range, it.value + "\n    <key>$INSTALL_ENV</key>\n    <string>${me.id}</string>")
+                }
+                slot.kind == Kind.UNIT -> Regex("""(?m)^\[Service][ \t]*$""").find(text)?.let {
+                    text.replaceRange(it.range, it.value + "\nEnvironment=" + sdQuote("$INSTALL_ENV=${me.id}"))
+                }
+                slot.kind == Kind.XDG -> endLine(text, "\n") + "export $INSTALL_ENV=" + shQuote(me.id) + "\n"
+                else -> endLine(text, "\r\n") + "\$env:$INSTALL_ENV = " + powershellLiteral(me.id) + "\r\n"
+            }
+            if (stamped == null) { all = false; continue }
+            writePrivate(slot.envPath, stamped)
+            if (slot.kind == Kind.UNIT && usesSystemd(env)) env.run(listOf("systemctl", "--user", "daemon-reload"))
+        }
+        all
+    }.getOrDefault(false)
+
+    private fun endLine(text: String, eol: String) = if (text.isEmpty() || text.endsWith("\n")) text else text + eol
+
+    /**
+     * Install (or re-install, which restarts) [me]'s service; the definition carries [me]'s id.
+     * [alreadyStopped]: the caller just stopped our running service broker itself ([stop], Windows),
+     * so don't stop it again. When the app runs as the job ([appRunsAsService]) nothing running is
+     * touched: see [Result.Installed.nextLogin]. Another copy's definition under our name is left as
+     * it is ([Result.NotOurs]) unless [replaceOther]: a takeover the user confirmed, which backed it
+     * up and stopped it first.
+     */
+    fun install(spec: Spec, env: OsEnv = SystemOsEnv, me: Owner, alreadyStopped: Boolean = false, replaceOther: Boolean = false): Result {
+        if (!me.persisted) return Result.Failed(UNSAVED_ID)
+        // Unreadable is not "nothing there": write nothing over what can't be told apart.
+        val (target, all) = try { installSlot(env) to slots(env) } catch (e: Exception) { return Result.Failed("couldn't read what is installed: ${e.message}") }
+        // Not over another copy's definition, nor next to one (both would start a broker at login).
+        val other = all.firstOrNull { it.ownership(me) == Ownership.OTHER && (it.marked || it.path == target?.path) }
+            ?: target?.takeIf { it.ownership(me) == Ownership.OTHER }
+        if (other != null && !replaceOther) return Result.NotOurs(other.path)
+        val stamped = spec.copy(env = spec.env + (INSTALL_ENV to me.id))
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> installLaunchd(spec, env, asJob)
-            OsEnv.Os.LINUX -> installSystemd(spec, env, asJob)
-            OsEnv.Os.WINDOWS -> installWindowsTask(spec, env, alreadyStopped, asJob)
-            OsEnv.Os.OTHER -> Result.Unsupported
+            DesktopOs.MACOS -> installLaunchd(stamped, env, asJob)
+            DesktopOs.LINUX -> installSystemd(stamped, env, asJob)
+            DesktopOs.WINDOWS -> installWindowsTask(stamped, env, alreadyStopped, asJob)
         }
     }
 
-    /** Remove our definition (or a 1.0.0 one). When the app runs as the job, the job itself is left to end with the app. */
-    fun remove(env: OsEnv = SystemOsEnv): Result {
+    /**
+     * Remove [me]'s definition (or a 1.0.0 one); another copy's is left as it is ([Result.NotOurs]).
+     * When the app runs as the job, the job itself is left to end with the app.
+     */
+    fun remove(env: OsEnv = SystemOsEnv, me: Owner): Result {
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> removeLaunchd(env, asJob)
-            OsEnv.Os.LINUX -> removeSystemd(env, asJob)
-            OsEnv.Os.WINDOWS -> removeWindowsTask(env, asJob)
-            OsEnv.Os.OTHER -> Result.Unsupported
+            DesktopOs.MACOS -> removeLaunchd(env, asJob, me)
+            DesktopOs.LINUX -> removeSystemd(env, asJob, me)
+            DesktopOs.WINDOWS -> removeWindowsTask(env, asJob, me)
         }
     }
 
-    /** Restart the running service in place. True iff the OS accepted the command. Never the job that is the app. */
-    fun restart(env: OsEnv = SystemOsEnv): Boolean = if (appRunsAsService(env)) false else when (env.os) {
-        OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
-        OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
+    /**
+     * Restart [me]'s running service in place. True iff the OS accepted the command. Never the job
+     * that is the app, never another copy's service.
+     */
+    fun restart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = if (appRunsAsService(env) || !isOursInstalled(env, me)) false else when (env.os) {
+        DesktopOs.MACOS -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
+        DesktopOs.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
         // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
         // brings back a task whose loop died, and (StopExisting) replaces a lingering instance.
         // A broker that didn't stop must not get a second loop next to it.
-        OsEnv.Os.WINDOWS -> stopWindowsTask(env) && env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
-        OsEnv.Os.OTHER -> false
-    }
-
-    fun isInstalled(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
-        OsEnv.Os.MAC -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
-        OsEnv.Os.LINUX -> Files.exists(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) ||
-            Files.exists(env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE"))
-        OsEnv.Os.WINDOWS -> env.runResult(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME)).exit == 0
-        OsEnv.Os.OTHER -> false
+        DesktopOs.WINDOWS -> stopWindowsTask(env) && env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
     }
 
     /**
-     * True iff a definition WE wrote (it carries [MANAGED_MARKER]) is installed. The retired Swift
-     * app used the same launchd label, so file existence alone is not enough.
+     * Whether our service definition is installed. On Windows `schtasks` answers, and a query that fails is not "no
+     * task" (#29): it let install write over a task it could not see, and remove report "removed" and delete the task
+     * loop's env file. When Windows cannot say, this throws [TaskStateUnknown], so every caller fails closed.
      */
-    fun isOursInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
-        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
-        when (env.os) {
-            OsEnv.Os.MAC -> ours(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
-            OsEnv.Os.LINUX -> ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) || ours(xdgAutostartPath(env))
-            // The 1.0.0 task had the same name; it runs the app, not the broker.
-            OsEnv.Os.WINDOWS -> isInstalled(env) && registeredTaskXml(env)?.let(::isLegacyDefinition) != true
-            OsEnv.Os.OTHER -> false
+    fun isInstalled(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
+        DesktopOs.MACOS -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
+        DesktopOs.LINUX -> Files.exists(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")) ||
+            Files.exists(xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE"))
+        DesktopOs.WINDOWS -> when (windowsTaskState(env)) {
+            TaskState.PRESENT -> true
+            TaskState.ABSENT -> false
+            TaskState.UNKNOWN -> throw TaskStateUnknown()
         }
+    }
+
+    /** Whether [WINDOWS_TASK_NAME] is registered; [UNKNOWN] when Windows could not say. */
+    internal enum class TaskState { PRESENT, ABSENT, UNKNOWN }
+
+    /** Windows could not say whether our task is registered, so nothing may be written over it or removed (#29). */
+    class TaskStateUnknown :
+        IllegalStateException("Windows could not say whether the \"$WINDOWS_TASK_NAME\" task is registered (schtasks failed); nothing was changed")
+
+    /**
+     * `/Query /TN` answers for our task. When it fails, its error text is in the user's language and cannot be read,
+     * so the whole list (`/Query /FO CSV /NH`, whose first field is each task's path: data, not words) tells "not
+     * registered" from a query that failed. The list failing as well is [TaskState.UNKNOWN].
+     */
+    internal fun windowsTaskState(env: OsEnv): TaskState {
+        if (env.runResult(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME)).exit == 0) return TaskState.PRESENT
+        val list = env.runResult(listOf("schtasks", "/Query", "/FO", "CSV", "/NH"))
+        if (list.exit != 0) return TaskState.UNKNOWN
+        return if (taskListed(list.out, WINDOWS_TASK_NAME)) TaskState.PRESENT else TaskState.ABSENT
+    }
+
+    /** Pure: whether `schtasks /Query /FO CSV /NH` output [csv] lists [name] at the root folder (names ignore case). */
+    internal fun taskListed(csv: String, name: String): Boolean =
+        csv.lineSequence().any { it.trimStart().startsWith("\"\\$name\"", ignoreCase = true) }
+
+    /**
+     * True iff a definition of [me]'s is installed: it carries [me]'s id. Every copy of the app (and
+     * the retired Swift app, and 1.0.0's keep-alive) used the same names, so existence is not enough.
+     */
+    fun isOursInstalled(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        slots(env).any { it.ownership(me) == Ownership.OURS }
     }.getOrDefault(false)
 
+    /** True iff a definition another copy of the app wrote is installed under our names (#77). */
+    fun anotherCopysInstalled(env: OsEnv = SystemOsEnv, me: Owner): Boolean = runCatching {
+        slots(env).any { it.marked && it.ownership(me) == Ownership.OTHER }
+    }.getOrDefault(false)
+
+    /**
+     * The port another copy's installed definition runs its broker on: its MUX_WEB_PORT, as each format
+     * writes it. Null when no other copy's definition is installed or it names none (#77).
+     */
+    fun anotherCopysPort(env: OsEnv = SystemOsEnv, me: Owner): Int? = runCatching {
+        slots(env).firstOrNull { it.marked && it.ownership(me) == Ownership.OTHER }?.env
+            ?.let { PORT_IN_ENV.find(it) }?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it in 1..65535 }
+    }.getOrNull()
+
+    /** MUX_WEB_PORT's value in a plist (`</key><string>`), a unit (`=`), the XDG env file (`='`) or the Windows one (` = '`). */
+    private val PORT_IN_ENV = Regex("""MUX_WEB_PORT(?:</key>\s*<string>|\s*=\s*'?)(\d{1,5})(?!\d)""")
+
     /** True iff OUR "service" is the Linux XDG autostart fallback (no systemd unit of ours): it only starts at login. */
-    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
-        fun ours(p: Path) = Files.isRegularFile(p) && MANAGED_MARKER in Files.readString(p)
-        ours(xdgAutostartPath(env)) && !ours(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT"))
+    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = env.os == DesktopOs.LINUX && runCatching {
+        xdgSlot(env)?.ownership(me) == Ownership.OURS && unitSlot(env)?.ownership(me) != Ownership.OURS
     }.getOrDefault(false)
 
     /** The XDG autostart fallback file (Linux without systemd --user). */
-    fun xdgAutostartPath(env: OsEnv): Path = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+    fun xdgAutostartPath(env: OsEnv): Path = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
 
     /** The XDG autostart's env file ([xdgEnvFile]). */
-    fun xdgEnvPath(env: OsEnv): Path = env.home.resolve(XDG_ENV_FILE)
+    fun xdgEnvPath(env: OsEnv): Path = xdgConfigHome(env).resolve(XDG_ENV_FILE)
+
+    /**
+     * `$XDG_CONFIG_HOME`, or `~/.config` when it is unset or not absolute (the XDG rule): where systemd --user reads its
+     * units and the desktop its autostart entries. Writing to ~/.config while it pointed elsewhere installed a unit that
+     * never loaded (#29).
+     */
+    internal fun xdgConfigHome(env: OsEnv): Path =
+        env.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Path.of(it) }.getOrNull() }?.takeIf { it.isAbsolute }
+            ?: env.home.resolve(".config")
 
     /** The Windows task loop's env file ([windowsEnvFile]). */
     fun windowsEnvPath(env: OsEnv): Path = env.localAppData.resolve(WINDOWS_ENV_FILE)
@@ -492,9 +715,10 @@ Terminal=false
         return last
     }
 
-    private fun removeLaunchd(env: OsEnv, asJob: Boolean): Result {
+    private fun removeLaunchd(env: OsEnv, asJob: Boolean, me: Owner): Result {
         val plist = env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist")
         return runCatching {
+            if (launchdSlot(env)?.ownership(me) == Ownership.OTHER) return Result.NotOurs(plist)
             // As the job, the file goes and the loaded job (us) ends with the app.
             if (!asJob && env.hasCommand("launchctl") && env.uid != null) {
                 env.run(listOf("launchctl", "bootout", "gui/${env.uid}/$LAUNCHD_LABEL"))
@@ -505,11 +729,8 @@ Terminal=false
     }
 
     private fun installSystemd(spec: Spec, env: OsEnv, asJob: Boolean): Result {
-        // systemd --user needs both systemctl and a runtime dir; otherwise fall back to XDG autostart.
-        if (!env.hasCommand("systemctl") || env.xdgRuntimeDir.isNullOrBlank()) {
-            return installXdgAutostart(spec, env)
-        }
-        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
+        if (!usesSystemd(env)) return installXdgAutostart(spec, env)
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
         return runCatching {
             Files.createDirectories(unit.parent)
             spec.log.parent?.let { Files.createDirectories(it) }
@@ -536,7 +757,7 @@ Terminal=false
     }
 
     private fun installXdgAutostart(spec: Spec, env: OsEnv): Result {
-        val file = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+        val file = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
         val envFile = xdgEnvPath(env)
         return runCatching {
             writePrivate(envFile, xdgEnvFile(spec))
@@ -545,19 +766,28 @@ Terminal=false
         }.getOrElse { Result.Failed("xdg autostart install failed: ${it.message}") }
     }
 
-    private fun removeSystemd(env: OsEnv, asJob: Boolean): Result {
-        val unit = env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")
-        val autostart = env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE")
+    private fun removeSystemd(env: OsEnv, asJob: Boolean, me: Owner): Result {
+        val unit = xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")
+        val autostart = xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE")
         return runCatching {
-            val systemd = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
+            // Either one may be another copy's: that one stays, with all that belongs to it.
+            val unitOther = unitSlot(env)?.ownership(me) == Ownership.OTHER
+            val autostartOther = xdgSlot(env)?.ownership(me) == Ownership.OTHER
+            val systemd = usesSystemd(env) && !unitOther
             // As the job, never --now: that stops this app. The unit ends with the app.
             if (systemd) env.run(listOf("systemctl", "--user", "disable") + (if (asJob) emptyList() else listOf("--now")) + SYSTEMD_NAME)
-            val a = Files.deleteIfExists(unit)
-            Files.deleteIfExists(env.home.resolve(".config/systemd/user/default.target.wants/$SYSTEMD_UNIT"))
-            val b = Files.deleteIfExists(autostart)
-            Files.deleteIfExists(xdgEnvPath(env))
+            val a = !unitOther && Files.deleteIfExists(unit)
+            if (!unitOther) Files.deleteIfExists(xdgConfigHome(env).resolve("systemd/user/default.target.wants/$SYSTEMD_UNIT"))
+            val b = !autostartOther && Files.deleteIfExists(autostart)
+            if (!autostartOther) Files.deleteIfExists(xdgEnvPath(env))
             if (systemd) env.run(listOf("systemctl", "--user", "daemon-reload"))
-            Result.Removed(when { a -> unit; b -> autostart; else -> null })
+            when {
+                a -> Result.Removed(unit)
+                b -> Result.Removed(autostart)
+                unitOther -> Result.NotOurs(unit)
+                autostartOther -> Result.NotOurs(autostart)
+                else -> Result.Removed(null)
+            }
         }.getOrElse { Result.Failed("systemd remove failed: ${it.message}") }
     }
 
@@ -566,21 +796,111 @@ Terminal=false
      * wait until the broker process is gone, so its .exe can be replaced. The task stays registered;
      * [install] or `schtasks /Run` starts it again. No-op elsewhere (false).
      */
-    fun stop(env: OsEnv = SystemOsEnv): Boolean = env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env)
+    fun stop(env: OsEnv = SystemOsEnv, stateDir: Path? = null, port: Int? = null): Boolean =
+        env.os == DesktopOs.WINDOWS && stopWindowsTask(env, stateDir, port)
 
     /**
-     * Stop the task's loop, then its broker, BY PID, and wait for the broker to exit. Never by image
-     * name: every agent's MCP shim is `supermux-broker.exe shim` (and the credential helper
-     * `supermux-broker.exe credential`), and those must survive a broker restart or update.
+     * Stop the task's loop, then its broker, and wait for the broker to exit. Never by image name: every agent's MCP
+     * shim is `supermux-broker.exe shim` (and the credential helper `supermux-broker.exe credential`), and those must
+     * survive a broker restart or update.
+     *
+     * With [stateDir] and [port] (the broker the app hosts): the broker is first ASKED to stop (POST /internal/stop
+     * with its per-boot stop-token), so it runs its graceful shutdown, which a kill (TerminateProcess) never does
+     * (Q8). Only if it is still there is it killed by pid, the one broker.pid names included when no loop is its
+     * parent (an orphan the stop used to skip while reporting success, #36). Success is then no broker holding the
+     * state's lock ([brokerLockPipe]) as well as the pids gone: an older broker takes no lock.
      * False when the processes couldn't be listed or a broker is still alive after ~10 s.
      */
-    private fun stopWindowsTask(env: OsEnv): Boolean {
+    private fun stopWindowsTask(env: OsEnv, stateDir: Path? = null, port: Int? = null): Boolean {
         val procs = listWindowsProcesses(env) ?: return false
         val targets = windowsTaskTargets(procs)
-        // The loop first, or it starts the broker again ~5 s after the kill.
+        // The loop first, or it starts the broker again ~5 s after it exits.
         if (targets.loops.isNotEmpty()) env.run(taskkillArgv(targets.loops))
-        if (targets.brokers.isNotEmpty()) env.run(taskkillArgv(targets.brokers))
-        return awaitWindowsPidsGone(env, targets.brokers)
+        val pipe = stateDir?.let { brokerLockPipe(it.toString()) }
+        if (pipe != null && port != null && brokerHoldsState(env, pipe) == true && requestStop(env, stateDir, port)) {
+            if (awaitLockReleased(env, pipe) == true && awaitWindowsPidsGone(env, targets.brokers)) return true
+        }
+        val brokers = (targets.brokers + listOfNotNull(pidFileBroker(stateDir, procs))).distinct()
+        if (brokers.isNotEmpty()) env.run(taskkillArgv(brokers))
+        val gone = awaitWindowsPidsGone(env, brokers)
+        // Pipes that cannot be listed (no PowerShell answer) leave the pids to decide, as before the lock.
+        return gone && (pipe == null || awaitLockReleased(env, pipe) != false)
+    }
+
+    /** The stop request: true when the broker accepted it (202). No token (an older broker): false, nothing sent. */
+    private fun requestStop(env: OsEnv, stateDir: Path, port: Int): Boolean {
+        val token = runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()
+        if (token.isNullOrEmpty()) return false
+        return env.postLocal("http://127.0.0.1:$port/internal/stop", mapOf(STOP_TOKEN_HEADER to token)) == 202
+    }
+
+    /** The broker broker.pid names, if it runs as a broker (never an agent's `… shim` / `… credential`). */
+    private fun pidFileBroker(stateDir: Path?, procs: List<WinProcess>): Long? {
+        val pid = stateDir?.let { runCatching { Files.readString(it.resolve("broker.pid")).trim().toLong() }.getOrNull() } ?: return null
+        val p = procs.firstOrNull { it.pid == pid } ?: return null
+        return pid.takeIf { p.name.equals(WINDOWS_BROKER_EXE, ignoreCase = true) && isServingBroker(p.commandLine) }
+    }
+
+    /** A broker's own command line: the exe and nothing after it (`shim`, `credential`… are the agents' helpers). */
+    internal fun isServingBroker(commandLine: String): Boolean {
+        val c = commandLine.trim()
+        val rest = if (c.startsWith('"')) c.substringAfter('"').substringAfter('"', "") else c.substringAfter(' ', "")
+        return rest.isBlank()
+    }
+
+    /**
+     * The Windows pipe that is the broker's lock for [stateDir]: `pipeName("broker", …)` in
+     * packages/platform/src/lock.ts, spelled the same way (sha-256 of the path in Windows' normalised, lower-cased
+     * form). One broker per state directory holds it and the kernel drops it with that broker: it is how the app
+     * knows a broker is gone, whoever its parent is.
+     */
+    fun brokerLockPipe(stateDir: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(windowsCanonical(stateDir).toByteArray(Charsets.UTF_8))
+        val hex = digest.joinToString("") { "%02x".format(it) }.take(32)
+        return "\\\\.\\pipe\\supermux-broker-$hex-lock"
+    }
+
+    /** Node's `path.win32.normalize` of an absolute path (a trailing separator kept), lower-cased: what lock.ts hashes. */
+    internal fun windowsCanonical(path: String): String {
+        val p = path.replace('/', '\\')
+        val unc = p.startsWith("\\\\")
+        val drive = if (!unc && p.length >= 2 && p[1] == ':') p.substring(0, 2) else ""
+        val rest = if (unc) p.substring(2) else p.substring(drive.length)
+        val rooted = unc || rest.startsWith('\\')
+        val out = ArrayList<String>()
+        for (segment in rest.split('\\')) when (segment) {
+            "", "." -> {}
+            ".." -> if (out.isNotEmpty() && out.last() != "..") out.removeAt(out.size - 1) else if (!rooted) out += segment
+            else -> out += segment
+        }
+        val root = if (unc) "\\\\" else drive + (if (rooted) "\\" else "")
+        val trailing = if (out.isNotEmpty() && (p.endsWith('\\'))) "\\" else ""
+        return (root + out.joinToString("\\") + trailing).lowercase()
+    }
+
+    /** Lists the named pipes, one `\\.\pipe\…` path a line. Listing connects to none of them. No double quotes (Java). */
+    internal fun listPipesArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "[System.IO.Directory]::GetFiles('\\\\.\\pipe\\')",
+    )
+
+    /** Whether a broker holds [pipe]: null when the pipes could not be listed. */
+    private fun brokerHoldsState(env: OsEnv, pipe: String): Boolean? =
+        env.runCapture(listPipesArgv())?.lineSequence()?.any { it.trim().equals(pipe, ignoreCase = true) }
+
+    /**
+     * Poll until no broker holds [pipe], up to 20 × 500 ms: true once released, false while still held, null when the
+     * pipes cannot be listed at all.
+     */
+    private fun awaitLockReleased(env: OsEnv, pipe: String): Boolean? {
+        for (i in 1..20) {
+            when (brokerHoldsState(env, pipe)) {
+                false -> return true
+                null -> return null
+                true -> env.sleep(500)
+            }
+        }
+        return brokerHoldsState(env, pipe)?.not()
     }
 
     /**
@@ -668,14 +988,15 @@ Terminal=false
         val xml = windowsTaskXml(spec, envFile)
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
+            // Compare with what is REGISTERED: that is what runs. Asked before anything is written: when Windows cannot
+            // say (isInstalled throws), nothing is (#29).
+            val wasInstalled = isInstalled(env)
+            val registered = if (wasInstalled) registeredTaskXml(env) else null
             // The loop reads its env from here on every (re)start: write it before anything runs.
             // With a BOM: Windows PowerShell reads a BOM-less script in the ANSI code page.
             writePrivate(envFile, "\uFEFF" + windowsEnvFile(spec))
             // An older version kept a copy of the definition, env included, next to it.
             Files.deleteIfExists(env.localAppData.resolve(WINDOWS_TASK_XML))
-            val wasInstalled = isInstalled(env)
-            // Compare with what is REGISTERED: that is what runs.
-            val registered = if (wasInstalled) registeredTaskXml(env) else null
             val unchanged = wasInstalled && sameTaskAction(registered, xml)
             // The 1.0.0 task (same name) runs the app: never "the previous broker" to fall back to.
             val wasOurs = wasInstalled && registered?.let(::isLegacyDefinition) != true
@@ -745,11 +1066,14 @@ Terminal=false
     /** schtasks by its System32 path: a bare name is looked up on the (user-influenced) PATH. */
     private const val SCHTASKS = "(\$env:SystemRoot + '\\System32\\schtasks.exe')"
 
-    private fun removeWindowsTask(env: OsEnv, asJob: Boolean): Result {
+    private fun removeWindowsTask(env: OsEnv, asJob: Boolean, me: Owner): Result {
         val taskXml = env.localAppData.resolve(WINDOWS_TASK_XML)
         return runCatching {
+            val task = taskSlot(env)
+            // Another copy's task: no UAC prompt to end and delete it, and its env file stays.
+            if (task?.ownership(me) == Ownership.OTHER) return Result.NotOurs(WINDOWS_TASK_PATH)
             Files.deleteIfExists(taskXml)
-            if (!isInstalled(env)) {
+            if (task == null) {
                 Files.deleteIfExists(windowsEnvPath(env))
                 return Result.Removed(null)
             }

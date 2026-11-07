@@ -1,9 +1,10 @@
 import { spawn as bunSpawn } from "bun"
 import { readFile, unlink, writeFile } from "fs/promises"
 import { join } from "path"
-import { tmpdir, homedir } from "os"
+import { tmpdir } from "os"
 import { makeLogger } from "../../shared/log"
 import { encodeWav16, readPcm16 } from "./wav"
+import { home } from "../../shared/home"
 
 const log = makeLogger("whisper")
 // Multilingual `base` is the default — best accuracy/speed balance (Turkish + English).
@@ -11,8 +12,8 @@ const log = makeLogger("whisper")
 // can't always recover (e.g. "resolve reject" → tiny "resort reject" → cleanup "REST API").
 // base ~13-21s and much more accurate, so the cleanup has less to fix. Override with
 // MUX_WHISPER_MODEL or the whisperModel app-config setting (ggml-base.bin / ggml-tiny.bin / …).
-const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(homedir(), ".cache", "whisper-models", "ggml-base.bin")
-const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(homedir(), ".local", "bin", "whisper-cli")
+const DEFAULT_MODEL = process.env.MUX_WHISPER_MODEL ?? join(home(), ".cache", "whisper-models", "ggml-base.bin")
+const WHISPER_BIN = process.env.MUX_WHISPER_BIN ?? join(home(), ".local", "bin", "whisper-cli")
 
 export interface TranscribeOpts {
   model?: string

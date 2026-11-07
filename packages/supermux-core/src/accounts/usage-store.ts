@@ -1,7 +1,8 @@
-import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises"
+import { chmod, mkdir, open, readFile, rm } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { dirname } from "node:path"
 import type { AccountUnavailable, UsageWindow } from "./types.js"
+import { files } from "@supermux/platform"
 
 const SAVE_DEBOUNCE_MS = 1000
 
@@ -110,7 +111,7 @@ export class UsageStore {
       try {
         const file = await open(temp, "wx", 0o600)
         try { await file.writeFile(text); await file.sync() } finally { await file.close() }
-        await rename(temp, this.file)
+        await files.replace(temp, this.file)
       } finally { await rm(temp, { force: true }) }
     }).catch(() => { /* a cache: the next change writes again */ })
     this.saving = run

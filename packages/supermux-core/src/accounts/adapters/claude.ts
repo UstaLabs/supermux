@@ -1,14 +1,14 @@
-import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { claudeLayout, claudeRoot } from "../homes.js"
 import type { AccountIdentity, AuthAdapter, HomeRoots, UsageWindow, Materialized } from "../types.js"
 import { epochDate, readJson, requireSecret, str, unsupported } from "./shared.js"
+import { dirs } from "@supermux/platform"
 
 const CREDENTIAL_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
 
 /** `.claude.json` sits inside CLAUDE_CONFIG_DIR, except for the real default (~/.claude → ~/.claude.json). */
 export function claudeIdentityFile(configDir: string): string {
-  return resolve(configDir) === join(homedir(), ".claude") ? join(homedir(), ".claude.json") : join(configDir, ".claude.json")
+  return resolve(configDir) === join(dirs.home(), ".claude") ? join(dirs.home(), ".claude.json") : join(configDir, ".claude.json")
 }
 
 export async function readClaudeIdentity(configDir: string): Promise<AccountIdentity | undefined> {

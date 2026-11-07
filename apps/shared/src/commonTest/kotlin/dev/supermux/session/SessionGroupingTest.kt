@@ -152,13 +152,6 @@ class SessionGroupingTest {
         assertEquals("~\\foo", formatWorkdir("C:\\Users\\hatic\\foo", null))
     }
 
-    @Test fun pathLeaf_splits_on_either_separator() {
-        assertEquals("x", pathLeaf("/home/u/x/"))
-        assertEquals("TunnelWho", pathLeaf("D:\\Projects\\TunnelWho"))
-        assertEquals("erydor", pathLeaf("…\\yasinemre\\erydor"))
-        assertEquals("plain", pathLeaf("plain"))
-    }
-
     @Test fun projectLabel_windows_workdir_is_the_folder() {
         val s = SessionInfo(id = "a", name = "a", workdir = "D:\\Projects\\TunnelWho", agent = "claude")
         assertEquals("TunnelWho", projectLabel(s, "C:\\Users\\hatic"))

@@ -1,6 +1,7 @@
 import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { checkAvatar, readAvatar, writeAvatar } from "../../core/agents/avatar"
 import { DeviceStore } from "./device-store"
+import { timingSafeEqual } from "node:crypto"
 import { LiveReplies, type LiveKind, type LiveSocket } from "./live-replies"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
@@ -60,6 +61,9 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { auditPushTargets } from "../../core/push/audit"
+import { PushRegistrationWatch } from "../../core/push/registration-watch"
+import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -483,6 +487,18 @@ export interface WebChannelOpts {
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
   internalSecret?: string
+  /**
+   * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
+   * carrying it in `x-supermux-stop-token` stops the broker gracefully: the desktop app's stop on Windows, where every
+   * external stop is otherwise TerminateProcess.
+   */
+  stopToken?: string
+  onStopRequest?: () => void
+  /**
+   * With [stopToken]: POST /internal/restart restarts the broker under whatever runs it (update/apply.ts
+   * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
+   */
+  onRestartRequest?: () => boolean
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -621,6 +637,7 @@ export class WebChannel implements Channel {
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
+  private readonly pushWatch?: PushRegistrationWatch
   private readonly vapidPublicKey?: string
   private readonly relayUrl?: string
   private readonly getHostInfo?: () => import("./host-route").HostInfo
@@ -660,6 +677,7 @@ export class WebChannel implements Channel {
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
+    if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
     this.vapidPublicKey = opts.vapidPublicKey
     this.relayUrl = opts.relayUrl
     this.getHostInfo = opts.getHostInfo
@@ -757,6 +775,7 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
+    auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
     if (this.opts.perf) {
@@ -1322,6 +1341,7 @@ export class WebChannel implements Channel {
 
   private onWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     this.wsConnections.add({ ws, deviceName: ws.data.deviceName })
+    this.pushWatch?.connected(ws.data.deviceName, ws.data.surface)
   }
 
   // Lazily create the per-connection LSP bridge, stored on ws.data so its
@@ -2535,6 +2555,32 @@ export class WebChannel implements Channel {
       return Response.json(this.lastClientFrames)
     }
 
+    // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    const stopTokenGiven = (kind: string): boolean => {
+      const given = req.headers.get("x-supermux-stop-token") ?? ""
+      const expected = this.opts.stopToken ?? ""
+      const ok = expected !== "" && given.length === expected.length && timingSafeEqual(Buffer.from(given), Buffer.from(expected))
+      if (!ok) log.warn(`${kind}_request_rejected`, { hasToken: given !== "" })
+      return ok
+    }
+    if (path === "/internal/stop" && this.opts.stopToken && this.opts.onStopRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("stop")) return new Response("forbidden", { status: 403 })
+      log.info("stop_request_accepted")
+      const stop = this.opts.onStopRequest
+      setTimeout(() => stop(), 0) // after this response has gone out
+      return new Response("stopping", { status: 202 })
+    }
+    if (path === "/internal/restart" && this.opts.stopToken && this.opts.onRestartRequest) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("restart")) return new Response("forbidden", { status: 403 })
+      // restartService schedules the restart a moment later, so this answer still goes out.
+      if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
+      log.info("restart_request_accepted")
+      return new Response("restarting", { status: 202 })
+    }
+
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
       // Machine-to-machine (Claude hooks curl this from localhost). Gated by a
       // persistent secret embedded in the hook URL so a reachable web port can't
@@ -2801,6 +2847,7 @@ export class WebChannel implements Channel {
       if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
         return new Response("platform + routingToken + pubkey required", { status: 400 })
       this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      this.pushWatch?.registered(auth.device.name, platform)
       return this.json({ ok: true })
     }
 
@@ -2903,10 +2950,14 @@ export class WebChannel implements Channel {
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
     // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
+    // `relayUrl` is the connectivity relay when one is on (the desktop pairs phones with it) and
+    // the push relay otherwise, which older phone apps read. `pushRelayUrl` is always the push
+    // relay: with the connectivity relay on, phones registering at `relayUrl` reached this broker
+    // and got a 404, so no phone could receive push (card #86).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
       const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
-      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl }, 200)
+      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl, pushRelayUrl: this.relayUrl }, 200)
       return this.json(a.throttled ? { error: "rate limited" } : { paired: false }, this.authFailureStatus(a))
     }
 
@@ -3990,7 +4041,7 @@ export class WebChannel implements Channel {
       const active = this.opts.getSessionsSnapshot().map((s) => s.repo_root ?? s.workdir)
       const archived = this.opts.listArchivedSessions?.().map((s) => s.workdir) ?? []
       const projects = uniqueKnownWorkdirs([...active, ...archived], home())
-        .filter((p) => p !== wtRoot && !p.startsWith(wtRoot + sep))
+        .filter((p) => !paths.isInside(p, wtRoot))
         // The mux home and agent folders are supermux's own, not projects to pick.
         .filter((p) => !isMuxInternalPath(p))
         .map((p) => ({ path: p }))

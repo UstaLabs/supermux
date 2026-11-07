@@ -19,12 +19,12 @@
 // session tokens return ERROR_NOT_LOGGED_IN (re-login via cursor-agent login).
 
 import { readFile } from "fs/promises"
-import { homedir } from "os"
 import { extname } from "path"
 import { makeLogger } from "../../../shared/log"
 import { isWav } from "../wav"
 import { authCredPath } from "../../agents/detect"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
+import { home } from "../../../shared/home"
 
 const log = makeLogger("stt-cursor")
 
@@ -197,7 +197,7 @@ export function cursorSttEngine(opts: CursorSttEngineOpts = {}): SttEngine {
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
   const authPath = opts.authPath ?? authCredPath("cursor", {
-    home: homedir(),
+    home: home(),
     xdgConfigHome: process.env.XDG_CONFIG_HOME,
     appData: process.env.APPDATA,
     platform: process.platform,

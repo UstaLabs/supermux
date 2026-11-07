@@ -67,6 +67,8 @@ data class HostState(
     val lastError: String? = null,
     /** The broker's mux home (from the snapshot); null until one arrives or from an older broker. */
     val muxHome: String? = null,
+    /** The broker host's home folder (from the snapshot); null until one arrives or from an older broker. */
+    val homeDir: String? = null,
     /** Catalog of permission modes per agent (from the snapshot). */
     val permissionModes: Map<String, List<dev.supermux.proto.PermissionModeInfo>> = emptyMap(),
     /** Worktree id → bytes, from `worktree_sizes` frames (spec 2026-09-22-explicit-worktree-cleanup). */

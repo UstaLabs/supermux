@@ -9,11 +9,10 @@
 // restart broker → re-pair. The tunnel runs as an OS-level service; the broker
 // only ever learns its public face through MUX_WEB_PUBLIC_URL.
 
-import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { createInterface } from "readline"
-import { realRun, which } from "./core/tunnels/run"
+import { realRun, realStartDetached, realStopTree, which } from "./core/tunnels/run"
 import type { Ask, Confirm, ConnectCtx, Println, Run, TunnelProvider } from "./core/tunnels/types"
 import { resolveMode } from "./core/tunnels/types"
 import { PROVIDERS, getProvider } from "./core/tunnels/registry"
@@ -29,6 +28,8 @@ import { openDb } from "./core/storage/db"
 import { SettingsStore } from "./core/settings/store"
 import type { TunnelRecord } from "./core/settings/app-config"
 import { validateWebEnv } from "./shared/web-env"
+import { readEnvText } from "./shared/env-file"
+import { muxHomeNow } from "./shared/paths"
 import { loadOrCreateHostKey } from "./core/host-identity"
 
 interface Flags {
@@ -73,19 +74,17 @@ function parseFlags(args: string[]): Flags {
   return f
 }
 
-/** Resolve the state dir from the CURRENT env (mirrors shared/paths.ts + cli-setup.ts). */
+/** Resolve the state dir from the CURRENT env (shared/paths.ts's rule, per call). */
 function resolveStateDir(): string {
-  const home = process.env.HOME || homedir()
-  const muxHome = process.env.MUX_HOME ?? join(home, ".mux")
-  return process.env.MUX_STATE_DIR ?? join(muxHome, "state")
+  return process.env.MUX_STATE_DIR ?? join(muxHomeNow().path, "state")
 }
 
 /** Port from --port, else MUX_WEB_PORT in .env, else 8787. */
 function resolvePort(stateDir: string, flagPort?: string): string {
   if (flagPort) return flagPort
   try {
-    const m = readFileSync(join(stateDir, ".env"), "utf8").match(/^MUX_WEB_PORT=(.*)$/m)
-    if (m && m[1]) return m[1].trim()
+    const port = readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_WEB_PORT")?.trim()
+    if (port) return port
   } catch {
     /* no .env yet */
   }
@@ -95,8 +94,7 @@ function resolvePort(stateDir: string, flagPort?: string): string {
 /** Hosted relay domain from the setup-generated .env. Empty means explicitly disabled. */
 function readHostedRelayDomain(stateDir: string): string | undefined {
   try {
-    const m = readFileSync(join(stateDir, ".env"), "utf8").match(/^MUX_RELAY_DOMAIN=(.*)$/m)
-    return m?.[1]?.trim() || undefined
+    return readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_RELAY_DOMAIN")?.trim() || undefined
   } catch {
     return undefined
   }
@@ -217,7 +215,7 @@ async function connectProvider(
   for (const n of result.notes ?? []) ctx.println(n)
 
   // 5. restart the broker so the new origin binds (CSRF + cookie scoping)
-  if (flags.restart) await restartBroker(ctx.run, ctx.println)
+  if (flags.restart) await restartBroker(ctx.stateDir, ctx.port, ctx.println)
   else ctx.println("Skipped broker restart (--no-restart) — restart it for the new URL to take effect.")
 
   // 6. re-pair (origin changed ⇒ old pairings are dead)
@@ -247,7 +245,7 @@ async function disconnect(ctx: ConnectCtx, flags: Flags): Promise<number> {
     tunnel: { provider: "", mode: "", publicUrl: "" },
   })
   ctx.println(`✔ Reverted to ${local}.`)
-  if (flags.restart) await restartBroker(ctx.run, ctx.println)
+  if (flags.restart) await restartBroker(ctx.stateDir, ctx.port, ctx.println)
   ctx.println("Devices now pair on the local origin again.")
   return 0
 }
@@ -334,6 +332,8 @@ export async function runConnectCommand(args: string[], deps: ConnectDeps = {}):
     println,
     ask,
     confirm,
+    startDetached: realStartDetached,
+    stopTree: realStopTree,
   }
 
   // --status / --off first (no provider needed)

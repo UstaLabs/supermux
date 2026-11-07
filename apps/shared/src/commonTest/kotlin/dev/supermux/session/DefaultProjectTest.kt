@@ -5,6 +5,8 @@ import dev.supermux.proto.ProjectLocationDto
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class DefaultProjectTest {
     private fun s(
@@ -148,5 +150,13 @@ class DefaultProjectTest {
         )
         assertEquals(listOf("mixed", "empty", "app"), out.map { it.id })
         assertEquals(listOf("/home/a/app"), out[0].locations.map { it.path })
+    }
+
+    // A Windows host names a folder whatever its letter case.
+    @Test fun windowsMuxHomeHidesWhateverTheLetterCase() {
+        assertTrue(isMuxInternalPath("c:\\users\\me\\.mux", "C:\\Users\\me\\.mux"))
+        assertTrue(isMuxInternalPath("C:\\Users\\me\\.MUX\\Workspace\\home", "C:\\Users\\me\\.mux"))
+        assertFalse(isMuxInternalPath("C:\\Users\\me\\.mux-old\\x", "C:\\Users\\me\\.mux"))
+        assertFalse(isMuxInternalPath("C:\\Users\\me\\.mux\\workspace", "C:\\Users\\me\\.mux"))
     }
 }

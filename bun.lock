@@ -8,6 +8,7 @@
         "@micdrop/smart-turn": "0.2.0",
         "@modelcontextprotocol/sdk": "^1.0.0",
         "@opencode-ai/sdk": "^1.16.2",
+        "@supermux/platform": "workspace:*",
         "@xterm/headless": "^6.0.0",
         "croner": "^10.0.1",
         "grammy": "^1.36.0",
@@ -35,6 +36,10 @@
         "@types/node": "^22.0.0",
         "typescript": "^5.6.0",
       },
+    },
+    "packages/platform": {
+      "name": "@supermux/platform",
+      "version": "0.1.0",
     },
     "packages/supermux-core": {
       "name": "@supermux/core",
@@ -114,6 +119,8 @@
     "@supermux/core": ["@supermux/core@workspace:packages/supermux-core"],
 
     "@supermux/frp-client": ["@supermux/frp-client@workspace:packages/frp-client"],
+
+    "@supermux/platform": ["@supermux/platform@workspace:packages/platform"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 

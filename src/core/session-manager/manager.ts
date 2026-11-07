@@ -1715,9 +1715,8 @@ export class SessionManager {
       ? new Set((await sessionBackend.list(tmuxSession)).map(target => target.name))
       : new Set<string>()
     const takenNames = new Set([...this.registry.takenNames(), ...takenRuntimeNames])
-    if (takenNames.has(name)) {
-      name = ensureUnique(name, takenNames)
-    }
+    // In any letter case, as the folder it becomes (ensureUnique): an exact match missed "Test" beside "test".
+    name = ensureUnique(name, takenNames)
 
     let resumedRuntimeTargetId: string | undefined
     let resumedRuntimePid: number | null = null

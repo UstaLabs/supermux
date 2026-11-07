@@ -115,6 +115,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.proto.PromptQuestion
 import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.PromptRequestOption
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.proto.parsedQuestions
 import dev.supermux.state.ClosedRequest
 import dev.supermux.ui.adaptive.InputMode
@@ -344,8 +345,9 @@ private fun PermissionBody(
     // A refusal the agent can learn from: the first tap on Reject opens the note, a second sends
     // the refusal as it stands. The note is optional on purpose — refusing must stay one gesture
     // away for someone who just wants the command to stop.
-    var noteOpen by remember(request.requestId) { mutableStateOf(false) }
-    var note by remember(request.requestId) { mutableStateOf("") }
+    val rejection = rememberRetained("request:${request.requestId}:note") { RejectNote() }
+    var noteOpen by rejection::open
+    var note by rejection::text
 
     fun reject(option: PromptRequestOption) {
         onRespond(
@@ -654,6 +656,18 @@ private fun questionTitle(request: PromptRequest, questions: List<PromptQuestion
     return if (name.isBlank() || name == only?.prompt?.trim() || name == request.body.trim()) "Question" else name
 }
 
+/** A question set's answers so far and the page shown, kept for a rebuilt card (`rememberRetained`, #89). */
+private class QuestionAnswers {
+    var page by mutableStateOf(0)
+    var drafts by mutableStateOf(mapOf<String, Draft>())
+}
+
+/** A permission refusal's note being written, kept for a rebuilt card (`rememberRetained`, #89). */
+private class RejectNote {
+    var open by mutableStateOf(false)
+    var text by mutableStateOf("")
+}
+
 /** One question's in-progress answer: the picked option ids, plus the "Other" field. */
 private data class Draft(
     val picked: List<String> = emptyList(),
@@ -694,8 +708,11 @@ private fun QuestionBody(
     disabled: Boolean,
     onRespond: (JsonObject) -> Unit,
 ) {
-    var page by remember(request.requestId) { mutableStateOf(0) }
-    var drafts by remember(request.requestId) { mutableStateOf(mapOf<String, Draft>()) }
+    // Outside this composition: a rotation rebuilt the card from nothing, and the agent stayed
+    // blocked until every answer was given again (#89).
+    val answers = rememberRetained("request:${request.requestId}") { QuestionAnswers() }
+    var page by answers::page
+    var drafts by answers::drafts
     val current = questions[page.coerceIn(0, questions.lastIndex)]
     fun draftOf(q: PromptQuestion) = drafts[q.id] ?: Draft()
     // (A question that offers nothing to answer with — no options, no free text — cannot block.)

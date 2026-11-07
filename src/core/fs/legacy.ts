@@ -5,6 +5,7 @@ import { realpath } from "fs/promises"
 import { dirname, join, relative, resolve, sep } from "path"
 import type { FileSystemService } from "./file-system-service"
 import type { FsEntry } from "./types"
+import { paths } from "@supermux/platform"
 
 export interface LegacyFsEntry { name: string; type: "file" | "dir"; size: number; modified: string; ignored: boolean }
 export interface LegacySearchResult { path: string; name: string; type: "file" | "dir"; ignored: boolean }
@@ -26,7 +27,7 @@ export class WorkdirFs {
   }
 
   private inside(root: string, p: string): boolean {
-    return p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
+    return paths.isInside(p, root)
   }
 
   /** Resolve a workdir-relative path; refuse anything that lands outside the workdir. */

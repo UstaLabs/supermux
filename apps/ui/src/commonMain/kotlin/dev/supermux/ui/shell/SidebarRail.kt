@@ -91,6 +91,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.supermux.chat.parseChatTs
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -658,7 +659,7 @@ private fun monogramColors(i: Int, dark: Boolean): Pair<Color, Color> = if (dark
 
 /** "Supermux Website" → "SW", "supermux" → "Su", "…/local/optikokuyucu" → "Op". */
 internal fun projectInitials(name: String): String {
-    val clean = name.substringAfterLast('/').trim()
+    val clean = pathLeaf(name).trim()
     val words = clean.split(' ', '-', '_', '.').filter { it.isNotBlank() }
     return when {
         words.size >= 2 -> "${words[0].first()}${words[1].first()}".uppercase()

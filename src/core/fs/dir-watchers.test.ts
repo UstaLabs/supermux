@@ -2,7 +2,7 @@ import { test, expect } from "bun:test"
 import { mkdtempSync, writeFileSync, realpathSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { DirWatchers } from "./dir-watchers"
+import { DirWatchers, watchDir } from "./dir-watchers"
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "fs-watch-")))
@@ -144,4 +144,37 @@ test("poll intervals and debounce timers are unref'd (they never keep the proces
   listener!("change", "x")
   expect(((w as any).slots.get(d).timer as { hasRef(): boolean }).hasRef()).toBe(false)
   w.closeAll()
+})
+
+// main.ts's git-status, worktree and avatar watches each wrapped fs.watch inline: a folder the OS would not watch
+// (ENOSPC, Linux's inotify limit) went quiet for good, and the avatar watch had no 'error' listener, so a removed folder
+// (EPERM on Windows) was thrown with nothing to catch it.
+test("watchDir polls a folder the OS will not watch, instead of going quiet", async () => {
+  let events = 0
+  const enospc = () => { throw Object.assign(new Error("ENOSPC: System limit for number of file watchers reached"), { code: "ENOSPC" }) }
+  const w = watchDir("/x", () => events++, { pollMs: 20, watchFn: enospc })
+  await sleep(90)
+  expect(events).toBeGreaterThanOrEqual(2)
+  w.close()
+  const after = events
+  await sleep(60)
+  expect(events).toBe(after)
+})
+
+test("watchDir takes a watch error (the folder went away) and says so once, without throwing", () => {
+  const emitter = Object.assign(new EventEmitter(), { close() {} }) as unknown as FSWatcher
+  const seen: (string | null)[] = []
+  watchDir("/x", (file) => seen.push(file), { watchFn: () => emitter })
+  expect(() => emitter.emit("error", Object.assign(new Error("EPERM"), { code: "EPERM" }))).not.toThrow()
+  expect(seen).toEqual([null])
+})
+
+test("watchDir reports the changed file's name, and a throwing listener does not escape", async () => {
+  const d = tmp()
+  const seen: (string | null)[] = []
+  const w = watchDir(d, (file) => { seen.push(file); throw new Error("consumer bug") })
+  writeFileSync(join(d, "a.avatar.json"), "{}")
+  await sleep(150)
+  expect(seen).toContain("a.avatar.json")
+  w.close()
 })

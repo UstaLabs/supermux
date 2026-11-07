@@ -22,13 +22,13 @@ import dev.supermux.state.FleetStore
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.BrokerApi
+import dev.supermux.push.NativePushRegistration
 import dev.supermux.push.openSealedPush
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 
 /**
@@ -48,7 +48,7 @@ import kotlin.math.absoluteValue
  *  3. [onMessageReceived] with a SEALED `d`:
  *       d. `openSealedPush(d, privatePkcs8B64)` → parse `{session, sessionId?, text}` → notify.
  *
- * All network/crypto runs on [scope] (a process-lived IO scope); FCM grants a short wake
+ * All network/crypto runs on [appScope] (a process-lived IO scope) through [launchDetached]; FCM grants a short wake
  * window per message, which is ample for one HTTP round-trip.
  *
  * **Why [registerIfPaired] exists:** [onNewToken] often fires *before* pairing (first launch).
@@ -57,11 +57,6 @@ import kotlin.math.absoluteValue
  */
 class SupermuxMessagingService : FirebaseMessagingService() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    // One client per service instance (mirrors AppViewModel's `HttpClient(CIO)`).
-    private val http: HttpClient by lazy { HttpClient(CIO) }
-
     private val keypair: PushKeypair by lazy { PushKeypair(applicationContext) }
 
     override fun onNewToken(token: String) {
@@ -69,7 +64,8 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         // Ensure the shared SecureTokenStore has a context even if MainActivity never ran
         // (FCM can start the process directly into this service).
         SecureTokenStoreContext.init(applicationContext)
-        scope.launch { registerWithRelayForAllHosts(applicationContext, token, http) }
+        val app = applicationContext
+        launchDetached(appScope, { HttpClient(CIO) }) { registerWithRelayForAllHosts(app, token, it) }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -82,17 +78,13 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         when (val routed = PushRouter.classify(d)) {
             is PushRouter.Routed.Bootstrap -> {
                 Log.i(TAG, "bootstrap message: registering device with broker")
-                scope.launch { registerDeviceWithBroker(routed.routingToken) }
+                val app = applicationContext
+                launchDetached(appScope, { HttpClient(CIO) }) { registerDeviceWithBrokers(app, routed.routingToken, it) }
             }
             is PushRouter.Routed.Sealed -> {
                 handleSealed(routed.blob)
             }
         }
-    }
-
-    /** Step 1c / bootstrap: register this device (routingToken + pubkey) with every paired broker. */
-    private suspend fun registerDeviceWithBroker(routingToken: String) {
-        registerDeviceWithBrokers(applicationContext, routingToken, http, keypair)
     }
 
     /** Step 3d: decrypt a sealed blob and post a notification. */
@@ -161,11 +153,6 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         nm.notify(GROUP_SUMMARY_ID, summary)
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        runCatching { http.close() }
-    }
-
     companion object {
         private const val TAG = "SupermuxFCM"
         private const val PLATFORM = "android"
@@ -205,12 +192,7 @@ class SupermuxMessagingService : FirebaseMessagingService() {
                         Log.w(TAG, "registerIfPaired: empty FCM token")
                         return@addOnSuccessListener
                     }
-                    appScope.launch {
-                        // Short-lived client — this path is not service-scoped.
-                        HttpClient(CIO).use { http ->
-                            registerWithRelayForAllHosts(app, token, http)
-                        }
-                    }
+                    launchDetached(appScope, { HttpClient(CIO) }) { registerWithRelayForAllHosts(app, token, it) }
                 }
                 .addOnFailureListener { e ->
                     Log.w(TAG, "registerIfPaired: getToken failed: ${e.message}")
@@ -245,9 +227,10 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         }
 
         /**
-         * Steps 1a–1c: resolve a push-relay URL from any paired broker, hand it our FCM
-         * token, then POST `/push/device` to **every** paired broker with the returned
-         * routingToken. The relay is **stateless** — routingToken seals (platform, fcmToken),
+         * Steps 1a–1c: from the first paired broker that can, register our FCM token at its push
+         * relay and store the routingToken there ([BrokerApi.registerNativePush], which also
+         * reports how it went to that broker's log), then POST `/push/device` to every other
+         * paired broker. The relay is **stateless** — routingToken seals (platform, fcmToken),
          * not a broker identity — so one /register is enough for the fleet.
          */
         internal suspend fun registerWithRelayForAllHosts(
@@ -261,28 +244,27 @@ class SupermuxMessagingService : FirebaseMessagingService() {
                 Log.i(TAG, "not paired (no baseUrl/token); skipping relay registration")
                 return
             }
+            val keypair = PushKeypair(context)
+            val pubkey = try {
+                keypair.publicKeyB64Url()
+            } catch (e: Throwable) {
+                Log.w(TAG, "keypair unavailable: ${e.message}")
+                return
+            }
             for (creds in all) {
-                try {
-                    val api = BrokerApi(creds.baseUrl, creds.token, http)
-                    val relayUrl = api.pushRelayUrl()
-                    if (relayUrl.isNullOrBlank()) {
-                        Log.i(TAG, "broker has no relayUrl; native push not configured (${creds.baseUrl})")
-                        continue
+                val outcome = BrokerApi(creds.baseUrl, creds.token, http).registerNativePush(PLATFORM, fcmToken, pubkey)
+                Log.i(TAG, "push registration (${creds.baseUrl}): ${outcome.summary}")
+                when (outcome) {
+                    is NativePushRegistration.Registered -> {
+                        if (all.size > 1) registerDeviceWithBrokers(context, outcome.routingToken, http, keypair)
+                        return
                     }
-                    val routingToken = api.registerPushTokenWithRelay(relayUrl, PLATFORM, fcmToken)
-                    Log.i(TAG, "registered FCM token with relay (${creds.baseUrl})")
-                    if (!routingToken.isNullOrBlank()) {
-                        // Primary path: do not depend on bootstrap FCM delivery.
-                        registerDeviceWithBrokers(context, routingToken, http, PushKeypair(context))
-                    } else {
-                        Log.i(TAG, "relay omitted routingToken; waiting for bootstrap push (old relay?)")
-                    }
-                    return // one /register is enough (routingToken encodes the FCM token)
-                } catch (e: Throwable) {
-                    Log.w(TAG, "relay registration failed (${creds.baseUrl}): ${e.message}")
+                    // An old relay sends the routing token by push; the bootstrap handler registers it.
+                    is NativePushRegistration.AwaitingBootstrap -> return
+                    else -> Unit // try the next broker
                 }
             }
-            Log.i(TAG, "no paired broker exposed a push relayUrl")
+            Log.i(TAG, "no paired broker could register push")
         }
 
         /** POST /push/device on every paired broker (HTTP path or bootstrap). */

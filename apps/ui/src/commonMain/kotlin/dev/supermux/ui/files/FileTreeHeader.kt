@@ -38,7 +38,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.FileSystemService
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.hostParent
+import dev.supermux.fs.hostRoot
+import dev.supermux.fs.inferHomeDir
+import dev.supermux.fs.sameHostPath
 
 /** One breadcrumb: its label and the folder it roots the tree at. */
 data class Crumb(val label: String, val path: String)
@@ -47,18 +50,19 @@ data class Crumb(val label: String, val path: String)
 data class Breadcrumbs(val truncated: Boolean, val crumbs: List<Crumb>)
 
 /**
- * Split [rootPath] into crumbs. Under [home] the first crumb is `~`; otherwise it is `/`. At most
- * [max] crumbs are kept (the LAST ones — the folder you are in matters more than where it hangs).
+ * Split [rootPath] into crumbs. Under [home] the first crumb is `~`; otherwise it is the root the
+ * path hangs from (`/`, `C:\`, `\\server\share`). At most [max] crumbs are kept (the LAST ones — the
+ * folder you are in matters more than where it hangs).
  */
 fun breadcrumbsOf(rootPath: String, home: String?, max: Int = 3): Breadcrumbs {
     val all = ArrayList<Crumb>()
     val base: String
-    if (home != null && home != "/" && isWithin(home, rootPath)) {
-        base = home.trimEnd('/')
+    if (home != null && hostParent(home) != null && isWithin(home, rootPath)) {
+        base = trimEnd(home)
         all += Crumb("~", base)
     } else {
-        base = "/"
-        all += Crumb("/", "/")
+        base = hostRoot(rootPath) ?: "/"
+        all += Crumb(base, base)
     }
     val rel = relativeToWorkdir(base, rootPath)
     if (rel != null && rel != ".") {
@@ -114,7 +118,7 @@ fun FileTreeHeader(
                         .testTag("tree_breadcrumb:${crumb.label}"),
                 )
             }
-            if (view.rootPath.trimEnd('/') != view.workdir.trimEnd('/')) {
+            if (!sameHostPath(view.rootPath, view.workdir)) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = cs.secondaryContainer,

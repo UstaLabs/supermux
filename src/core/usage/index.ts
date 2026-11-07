@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, readdirSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
@@ -9,6 +8,7 @@ import { SIGN_IN_EXPIRED } from "../accounts/broker-accounts"
 import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
+import { home } from "../../shared/home"
 
 const log = makeLogger("usage")
 
@@ -173,12 +173,12 @@ export interface UsageResponse {
 
 // ── Credential paths ──
 
-const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
-const CLAUDE_JSON  = join(homedir(), ".claude.json")
-const CLAUDE_VERSIONS_DIR = join(homedir(), ".local", "share", "claude", "versions")
-const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
-const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
-const GROK_AUTH   = join(homedir(), ".grok", "auth.json")
+const CLAUDE_CREDS = join(home(), ".claude", ".credentials.json")
+const CLAUDE_JSON  = join(home(), ".claude.json")
+const CLAUDE_VERSIONS_DIR = join(home(), ".local", "share", "claude", "versions")
+const CODEX_AUTH   = join(home(), ".codex", "auth.json")
+const OPENCODE_DB = join(openCodeDataDir({ home: home() }), "opencode.db")
+const GROK_AUTH   = join(home(), ".grok", "auth.json")
 
 // Undocumented but what `grok /usage` hits (cli-chat-proxy). Override via env for tests/mirrors.
 const GROK_BILLING_BASE =
@@ -558,7 +558,7 @@ export async function redeemCodexReset(
  */
 export function cursorAuthPath(): string {
   return authCredPath(AgentKind.Cursor, {
-    home: homedir(),
+    home: home(),
     xdgConfigHome: process.env.XDG_CONFIG_HOME,
     appData: process.env.APPDATA,
     platform: process.platform,

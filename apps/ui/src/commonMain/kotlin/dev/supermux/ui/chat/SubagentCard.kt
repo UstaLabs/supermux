@@ -95,7 +95,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -125,6 +124,8 @@ import dev.supermux.net.SubagentActionResult
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.Subagent
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.IconSize
@@ -466,6 +467,8 @@ internal fun cardSurface(): Color {
 class SubagentActions(
     val message: suspend (subagentId: String, text: String) -> SubagentActionResult = { _, _ -> SubagentActionResult(ok = false) },
     val stop: suspend (subagentId: String) -> SubagentActionResult = { SubagentActionResult(ok = false) },
+    /** The session they act on: it names what a card keeps for a rebuilt transcript (#89). */
+    val sessionId: String = "",
 )
 
 /** What a [TimelineItemRow] needs to draw subagent cards: expansion state + actions. */
@@ -732,12 +735,16 @@ private fun ExpandedBody(
     highDetail: Boolean,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var draft by remember(s.id) { mutableStateOf("") }
-    var busy by remember(s.id) { mutableStateOf(false) }
-    var messageError by remember(s.id) { mutableStateOf<String?>(null) }
-    var stopError by remember(s.id) { mutableStateOf<String?>(null) }
-    var note by remember(s.id) { mutableStateOf<String?>(null) }
+    // The message being written, and a send or a stop in flight, outlive this composition: a
+    // rotation or a width change rebuilt the card empty and cancelled a send halfway (#89). The
+    // send runs on the fleet's scope and lands in [kept] for whichever card is on screen then.
+    val kept = rememberRetained("subagent:${actions.sessionId}:${s.id}") { SubagentMessage() }
+    val scope = rememberRetainedScope()
+    var draft by kept::draft
+    var busy by kept::busy
+    var messageError by kept::messageError
+    var stopError by kept::stopError
+    var note by kept::note
     val thread = remember(s, item.children, item.spawn) { threadOf(s, item.children, item.spawn?.output) }
 
     fun send() {
@@ -836,6 +843,15 @@ private fun ExpandedBody(
         stopError?.takeIf { s.canStop }?.let { ErrorLine(it, s.id) }
         }
     }
+}
+
+/** One subagent's message being written and its send or stop in flight, kept for a rebuilt card (`rememberRetained`, #89). */
+private class SubagentMessage {
+    var draft by mutableStateOf("")
+    var busy by mutableStateOf(false)
+    var messageError by mutableStateOf<String?>(null)
+    var stopError by mutableStateOf<String?>(null)
+    var note by mutableStateOf<String?>(null)
 }
 
 @Composable

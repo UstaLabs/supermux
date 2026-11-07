@@ -57,6 +57,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.CircleShape
+import dev.supermux.fs.hostRelativePath
+import dev.supermux.fs.isWindowsHostPath
 import dev.supermux.proto.ProjectDto
 import dev.supermux.session.OmniOption
 import dev.supermux.workspace.ProjectRef
@@ -145,11 +147,12 @@ const val PROJECT_TILE_COUNT = 6
 const val PROJECT_TILE_COLUMNS = 3
 
 /** [path] with the [home] prefix shown as "~" — the full location, as short as it honestly gets. */
-internal fun homeRelativePath(path: String, home: String): String = when {
-    home.isEmpty() -> path
-    path == home -> "~"
-    path.startsWith("$home/") -> "~" + path.removePrefix(home)
-    else -> path
+internal fun homeRelativePath(path: String, home: String): String {
+    if (home.isEmpty()) return path
+    val rel = hostRelativePath(home, path) ?: return path
+    if (rel.isEmpty()) return "~"
+    val sep = if (isWindowsHostPath(home)) '\\' else '/'
+    return "~$sep" + rel.replace('/', sep)
 }
 
 /** The same name-hashed hue the sidebar's project group tile uses, so a project keeps its colour. */

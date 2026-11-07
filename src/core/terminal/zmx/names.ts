@@ -51,6 +51,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmdirSync,
 import { basename, isAbsolute, join, resolve } from "path"
 import { STATE_DIR } from "../../../shared/paths"
 import { WorkspaceTerminalError, type WorkspaceTerminalKey } from "../workspace-backend"
+import { proc } from "@supermux/platform"
 
 const PREFIX = "muxterm_"
 
@@ -236,13 +237,7 @@ export const SOCKET_DIR_OWNER_FILE = ".broker-owner"
  * exists to prevent. Only `ESRCH` (and a pid that cannot be one) is death.
  */
 export function isProcessAlive(pid: number): boolean {
-  if (pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "EPERM"
-  }
+  return proc.isAlive(pid)
 }
 
 /**

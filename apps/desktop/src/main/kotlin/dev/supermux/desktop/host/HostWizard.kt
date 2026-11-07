@@ -116,6 +116,8 @@ class HostWizardModel(
     private val onPairThisComputer: (localToken: String, directUrl: String?, hostId: String) -> Unit,
     private val onInstallKeepAlive: (Boolean) -> Unit,
     private val qrOf: (String) -> ImageBitmap = { qrBitmap(it) },
+    /** Why no pairing code could be made, when the caller knows better than "it failed" (null: it doesn't). */
+    private val whyNoClaim: () -> String? = { null },
 ) {
     private val _state = MutableStateFlow<HostWizardUiState>(HostWizardUiState.Preparing)
     val state: StateFlow<HostWizardUiState> = _state.asStateFlow()
@@ -142,7 +144,7 @@ class HostWizardModel(
             }
             val c = runCatching { mintClaim() }.getOrNull()
             if (c == null || c.claimSecret.isBlank()) {
-                _state.value = HostWizardUiState.Error("Couldn't create a pairing code from the local host.")
+                _state.value = HostWizardUiState.Error(whyNoClaim() ?: "Couldn't create a pairing code from the local host.")
                 return@launch
             }
             val relay = c.relayUrl ?: provideRelayUrl()
@@ -170,6 +172,9 @@ class HostWizardModel(
 const val HOST_WIZARD_HEADLINE = "This computer is ready to host your agents. Scan the QR with your phone."
 const val HOST_WIZARD_KEEPALIVE_LABEL = "Keep running in the background"
 const val HOST_WIZARD_KEEPALIVE_HELP = "Your agents stay reachable after you quit, sign out or restart."
+/** The local host is one this app doesn't manage (another copy of the app, `supermux setup`, left alone): #77. */
+const val HOST_WIZARD_SET_UP_ELSEWHERE =
+    "A supermux host already runs on this computer, set up outside this app, and this app leaves it as it is. To use it here, connect to it instead."
 private const val RELAY_ON_DISCLOSURE =
     "Remote access is on through relay.supermux.dev."
 private const val RELAY_OFF_DISCLOSURE =

@@ -24,6 +24,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.Space
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.projectGroupKey
@@ -77,7 +79,12 @@ fun OrganizeProjectsDialog(
 ) {
     val cs = MaterialTheme.colorScheme
     val initial = remember(projects) { projectOrderByHost(projects) }
-    val orders = remember(initial) { mutableStateMapOf<String, List<ProjectRef>>().apply { putAll(initial) } }
+    // The order being dragged outlives this composition: a rotation or a width change rebuilt the
+    // dialog with the sidebar's order again (#89). Kept for the order it started from, and dropped
+    // by every way out, so the next Organize starts from the sidebar's.
+    val kept = rememberRetained("sidebar.organize-projects") { ProjectOrders() }
+    val orders = remember(initial) { kept.from(initial) }
+    val close: () -> Unit = { kept.startedFrom = null; onDismiss() }
     // A host header only earns its row when there is more than one host to tell apart.
     val showHostHeaders = initial.size > 1
     val hostNames = remember(hosts) { hosts.associate { it.recordId to it.displayName } }
@@ -99,7 +106,7 @@ fun OrganizeProjectsDialog(
         true
     }
 
-    AdaptiveProjectContainer(tag = OrganizeProjectsTestIds.SHEET, onDismiss = onDismiss) {
+    AdaptiveProjectContainer(tag = OrganizeProjectsTestIds.SHEET, onDismiss = close) {
         Column(Modifier.fillMaxWidth().padding(vertical = Space.md)) {
             Text(
                 "Organize projects",
@@ -144,18 +151,37 @@ fun OrganizeProjectsDialog(
                 Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = Space.xs),
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(onClick = onDismiss, modifier = Modifier.testTag(OrganizeProjectsTestIds.CANCEL)) {
+                TextButton(onClick = close, modifier = Modifier.testTag(OrganizeProjectsTestIds.CANCEL)) {
                     Text("Cancel")
                 }
                 TextButton(
                     onClick = {
                         changedProjectOrders(initial, orders).forEach { (hostId, ids) -> onSave(hostId, ids) }
-                        onDismiss()
+                        close()
                     },
                     modifier = Modifier.testTag(OrganizeProjectsTestIds.DONE),
                 ) { Text("Done") }
             }
         }
+    }
+}
+
+/**
+ * The order being dragged in [OrganizeProjectsDialog], with the order it started from, kept for a
+ * dialog rebuilt by a rotation or a width change (`rememberRetained`, #89).
+ */
+private class ProjectOrders {
+    var startedFrom: Map<String, List<ProjectRef>>? = null
+    private val orders = mutableStateMapOf<String, List<ProjectRef>>()
+
+    /** The order being dragged from [initial]; [initial] itself when it is new (an opening, a live update). */
+    fun from(initial: Map<String, List<ProjectRef>>): SnapshotStateMap<String, List<ProjectRef>> {
+        if (startedFrom != initial) {
+            startedFrom = initial
+            orders.clear()
+            orders.putAll(initial)
+        }
+        return orders
     }
 }
 

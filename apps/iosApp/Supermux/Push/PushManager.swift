@@ -119,33 +119,21 @@ final class PushManager: NSObject {
         NSLog("[supermux push] APNs registration failed: %@", error.localizedDescription)
     }
 
-    /// Steps 2a–2b: resolve the relay URL from the broker, hand it our APNs token.
+    /// Steps 2a–2b and the HTTP half of 3, shared with Android: the broker's push relay takes our
+    /// APNs token, its routing token goes to the broker, and the outcome also reaches the broker's
+    /// log (card #86). Bootstrap APNs remains a backup for an old relay.
     private func registerWithRelay(hexToken: String) async {
         guard let api = makeApi() else {
             NSLog("[supermux push] not paired; skipping relay registration")
             return
         }
         do {
-            guard let relayUrl = try await api.pushRelayUrl(), !relayUrl.isEmpty else {
-                NSLog("[supermux push] broker has no relayUrl; native push not configured")
-                return
-            }
-            // Prefer routingToken from the HTTP response so we can POST /push/device
-            // immediately (same path as Android). Bootstrap APNs remains a backup.
-            let routingToken = try await api.registerPushTokenWithRelay(
-                relayUrl: relayUrl, platform: Self.platform, pushToken: hexToken
+            let outcome = try await api.registerNativePush(
+                platform: Self.platform,
+                pushToken: hexToken,
+                pubkey: PushKeypair.shared.publicKeyB64Url
             )
-            NSLog("[supermux push] registered APNs token with relay")
-            if let routingToken, !routingToken.isEmpty {
-                try await api.registerPushDevice(
-                    platform: Self.platform,
-                    routingToken: routingToken,
-                    pubkey: PushKeypair.shared.publicKeyB64Url
-                )
-                NSLog("[supermux push] device registered with broker (HTTP path)")
-            } else {
-                NSLog("[supermux push] relay omitted routingToken; awaiting bootstrap push")
-            }
+            NSLog("[supermux push] registration: %@", outcome.summary)
         } catch {
             NSLog("[supermux push] relay registration failed: %@", error.localizedDescription)
         }

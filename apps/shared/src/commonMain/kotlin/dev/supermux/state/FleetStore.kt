@@ -164,6 +164,9 @@ class FleetStore(
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
 
+    /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
+    val retainedUi = RetainedUiState(fleetScope)
+
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
@@ -499,6 +502,30 @@ class FleetStore(
         }
             .distinctUntilChanged()
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
+
+    /**
+     * Each connected host's own home folder (record id → the homeDir its snapshot sent), so a host's
+     * paths shorten to `~` under ITS home, not under one home guessed for the whole fleet. A host whose
+     * broker sent none (an older broker) is absent. Keyed on the live [HostStore]s like
+     * [projectCatalogHosts].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val homeDirs: StateFlow<Map<String, String>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                val ids = synchronized(lock) {
+                    apps.map { app -> conns.entries.firstOrNull { it.value.app === app }?.key }
+                }
+                combine(apps.mapIndexed { i, app -> app.homeDir.map { home -> ids[i]?.let { id -> home?.let { id to it } } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<Pair<String, String>?>).filterNotNull().toMap()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyMap())
 
     /**
      * The ACTIVE host's requirements ([HostStore.hostRequirements]) for the launcher's "needs git"

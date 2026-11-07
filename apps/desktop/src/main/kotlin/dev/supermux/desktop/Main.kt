@@ -58,6 +58,8 @@ import dev.supermux.ui.chat.fetchImageBytesWithPolicy
 import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
+import dev.supermux.desktop.platform.ScreenWatch
+import dev.supermux.desktop.platform.screenProbe
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.BackgroundQuitNotice
 import dev.supermux.desktop.host.FleetFacts
@@ -198,8 +200,10 @@ private val desktopDeps: HostStoreDeps by lazy {
         clientInfo = dev.supermux.net.ClientInfo(
             surface = "desktop",
             version = dev.supermux.desktop.update.DESKTOP_APP_VERSION,
-            os = System.getProperty("os.name").orEmpty().lowercase().let {
-                when { "mac" in it -> "macos"; "win" in it -> "windows"; else -> "linux" }
+            os = when (dev.supermux.desktop.platform.DesktopOs.current) {
+                dev.supermux.desktop.platform.DesktopOs.MACOS -> "macos"
+                dev.supermux.desktop.platform.DesktopOs.WINDOWS -> "windows"
+                dev.supermux.desktop.platform.DesktopOs.LINUX -> "linux"
             },
         ),
     )
@@ -221,8 +225,7 @@ private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : Pai
 }
 
 /** This computer's name on a host it pairs with: onboarding and Add host both offer it. */
-private fun desktopDeviceName(): String =
-    runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "Desktop host"
+private fun desktopDeviceName(): String = DesktopHostBootstrap.defaultHostName()
 
 /**
  * Desktop's legacy `intro-seen` marker file (contents = the intro version), read ONCE so
@@ -363,6 +366,9 @@ private val desktopBindTts: (
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
+    // The hostname lookup can stall ~5 s on macOS: start it now, off the UI thread, so the supervisor and the pairing
+    // screens find it done (#29).
+    DesktopHostBootstrap.prefetchHostName()
     // Card #54: the launch trace starts here; SUPERMUX_PERF=1 also opens the Load Timings panel
     // and prints every trace event as it happens.
     run {
@@ -514,6 +520,11 @@ fun main() {
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
         // Same, for the fleet: the tray reads this computer's session count and the remote host.
         var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
+
+        // Card #86 part 2: a locked screen or sleeping displays are nobody reading, focused window or not.
+        val screenWatch = remember { ScreenWatch(screenProbe()) }
+        LaunchedEffect(screenWatch) { screenWatch.run() }
+        val screenSeen by screenWatch.seen.collectAsState()
 
         // ── Hosting lifecycle (spec: HostSupervisor, Tray, D3) ──
         // The supervisor starts, updates or adopts the local broker on EVERY launch, paired or not.
@@ -861,7 +872,11 @@ fun main() {
             // same black glyph on a light taskbar, where the white colour icon is invisible; else colour.
             val trayIcon = when {
                 isMacOs() -> remember { TrayIcons.painter(mac = true) }
-                isWindowsOs() -> remember { TrayIcons.painter(mac = false, darkGlyph = TrayIcons.darkGlyph(mac = false, windows = true)) }
+                isWindowsOs() -> {
+                    // Off the UI thread, and read again every 30 s: a light/dark switch repaints the glyph.
+                    val light by remember { TrayIcons.taskbarIsLight() }.collectAsState(initial = false)
+                    remember(light) { TrayIcons.painter(mac = false, darkGlyph = light) }
+                }
                 else -> painterResource(TrayIcons.COLOUR)
             }
             Tray(
@@ -1964,7 +1979,7 @@ fun main() {
                             fleet = fleet,
                             ui = ui,
                             notify = notificationController,
-                            appForeground = LocalWindowInfo.current.isWindowFocused,
+                            appForeground = LocalWindowInfo.current.isWindowFocused && screenSeen,
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
                             // sessions. The one genuine per-host choice left in the shell.
                             sessionListMode = SessionListMode.Workspaces,

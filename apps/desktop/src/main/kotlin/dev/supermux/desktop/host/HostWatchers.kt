@@ -152,7 +152,8 @@ internal suspend fun HostSupervisor.watchService(gen: Long) {
                 downSince = t
                 publish(HostingStatus.Restarting(1))
                 log("the broker service has been down for ${timing.serviceDownMs / 1000} s; restarting it")
-                withContext(io) { BrokerService.restart(osEnv) }
+                val me = me()
+                withContext(io) { BrokerService.restart(osEnv, me) }
             } else {
                 watchGen++
                 log("the broker service is still down after the restart; giving up")

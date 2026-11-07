@@ -76,6 +76,8 @@ import dev.supermux.net.showReasoningPicker
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import kotlinx.coroutines.flow.first
 import dev.supermux.state.AccountResult
 import dev.supermux.state.agentFailureText
@@ -90,6 +92,41 @@ import kotlinx.coroutines.launch
 
 /** One gallery character: its display name, the JSON the Agent will keep, and the parsed rig. */
 private class GalleryCharacter(val name: String, val json: String, val rig: AvatarRig)
+
+/**
+ * The New Agent dialog's picks and typing, with the lists they were picked from, kept for a dialog
+ * rebuilt by a rotation or a width change (`rememberRetained`, #89). [clear] makes it a new one.
+ */
+private class NewAgentForm {
+    var picked by mutableIntStateOf(0)
+    var name by mutableStateOf("")
+    var providers by mutableStateOf<List<String>?>(null)
+    var provider by mutableStateOf<String?>(null)
+    var models by mutableStateOf<List<ModelInfo>>(emptyList())
+    var model by mutableStateOf<String?>(null)
+    /** The provider and prefs [model] was last resolved for. */
+    var modelsFor: Pair<String?, LauncherPrefs?>? = null
+    var efforts by mutableStateOf<ReasoningResponse?>(null)
+    var effort by mutableStateOf<String?>(null)
+    var launcherPrefs by mutableStateOf<LauncherPrefs?>(null)
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+
+    fun clear() {
+        picked = 0
+        name = ""
+        providers = null
+        provider = null
+        models = emptyList()
+        model = null
+        modelsFor = null
+        efforts = null
+        effort = null
+        launcherPrefs = null
+        busy = false
+        error = null
+    }
+}
 
 /** The states the preview cycles through, with the caption shown under it. */
 private val PreviewStates = listOf(
@@ -109,24 +146,33 @@ internal fun CreateAgentDialog(
     onCreated: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
+    // A create in flight finishes even if a rotation rebuilds the dialog under it (#89).
+    val scope = rememberRetainedScope()
     val gallery = remember {
         AvatarRigExamples.mapNotNull { (n, j) -> parseAvatarRig(j)?.let { GalleryCharacter(n, j, it) } }
     }
-    var picked by remember { mutableIntStateOf(0) }
-    var name by remember { mutableStateOf("") }
-    var providers by remember { mutableStateOf<List<String>?>(null) }
+    // What was picked and typed, and the lists it was picked from, live outside this composition:
+    // a rotation or a width change rebuilt the dialog from nothing (#89). One New Agent at a time,
+    // so one key; every way out empties it for the next.
+    val form = rememberRetained("sidebar.new-agent") { NewAgentForm() }
+    val dismiss: () -> Unit = { form.clear(); onDismiss() }
+    val created: () -> Unit = { form.clear(); onCreated() }
+    var picked by form::picked
+    var name by form::name
+    var providers by form::providers
     var providersFailed by remember { mutableStateOf(false) }
     var providersAttempt by remember { mutableIntStateOf(0) }
-    var provider by remember { mutableStateOf<String?>(null) }
-    var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
-    var model by remember { mutableStateOf<String?>(null) }
-    var efforts by remember { mutableStateOf<ReasoningResponse?>(null) }
-    var effort by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var provider by form::provider
+    var models by form::models
+    var model by form::model
+    var efforts by form::efforts
+    var effort by form::effort
+    var busy by form::busy
+    var error by form::error
 
     LaunchedEffect(providersAttempt) {
+        // Listed already: a dialog rebuilt over the user's provider keeps it.
+        if (providers != null) return@LaunchedEffect
         providersFailed = false
         val list = actions.providers()
         if (list == null) {
@@ -138,16 +184,20 @@ internal fun CreateAgentDialog(
     }
     // The composer's memory (LauncherPrefs): the last model + effort used per provider.
     val uiPrefs = LocalUiPrefsOrNull.current
-    var launcherPrefs by remember { mutableStateOf<LauncherPrefs?>(null) }
+    var launcherPrefs by form::launcherPrefs
     LaunchedEffect(uiPrefs) { launcherPrefs = uiPrefs?.launcherPrefs?.first() }
 
     // A real model is always picked (no "Default"): the composer's last one for this provider,
-    // else the provider's first.
+    // else the provider's first. Not again for the inputs it was last picked for: that is a
+    // rebuilt dialog (this effect's first run), and the model may be the user's own pick.
     LaunchedEffect(provider, launcherPrefs) {
+        val inputs = provider to launcherPrefs
+        if (form.modelsFor == inputs) return@LaunchedEffect
         model = null
         models = provider?.let { actions.models(it) }.orEmpty()
         val remembered = provider?.let { launcherPrefs?.models?.get(it) }
         model = models.firstOrNull { it.id == remembered }?.id ?: models.firstOrNull()?.id
+        form.modelsFor = inputs
     }
     // Efforts depend on the model. The same rule as the composer (resolveReasoningLevel): the one
     // already picked or remembered when this model offers it, else "high", else the highest.
@@ -176,7 +226,7 @@ internal fun CreateAgentDialog(
         error = null
         scope.launch {
             when (val r = actions.create(finalName, p, model, character?.json, effort?.takeIf { it in effortIds })) {
-                is AccountResult.Ok -> onCreated()
+                is AccountResult.Ok -> created()
                 is AccountResult.Failed -> error = agentFailureText(r, "create the agent")
             }
             busy = false
@@ -200,7 +250,7 @@ internal fun CreateAgentDialog(
                 )
             }
             if (!compact) {
-                GhostIconButton(onClick = { if (!busy) onDismiss() }, tag = "agents_create_cancel_x") {
+                GhostIconButton(onClick = { if (!busy) dismiss() }, tag = "agents_create_cancel_x") {
                     Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
                 }
             }
@@ -323,7 +373,7 @@ internal fun CreateAgentDialog(
             Row(Modifier.fillMaxWidth().padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("↵ to create · esc to cancel", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 11.sp)
                 Spacer(Modifier.weight(1f))
-                SecondaryButton("Cancel", enabled = !busy, tag = "agents_create_cancel", onClick = onDismiss)
+                SecondaryButton("Cancel", enabled = !busy, tag = "agents_create_cancel", onClick = dismiss)
                 Spacer(Modifier.width(8.dp))
                 PrimaryButton(createLabel, enabled = canCreate, tag = "agents_create_confirm", onClick = ::create)
             }
@@ -333,7 +383,7 @@ internal fun CreateAgentDialog(
     if (compact) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
-            onDismissRequest = onDismiss,
+            onDismissRequest = dismiss,
             sheetState = sheetState,
             containerColor = cs.surfaceContainerHigh,
         ) {
@@ -357,7 +407,7 @@ internal fun CreateAgentDialog(
         }
     } else {
         Dialog(
-            onDismissRequest = { if (!busy) onDismiss() },
+            onDismissRequest = { if (!busy) dismiss() },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Surface(
@@ -373,7 +423,7 @@ internal fun CreateAgentDialog(
                     .onPreviewKeyEvent { e ->
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (e.key) {
-                            Key.Escape -> { if (!busy) onDismiss(); true }
+                            Key.Escape -> { if (!busy) dismiss(); true }
                             Key.Enter, Key.NumPadEnter -> { create(); true }
                             else -> false
                         }

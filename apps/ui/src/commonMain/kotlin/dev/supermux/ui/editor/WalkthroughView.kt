@@ -282,7 +282,7 @@ private fun StepSlide(
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (step.repo.isBlank()) path else "${step.repo}/$path",
+                repoPath(step.repo, path),
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
                 color = cs.onSurfaceVariant,
