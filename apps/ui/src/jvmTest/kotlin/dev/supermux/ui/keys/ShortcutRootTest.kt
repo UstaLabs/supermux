@@ -42,6 +42,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
+import kotlin.time.TimeSource
 
 @OptIn(ExperimentalTestApi::class)
 class ShortcutRootTest {
@@ -319,7 +323,12 @@ class ShortcutRootTest {
     // The dispatcher alone, on synthetic events: what its two passes do with a held key and its echoes.
 
     /** A dispatcher whose focused window root has [command]; its handler calls [onRun]. */
-    private fun dispatcherWith(os: KeyOs, command: AppCommand, onRun: () -> Unit) = ShortcutDispatcher(os = os).apply {
+    private fun dispatcherWith(
+        os: KeyOs,
+        command: AppCommand,
+        timeSource: TimeSource = TimeSource.Monotonic,
+        onRun: () -> Unit,
+    ) = ShortcutDispatcher(os = os, timeSource = timeSource).apply {
         val root = KeyScope(KeyContext.Window, viewId = null, parent = null)
         tracker.register(root)
         root.hasFocus = true
@@ -342,6 +351,23 @@ class ShortcutRootTest {
         assertEquals(1, ran)
         // Another chord on the same key is no repeat: it resolves as a press of its own.
         assertTrue(dispatcher.press(keyEvent(Key.T, KeyEventType.KeyDown, ctrl = true)))
+        assertEquals(2, ran)
+    }
+
+    @Test fun aHeldKeysRepeatExpires() {
+        var ran = 0
+        val clock = TestTimeSource()
+        val dispatcher = dispatcherWith(KeyOs.Other, AppCommands.NewTerminal, clock) { ran++ }
+        val ctrlShiftT = keyEvent(Key.T, KeyEventType.KeyDown, ctrl = true, shift = true)
+        assertTrue(dispatcher.press(ctrlShiftT))
+        clock += 500.milliseconds
+        assertTrue(dispatcher.onPreview(ctrlShiftT), "half a second on, the same chord is the key's auto-repeat")
+        clock += 1800.milliseconds
+        assertTrue(dispatcher.onPreview(ctrlShiftT), "each repeat restarts the clock: a key held for seconds stays held")
+        assertEquals(1, ran)
+        // The command opened a dialog and the key's release went there: seconds on, the same chord is a new press.
+        clock += 3.seconds
+        assertTrue(dispatcher.press(ctrlShiftT))
         assertEquals(2, ran)
     }
 
