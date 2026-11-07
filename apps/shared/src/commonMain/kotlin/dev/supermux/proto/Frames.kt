@@ -557,6 +557,11 @@ sealed interface ServerFrame {
         val archivedLazy: Boolean = false,
         /** Card #76: session → its open live streams (only when `subscribe` asked for `streams`). */
         val streams: Map<String, List<LiveStreamDto>> = emptyMap(),
+        /**
+         * Card #62: the optional client frames this broker takes ([ClientFrame.Live]). An older broker answers a frame
+         * it doesn't know with an error, so the app sends one of these only when the broker lists it here.
+         */
+        val accepts: List<String> = emptyList(),
     ) : ServerFrame
 
     /**

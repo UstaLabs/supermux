@@ -601,6 +601,9 @@ export type ArchivedWorkspaceRow = Omit<import("../../core/workspace/dto").Works
   Partial<Pick<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout">>
 
 /** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
+/** Card #62: client frames an older broker doesn't know, which this one takes; listed in every snapshot (`accepts`). */
+const ACCEPTED_OPTIONAL_FRAMES = ["live"]
+
 export const WEB_CAPABILITIES: ChannelCapabilities = {
   multiplexesSessions: false,
   supportsReactions: false,
@@ -1844,7 +1847,10 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       laps.lap("rest")
-      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
+      // Card #62: the optional frames this broker takes. An older one answers a frame it doesn't know with an
+      // error, which an app would show, so an app sends one of these only to a broker that lists it here.
+      const accepts = ACCEPTED_OPTIONAL_FRAMES
+      const snapshot = { type: "snapshot", accepts, sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
       const text = JSON.stringify(snapshot)
       laps.lap("stringify")
       const sent = ws.send(text)

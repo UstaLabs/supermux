@@ -32,7 +32,7 @@ internal fun overlayStore(sent: MutableList<ClientFrame> = Collections.synchroni
     connectOnInit = false,
     sendFrameOverride = { sent.add(it) },
     apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) })),
-).also { it.reduce(ServerFrame.Snapshot(sessions = listOf(overlaySession))) }
+).also { it.reduce(ServerFrame.Snapshot(sessions = listOf(overlaySession), accepts = listOf("live"))) }
 
 /** The Agent writes more of a reply ([at] 0 is the whole text so far), as `reply_stream` frames bring it. */
 internal fun HostStore.agentWrites(text: String, at: Int = 0, stream: String = "k1") =
