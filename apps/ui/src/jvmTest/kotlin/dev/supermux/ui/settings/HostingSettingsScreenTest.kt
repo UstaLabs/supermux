@@ -148,6 +148,11 @@ class HostingSettingsScreenTest {
         assertEquals(listOf("hosting:true"), rec.calls)
     }
 
+    @Test fun a_checkout_that_moved_is_shown() = runComposeUiTest {
+        setPlatformContent { HostingSettingsScreen(running().copy(checkoutMoved = "This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code."), Recorder()) }
+        onNodeWithTag("hosting_checkout_moved").assertTextContains("This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.")
+    }
+
     @Test fun background_error_is_shown() = runComposeUiTest {
         setPlatformContent { HostingSettingsScreen(running(backgroundError = "Background needs the packaged app."), Recorder()) }
         onNodeWithTag("hosting_background_error").assertTextContains("Background needs the packaged app.")

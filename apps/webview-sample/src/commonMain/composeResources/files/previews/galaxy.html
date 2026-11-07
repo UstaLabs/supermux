@@ -1,0 +1,142 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Particle galaxy</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: radial-gradient(120% 90% at 50% 45%, var(--bg1), var(--bg2)); }
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { width: 100%; height: 100%; }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; color: #fff9; font-size: 13px; }
+  body.no-webgl .nogl { display: grid; }
+</style>
+</head>
+<body class="fixed nosel">
+<div id="stage"></div>
+<div class="nogl">WebGL is off on this device</div>
+<script type="module">
+import * as THREE from './lib/three.module.min.js';
+
+const P = Kit.pick({
+  classic: { inside: '#ffb35c', outside: '#3a6bff', branches: 4, spin: 1.1, bg: ['#111a3d', '#02030a'], stars: '#bcd2ff' },
+  rose: { inside: '#ff86cf', outside: '#6b4bff', branches: 3, spin: 1.45, bg: ['#2a0f33', '#06020b'], stars: '#ffd6f2' },
+  emerald: { inside: '#a8ffd8', outside: '#1f8bff', branches: 5, spin: 0.9, bg: ['#06262b', '#010608'], stars: '#c9fff1' },
+}, 'classic');
+document.body.style.setProperty('--bg1', P.bg[0]);
+document.body.style.setProperty('--bg2', P.bg[1]);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.body.classList.add('no-webgl');
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Kit.dpr(2));
+  renderer.setClearColor(0x000000, 0);
+  const stage = document.getElementById('stage');
+  stage.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+
+  // A soft round sprite, so each particle is a glow rather than a square.
+  function glow(size, stops) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    for (const [at, colour] of stops) grad.addColorStop(at, colour);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const dot = glow(64, [[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,255,255,0.85)'], [1, 'rgba(255,255,255,0)']]);
+
+  // The galaxy: points along spiral arms, denser and warmer at the core.
+  const rand = Kit.rng(42);
+  const COUNT = 14000, RADIUS = 5;
+  const positions = new Float32Array(COUNT * 3);
+  const colours = new Float32Array(COUNT * 3);
+  const inside = new THREE.Color(P.inside), outside = new THREE.Color(P.outside);
+  for (let i = 0; i < COUNT; i++) {
+    const r = Math.pow(rand(), 1.6) * RADIUS;
+    const branch = (i % P.branches) / P.branches * Math.PI * 2;
+    const spin = r * P.spin;
+    const spread = 0.35 + r * 0.06;
+    const rx = Math.pow(rand(), 3) * (rand() < 0.5 ? 1 : -1) * spread * r * 0.6;
+    const ry = Math.pow(rand(), 3) * (rand() < 0.5 ? 1 : -1) * spread * 0.5;
+    const rz = Math.pow(rand(), 3) * (rand() < 0.5 ? 1 : -1) * spread * r * 0.6;
+    positions[i * 3] = Math.cos(branch + spin) * r + rx;
+    positions[i * 3 + 1] = ry;
+    positions[i * 3 + 2] = Math.sin(branch + spin) * r + rz;
+    const c = inside.clone().lerp(outside, Math.min(1, r / RADIUS * 1.15));
+    colours[i * 3] = c.r;
+    colours[i * 3 + 1] = c.g;
+    colours[i * 3 + 2] = c.b;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  const material = new THREE.PointsMaterial({
+    size: 0.075, sizeAttenuation: true, map: dot, vertexColors: true,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const galaxy = new THREE.Points(geometry, material);
+  galaxy.rotation.x = 0.18;
+  scene.add(galaxy);
+
+  // The core's glow.
+  const core = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow(128, [[0, 'rgba(255,255,255,0.95)'], [0.18, P.inside + 'cc'], [0.5, P.inside + '33'], [1, 'rgba(0,0,0,0)']]),
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  core.scale.set(3.2, 3.2, 1);
+  scene.add(core);
+
+  // Far stars, still.
+  const STARS = 1400;
+  const starPositions = new Float32Array(STARS * 3);
+  for (let i = 0; i < STARS; i++) {
+    const u = rand() * 2 - 1, a = rand() * Math.PI * 2, d = 18 + rand() * 12;
+    const s = Math.sqrt(1 - u * u);
+    starPositions[i * 3] = Math.cos(a) * s * d;
+    starPositions[i * 3 + 1] = u * d;
+    starPositions[i * 3 + 2] = Math.sin(a) * s * d;
+  }
+  const starGeometry = new THREE.BufferGeometry();
+  starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+  scene.add(new THREE.Points(starGeometry, new THREE.PointsMaterial({
+    size: 0.09, map: dot, color: P.stars, transparent: true, opacity: 0.75, depthWrite: false,
+  })));
+
+  Kit.watch(document.body, () => {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // Keep the whole disc in a wide, short card.
+    camera.position.set(0, 3.4, w / h > 1.6 ? 6.4 : 7.6);
+    camera.lookAt(0, -0.2, 0);
+    camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+  });
+
+  let time = 0;
+  Kit.loop((dt) => {
+    time += dt;
+    galaxy.rotation.y += dt * 0.12;
+    camera.position.y = 3.4 + Math.sin(time * 0.35) * 0.35;
+    camera.lookAt(0, -0.2, 0);
+    core.material.opacity = 0.85 + Math.sin(time * 1.7) * 0.1;
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

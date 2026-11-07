@@ -11,6 +11,7 @@ import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
@@ -28,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -115,7 +117,7 @@ internal class DesktopFileAccess : FileAccess {
  * trailing dot or space (Windows drops them), no device name (`CON`, `NUL`, `COM1`...).
  */
 internal fun safeFileName(name: String, windows: Boolean = isWindowsOs()): String {
-    val last = name.substringAfterLast('/').substringAfterLast('\\')
+    val last = fileNameOf(name)
     val clean = if (windows) last.replace(WINDOWS_RESERVED, "-").trimEnd('.', ' ') else last
     return when {
         clean.isBlank() || clean == "." || clean == ".." -> "file"
@@ -207,6 +209,9 @@ internal class DesktopMicCapture(
             AudioSystem.isLineSupported(DataLine.Info(TargetDataLine::class.java, DICTATION_FORMAT))
         }.getOrDefault(false)
 
+    /** Asked of the OS itself (see MicPresence): Java Sound lists a "default" line with no microphone behind it. */
+    override suspend fun trouble(): MicTrouble = withContext(Dispatchers.IO) { askMicTrouble(DesktopOs.current) }
+
     override val liveTranscript: LiveTranscript? get() = null
 }
 
@@ -233,7 +238,7 @@ internal class DesktopTtsEngine : TtsEngine {
 
     override suspend fun playAudioChunk(bytes: ByteArray) {
         val file = runCatching {
-            File.createTempFile("read-aloud-", ".mp3").also { it.deleteOnExit(); it.writeBytes(bytes) }
+            Files.createTempFile("read-aloud-", ".mp3").toFile().also { it.deleteOnExit(); it.writeBytes(bytes) }
         }.getOrNull() ?: return
         try {
             val cmd = playCommand(file.absolutePath) ?: return

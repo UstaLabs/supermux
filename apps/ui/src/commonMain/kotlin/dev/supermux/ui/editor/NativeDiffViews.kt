@@ -367,6 +367,7 @@ private fun NativeFileDiffEditor(
                 val reverted = shown.view?.state?.doc?.toString()
                 if (reverted != null) scope.launch {
                     if (!applyRevert(support, repo, path, reverted, working.crlf, expected = working.text)) {
+                        // platform-ok: a git path, always /
                         notices.show("Couldn't revert that change: ${path.substringAfterLast('/')} changed since the diff was loaded")
                     }
                     // Either way the views are rebuilt from disk: a refused revert must not leave the

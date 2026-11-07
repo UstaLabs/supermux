@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -82,8 +83,6 @@ object HostBinaries {
     /** Helpers earlier builds materialized into [BIN_SUBDIR] and nothing runs any more. */
     val STALE_HELPERS = listOf("frpc", "frpc.exe")
 
-    enum class Os { LINUX, MAC, WINDOWS, OTHER }
-
     enum class Binary { Broker, Sessiond, Tmux, Zmx, ZmxHelper, ZmxManifest }
 
     /** The materialized host binaries the supervisor runs. Nulls = not bundled / not found. */
@@ -99,18 +98,8 @@ object HostBinaries {
 
     // ── pure policy / naming ──────────────────────────────────────────────────────────
 
-    fun detectOs(osName: String? = System.getProperty("os.name")): Os {
-        val n = osName?.lowercase() ?: return Os.OTHER
-        return when {
-            n.contains("mac") || n.contains("darwin") -> Os.MAC
-            n.contains("win") -> Os.WINDOWS
-            n.contains("nux") || n.contains("nix") || n.contains("aix") -> Os.LINUX
-            else -> Os.OTHER
-        }
-    }
-
     /** File name of [binary] inside the resources / bin dir. `.exe` on Windows for the execs. */
-    fun fileName(binary: Binary, os: Os): String = when (binary) {
+    fun fileName(binary: Binary, os: DesktopOs): String = when (binary) {
         Binary.Broker -> "supermux-broker" + exeSuffix(os)
         Binary.Sessiond -> "mux-sessiond" + exeSuffix(os)
         Binary.Tmux -> "tmux" // Linux/macOS only; never suffixed
@@ -123,17 +112,16 @@ object HostBinaries {
     }
 
     /** Whether [os]'s shipped app image carries [binary]. */
-    fun isBundled(binary: Binary, os: Os): Boolean = when (os) {
-        Os.LINUX, Os.MAC ->
+    fun isBundled(binary: Binary, os: DesktopOs): Boolean = when (os) {
+        DesktopOs.LINUX, DesktopOs.MACOS ->
             binary == Binary.Broker || binary == Binary.Tmux ||
                 binary == Binary.Zmx || binary == Binary.ZmxHelper || binary == Binary.ZmxManifest
         // No zmx on Windows: persistent terminals there are sessiond's, and a zmx bundle in the
         // MSI would be a second backend claiming the same workspaces.
-        Os.WINDOWS -> binary == Binary.Broker || binary == Binary.Sessiond
-        Os.OTHER -> false
+        DesktopOs.WINDOWS -> binary == Binary.Broker || binary == Binary.Sessiond
     }
 
-    private fun exeSuffix(os: Os) = if (os == Os.WINDOWS) ".exe" else ""
+    private fun exeSuffix(os: DesktopOs) = if (os == DesktopOs.WINDOWS) ".exe" else ""
 
     /** Packaged app resources dir from the system property, or null in a dev checkout. */
     fun resourcesDir(prop: String? = System.getProperty(RESOURCES_PROP)): Path? =
@@ -154,7 +142,7 @@ object HostBinaries {
      */
     fun resolve(
         stateDir: Path,
-        os: Os = detectOs(),
+        os: DesktopOs = DesktopOs.current,
         resourcesDir: Path? = resourcesDir(),
         onPath: (String) -> Path? = ::whichOnPath,
         clearQuarantine: (List<String>) -> Unit = ::runQuietly,
@@ -205,8 +193,8 @@ object HostBinaries {
      * `<stateDir>/desktop-assets` is dropped: only our own copies are ever touched, never the app
      * or a user's file. `-r` also makes a copy that has no quarantine a silent no-op (exit 0).
      */
-    fun quarantineClearArgv(os: Os, stateDir: Path, paths: List<Path>): List<String>? {
-        if (os != Os.MAC) return null
+    fun quarantineClearArgv(os: DesktopOs, stateDir: Path, paths: List<Path>): List<String>? {
+        if (os != DesktopOs.MACOS) return null
         val root = stateDir.toAbsolutePath().normalize().resolve(ASSETS_SUBDIR)
         val ours = paths.map { it.toAbsolutePath().normalize() }.filter { it.startsWith(root) && it != root }.distinct()
         if (ours.isEmpty()) return null
@@ -219,7 +207,7 @@ object HostBinaries {
     /** Best-effort [argv]: never throws, output discarded, killed after 10 s. */
     private fun runQuietly(argv: List<String>) {
         runCatching {
-            val p = ProcessBuilder(argv).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+            val p = dev.supermux.desktop.platform.OsCommand(argv).start()
             if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
         }
     }
@@ -237,7 +225,7 @@ object HostBinaries {
      * or when the copy fails — the broker then reports `backend-unavailable` for workspace
      * terminals, which is exactly what is true.
      */
-    fun materializeZmxBundle(stateDir: Path, os: Os, resourcesDir: Path?): Path? {
+    fun materializeZmxBundle(stateDir: Path, os: DesktopOs, resourcesDir: Path?): Path? {
         if (resourcesDir == null || !isBundled(Binary.Zmx, os)) return null
         val pieces = listOf(Binary.Zmx, Binary.ZmxHelper, Binary.ZmxManifest)
             .map { it to resourcesDir.resolve(fileName(it, os)) }

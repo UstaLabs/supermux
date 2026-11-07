@@ -2,12 +2,14 @@ import { EventEmitter } from "events"
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { STATE_DIR } from "../../shared/paths"
+import { fetchAntigravityUsage } from "./antigravity"
 import {
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchCursorUsage,
   fetchGrokUsage,
   fetchOpenCodeUsage,
+  type AntigravityUsage,
   type ClaudeUsage,
   type CodexUsage,
   type CursorUsage,
@@ -20,10 +22,10 @@ import type { AccountUsageTarget } from "./accounts"
 import { systemAccountId } from "../../../packages/supermux-core/src/accounts/index.js"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 
-export type UsageProvider = "claude" | "codex" | "cursor" | "opencode" | "grok"
+export type UsageProvider = "claude" | "codex" | "cursor" | "opencode" | "grok" | "antigravity"
 export type UsageSource = "live" | "agent" | "local" | "cache"
 
-const PROVIDERS: UsageProvider[] = ["claude", "codex", "cursor", "opencode", "grok"]
+const PROVIDERS: UsageProvider[] = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"]
 const DEFAULT_STALE_MS = 5 * 60_000
 const PERSIST_DEBOUNCE_MS = 250
 const UNTHROTTLED = new Set<UsageProvider>(["opencode"])
@@ -51,6 +53,7 @@ export interface AccountUsageEntry {
 }
 
 export interface UsageSnapshot extends UsageResponse {
+  antigravity: AntigravityUsage | null
   errorCodes: Record<string, string>
   fetchedAt: Record<UsageProvider, string | null>
   source: Record<UsageProvider, UsageSource | null>
@@ -100,6 +103,7 @@ const DEFAULT_FETCHERS: Record<UsageProvider, () => Promise<unknown | null>> = {
   cursor: () => fetchCursorUsage(),
   opencode: () => fetchOpenCodeUsage(),
   grok: () => fetchGrokUsage(),
+  antigravity: () => fetchAntigravityUsage(),
 }
 
 const DEFAULT_LOCAL_READERS: Partial<
@@ -110,12 +114,13 @@ const DEFAULT_LOCAL_READERS: Partial<
 }
 
 function emptyMeta<T>(): Record<UsageProvider, T | null> {
-  return { claude: null, codex: null, cursor: null, opencode: null, grok: null }
+  return { claude: null, codex: null, cursor: null, opencode: null, grok: null, antigravity: null }
 }
 
 function nullError(provider: UsageProvider): string {
   if (provider === "claude" || provider === "grok") return "credentials not found or token expired"
   if (provider === "opencode") return "no usage recorded yet"
+  if (provider === "antigravity") return "Not signed in to Antigravity."
   return "credentials not found"
 }
 
@@ -141,6 +146,8 @@ function usageField(res: UsageResponse, provider: UsageProvider): unknown {
       return res.opencode
     case "grok":
       return res.grok
+    case "antigravity":
+      return res.antigravity
   }
 }
 
@@ -164,6 +171,7 @@ export class UsageStore extends EventEmitter {
   private cursor: CursorUsage | null = null
   private opencode: OpenCodeUsage | null = null
   private grok: GrokUsage | null = null
+  private antigravity: AntigravityUsage | null = null
   private errors: Record<string, string> = {}
   private errorCodes: Record<string, string> = {}
   private fetchedAt: Record<UsageProvider, string | null> = emptyMeta()
@@ -196,6 +204,7 @@ export class UsageStore extends EventEmitter {
       cursor: this.cursor,
       opencode: this.opencode,
       grok: this.grok,
+      antigravity: this.antigravity,
       errors: { ...this.errors },
       errorCodes: { ...this.errorCodes },
       fetchedAt: { ...this.fetchedAt },
@@ -495,6 +504,9 @@ export class UsageStore extends EventEmitter {
       case "grok":
         this.grok = data as GrokUsage
         break
+      case "antigravity":
+        this.antigravity = data as AntigravityUsage
+        break
     }
   }
 
@@ -532,6 +544,7 @@ export class UsageStore extends EventEmitter {
     if (raw.cursor !== undefined) this.cursor = raw.cursor
     if (raw.opencode !== undefined) this.opencode = raw.opencode
     if (raw.grok !== undefined) this.grok = raw.grok
+    if (raw.antigravity !== undefined) this.antigravity = raw.antigravity
     if (raw.errors && typeof raw.errors === "object") this.errors = { ...raw.errors }
     if (raw.errorCodes && typeof raw.errorCodes === "object") {
       this.errorCodes = Object.fromEntries(
@@ -589,6 +602,8 @@ export class UsageStore extends EventEmitter {
         return this.opencode
       case "grok":
         return this.grok
+      case "antigravity":
+        return this.antigravity
     }
   }
 
@@ -616,6 +631,7 @@ export class UsageStore extends EventEmitter {
       cursor: this.cursor,
       opencode: this.opencode,
       grok: this.grok,
+      antigravity: this.antigravity,
       errors: this.errors,
       errorCodes: this.errorCodes,
       fetchedAt: this.fetchedAt,

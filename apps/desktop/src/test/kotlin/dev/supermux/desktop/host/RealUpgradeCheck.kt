@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -58,7 +59,7 @@ fun main(args: Array<String>) {
                 osEnv = env,
                 materialize = {
                     // The app's own copy: the new broker over the old one, once the service let go of it.
-                    val broker = bin.resolve(HostBinaries.fileName(HostBinaries.Binary.Broker, HostBinaries.Os.WINDOWS))
+                    val broker = bin.resolve(HostBinaries.fileName(HostBinaries.Binary.Broker, DesktopOs.WINDOWS))
                     // Windows may hold the old .exe a moment after its process ended. Never leave the
                     // service down over it: after ~10 s the update restarts it on the old binary.
                     for (attempt in 1..20) {

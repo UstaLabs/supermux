@@ -1,5 +1,7 @@
 package dev.supermux.ios
 
+import dev.supermux.net.isOpenableLink
+import dev.supermux.net.linkScheme
 import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
@@ -121,7 +123,10 @@ class IosPlatform(
 
     /** `UIApplication.openURL` lives on the Swift side — it is app-delegate territory, and a
      *  Compose surface has no application object of its own to reach for. Fire-and-forget. */
-    override fun openUrl(url: String) = onMainThread { bridge.openUrl(url) }
+    override fun openUrl(url: String) {
+        if (!isOpenableLink(url)) { println("[links] not opening a ${linkScheme(url) ?: "relative"} link"); return }
+        onMainThread { bridge.openUrl(url) }
+    }
 
     /** Parity with Android's `ClipData.newPlainText`; iOS has no clip label to set. */
     override fun copyToClipboard(text: String) = onMainThread {

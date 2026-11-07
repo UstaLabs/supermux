@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
@@ -29,6 +30,7 @@ import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
@@ -45,6 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -199,7 +202,7 @@ internal class AndroidFileAccess(
 
 /** Strip any directory part and refuse an empty name — attachment names are broker-supplied. */
 internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+    fileNameOf(name).ifBlank { "file" }
 
 // ── mic ──────────────────────────────────────────────────────────────────────
 
@@ -239,7 +242,11 @@ internal class AndroidMicCapture(
     override val available: Boolean,
     override val liveTranscript: LiveTranscript?,
     private val onRequestPermission: suspend () -> Boolean,
+    /** Why it won't open, asked of the device ([androidMicTrouble]). */
+    private val onTrouble: () -> MicTrouble = { MicTrouble.DIDNT_OPEN },
 ) : MicCapture {
+
+    override suspend fun trouble(): MicTrouble = onTrouble()
 
     override fun start(): Boolean = runCatching { recorder.start(); true }.getOrDefault(false)
 
@@ -596,3 +603,12 @@ internal class AndroidNotices(private val context: Context) : NoticeChannel {
 internal fun hasRecordAudioPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
+
+/** Why this device's mic won't open ([androidMicTrouble]): its microphone feature, its audio inputs, RECORD_AUDIO. */
+internal fun androidMicTrouble(context: Context): MicTrouble = androidMicTrouble(
+    allowed = hasRecordAudioPermission(context),
+    hasMicFeature = context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE),
+    inputs = runCatching {
+        context.getSystemService(AudioManager::class.java)?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.map { it.type }
+    }.getOrNull(),
+)

@@ -1,0 +1,251 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Line chart</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root { --good: #047857; --goodbg: rgba(16, 185, 129, .13); }
+  @media (prefers-color-scheme: dark) { :root { --good: #34d399; --goodbg: rgba(52, 211, 153, .15); } }
+  main { padding: 16px 16px 8px; }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .title { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+  .title small { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .legend { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { display: inline-block; width: 14px; height: 0; border-top: 2.5px solid var(--a1); border-radius: 2px; }
+  .legend i.dash { border-top: 2px dashed var(--muted); opacity: .8; }
+  .head { display: flex; align-items: center; gap: 10px; margin: 8px 0 2px; }
+  .big { font-size: 28px; font-weight: 750; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .big small { font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 3px; letter-spacing: 0; }
+  .delta { font-size: 12px; font-weight: 650; padding: 3px 9px; border-radius: 999px; color: var(--good); background: var(--goodbg); }
+  svg { display: block; width: 100%; height: 160px; overflow: visible; }
+  .grid line { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+  .ylab, .xlab { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .line { fill: none; stroke: var(--a1); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+  .cmp { fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 4 5; opacity: 0; transition: opacity .8s .3s; }
+  .area { opacity: 0; transition: opacity 1s .9s; }
+  .dot { fill: var(--bg); stroke: var(--a1); stroke-width: 2; opacity: 0; transition: opacity .35s; }
+  .shown .cmp { opacity: .55; }
+  .shown .area { opacity: 1; }
+  .marker line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+  .marker rect { fill: var(--chip); }
+  .marker text { fill: var(--muted); font-size: 9.5px; font-weight: 600; }
+  .pulse { fill: var(--a1); transform-box: fill-box; transform-origin: center; opacity: 0; }
+  .shown .pulse { animation: pulse 1.8s ease-out 1.6s infinite; }
+  @keyframes pulse { 0% { transform: scale(.6); opacity: .55; } 100% { transform: scale(2.6); opacity: 0; } }
+  .bubble { opacity: 0; transform: translateY(6px) scale(.9); transform-box: fill-box; transform-origin: 50% 100%;
+    transition: opacity .4s 1.5s, transform .5s cubic-bezier(.3, 1.6, .5, 1) 1.5s; }
+  .shown .bubble { opacity: 1; transform: none; }
+  .bubble rect { fill: var(--fg); }
+  .bubble path { fill: var(--fg); }
+  .bubble text { fill: var(--bg); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <div class="top">
+    <div><div class="title" id="title"></div><div class="sub" id="sub"></div></div>
+    <div class="legend"><span><i></i><b id="l1"></b></span><span><i class="dash"></i><b id="l2" style="font-weight:500"></b></span></div>
+  </div>
+  <div class="head"><div class="big" id="big"></div><div class="delta" id="delta"></div></div>
+  <svg id="chart" role="img" aria-label="Line chart"></svg>
+</main>
+<script>
+(function () {
+  var P = Kit.pick({
+    latency: {
+      title: 'p95 latency', unit: 'ms', sub: 'api-gateway · last 24 hours', a1: '#0ea5e9', a2: '#38bdf8',
+      l1: 'Today', l2: 'Last week',
+      main: [318, 326, 312, 335, 341, 329, 322, 338, 344, 331, 336, 328, 262, 231, 214, 205, 198, 196, 191, 188, 186, 184, 183, 182],
+      cmp: [305, 300, 311, 318, 309, 315, 322, 316, 309, 318, 325, 317, 312, 309, 318, 321, 314, 310, 316, 319, 312, 308, 315, 311],
+      xlabels: { 0: '00:00', 6: '06:00', 12: '12:00', 18: '18:00', 23: 'now' },
+      marker: { at: 12, text: 'deploy v2.14' }, zero: false,
+      big: function (v) { return Math.round(v) + '<small>ms</small>'; },
+      bubble: function (v) { return Math.round(v) + ' ms'; },
+      delta: function (m) { var before = m.slice(6, 12).reduce(function (a, b) { return a + b; }, 0) / 6; return '▼ ' + Math.round((1 - m[m.length - 1] / before) * 100) + '% since deploy'; },
+      live: 2.5
+    },
+    stars: {
+      title: 'GitHub stars', unit: '', sub: 'webview-compose · 12 months', a1: '#f59e0b', a2: '#fbbf24',
+      l1: 'This year', l2: 'Last year',
+      main: [1.2, 1.5, 1.9, 2.4, 3.1, 3.6, 4.4, 5.9, 7.8, 9.1, 10.6, 12.4],
+      cmp: [0.4, 0.5, 0.7, 0.9, 1.1, 1.2, 1.4, 1.6, 1.9, 2.1, 2.4, 2.7],
+      xlabels: { 0: 'Nov', 3: 'Feb', 6: 'May', 9: 'Aug', 11: 'Oct' },
+      marker: { at: 7, text: 'HN front page' }, zero: true,
+      big: function (v) { return v.toFixed(1) + 'k<small>★</small>'; },
+      bubble: function (v) { return '★ ' + v.toFixed(1) + 'k'; },
+      delta: function (m) { return '▲ ' + Math.round((m[m.length - 1] / m[m.length - 2] - 1) * 100) + '% this month'; },
+      live: 0.04
+    }
+  }, 'latency');
+
+  var rs = document.documentElement.style;
+  rs.setProperty('--a1', P.a1);
+  document.getElementById('title').innerHTML = P.title + (P.unit ? '<small>· ' + P.unit + '</small>' : '');
+  document.getElementById('sub').textContent = P.sub;
+  document.getElementById('l1').textContent = P.l1;
+  document.getElementById('l2').textContent = P.l2;
+  var big = document.getElementById('big');
+  var svg = document.getElementById('chart');
+  var NS = 'http://www.w3.org/2000/svg';
+  var H = 160, pad = { t: 30, r: 10, b: 20, l: 30 };
+  var data = P.main.slice(), n = data.length;
+  var all = data.concat(P.cmp);
+  var lo = P.zero ? 0 : Math.min.apply(null, all), hi = Math.max.apply(null, all);
+  var span = hi - lo;
+  lo = P.zero ? 0 : Math.max(0, lo - span * 0.12);
+  hi = hi + span * 0.03;
+  // Nice ticks: three or four steps of 1, 2, 2.5 or 5 times a power of ten, whichever hugs the data more tightly.
+  function nice(count) {
+    var raw = (hi - lo) / count, mag = Math.pow(10, Math.floor(Math.log10(raw))), norm = raw / mag;
+    var s = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+    var a = Math.floor(lo / s) * s, b = Math.ceil(hi / s) * s;
+    return { step: s, lo: a, hi: b, n: Math.round((b - a) / s) };
+  }
+  var fit3 = nice(3), fit4 = nice(4);
+  var fit = fit4.hi - fit4.lo < fit3.hi - fit3.lo - 1e-9 && fit4.n <= 5 ? fit4 : fit3;
+  var step = fit.step, ticks = fit.n;
+  lo = fit.lo;
+  hi = fit.hi;
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function points(values, W) {
+    var pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+    return values.map(function (v, i) { return [pad.l + pw * i / (values.length - 1), pad.t + ph - (v - lo) / (hi - lo) * ph]; });
+  }
+  // Catmull-Rom through the points, as cubic Béziers.
+  function smooth(pts) {
+    var d = 'M' + pts[0][0].toFixed(1) + ',' + pts[0][1].toFixed(1);
+    for (var i = 0; i < pts.length - 1; i++) {
+      var p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      d += 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(1) + ',' + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(1) + ' ' +
+        (p2[0] - (p3[0] - p1[0]) / 6).toFixed(1) + ',' + (p2[1] - (p3[1] - p1[1]) / 6).toFixed(1) + ' ' +
+        p2[0].toFixed(1) + ',' + p2[1].toFixed(1);
+    }
+    return d;
+  }
+
+  var line, area, dots = [], bubble, bubbleText, bubbleRect, bubbleTip, pulse, W = 0, drawn = false, drawing = false;
+
+  function layoutEnd(pts) {
+    var last = pts[pts.length - 1];
+    pulse.setAttribute('cx', last[0]);
+    pulse.setAttribute('cy', last[1]);
+    dots[dots.length - 1].setAttribute('cx', last[0]);
+    dots[dots.length - 1].setAttribute('cy', last[1]);
+    bubbleText.textContent = P.bubble(data[n - 1]);
+    var tw = Math.max(40, bubbleText.getComputedTextLength() + 16);
+    var bx = Kit.clamp(last[0] - tw / 2, 2, W - tw - 2), by = last[1] - 34;
+    bubbleRect.setAttribute('x', bx);
+    bubbleRect.setAttribute('y', by);
+    bubbleRect.setAttribute('width', tw);
+    bubbleText.setAttribute('x', bx + tw / 2);
+    bubbleText.setAttribute('y', by + 15.5);
+    var tx = Kit.clamp(last[0], bx + 8, bx + tw - 8);
+    bubbleTip.setAttribute('d', 'M' + (tx - 5) + ',' + (by + 22) + 'L' + tx + ',' + (by + 27) + 'L' + (tx + 5) + ',' + (by + 22) + 'Z');
+    big.innerHTML = P.big(data[n - 1]);
+  }
+
+  function build() {
+    W = svg.clientWidth || 320;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var defs = el('defs', {}, svg);
+    var g = el('linearGradient', { id: 'fade', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+    el('stop', { offset: 0, 'stop-color': P.a2, 'stop-opacity': 0.38 }, g);
+    el('stop', { offset: 1, 'stop-color': P.a2, 'stop-opacity': 0 }, g);
+    var grid = el('g', { 'class': 'grid' }, svg), ph = H - pad.t - pad.b;
+    for (var k = 0; k <= ticks; k++) {
+      var v = lo + step * k, y = pad.t + ph - ph * k / ticks;
+      el('line', { x1: pad.l, x2: W - pad.r, y1: y, y2: y }, grid);
+      var t = el('text', { x: pad.l - 6, y: y + 3.5, 'text-anchor': 'end', 'class': 'ylab' }, svg);
+      t.textContent = P.zero ? (v === 0 ? '0' : (Math.round(v * 10) / 10) + 'k') : Math.round(v);
+    }
+    var pts = points(data, W), cpts = points(P.cmp, W);
+    for (var i in P.xlabels) {
+      var xl = el('text', { x: pts[i][0], y: H - 4, 'text-anchor': +i === 0 ? 'start' : +i === n - 1 ? 'end' : 'middle', 'class': 'xlab' }, svg);
+      xl.textContent = P.xlabels[i];
+    }
+    if (P.marker) {
+      var mx = pts[P.marker.at][0], m = el('g', { 'class': 'marker' }, svg);
+      el('line', { x1: mx, x2: mx, y1: pad.t - 6, y2: H - pad.b }, m);
+      var right = mx > W * 0.55;
+      var mt = el('text', { x: right ? mx - 5 : mx + 5, y: pad.t - 9, 'text-anchor': right ? 'end' : 'start' }, m);
+      mt.textContent = P.marker.text;
+    }
+    el('path', { d: smooth(cpts), 'class': 'cmp' }, svg);
+    area = el('path', { 'class': 'area', fill: 'url(#fade)' }, svg);
+    line = el('path', { 'class': 'line' }, svg);
+    dots = pts.map(function (p, i) {
+      var c = el('circle', { cx: p[0], cy: p[1], r: i === n - 1 ? 4.5 : 2.6, 'class': 'dot' }, svg);
+      c.style.transitionDelay = (0.2 + 1.3 * i / (n - 1)).toFixed(2) + 's';
+      return c;
+    });
+    pulse = el('circle', { r: 6, 'class': 'pulse' }, svg);
+    svg.appendChild(dots[n - 1]);
+    bubble = el('g', { 'class': 'bubble' }, svg);
+    bubbleRect = el('rect', { height: 22, rx: 11 }, bubble);
+    bubbleTip = el('path', {}, bubble);
+    bubbleText = el('text', { 'text-anchor': 'middle' }, bubble);
+    shape(pts);
+    if (!drawn) {
+      // The line draws itself on: its dash as long as the line, offset away, then brought home. A tween in JS: the
+      // dash offset isn't a property for CSS motion (transform and opacity only).
+      drawn = true;
+      drawing = true;
+      var target = line, len = target.getTotalLength(), t0 = -1;
+      var ease = function (t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+      target.style.strokeDasharray = len + ' ' + len;
+      target.style.strokeDashoffset = len;
+      requestAnimationFrame(function step(now) {
+        if (t0 < 0) {
+          t0 = now;
+          svg.classList.add('shown');
+          dots.forEach(function (d) { d.style.opacity = 1; });
+        }
+        var t = Kit.clamp((now - t0) / 1500, 0, 1);
+        target.style.strokeDashoffset = (len * (1 - ease(t))).toFixed(1);
+        if (t < 1) { requestAnimationFrame(step); return; }
+        target.style.strokeDasharray = 'none';
+        target.style.strokeDashoffset = '';
+        drawing = false;
+      });
+    } else {
+      svg.classList.add('shown');
+      dots.forEach(function (d) { d.style.transitionDelay = '0s'; d.style.opacity = 1; });
+    }
+  }
+
+  function shape(pts) {
+    var d = smooth(pts);
+    line.setAttribute('d', d);
+    area.setAttribute('d', d + 'L' + pts[n - 1][0].toFixed(1) + ',' + (H - pad.b) + 'L' + pts[0][0].toFixed(1) + ',' + (H - pad.b) + 'Z');
+    layoutEnd(pts);
+  }
+
+  document.getElementById('delta').textContent = P.delta(data);
+  Kit.watch(document.querySelector('main'), function () {
+    if (Math.abs((svg.clientWidth || 320) - W) > 0.5) build();
+  });
+
+  // Live: the newest point moves a little every few seconds.
+  var rand = Kit.rng(11), base = data[n - 1];
+  setInterval(function () {
+    if (document.hidden || drawing) return;
+    data[n - 1] = base + (rand() * 2 - 1) * P.live;
+    var pts = points(data, W);
+    shape(pts);
+  }, 2600);
+})();
+</script>
+</body>
+</html>

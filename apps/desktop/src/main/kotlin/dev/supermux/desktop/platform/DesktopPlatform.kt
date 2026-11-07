@@ -149,7 +149,7 @@ class DesktopPlatform : Platform {
     override val mic: MicCapture = DesktopMicCapture()
 
     /**
-     * The assistant overlay (#62): on macOS and Windows a window may float over other apps without asking;
+     * The assistant overlay (#62): on macOS, Windows and Linux a window may float over other apps without asking;
      * macOS asks for the mic the first time hold-to-talk records. Elsewhere there is no overlay.
      */
     override val assistantOverlay: dev.supermux.ui.platform.AssistantOverlayHost? =
@@ -230,7 +230,7 @@ internal fun awtPickDirectory(title: String): String? {
             if (previous == null) System.clearProperty(key) else System.setProperty(key, previous)
         }
     }
-    val chooser = javax.swing.JFileChooser(System.getProperty("user.home")).apply {
+    val chooser = javax.swing.JFileChooser(dev.supermux.desktop.host.SystemOsEnv.home.toFile()).apply {
         dialogTitle = title
         fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
         isAcceptAllFileFilterUsed = false

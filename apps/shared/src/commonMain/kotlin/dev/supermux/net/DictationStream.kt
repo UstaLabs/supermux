@@ -68,6 +68,7 @@ interface DictationStreamSocket {
 
 /** `ws(s)://host/transcribe/stream?dictationId=…[&session=…]` for a broker [baseUrl] (http(s) or ws(s)). */
 fun dictationStreamUrl(baseUrl: String, dictationId: String, sessionId: String?): String {
+    // platform-ok: a URL
     val url = StringBuilder("${wsBaseUrl(baseUrl).trimEnd('/')}/transcribe/stream?dictationId=${urlParam(dictationId)}")
     if (!sessionId.isNullOrBlank()) url.append("&session=").append(urlParam(sessionId))
     return url.toString()

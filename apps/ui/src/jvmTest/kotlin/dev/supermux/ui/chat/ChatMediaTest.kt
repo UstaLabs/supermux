@@ -120,6 +120,12 @@ class ChatMediaTest {
         assertEquals("b.mp4", only.name)
     }
 
+    @Test fun a_windows_hosts_media_is_named_by_its_file_not_its_whole_path() {
+        val set = chatMediaItems(listOf(msg("m1", text = "![clip](shots/b.mp4)")), hostFiles = true, baseDir = "C:\\repo")
+        val only = set.single() as ChatMediaItem.FromMarkdown
+        assertEquals("b.mp4", only.name)
+    }
+
     @Test fun the_same_attachment_twice_in_one_message_appears_once() {
         // The viewer's pager and strip are keyed: a duplicate key would throw.
         val items = listOf(msg("m1", attachments = listOf(att("f1", kind = "photo"), att("f1", kind = "photo"))))

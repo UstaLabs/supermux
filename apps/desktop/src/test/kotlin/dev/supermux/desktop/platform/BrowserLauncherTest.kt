@@ -32,6 +32,21 @@ class BrowserLauncherTest {
     }
 
     @Test
+    fun `a link that may not open reaches neither the browser nor the OS opener`() {
+        val captured = mutableListOf<String>()
+        openInBrowserOverride = { captured += it }
+        try {
+            for (url in listOf("javascript:alert(1)", "file://host/share/x.exe", "file:///Applications/Calculator.app", "vbscript:x")) {
+                openInBrowser(url)
+            }
+            openInBrowser("https://example.com/")
+        } finally {
+            openInBrowserOverride = null
+        }
+        assertEquals(listOf("https://example.com/"), captured)
+    }
+
+    @Test
     fun `text that is not a URL is opened by neither`() {
         openUrlWith("https://exa mple.com/ bad", browse = { browsed += it }) { opened += it }
         assertEquals(emptyList(), browsed)

@@ -70,6 +70,8 @@ import dev.supermux.ui.widgets.SettingsSectionHeader
  *   while it is not ok (git features off; agents still run). Null: the broker has not said (not running, or older).
  * @property power "Keep this computer awake", "Even with the lid closed" and the reboot copy. Only
  *   the host computer builds it (desktop); null hides the section.
+ * @property checkoutMoved the running broker's "restart it to run the new code" when it runs from a checkout that moved
+ *   under it (a warning: sessions still start); null hides it.
  */
 data class HostingUiState(
     val hosting: Boolean,
@@ -88,6 +90,7 @@ data class HostingUiState(
     val backgroundError: String? = null,
     val gitRequirement: GitRequirement? = null,
     val power: HostingPowerUi? = null,
+    val checkoutMoved: String? = null,
 ) {
     /** The local broker has no git: its git features are off (agents still run). */
     val gitMissing: Boolean get() = gitRequirement?.ok == false
@@ -312,6 +315,14 @@ private fun HostingSettingsBody(
                     style = MaterialTheme.typography.bodyMedium,
                     color = cs.onBackground,
                     modifier = Modifier.testTag("hosting_status"),
+                )
+            }
+            state.checkoutMoved?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.tertiary,
+                    modifier = Modifier.testTag("hosting_checkout_moved"),
                 )
             }
             if (state.logTail.isNotEmpty()) {

@@ -23,6 +23,12 @@ export type Drift = { rose: Change[]; fell: Change[] }
 const ROOT = resolve(import.meta.dir, "..")
 export const BASELINE = join(ROOT, "tests", "platform-boundary.baseline.json")
 const DESKTOP = "apps/desktop/src/main/kotlin/dev/supermux/desktop"
+// The webview library ships on its own, without the desktop's OsEnv or folder helper: its native loaders and engine
+// runtimes are its OS seams, each allowed under the one rule it needs (never os-check-kt: it asks Skiko's hostOs). Its
+// sample and feasibility labs are harnesses that drive the OS on purpose (xdotool, PowerShell, temp folders).
+const WEBVIEW = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine"
+const LSP_TRANSPORT = "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt"
+const WEBVIEW_HARNESSES = ["apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/"]
 
 export const RULES: Rule[] = [
   {
@@ -126,8 +132,25 @@ export const RULES: Rule[] = [
     id: "spawn-kt",
     lang: "kt",
     patterns: [/\bProcessBuilder\(/, /Runtime\.getRuntime\(\)\.exec\(/],
-    allowed: [`${DESKTOP}/host/OsEnv.kt`, `${DESKTOP}/platform/DesktopOs.kt`],
+    allowed: [
+      `${DESKTOP}/host/OsEnv.kt`,
+      `${DESKTOP}/platform/DesktopOs.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      `${WEBVIEW}/linux/WpeExtractor.kt`,
+      ...WEBVIEW_HARNESSES,
+      // The editor library's own LSP transport, for its sample and tests: the product's language servers run on the broker.
+      LSP_TRANSPORT,
+    ],
     use: "run OS commands through OsEnv",
+  },
+  {
+    id: "platform-seam-kt",
+    lang: "kt",
+    // Compose's own clipboard and link opener: AWT's on the desktop, an Intent on Android that throws when nothing
+    // takes the link. The libraries below :ui have no Platform: they use Compose's, which an app can provide.
+    patterns: [/\bLocalClipboardManager\b/, /\bLocalUriHandler\b/],
+    allowed: ["apps/terminal-compose/", "apps/editor-compose/", "apps/webview-compose/"],
+    use: "copy and open links through LocalPlatform.current (copyToClipboard, openUrl): one implementation per app, and neither throws",
   },
   {
     id: "env-dirs-kt",
@@ -138,7 +161,19 @@ export const RULES: Rule[] = [
       /System\.getenv\(\s*"(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_[A-Z_]*(?:_HOME|_DIRS?))"\s*\)/,
       /\bFile\.createTempFile\(/,
     ],
-    allowed: [],
+    allowed: [
+      // The desktop's one reader of home, the app-data folder and XDG_RUNTIME_DIR.
+      `${DESKTOP}/host/OsEnv.kt`,
+      // The native-library cache root's call sites; the shared block itself takes them as parameters.
+      "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt",
+      "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt",
+      LSP_TRANSPORT,
+      `${WEBVIEW}/windows/WinNativeLoader.kt`,
+      `${WEBVIEW}/windows/Wv2Runtime.kt`,
+      `${WEBVIEW}/mac/MacNativeLibrary.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      ...WEBVIEW_HARNESSES,
+    ],
     use: "folders: the desktop dirs helper (platform step 9); temp files: Files.createTempFile / createTempDirectory",
   },
 ]

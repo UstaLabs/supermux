@@ -63,6 +63,7 @@ jobs:
       wire: ${{ steps.f.outputs.wire }}
       zmx: ${{ steps.f.outputs.zmx }}
       terminal: ${{ steps.f.outputs.terminal }}
+      webview: ${{ steps.f.outputs.webview }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -84,6 +85,10 @@ jobs:
               - 'apps/gradle/**'
             android:
               - 'apps/android/**'
+            # The webview library (card #93): the library, its testing module, its sample and labs. What pins their
+            # toolchain (apps/gradle, the root build and settings) is `shared`, which starts the kotlin lane too.
+            webview:
+              - 'apps/webview-*/**'
             # The browser client: :ui compiled to Kotlin/Wasm and staged into
             # src/channels/web/static. `apps/ui` and `apps/shared` are most of
             # what it compiles, and `apps/gradle` pins the toolchain, so any of
@@ -541,7 +546,8 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.android == 'true' ||
       needs.changes.outputs.desktop == 'true' ||
-      needs.changes.outputs.wire == 'true'
+      needs.changes.outputs.wire == 'true' ||
+      needs.changes.outputs.webview == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -591,6 +597,15 @@ jobs:
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
         run: xvfb-run -a ./gradlew :shared:jvmTest :ui:jvmTest :desktop:test --build-cache --console=plain
+
+      # The webview library (card #93): its JVM suites (the runtime, the desktop engines' logic against fakes, the
+      # sample's pool and chat checks; the real engines are checked on devices) and its ABI dump. A Linux runner can't
+      # build the iOS klibs: KGP keeps their part of the dump as it is, with a warning, and a Mac writes it
+      # (webview-mac-gradle :webview-compose:updateKotlinAbi). The default compiler daemon, as everywhere here: Kotlin
+      # 2.4's in-process strategy crashed the library's wasm test compile.
+      - name: Webview library (JVM, ABI dump)
+        working-directory: apps
+        run: xvfb-run -a ./gradlew :webview-compose:jvmTest :webview-compose:checkKotlinAbi :webview-sample:jvmTest --build-cache --console=plain
 
       # apps/android/google-services.json is gitignored (the real one carries the
       # app's API key), and without it :android:processDebugGoogleServices fails

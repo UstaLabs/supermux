@@ -1,12 +1,13 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class OsEnvTest {
-    private val posix = SystemOsEnv.os == OsEnv.Os.MAC || SystemOsEnv.os == OsEnv.Os.LINUX
+    private val posix = SystemOsEnv.os == DesktopOs.MACOS || SystemOsEnv.os == DesktopOs.LINUX
 
     @Test fun aHungCommandIsKilledAtItsTimeout() {
         if (!posix) return

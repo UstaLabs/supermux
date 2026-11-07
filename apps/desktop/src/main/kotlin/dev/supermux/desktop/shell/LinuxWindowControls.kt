@@ -253,12 +253,13 @@ private fun BoxScope.ResizeHandles(start: (WmMoveResizeDirection) -> Unit) {
 }
 
 /**
- * Keeps this element's content out from under the window buttons: when the element sits in the
- * top band flush with the window's right edge (the top-right tab strip), its content is inset by
- * [LocalWindowChromeInsets]' end width; when it starts under the controls at the band's start
- * (the top-left strip beside the collapsed rail), by the part of their start width it overlaps.
- * Its own size and background are unchanged, so the strip still runs to the edges behind the
- * buttons. A no-op where the insets are zero.
+ * Keeps this element's content out from under the window buttons: when the element runs under the
+ * controls at the top band's end (the top-right tab strip, which the pane frame's gutter leaves a
+ * few dp short of the window's edge), its content is inset by the part of [LocalWindowChromeInsets]'
+ * end width it overlaps; when it starts under the controls at the band's start (the top-left strip
+ * beside the collapsed rail), by the part of their start width it overlaps. Its own size and
+ * background are unchanged, so the strip still runs to the edges behind the buttons. A no-op where
+ * the insets are zero.
  */
 fun Modifier.avoidWindowControls(): Modifier = this then AvoidWindowControlsElement
 
@@ -310,19 +311,25 @@ private class AvoidWindowControlsNode :
         return if (pos.y < with(density) { insets.band.toPx() } && pos.x < startPx) (startPx - pos.x).roundToInt() else 0
     }
 
+    /**
+     * Only the part of the end controls this element actually runs under: all of them for a strip
+     * flush with the window's right edge, all but the gutter for one the pane frame sets in from
+     * it, and none for one that ends before them (a left split) or sits below the band.
+     */
     private fun endInsetFor(coordinates: LayoutCoordinates, insets: ChromeInsets): Int {
         if (insets.end <= 0.dp) return 0
         val density = currentValueOf(LocalDensity)
         val pos = coordinates.positionInRoot()
         val rootWidth = coordinates.findRootCoordinates().size.width
-        return if (touchesTopEnd(pos.y, pos.x + coordinates.size.width, rootWidth.toFloat(), with(density) { insets.band.toPx() })) {
-            with(density) { insets.end.roundToPx() }
-        } else {
-            0
-        }
+        return with(density) {
+            underTopEnd(pos.y, pos.x + coordinates.size.width, rootWidth.toFloat(), insets.end.toPx(), insets.band.toPx())
+        }.roundToInt()
     }
 }
 
-/** True when an element whose top is at [top] and right edge at [right] reaches the top-right band. */
-internal fun touchesTopEnd(top: Float, right: Float, rootWidth: Float, bandPx: Float): Boolean =
-    top < bandPx && right >= rootWidth - 1f
+/**
+ * How far an element whose top is at [top] and right edge at [right] runs under the controls
+ * [endPx] wide at the right end of a [bandPx] band: 0 when it ends before them or sits below it.
+ */
+internal fun underTopEnd(top: Float, right: Float, rootWidth: Float, endPx: Float, bandPx: Float): Float =
+    if (top < bandPx) (right - (rootWidth - endPx)).coerceAtLeast(0f) else 0f

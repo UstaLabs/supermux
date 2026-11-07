@@ -1,0 +1,208 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Instanced wave</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: radial-gradient(115% 95% at 50% 42%, var(--bg1), var(--bg2)); }
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { width: 100%; height: 100%; }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; color: #fff9; font-size: 13px; }
+  body.no-webgl .nogl { display: grid; }
+</style>
+</head>
+<body class="fixed nosel">
+<div id="stage"></div>
+<div class="nogl">WebGL is off on this device</div>
+<script type="module">
+import * as THREE from './lib/three.module.min.js';
+
+// ramp: the bars' colours from the lowest to the highest. k / w: each wave source's ripple density and speed.
+const P = Kit.pick({
+  neon: {
+    bg: ['#141a4d', '#03040e'],
+    ramp: ['#141f66', '#1490ff', '#33e6ff', '#b26bff', '#ff4fd8'],
+    glow: '#2f6bff', key: '#e4ecff', rim: '#ff4fd8', sky: '#7d92ff', ground: '#070818',
+    amp: 3.3, k: [0.86, 0.68], w: [2.7, 2.2], drift: 1.0, elevation: 0.68,
+  },
+  sunset: {
+    bg: ['#43143a', '#0b0309'],
+    ramp: ['#2e0c47', '#8e1f6b', '#e8405e', '#ff8a3d', '#ffd873'],
+    glow: '#ff5a3d', key: '#fff0dc', rim: '#ff7a45', sky: '#ffb391', ground: '#14050f',
+    amp: 2.9, k: [0.62, 0.5], w: [1.9, 1.55], drift: 0.75, elevation: 0.6,
+  },
+}, 'neon');
+document.body.style.setProperty('--bg1', P.bg[0]);
+document.body.style.setProperty('--bg2', P.bg[1]);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.body.classList.add('no-webgl');
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Kit.dpr(2));
+  renderer.setClearColor(0x000000, 0);
+  const stage = document.getElementById('stage');
+  stage.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.5, 200);
+
+  // The grid: one box geometry, drawn 26 x 26 times in a single call. Each box stands on the floor (its base at y = 0)
+  // and fades from its colour at the top to near black at its foot.
+  const N = 26, COUNT = N * N, HALF = (N - 1) / 2, BOX = 0.8;
+  const box = new THREE.BoxGeometry(BOX, 1, BOX).translate(0, 0.5, 0);
+  {
+    const pos = box.attributes.position;
+    const shade = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) shade.fill(pos.getY(i) > 0.5 ? 1 : 0.07, i * 3, i * 3 + 3);
+    box.setAttribute('color', new THREE.BufferAttribute(shade, 3));
+  }
+  const bars = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.42, metalness: 0.05,
+  }), COUNT);
+  bars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  bars.frustumCulled = false;
+  scene.add(bars);
+
+  // The grid's rim sinks into the dark: a fixed dimming per box, by its distance from the centre.
+  const fade = new Float32Array(COUNT);
+  for (let r = 0, i = 0; r < N; r++) {
+    for (let c = 0; c < N; c++, i++) {
+      const d = Math.hypot(c - HALF, r - HALF) / (HALF * Math.SQRT2);
+      fade[i] = 1 - 0.62 * Kit.smooth((d - 0.42) / 0.58);
+    }
+  }
+
+  // A soft pool of light on the floor under the grid.
+  {
+    const size = 128, c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+    grad.addColorStop(0.45, 'rgba(255,255,255,0.32)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+    const texture = new THREE.CanvasTexture(c);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(N * 1.7, N * 1.7).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
+      map: texture, color: P.glow, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    pool.position.y = -0.02;
+    scene.add(pool);
+  }
+
+  scene.add(new THREE.HemisphereLight(P.sky, P.ground, 1.25));
+  const key = new THREE.DirectionalLight(P.key, 2.3);
+  key.position.set(-4, 10, 7);
+  const rim = new THREE.DirectionalLight(P.rim, 1.7);
+  rim.position.set(9, 3.5, -5);
+  scene.add(key, rim);
+
+  // The colour of a height 0..1, along the ramp. One Color, one Object3D: nothing is allocated per frame.
+  const ramp = P.ramp.map((hex) => new THREE.Color(hex));
+  const colour = new THREE.Color();
+  const dummy = new THREE.Object3D();
+  function paint(v) {
+    const x = v * (ramp.length - 1);
+    const i = Math.min(ramp.length - 2, Math.floor(x));
+    return colour.lerpColors(ramp[i], ramp[i + 1], x - i);
+  }
+
+  // Two point sources drifting on slow loops; their ripples meet and interfere.
+  const [K1, K2] = P.k, [W1, W2] = P.w;
+  function wave(t) {
+    const s = t * P.drift;
+    const ax = Math.sin(s * 0.23) * 6.5, az = Math.cos(s * 0.31) * 5.5;
+    const bx = Math.sin(s * 0.17 + 2.4) * 7, bz = Math.cos(s * 0.13 + 0.9) * 7.5;
+    for (let r = 0, i = 0; r < N; r++) {
+      const z = r - HALF;
+      for (let c = 0; c < N; c++, i++) {
+        const x = c - HALF;
+        const dax = x - ax, daz = z - az, dbx = x - bx, dbz = z - bz;
+        const d1 = Math.sqrt(dax * dax + daz * daz), d2 = Math.sqrt(dbx * dbx + dbz * dbz);
+        const w = 0.55 * Math.sin(d1 * K1 - t * W1) + 0.45 * Math.sin(d2 * K2 - t * W2);
+        const v = Kit.clamp(w * 0.5 + 0.5, 0, 1);
+        dummy.position.set(x, 0, z);
+        dummy.scale.set(1, 0.14 + Math.pow(v, 1.3) * P.amp, 1);
+        dummy.updateMatrix();
+        bars.setMatrixAt(i, dummy.matrix);
+        bars.setColorAt(i, paint(v).multiplyScalar(fade[i]));
+      }
+    }
+    bars.instanceMatrix.needsUpdate = true;
+    bars.instanceColor.needsUpdate = true;
+  }
+
+  // The camera looks down on the grid from a corner. Its distance is the nearest that keeps the grid's whole box (with
+  // the tallest bars) inside the card, whatever its shape; the near corner looms larger than the far one, so the view
+  // also pans up or down (lift) to centre the box rather than its middle.
+  const AZIMUTH = Math.PI / 4, MARGIN = 0.92;
+  const target = new THREE.Vector3(0, 0, 0), look = new THREE.Vector3();
+  const toCamera = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3(), ahead = new THREE.Vector3();
+  const WORLD_UP = new THREE.Vector3(0, 1, 0);
+  const E = HALF + BOX / 2, H = P.amp + 0.14;
+  const corners = [];
+  for (const x of [-E, E]) for (const z of [-E, E]) for (const y of [0, H]) corners.push(new THREE.Vector3(x, y, z));
+  let distance = 40, lift = 0;
+
+  function basis(azimuth) {
+    toCamera.set(Math.cos(P.elevation) * Math.sin(azimuth), Math.sin(P.elevation), Math.cos(P.elevation) * Math.cos(azimuth));
+    ahead.copy(toCamera).negate();
+    right.crossVectors(ahead, WORLD_UP).normalize();
+    up.crossVectors(right, ahead);
+  }
+  function aim(azimuth) {
+    basis(azimuth);
+    look.copy(target).addScaledVector(up, lift);
+    camera.position.copy(look).addScaledVector(toCamera, distance);
+    camera.lookAt(look);
+  }
+
+  Kit.watch(document.body, () => {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    basis(AZIMUTH);
+    const ky = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * MARGIN, kx = ky * camera.aspect;
+    // Each corner p must satisfy |p·right| <= kx·depth and |p·up - lift| <= ky·depth, depth = distance - p·toCamera.
+    let d = 0;
+    for (const p of corners) {
+      d = Math.max(d, Math.abs(p.dot(right)) / kx + p.dot(toCamera));
+      for (const q of corners) d = Math.max(d, (p.dot(up) - q.dot(up)) / (2 * ky) + (p.dot(toCamera) + q.dot(toCamera)) / 2);
+    }
+    let lo = -Infinity, hi = Infinity;
+    for (const p of corners) {
+      const room = ky * (d - p.dot(toCamera));
+      lo = Math.max(lo, p.dot(up) - room);
+      hi = Math.min(hi, p.dot(up) + room);
+    }
+    distance = d;
+    lift = (lo + hi) / 2;
+    camera.far = distance + 60;
+    camera.updateProjectionMatrix();
+    aim(AZIMUTH);
+    renderer.render(scene, camera);
+  });
+
+  let time = 0;
+  wave(time);
+  Kit.loop((dt) => {
+    time += dt;
+    wave(time);
+    // A slow sway off the diagonal: the diagonal is the widest view, so the grid never leaves the card.
+    aim(AZIMUTH + Math.sin(time * 0.21) * 0.14);
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

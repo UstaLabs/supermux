@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.platform.windowsPowerShell
 import java.nio.file.Files
 import java.nio.file.Path
@@ -260,6 +261,7 @@ Terminal=false
             windowsArgument(script),
         ).joinToString(" ")
         val executable = spec.broker.toString()
+        // platform-ok: the broker's own path, either separator: the task script is tested off Windows too
         val separator = maxOf(executable.lastIndexOf('\\'), executable.lastIndexOf('/'))
         val workingDirectory = if (separator > 0) executable.substring(0, separator) else "."
         return """<?xml version="1.0" encoding="UTF-16"?>
@@ -319,8 +321,8 @@ Terminal=false
     fun appRunsAsService(env: OsEnv = SystemOsEnv): Boolean {
         if (env.getenv(LEGACY_KEEP_ALIVE_ENV) == "1") return true
         return when (env.os) {
-            OsEnv.Os.MAC -> env.getenv("XPC_SERVICE_NAME") == LAUNCHD_LABEL
-            OsEnv.Os.LINUX -> env.selfCgroup()?.lineSequence()?.any { it.trimEnd().endsWith("/$SYSTEMD_UNIT") } == true
+            DesktopOs.MACOS -> env.getenv("XPC_SERVICE_NAME") == LAUNCHD_LABEL
+            DesktopOs.LINUX -> env.selfCgroup()?.lineSequence()?.any { it.trimEnd().endsWith("/$SYSTEMD_UNIT") } == true
             else -> false
         }
     }
@@ -337,11 +339,10 @@ Terminal=false
     fun isLegacyInstalled(env: OsEnv = SystemOsEnv): Boolean = runCatching {
         fun file(p: Path) = if (Files.isRegularFile(p)) Files.readString(p) else null
         when (env.os) {
-            OsEnv.Os.MAC -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
-            OsEnv.Os.LINUX -> file(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
+            DesktopOs.MACOS -> file(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))?.let(::isLegacyDefinition) == true
+            DesktopOs.LINUX -> file(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT"))?.let(::isLegacyDefinition) == true ||
                 file(xdgAutostartPath(env))?.let(::isLegacyXdgEntry) == true
-            OsEnv.Os.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
-            OsEnv.Os.OTHER -> false
+            DesktopOs.WINDOWS -> registeredTaskXml(env)?.let(::isLegacyDefinition) == true
         }
     }.getOrDefault(false)
 
@@ -442,18 +443,16 @@ Terminal=false
     private fun usesSystemd(env: OsEnv): Boolean = env.hasCommand("systemctl") && !env.xdgRuntimeDir.isNullOrBlank()
 
     private fun slots(env: OsEnv): List<Slot> = when (env.os) {
-        OsEnv.Os.MAC -> listOfNotNull(launchdSlot(env))
-        OsEnv.Os.LINUX -> listOfNotNull(unitSlot(env), xdgSlot(env))
-        OsEnv.Os.WINDOWS -> listOfNotNull(taskSlot(env))
-        OsEnv.Os.OTHER -> emptyList()
+        DesktopOs.MACOS -> listOfNotNull(launchdSlot(env))
+        DesktopOs.LINUX -> listOfNotNull(unitSlot(env), xdgSlot(env))
+        DesktopOs.WINDOWS -> listOfNotNull(taskSlot(env))
     }
 
     /** The definition [install] would write over. */
     private fun installSlot(env: OsEnv): Slot? = when (env.os) {
-        OsEnv.Os.MAC -> launchdSlot(env)
-        OsEnv.Os.LINUX -> if (usesSystemd(env)) unitSlot(env) else xdgSlot(env)
-        OsEnv.Os.WINDOWS -> taskSlot(env)
-        OsEnv.Os.OTHER -> null
+        DesktopOs.MACOS -> launchdSlot(env)
+        DesktopOs.LINUX -> if (usesSystemd(env)) unitSlot(env) else xdgSlot(env)
+        DesktopOs.WINDOWS -> taskSlot(env)
     }
 
     /**
@@ -523,10 +522,9 @@ Terminal=false
         val stamped = spec.copy(env = spec.env + (INSTALL_ENV to me.id))
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> installLaunchd(stamped, env, asJob)
-            OsEnv.Os.LINUX -> installSystemd(stamped, env, asJob)
-            OsEnv.Os.WINDOWS -> installWindowsTask(stamped, env, alreadyStopped, asJob)
-            OsEnv.Os.OTHER -> Result.Unsupported
+            DesktopOs.MACOS -> installLaunchd(stamped, env, asJob)
+            DesktopOs.LINUX -> installSystemd(stamped, env, asJob)
+            DesktopOs.WINDOWS -> installWindowsTask(stamped, env, alreadyStopped, asJob)
         }
     }
 
@@ -537,10 +535,9 @@ Terminal=false
     fun remove(env: OsEnv = SystemOsEnv, me: Owner): Result {
         val asJob = appRunsAsService(env)
         return when (env.os) {
-            OsEnv.Os.MAC -> removeLaunchd(env, asJob, me)
-            OsEnv.Os.LINUX -> removeSystemd(env, asJob, me)
-            OsEnv.Os.WINDOWS -> removeWindowsTask(env, asJob, me)
-            OsEnv.Os.OTHER -> Result.Unsupported
+            DesktopOs.MACOS -> removeLaunchd(env, asJob, me)
+            DesktopOs.LINUX -> removeSystemd(env, asJob, me)
+            DesktopOs.WINDOWS -> removeWindowsTask(env, asJob, me)
         }
     }
 
@@ -549,13 +546,12 @@ Terminal=false
      * that is the app, never another copy's service.
      */
     fun restart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = if (appRunsAsService(env) || !isOursInstalled(env, me)) false else when (env.os) {
-        OsEnv.Os.MAC -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
-        OsEnv.Os.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
+        DesktopOs.MACOS -> env.uid != null && env.run(listOf("launchctl", "kickstart", "-k", "gui/${env.uid}/$LAUNCHD_LABEL"))
+        DesktopOs.LINUX -> env.run(listOf("systemctl", "--user", "restart", SYSTEMD_NAME))
         // Stop the loop and its broker, then start the task afresh; no elevation needed. /Run also
         // brings back a task whose loop died, and (StopExisting) replaces a lingering instance.
         // A broker that didn't stop must not get a second loop next to it.
-        OsEnv.Os.WINDOWS -> stopWindowsTask(env) && env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
-        OsEnv.Os.OTHER -> false
+        DesktopOs.WINDOWS -> stopWindowsTask(env) && env.run(listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME))
     }
 
     /**
@@ -564,15 +560,14 @@ Terminal=false
      * loop's env file. When Windows cannot say, this throws [TaskStateUnknown], so every caller fails closed.
      */
     fun isInstalled(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
-        OsEnv.Os.MAC -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
-        OsEnv.Os.LINUX -> Files.exists(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")) ||
+        DesktopOs.MACOS -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
+        DesktopOs.LINUX -> Files.exists(xdgConfigHome(env).resolve("systemd/user/$SYSTEMD_UNIT")) ||
             Files.exists(xdgConfigHome(env).resolve("autostart/$XDG_AUTOSTART_FILE"))
-        OsEnv.Os.WINDOWS -> when (windowsTaskState(env)) {
+        DesktopOs.WINDOWS -> when (windowsTaskState(env)) {
             TaskState.PRESENT -> true
             TaskState.ABSENT -> false
             TaskState.UNKNOWN -> throw TaskStateUnknown()
         }
-        OsEnv.Os.OTHER -> false
     }
 
     /** Whether [WINDOWS_TASK_NAME] is registered; [UNKNOWN] when Windows could not say. */
@@ -624,7 +619,7 @@ Terminal=false
     private val PORT_IN_ENV = Regex("""MUX_WEB_PORT(?:</key>\s*<string>|\s*=\s*'?)(\d{1,5})(?!\d)""")
 
     /** True iff OUR "service" is the Linux XDG autostart fallback (no systemd unit of ours): it only starts at login. */
-    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = env.os == OsEnv.Os.LINUX && runCatching {
+    fun isOursXdgAutostart(env: OsEnv = SystemOsEnv, me: Owner): Boolean = env.os == DesktopOs.LINUX && runCatching {
         xdgSlot(env)?.ownership(me) == Ownership.OURS && unitSlot(env)?.ownership(me) != Ownership.OURS
     }.getOrDefault(false)
 
@@ -803,7 +798,7 @@ Terminal=false
      * [install] or `schtasks /Run` starts it again. No-op elsewhere (false).
      */
     fun stop(env: OsEnv = SystemOsEnv, stateDir: Path? = null, port: Int? = null): Boolean =
-        env.os == OsEnv.Os.WINDOWS && stopWindowsTask(env, stateDir, port)
+        env.os == DesktopOs.WINDOWS && stopWindowsTask(env, stateDir, port)
 
     /**
      * Stop the task's loop, then its broker, and wait for the broker to exit. Never by image name: every agent's MCP

@@ -85,7 +85,17 @@ data class HostIdentity(
     val requirements: HostRequirements? = null,
     /** Authed and local callers: "Keep this computer awake". Null from an older broker. */
     val keepAwake: KeepAwakeState? = null,
+    /** Authed and local callers: a broker run from a checkout that moved under it. Null otherwise, or from an older broker. */
+    val checkoutMoved: CheckoutMoved? = null,
 )
+
+/**
+ * `GET /host`'s `checkoutMoved`: the broker runs from a checkout whose HEAD moved since it started ([runs] → [checkout],
+ * short commits), so what it starts now loads code it does not run. [message] is the sentence the apps show. A warning:
+ * the broker refuses nothing.
+ */
+@Serializable
+data class CheckoutMoved(val runs: String = "", val checkout: String = "", val message: String = "")
 
 /**
  * "Keep this computer awake" on a host (spec "Keep the computer awake while hosting"): `GET /host`'s
@@ -741,6 +751,20 @@ data class GrokUsage(
     val billingPeriodEnd: String? = null,
 )
 
+/** One Antigravity limit as agy reports it: a model group's 5-hour or weekly window. [resetsAt] is ISO-8601. */
+@Serializable
+data class AntigravityWindow(
+    val id: String = "",
+    /** "<agy's group name> · 5-hour" or "· weekly" ("Gemini Models · 5-hour"), made by the broker. */
+    val label: String = "",
+    val used: Double = 0.0,
+    val resetsAt: String? = null,
+)
+
+/** Antigravity's limits per model group. agy reports no plan. */
+@Serializable
+data class AntigravityUsage(val windows: List<AntigravityWindow> = emptyList())
+
 @Serializable
 data class UsageResponse(
     val claude: ClaudeUsage? = null,
@@ -748,6 +772,8 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
+    /** Absent on brokers older than #103. */
+    val antigravity: AntigravityUsage? = null,
     /** Per-provider failure text. Values are nullable: the broker records a null for a provider
      *  it could not reach without a message, and a null map VALUE is not something
      *  `coerceInputValues` can rescue (it only defaults properties). */
@@ -1763,10 +1789,18 @@ class BrokerApi(
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
+        // platform-ok: a URL
         .trimEnd('/')
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
+    //
+    // encodeDefaults=true (card #97): a field that HAS a value is always sent, even when it equals
+    // the Kotlin default. The broker merges a write over what it stored and reads a missing field as
+    // "unchanged", so dropping defaults made the user's choice vanish whenever it was the default:
+    // "Switch accounts automatically" could not be turned off (`{autoSwitch:false}` went out as `{}`)
+    // and the curator could not go back to Off, 01:00 or Claude. Null stays the one way to say "not
+    // set" — explicitNulls=false above still leaves it out.
     //
     // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
     // that field's DEFAULT instead of throwing — the per-field leniency Android's hand-written
@@ -1780,6 +1814,7 @@ class BrokerApi(
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+        encodeDefaults = true
         coerceInputValues = true
     }
     internal var spawnTimeoutMillis: Long = 120_000
@@ -2701,12 +2736,16 @@ class BrokerApi(
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
         getJson("$httpBase/settings/curator")
 
-    /** PUT /settings/curator → updated {config, nextRun} */
+    /**
+     * PUT /settings/curator → updated {config, nextRun}. A null model or effort ("Default") goes out
+     * as "", the broker's "back to the agent's own": null itself is never sent, and a key left out
+     * keeps whatever model was stored before.
+     */
     suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(config))
+            setBody(json.encodeToString(config.copy(model = config.model ?: "", reasoningLevel = config.reasoningLevel ?: "")))
         })
 
     /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
@@ -3625,6 +3664,7 @@ class BrokerApi(
      * Returns null only if the body lacks a usable routingToken (old relay).
      */
     suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String): String? {
+        // platform-ok: a URL
         val url = relayUrl.trimEnd('/') + "/register"
         val resp = postReturningJson<RegisterPushRelayBody, RegisterPushRelayResponse>(
             url,

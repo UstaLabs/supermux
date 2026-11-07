@@ -9,8 +9,9 @@ import dev.supermux.ui.panes.PaneStripChrome
  *
  * The EMPTY TAIL of a strip is a native window-drag handle (browser-tab-bar behavior). The tabs +
  * "+" row punches a hole in that region so dragging a tab never moves the window. A no-op without
- * a provided registry — see MacWindowChrome.kt / LinuxWindowChrome.kt. The top-right strip also
- * keeps its tabs out from under the Linux window buttons ([avoidWindowControls]).
+ * a provided registry — see MacWindowChrome.kt / LinuxWindowChrome.kt. A strip in the top band also
+ * keeps its tabs out from under the window's own buttons — Windows' caption buttons, Linux's custom
+ * ones, the macOS traffic lights ([avoidWindowControls]).
  */
 object DesktopStripChrome : PaneStripChrome {
     override fun strip(key: String): Modifier = Modifier.macTitleBarDragRegion(key).avoidWindowControls()

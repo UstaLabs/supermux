@@ -92,7 +92,7 @@ import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
+import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes, migrateOverridesToSessionIds } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFailed, type UsageFetched } from "./core/usage/store"
@@ -128,7 +128,9 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
+import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
+import { createCheckoutWatch } from "./core/checkout-watch"
+import { gitAsync } from "./core/git/exec"
 import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -232,6 +234,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { antigravityKeyringLogin } from "./core/agents/antigravity/keyring"
+import { claudeStoredLoginPresent } from "./core/agents/claude/stored-login"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
@@ -584,6 +587,14 @@ const keepAwake = new KeepAwake({
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()
+// A broker run from its checkout keeps the code it started with, while keepers and sessions load the files on disk: when
+// the checkout moves under it, say so (log, /host), never refuse (the keeper-error card). Compiled releases carry their code.
+const checkoutWatch = IS_COMPILED ? undefined : createCheckoutWatch({
+  readHead: () => gitAsync(join(import.meta.dir, ".."), ["rev-parse", "HEAD"], { timeoutMs: 10_000 }).catch(() => null),
+  log: (event, fields) => log.warn(event, fields),
+  intervalMs: 60_000,
+})
+void checkoutWatch?.start()
 // Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
 const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
@@ -1407,7 +1418,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
       workdir: s.workdir,
       repoRoot: s.repo_root ?? undefined,
       muted: !!s.mute,
-      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, sessionId: s.id, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -2668,6 +2679,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       gitAvailable: gitRequirement.ok,
       requirements: gitRequirement.requirements(),
       keepAwake: keepAwake.state(),
+      checkoutMoved: checkoutWatch?.current(),
     }),
     getHostRequirements: () => gitRequirement.requirements(),
     installGit: () => gitInstaller.install(),
@@ -3564,10 +3576,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // codex/cursor API key short-circuits the login flow the same way a CLI
     // cred file does. Claude adds the darwin Keychain probe: `claude login`
     // can finish without ever writing the credential file this manager polls.
-    // Antigravity adds Windows' Credential Manager: agy keeps its login there
-    // and writes no token file at all.
+    // Claude and Antigravity add Windows' Credential Manager: agy keeps its login
+    // there and writes no token file at all, and Claude Code does too when
+    // Anthropic's tengu_windows_credman rollout is on (#101).
     hasCredential: (kind) =>
-      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated())
+      agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
@@ -4688,6 +4701,10 @@ if (!IS_TEST_BROKER) {
     }
     if (ensureAntigravityPluginScopes()) {
       log.info("antigravity_plugin_scopes_synced")
+    }
+    // Overrides are keyed by session id since #102: re-key the ones written by name, once.
+    if (migrateOverridesToSessionIds([...registry.list(), ...registry.listArchived()].map((s) => ({ id: s.id, name: s.name })))) {
+      log.info("plugin_overrides_keyed_by_id")
     }
   } catch (err: any) {
     log.warn("mux_core_skill_sync_failed", { err: err?.message ?? String(err) })

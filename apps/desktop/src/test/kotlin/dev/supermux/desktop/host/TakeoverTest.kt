@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -20,7 +21,7 @@ class TakeoverTest {
     }
 
     private fun macEnv(m: Mac, uid: Long? = 501, failing: Set<List<String>> = emptySet(), scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap()) =
-        FakeOsEnv(os = OsEnv.Os.MAC, home = m.home, uid = uid, failing = failing, scripted = scripted)
+        FakeOsEnv(os = DesktopOs.MACOS, home = m.home, uid = uid, failing = failing, scripted = scripted)
 
     private val printHost = listOf("launchctl", "print", "gui/501/dev.supermux.host")
     private val printBroker = listOf("launchctl", "print", "gui/501/dev.supermux.broker")
@@ -112,7 +113,7 @@ class TakeoverTest {
         val home = createTempDirectory()
         val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
         Files.writeString(dir.resolve("supermux.service"), res("linux-supermux.service"))
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         assertEquals("supermux.service", Takeover.findOldService(env, me)!!.name)
     }
 
@@ -121,7 +122,7 @@ class TakeoverTest {
         val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
         Files.writeString(dir.resolve("supermux.service"),
             "[Service]\nExecStart=/usr/bin/true\nExecStart=sg render -c \"exec %h/.bun/bin/bun %h/projects/supermux/src/main.ts\"\n")
-        assertTrue(Takeover.findOldServices(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000), me).isEmpty())
+        assertTrue(Takeover.findOldServices(FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000), me).isEmpty())
     }
 
     // ---- linux env sources ----
@@ -143,7 +144,7 @@ class TakeoverTest {
         val envFile = h.home.resolve("mux.env").also { Files.writeString(it, "# c\n\nMUX_FROM_FILE=\"f1\"\nMUX_OTHER=2\n") }
         val d = unit.resolveSibling("supermux.service.d").also { Files.createDirectories(it) }
         Files.writeString(d.resolve("override.conf"), "[Service]\nEnvironment=MUX_WHATSAPP_WEBHOOK_SECRET=s3\nEnvironmentFile=-$envFile\n")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, failing = setOf(showEnv))
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, failing = setOf(showEnv))
         val carried = ok(Takeover.prepare(listOf(old), createTempDirectory(), env)).carriedEnv
         assertEquals("s3", carried["MUX_WHATSAPP_WEBHOOK_SECRET"])
         assertEquals("f1", carried["MUX_FROM_FILE"])
@@ -153,7 +154,7 @@ class TakeoverTest {
     @Test fun linuxParsesScriptedSystemctlShow() {
         val (h, old) = linuxUnit()
         val envFile = h.home.resolve("m.env").also { Files.writeString(it, "MUX_FILE=x\n") }
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, scripted = mapOf(
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, scripted = mapOf(
             showEnv to listOf(OsEnv.RunResult(0, "NODE_ENV=production \"MUX_TELEGRAM_BOT_TOKEN=1:a b\" MUX_D=4\n", "")),
             showFiles to listOf(OsEnv.RunResult(0, "-$envFile (ignore_errors=yes)\n", "")),
         ))
@@ -165,7 +166,7 @@ class TakeoverTest {
         assumePosixHost()
         val (h, old) = linuxUnit()
         val state = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val prepared = ok(Takeover.prepare(listOf(old), state, env))
         val stopCmds = env.ran.filter { it.getOrNull(2) in setOf("disable", "is-active") }
         assertEquals(listOf(listOf("systemctl", "--user", "disable", "--now", "supermux.service"),
@@ -182,7 +183,7 @@ class TakeoverTest {
     @Test fun linuxStillActiveFailsAndRollsBack() {
         val (h, old) = linuxUnit()
         val isActive = listOf("systemctl", "--user", "is-active", "supermux.service")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000,
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000,
             scripted = mapOf(isActive to List(20) { OsEnv.RunResult(0, "active\n", "") }))
         assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(listOf(old), createTempDirectory(), env))
         assertEquals(listOf("systemctl", "--user", "enable", "--now", "supermux.service"), env.ran.last())
@@ -369,7 +370,7 @@ class TakeoverTest {
     @Test fun anotherCopysUnitIsAnOldServiceButThe100UnitIsNot() {
         val home = createTempDirectory()
         val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         Files.writeString(dir.resolve("supermux-host.service"), BrokerService.systemdUnit(
             BrokerService.Spec(Path.of("/s/desktop-assets/bin/supermux-broker"), mapOf(BrokerService.INSTALL_ENV to theirs.id), Path.of("/s/l.log")),
         ))

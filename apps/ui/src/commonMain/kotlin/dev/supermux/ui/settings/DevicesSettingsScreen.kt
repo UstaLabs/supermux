@@ -59,9 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.chat.parseChatTs
 import dev.supermux.net.AddDeviceResponse
@@ -71,6 +69,7 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.IconSize
@@ -455,7 +454,7 @@ private fun AddDeviceDialog(
     onDismiss: (minted: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     // The name, and a link once minted, kept for the page on display; the mint runs on the
     // fleet's scope and lands in [form] (#89). The device exists on the broker from that moment
     // and its link opens once, so a rotation that dropped the dialog lost the only way to use it.
@@ -602,7 +601,7 @@ private fun AddDeviceDialog(
             } else {
                 TextButton(
                     onClick = {
-                        clipboard.setText(AnnotatedString(form.result!!.url))
+                        platform.copyToClipboard(form.result!!.url)
                         copied = true
                     },
                     modifier = Modifier.testTag("devices_add_copy"),

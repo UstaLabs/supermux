@@ -3,6 +3,8 @@ import { createHostProvider } from "../../../../packages/supermux-core/src/index
 import { STATE_DIR } from "../../../shared/paths"
 import { brokerAccountsOptions } from "../../accounts/broker-accounts"
 import { createOpenCodeCoreHost, type OpenCodeCoreHost } from "./core-host"
+import { brokerPluginDeps } from "./plugin-deps"
+import { resolveCommand } from "../../process/launcher"
 
 export type OpenCodeCoreHostFactory = () => OpenCodeCoreHost
 
@@ -10,6 +12,7 @@ const provider = createHostProvider({
   create: () => createOpenCodeCoreHost({
     stateDirectory: join(STATE_DIR, "core", "opencode"),
     accounts: brokerAccountsOptions(),
+    pluginDeps: brokerPluginDeps(STATE_DIR, () => resolveCommand(["opencode"], process.env)),
   }),
 })
 

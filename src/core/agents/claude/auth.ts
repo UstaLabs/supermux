@@ -9,7 +9,9 @@
  *   - `claude-auth-status.ts`   ran `claude auth status` on darwin
  *   - `main.ts` (two sites)     read the stored settings credentials
  *
- * The three sources now live here, in one order, behind one predicate.
+ * The three sources now live here, in one order, behind one predicate. Windows
+ * added a fourth (#101): Claude Code may keep the login in Credential Manager and
+ * no file, which `stored-login.ts` sees.
  *
  * FAILS OPEN: the resolver never throws. A claude session spawns whatever the
  * answer is, and the CLI reports its own auth error. The answer drives the
@@ -27,6 +29,7 @@ export type ClaudeAuthMode =
   | "api_key"            // ANTHROPIC_API_KEY in the environment
   | "stored_credential"  // a credential the user saved in supermux settings
   | "credentials_file"   // ~/.claude/.credentials.json
+  | "credential_manager" // Windows: the login Claude Code keeps in Credential Manager instead of the file
   | "cli_keychain"       // darwin: `claude auth status` accepts the Keychain login
   | "none"
 
@@ -85,12 +88,14 @@ export type ClaudeAuthProbe = {
   fileExists?: (path: string) => boolean
   /** A credential the user stored in supermux settings. */
   storedCredential?: boolean
+  /** Whether Claude Code keeps its login in Windows Credential Manager (stored-login.ts); asked only without a file. */
+  storedLogin?: () => boolean
   runner?: AuthStatusRunner
 }
 
 /** Which source authenticates claude, in order: environment, stored settings,
- * credential file, then the darwin Keychain probe (which is the slowest, and
- * answers false everywhere else). */
+ * credential file, Windows Credential Manager, then the darwin Keychain probe
+ * (which is the slowest, and answers false everywhere else). */
 export function claudeAuthMode(opts: ClaudeAuthProbe): ClaudeAuthMode {
   const env = opts.env ?? {}
   for (const [name, mode] of CLAUDE_ENV_MODES) {
@@ -99,6 +104,7 @@ export function claudeAuthMode(opts: ClaudeAuthProbe): ClaudeAuthMode {
   if (opts.storedCredential) return "stored_credential"
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   if (exists(claudeCredentialsPath(opts))) return "credentials_file"
+  if (opts.storedLogin?.()) return "credential_manager"
   if (claudeCliIsAuthenticated(opts.platform ?? process.platform, opts.runner ?? runAuthStatus)) {
     return "cli_keychain"
   }

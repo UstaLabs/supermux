@@ -108,10 +108,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -160,6 +158,7 @@ import kotlinx.coroutines.launch
 import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.chat.previewFilename
+import dev.supermux.fs.fileNameOf
 
 // ---------------------------------------------------------------------------
 // Reading width
@@ -293,7 +292,6 @@ fun AgentErrorMessage(
 @Composable
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
     val platform = LocalPlatform.current
     val readAloud = remember(platform) { PlatformReadAloud(platform) }
     val scope = rememberCoroutineScope()
@@ -321,7 +319,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
         }
         IconButton(
             onClick = {
-                clipboard.setText(AnnotatedString(text))
+                platform.copyToClipboard(text)
                 copied = true
                 scope.launch {
                     delay(1500)
@@ -1596,6 +1594,7 @@ internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia
     val bytes = runCatching { media.bytes(att) }.getOrNull() ?: return null
     // Name by the unique file_id so two clips never collide in the staging dir, and keep the
     // original extension — the native backends pick their demuxer from it.
+    // platform-ok: a file id, not a path
     val name = attachmentTempName("video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
     val located = runCatching { platform.files.stageTemp(name, bytes) }.getOrNull() ?: return null
     return PlayableClip(located, staged = bytes)
@@ -1607,7 +1606,8 @@ internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia
  * back to [defaultExt] — both OS viewers and the video backends pick their decoder from the suffix.
  */
 internal fun attachmentTempName(base: String, extensionFrom: String?, defaultExt: String): String {
-    val safeBase = base.substringAfterLast('/').substringBeforeLast('.', base).take(64).ifBlank { "file" }
+    val leaf = fileNameOf(base)
+    val safeBase = leaf.substringBeforeLast('.', leaf).take(64).ifBlank { "file" }
     val ext = (extensionFrom ?: "").substringAfterLast('.', "").ifBlank { defaultExt }
     return "$safeBase.$ext"
 }
@@ -2228,7 +2228,7 @@ internal suspend fun saveOrOpenAttachment(
 ) {
     // Give the saved file an extension the host's viewer can identify, or a PDF/log downloaded
     // under a bare `file_id` opens as an unrecognised blob.
-    val safeName = previewFilename(name.substringAfterLast('/'), mime)
+    val safeName = previewFilename(fileNameOf(name), mime)
     val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
     if (pointer) {
         platform.files.saveAs(safeName, type, bytes)?.let { platform.files.openSaved(it) }

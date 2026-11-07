@@ -25,10 +25,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.TelemetryState
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
@@ -56,7 +56,7 @@ internal fun telemetryLockedReason(state: TelemetryState): String? = when (state
 internal fun TelemetrySettingsSection(actions: SystemSettingsActions) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val uri = LocalUriHandler.current
+    val platform = LocalPlatform.current
     var state by remember { mutableStateOf<TelemetryState?>(null) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -103,7 +103,7 @@ internal fun TelemetrySettingsSection(actions: SystemSettingsActions) {
             modifier = Modifier.testTag("system_telemetry_recent"),
         ) { Text("View recent events") }
         TextButton(
-            onClick = { uri.openUri(TELEMETRY_DOC_URL) },
+            onClick = { platform.openUrl(TELEMETRY_DOC_URL) },
             modifier = Modifier.testTag("system_telemetry_doc"),
         ) { Text("What's sent") }
     }

@@ -46,3 +46,16 @@ test("requirements reach authed and direct loopback callers, never public ones",
   expect(buildHostBody(withReq, false, true).requirements).toEqual(requirements)
   expect(buildHostBody(withReq, false, false)).not.toHaveProperty("requirements")
 })
+
+// The keeper-error card: a broker whose checkout moved under it says so to the apps (a warning, never a refusal).
+test("a checkout that moved under the broker is told to authed and direct callers, never anonymous ones", () => {
+  const checkoutMoved = {
+    runs: "aaaaaaaaa", checkout: "bbbbbbbbb",
+    message: "This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.",
+  }
+  const moved = { ...info, checkoutMoved }
+  expect(buildHostBody(moved, true).checkoutMoved).toEqual(checkoutMoved)
+  expect(buildHostBody(moved, false, true).checkoutMoved).toEqual(checkoutMoved)
+  expect(buildHostBody(moved, false).checkoutMoved).toBeUndefined()
+  expect("checkoutMoved" in buildHostBody(info, true)).toBe(false)
+})

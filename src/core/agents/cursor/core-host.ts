@@ -12,7 +12,7 @@ import { makeLogger } from "../../../shared/log"
 import { resolveCommand, type FileExists } from "../../process/launcher"
 import { isGrokAgentPath } from "../detect"
 
-import { smokeCursorAgent } from "./smoke"
+import { cachedCursorSmoke } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -97,6 +97,9 @@ function cursorOpts(
       stateDirectory,
       limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },
     },
+    // #102: the session's plugin skills are linked into its own HOME's .cursor/skills (prepare gives every
+    // session a HOME of its own), the only place cursor-agent's ACP server reads skills from.
+    homeSkills: true,
     ...(model ? { model } : {}),
   }
 }
@@ -155,20 +158,23 @@ function userConfigDir(): string {
   return process.env.XDG_CONFIG_HOME || join(HOME, ".config")
 }
 
+/** One per process: a cursor-agent binary that passed is not asked again (#102). */
+const defaultSmoke = cachedCursorSmoke()
+
 export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCoreHost {
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
-  const smoke = options.smoke ?? smokeCursorAgent
+  const smoke = options.smoke ?? defaultSmoke
   return createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
     // Instructions (the first prompt's leading block: Cursor's ACP server has no system-prompt
-    // channel; nothing is written into the repo any more) and mux-shim (ACP mcpServers) are
-    // session context. Plugins are passed too but Cursor's ACP server cannot load them
-    // (--plugin-dir is ignored): "warn" drops them with context.degraded.
-    context: cursorContext([]).support,
+    // channel; nothing is written into the repo any more), plugins (their skills linked into the
+    // session HOME's .cursor/skills: --plugin-dir is ignored) and mux-shim (ACP mcpServers) are
+    // session context. "warn": plugin parts Cursor cannot take are dropped with context.degraded.
+    context: cursorContext([], { homeSkills: true }).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
@@ -208,7 +214,7 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         env: prepared.env,
         context: {
           instructions: sessionInstructions({ agent: "cursor", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
-          plugins: sessionPlugins("cursor", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          plugins: sessionPlugins("cursor", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("cursor", extra.sessionId, extra.sessionName)],
         },
       }

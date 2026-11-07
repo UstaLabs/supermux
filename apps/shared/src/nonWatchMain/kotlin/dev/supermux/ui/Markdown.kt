@@ -1,5 +1,6 @@
 package dev.supermux.ui
 
+import dev.supermux.net.isOpenableLink
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
@@ -342,8 +343,12 @@ private fun emitLink(node: ASTNode, src: String, sink: SpanSink) {
     var label = node.findChildOfType(MarkdownElementTypes.LINK_TEXT)?.getTextInNode(src)?.toString()?.trim().orEmpty()
     if (label.startsWith("[") && label.endsWith("]")) label = label.substring(1, label.length - 1)
     val ref = linkFileRef(dest)
-    if (ref != null) sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, ref = ref))
-    else sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+    when {
+        ref != null -> sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, ref = ref))
+        isOpenableLink(dest) -> sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+        // A link the app would never open (`javascript:`, `file:`, an `#anchor`) is no link: its label stays as text.
+        else -> sink.append(label.ifEmpty { dest }, SpanStyleKind.PLAIN)
+    }
 }
 
 // A scheme, but not a Windows drive: `C:\…` and `C:/…` are paths.
@@ -376,7 +381,8 @@ private fun emitImage(node: ASTNode, src: String, sink: SpanSink) {
         return
     }
     val alt = imageAlt(link, src)
-    sink.addSpan(MdSpan(alt.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+    if (isOpenableLink(dest)) sink.addSpan(MdSpan(alt.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+    else sink.append(alt.ifEmpty { dest }, SpanStyleKind.PLAIN)
 }
 
 /** Coalesces consecutive same-kind plain runs; link spans are emitted standalone. */

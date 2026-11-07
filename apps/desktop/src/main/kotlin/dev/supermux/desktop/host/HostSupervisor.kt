@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -72,7 +73,7 @@ class HostSupervisor(
     internal val io: CoroutineDispatcher = Dispatchers.IO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     internal val existingPath: String? = System.getenv("PATH"),
-    internal val userHome: String = System.getProperty("user.home") ?: ".",
+    internal val userHome: String = SystemOsEnv.home.toString(),
     internal val timing: Timing = Timing(),
     /** Stderr, plus `<stateDir>/desktop-host.log`: an app launched from Finder has no stdout. */
     internal val log: (String) -> Unit = defaultLog(stateDir),
@@ -134,6 +135,13 @@ class HostSupervisor(
      */
     val keepAwake: StateFlow<dev.supermux.net.KeepAwakeState?> = _keepAwake.asStateFlow()
 
+    private val _checkoutMoved = MutableStateFlow<String?>(null)
+    /**
+     * The local broker's "restart it to run the new code" when it runs from a checkout that moved under it (`/host`'s
+     * `checkoutMoved`), refreshed by every probe. Null: it has not moved, or no answer yet.
+     */
+    val checkoutMoved: StateFlow<String?> = _checkoutMoved.asStateFlow()
+
     /** The state the broker answered a `PUT /settings/keep-awake` with. */
     fun publishKeepAwake(state: dev.supermux.net.KeepAwakeState) {
         _keepAwake.value = state
@@ -146,6 +154,7 @@ class HostSupervisor(
                 _gitAvailable.value = r.gitAvailable
                 _gitRequirement.value = r.gitRequirement
                 _keepAwake.value = r.keepAwake
+                _checkoutMoved.value = r.checkoutMoved
             }
         }
     }
@@ -415,6 +424,7 @@ class HostSupervisor(
             _gitAvailable.value = null
             _gitRequirement.value = null
             _keepAwake.value = null
+            _checkoutMoved.value = null
             _status.value = HostingStatus.NotHosting
         }
     }
@@ -618,7 +628,7 @@ class HostSupervisor(
             is HostPlan.AskTakeover -> {
                 // Windows has no takeover (no old service is ever found there): "yes" could only fail,
                 // so don't ask; use it read-only.
-                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
+                if (osEnv.os == DesktopOs.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
                     log("supermux on port ${prefs.port} wasn't set up by this app and can't be taken over here; using it read-only")
                     _build.value = (found as HostProbeResult.Supermux).build
                     readOnlyLocked(prefs, plan.hostId)
@@ -628,7 +638,7 @@ class HostSupervisor(
             }
             is HostPlan.AskDowngrade -> {
                 // As for AskTakeover: "use this app's version" could only fail where nothing can be taken over.
-                if (osEnv.os == OsEnv.Os.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
+                if (osEnv.os == DesktopOs.WINDOWS && withContext(io) { Takeover.findOldServices(osEnv, me) }.isEmpty()) {
                     log("a newer supermux on port ${prefs.port} wasn't set up by this app and can't be taken over here; using it read-only")
                     _build.value = (found as HostProbeResult.Supermux).build
                     readOnlyLocked(prefs, plan.hostId)
@@ -764,7 +774,7 @@ class HostSupervisor(
 
     private suspend fun updateOwnLocked(prefs0: HostingPrefs) {
         updateTried = true
-        val windows = osEnv.os == OsEnv.Os.WINDOWS
+        val windows = osEnv.os == DesktopOs.WINDOWS
         if (serviceOverPreviousChildLocked(prefs0.port)) { warnIfStillOld(); return }
         if (claimChildLocked()) {
             val prefs = _prefs.value
@@ -888,7 +898,7 @@ class HostSupervisor(
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
-        val stopped = mode == Mode.SERVICE && osEnv.os == OsEnv.Os.WINDOWS
+        val stopped = mode == Mode.SERVICE && osEnv.os == DesktopOs.WINDOWS
         if (stopped && !stopWindowsServiceLocked(p.port)) return keepServiceAfterFailedStop(p)
         val bins = binaries()
         val why = if (mode == Mode.SERVICE) {
@@ -1044,7 +1054,7 @@ class HostSupervisor(
 
         fun defaultBunPath(): String {
             HostBinaries.whichOnPath("bun")?.let { return it.toString() }
-            val home = System.getProperty("user.home") ?: return "bun"
+            val home = SystemOsEnv.home.toString()
             val local = installedBun(home, dev.supermux.desktop.platform.isWindowsOs())
             return if (Files.isExecutable(local)) local.toString() else "bun"
         }

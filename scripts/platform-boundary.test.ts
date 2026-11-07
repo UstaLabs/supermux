@@ -58,9 +58,41 @@ describe("Kotlin rules", () => {
     expect(kt("apps/desktop/src/main/kotlin/B.kt", 'val desktop = System.getenv("XDG_CURRENT_DESKTOP")')).toEqual([])
   })
 
+  // Platform.kt: a shared screen never names the machine's own clipboard or link opener. Compose's handlers
+  // differ per app (AWT on the desktop, an Intent on Android that throws when nothing takes the link);
+  // Platform's copyToClipboard and openUrl are each app's one implementation, and never throw.
+  test("a shared screen copies and opens links through its Platform", () => {
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val clipboard = LocalClipboardManager.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val uri = LocalUriHandler.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/android/src/main/kotlin/B.kt", "import androidx.compose.ui.platform.LocalUriHandler"))).toEqual(["platform-seam-kt"])
+    // The libraries below :ui have no Platform: they use Compose's own, which an app can provide (TerminalClipboard,
+    // EditorClipboard, the webview's link opener).
+    expect(kt("apps/terminal-compose/src/commonMain/kotlin/dev/supermux/terminal/compose/TerminalClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/editor-compose/src/commonMain/kotlin/dev/supermux/editor/compose/EditorClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/webview-compose/src/commonMain/kotlin/dev/supermux/webview/WebView.kt", "val uriHandler = LocalUriHandler.current")).toEqual([])
+  })
+
+  // #29 step 11: the folders a Kotlin library or the desktop reads through one seam each.
+  test("the desktop's OsEnv and the libraries' own seams may read home, temp and PATH", () => {
+    expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", 'override val home: Path = Path.of(System.getProperty("user.home") ?: ".")')).toEqual([])
+    expect(kt("apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt", "ProcessBuilder(command)")).toEqual([])
+    // Everywhere else in the desktop, home comes from OsEnv.
+    expect(ids(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt", 'val home = System.getProperty("user.home") ?: "."'))).toEqual(["env-dirs-kt"])
+  })
+
   test("HostPaths and the desktop's OS seams are allowed", () => {
     expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
     expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])
+  })
+
+  test("the webview library's OS seams are allowed under their own rule only", () => {
+    const loader = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WinNativeLoader.kt"
+    expect(kt(loader, 'val local = System.getenv("LOCALAPPDATA")')).toEqual([])
+    expect(ids(kt(loader, 'val os = System.getProperty("os.name")'))).toEqual(["os-check-kt"])
+    const beside = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WindowsWebEngine.kt"
+    expect(ids(kt(beside, 'val local = System.getenv("LOCALAPPDATA")'))).toEqual(["env-dirs-kt"])
   })
 })
 
