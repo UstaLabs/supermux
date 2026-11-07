@@ -116,6 +116,15 @@ val linuxJvmArgs = if (linuxBuildHost) {
     emptyList()
 }
 
+// Windows: the JDK's ProcessBuilder accepts an "ambiguous" command line by default (its legacy mode: a program path with
+// spaces taken as a program plus arguments). Every command the app runs is a whole argv, so that mode is refused (#29).
+val windowsBuildHost = hostOs.startsWith("windows")
+val windowsJvmArgs = if (windowsBuildHost) {
+    listOf("-Djdk.lang.Process.allowAmbiguousCommands=false")
+} else {
+    emptyList()
+}
+
 // The app runs on — and ships with — a pinned JetBrains Runtime (plain JBR, no JCEF since the M5
 // native-editor cutover). A JBR is what makes MacWindowChrome's custom title bar and its drag
 // arbitration work (libs.jbr.api is a no-op facade on any other JVM), and it is the runtime Compose
@@ -227,14 +236,14 @@ tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("dev.supermux.desktop.MainKt")
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs + linuxJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs + windowsJvmArgs)
 }
 
 // The normal Compose run task uses the same JBR as packaged builds.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     dependsOn(prepareJbrRuntime)
     javaLauncher.set(jbrLauncher)
-    jvmArgs(macJvmArgs + linuxJvmArgs)
+    jvmArgs(macJvmArgs + linuxJvmArgs + windowsJvmArgs)
 }
 
 // Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
@@ -270,7 +279,7 @@ tasks.register<JavaExec>("renderSidebarStyles") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        jvmArgs += macJvmArgs + linuxJvmArgs
+        jvmArgs += macJvmArgs + linuxJvmArgs + windowsJvmArgs
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
