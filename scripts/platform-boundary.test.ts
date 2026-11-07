@@ -72,6 +72,16 @@ describe("Kotlin rules", () => {
     expect(kt("apps/webview-compose/src/commonMain/kotlin/dev/supermux/webview/WebView.kt", "val uriHandler = LocalUriHandler.current")).toEqual([])
   })
 
+  // #29 step 11: the folders a Kotlin library or the desktop reads through one seam each.
+  test("the desktop's OsEnv and the libraries' own seams may read home, temp and PATH", () => {
+    expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", 'override val home: Path = Path.of(System.getProperty("user.home") ?: ".")')).toEqual([])
+    expect(kt("apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt", "ProcessBuilder(command)")).toEqual([])
+    // Everywhere else in the desktop, home comes from OsEnv.
+    expect(ids(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt", 'val home = System.getProperty("user.home") ?: "."'))).toEqual(["env-dirs-kt"])
+  })
+
   test("HostPaths and the desktop's OS seams are allowed", () => {
     expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
     expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])

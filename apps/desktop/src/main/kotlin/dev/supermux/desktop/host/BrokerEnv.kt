@@ -19,7 +19,7 @@ fun brokerEnv(
     stateDir: Path,
     hostName: String = DesktopHostBootstrap.defaultHostName(),
     existingPath: String? = System.getenv("PATH"),
-    home: String = System.getProperty("user.home") ?: ".",
+    home: String = SystemOsEnv.home.toString(),
     os: DesktopOs = SystemOsEnv.os,
 ): Map<String, String> {
     val out = LinkedHashMap(carried)

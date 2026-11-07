@@ -39,23 +39,6 @@
     "src/core/usage/index.ts": 2,
     "src/main.ts": 4
   },
-  "env-dirs-kt": {
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/Main.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/auth/DesktopTokenStore.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/BrokerEnv.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostSupervisor.kt": 2,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostingPrefs.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/KeepAwakeControls.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt": 3,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopChatSeams.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopMedia.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopPlatform.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/WindowsWindowChrome.kt": 1,
-    "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1,
-    "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt": 1,
-    "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt": 2
-  },
   "links-perms": {
     "packages/supermux-core/examples/chat/server.ts": 1,
     "packages/supermux-core/examples/kanban/server.ts": 1,
@@ -319,8 +302,5 @@
     "src/core/worktree/lite-status.ts": 1,
     "src/core/worktree/verify.ts": 1,
     "src/main.ts": 2
-  },
-  "spawn-kt": {
-    "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1
   }
 }

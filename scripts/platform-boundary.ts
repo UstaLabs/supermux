@@ -27,6 +27,7 @@ const DESKTOP = "apps/desktop/src/main/kotlin/dev/supermux/desktop"
 // runtimes are its OS seams, each allowed under the one rule it needs (never os-check-kt: it asks Skiko's hostOs). Its
 // sample and feasibility labs are harnesses that drive the OS on purpose (xdotool, PowerShell, temp folders).
 const WEBVIEW = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine"
+const LSP_TRANSPORT = "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt"
 const WEBVIEW_HARNESSES = ["apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/"]
 
 export const RULES: Rule[] = [
@@ -137,6 +138,8 @@ export const RULES: Rule[] = [
       `${WEBVIEW}/linux/WpeRuntime.kt`,
       `${WEBVIEW}/linux/WpeExtractor.kt`,
       ...WEBVIEW_HARNESSES,
+      // The editor library's own LSP transport, for its sample and tests: the product's language servers run on the broker.
+      LSP_TRANSPORT,
     ],
     use: "run OS commands through OsEnv",
   },
@@ -159,6 +162,12 @@ export const RULES: Rule[] = [
       /\bFile\.createTempFile\(/,
     ],
     allowed: [
+      // The desktop's one reader of home, the app-data folder and XDG_RUNTIME_DIR.
+      `${DESKTOP}/host/OsEnv.kt`,
+      // The native-library cache root's call sites; the shared block itself takes them as parameters.
+      "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt",
+      "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt",
+      LSP_TRANSPORT,
       `${WEBVIEW}/windows/WinNativeLoader.kt`,
       `${WEBVIEW}/windows/Wv2Runtime.kt`,
       `${WEBVIEW}/mac/MacNativeLibrary.kt`,

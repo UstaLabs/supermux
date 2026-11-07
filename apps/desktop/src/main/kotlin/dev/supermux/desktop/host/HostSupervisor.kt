@@ -73,7 +73,7 @@ class HostSupervisor(
     internal val io: CoroutineDispatcher = Dispatchers.IO,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     internal val existingPath: String? = System.getenv("PATH"),
-    internal val userHome: String = System.getProperty("user.home") ?: ".",
+    internal val userHome: String = SystemOsEnv.home.toString(),
     internal val timing: Timing = Timing(),
     /** Stderr, plus `<stateDir>/desktop-host.log`: an app launched from Finder has no stdout. */
     internal val log: (String) -> Unit = defaultLog(stateDir),
@@ -1054,7 +1054,7 @@ class HostSupervisor(
 
         fun defaultBunPath(): String {
             HostBinaries.whichOnPath("bun")?.let { return it.toString() }
-            val home = System.getProperty("user.home") ?: return "bun"
+            val home = SystemOsEnv.home.toString()
             val local = installedBun(home, dev.supermux.desktop.platform.isWindowsOs())
             return if (Files.isExecutable(local)) local.toString() else "bun"
         }

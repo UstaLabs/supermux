@@ -105,6 +105,7 @@ fun rememberWindowsWindowChrome(window: ComposeWindow, dark: Boolean): WindowsWi
         // JBR contract (as on macOS): update the hit test on every mouse event but EXITED/WHEEL.
         // SUPERMUX_CHROME_DEBUG=1: log the hit-test inputs to %TEMP%\supermux-chrome.log.
         val debug = if (System.getenv("SUPERMUX_CHROME_DEBUG") == "1") {
+            // platform-ok: an opt-in debug log (SUPERMUX_CHROME_DEBUG=1), at a fixed name in the OS temp folder so it is easy to find
             java.io.File(System.getProperty("java.io.tmpdir"), "supermux-chrome.log")
         } else {
             null

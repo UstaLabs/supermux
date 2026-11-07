@@ -230,7 +230,7 @@ internal fun awtPickDirectory(title: String): String? {
             if (previous == null) System.clearProperty(key) else System.setProperty(key, previous)
         }
     }
-    val chooser = javax.swing.JFileChooser(System.getProperty("user.home")).apply {
+    val chooser = javax.swing.JFileChooser(dev.supermux.desktop.host.SystemOsEnv.home.toFile()).apply {
         dialogTitle = title
         fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
         isAcceptAllFileFilterUsed = false
