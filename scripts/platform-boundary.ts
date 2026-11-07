@@ -23,6 +23,11 @@ export type Drift = { rose: Change[]; fell: Change[] }
 const ROOT = resolve(import.meta.dir, "..")
 export const BASELINE = join(ROOT, "tests", "platform-boundary.baseline.json")
 const DESKTOP = "apps/desktop/src/main/kotlin/dev/supermux/desktop"
+// The webview library ships on its own, without the desktop's OsEnv or folder helper: its native loaders and engine
+// runtimes are its OS seams, each allowed under the one rule it needs (never os-check-kt: it asks Skiko's hostOs). Its
+// sample and feasibility labs are harnesses that drive the OS on purpose (xdotool, PowerShell, temp folders).
+const WEBVIEW = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine"
+const WEBVIEW_HARNESSES = ["apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/"]
 
 export const RULES: Rule[] = [
   {
@@ -126,7 +131,13 @@ export const RULES: Rule[] = [
     id: "spawn-kt",
     lang: "kt",
     patterns: [/\bProcessBuilder\(/, /Runtime\.getRuntime\(\)\.exec\(/],
-    allowed: [`${DESKTOP}/host/OsEnv.kt`, `${DESKTOP}/platform/DesktopOs.kt`],
+    allowed: [
+      `${DESKTOP}/host/OsEnv.kt`,
+      `${DESKTOP}/platform/DesktopOs.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      `${WEBVIEW}/linux/WpeExtractor.kt`,
+      ...WEBVIEW_HARNESSES,
+    ],
     use: "run OS commands through OsEnv",
   },
   {
@@ -150,7 +161,13 @@ export const RULES: Rule[] = [
       /System\.getenv\(\s*"(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_[A-Z_]*(?:_HOME|_DIRS?))"\s*\)/,
       /\bFile\.createTempFile\(/,
     ],
-    allowed: [],
+    allowed: [
+      `${WEBVIEW}/windows/WinNativeLoader.kt`,
+      `${WEBVIEW}/windows/Wv2Runtime.kt`,
+      `${WEBVIEW}/mac/MacNativeLibrary.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      ...WEBVIEW_HARNESSES,
+    ],
     use: "folders: the desktop dirs helper (platform step 9); temp files: Files.createTempFile / createTempDirectory",
   },
 ]

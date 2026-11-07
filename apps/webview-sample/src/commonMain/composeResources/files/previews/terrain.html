@@ -1,0 +1,270 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Terrain fly-over</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: linear-gradient(var(--sky1), var(--sky2)); }
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { width: 100%; height: 100%; }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; color: #fffc; font-size: 13px; }
+  body.no-webgl .nogl { display: grid; }
+</style>
+</head>
+<body class="fixed nosel">
+<div id="stage"></div>
+<div class="nogl">WebGL is off on this device</div>
+<script type="module">
+import * as THREE from './lib/three.module.min.js';
+
+// sky: the horizon (also the fog), the low sky, the zenith. fill: a second light from behind the camera, if any.
+const P = Kit.pick({
+  meadow: {
+    sky: ['#dcefff', '#9fcbf5', '#3f86dc'], sun: '#fff1cf', sunDir: [-0.5, 0.74, 0.45], sunSize: 0, sunLight: 2.4,
+    hemi: ['#e2f1ff', '#4d6b3f', 1.35], fill: null,
+    water: '#3b8fd0', sand: '#e9d7a0', grass: ['#6cb352', '#5fa84b', '#519743'], rock: ['#a2998d', '#8e867c'], snow: '#f7fafd',
+  },
+  dusk: {
+    sky: ['#ffa36f', '#e2667c', '#3b2366'], sun: '#ffc08a', sunDir: [-0.18, 0.1, -1], sunSize: 16, sunLight: 2.3,
+    hemi: ['#ffaa8c', '#3a2552', 1.0], fill: ['#8f7cff', 0.85],
+    water: '#5a4693', sand: '#eea37a', grass: ['#8d5d92', '#7f5288', '#70477c'], rock: ['#a2627f', '#86526c'], snow: '#ffe4d8',
+  },
+}, 'meadow');
+document.body.style.setProperty('--sky1', P.sky[2]);
+document.body.style.setProperty('--sky2', P.sky[0]);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.body.classList.add('no-webgl');
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Kit.dpr(2));
+  const stage = document.getElementById('stage');
+  stage.appendChild(renderer.domElement);
+
+  const horizon = new THREE.Color(P.sky[0]);
+  const scene = new THREE.Scene();
+  scene.background = horizon;
+  scene.fog = new THREE.Fog(horizon, 14, 40);
+  const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 160);
+
+  // The sky: a dome that follows the camera, from the horizon's colour at eye level through the low sky to the zenith,
+  // mixed in sRGB like a designed gradient (mixed in linear light it would stay pale).
+  const dome = new THREE.SphereGeometry(90, 32, 48);
+  {
+    const stops = P.sky.map((hex) => Kit.rgb(hex));
+    const pos = dome.attributes.position;
+    const colours = new Float32Array(pos.count * 3);
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const e = Math.max(0, pos.getY(i) / 90);
+      const low = e < 0.14;
+      const a = low ? stops[0] : stops[1], b = low ? stops[1] : stops[2];
+      const k = low ? Kit.smooth(e / 0.14) : Kit.smooth((e - 0.14) / 0.43);
+      c.setRGB(Kit.lerp(a[0], b[0], k) / 255, Kit.lerp(a[1], b[1], k) / 255, Kit.lerp(a[2], b[2], k) / 255, THREE.SRGBColorSpace);
+      c.toArray(colours, i * 3);
+    }
+    dome.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  }
+  const skyMaterial = new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true, fog: false, depthWrite: false });
+  const sky = new THREE.Mesh(dome, skyMaterial);
+  sky.renderOrder = -2;
+  scene.add(sky);
+
+  // The sun's disc, far away, when it is in view: the mountains pass in front of it.
+  const sunDir = new THREE.Vector3(...P.sunDir).normalize();
+  let sun = null;
+  if (P.sunSize > 0) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.08, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.16, P.sun + 'dd');
+    grad.addColorStop(0.36, P.sun + '40');
+    grad.addColorStop(0.65, P.sun + '12');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    const texture = new THREE.CanvasTexture(c);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, fog: false, transparent: true, depthWrite: false }));
+    sun.scale.set(P.sunSize, P.sunSize, 1);
+    sun.renderOrder = -1;
+    scene.add(sun);
+  }
+
+  const light = new THREE.DirectionalLight(P.sun, P.sunLight);
+  light.position.copy(sunDir).multiplyScalar(30);
+  scene.add(light, new THREE.HemisphereLight(P.hemi[0], P.hemi[1], P.hemi[2]));
+  if (P.fill) {
+    const fill = new THREE.DirectionalLight(P.fill[0], P.fill[1]);
+    fill.position.set(0.35, 0.55, 1);
+    scene.add(fill);
+  }
+
+  // The land: a PlaneGeometry of 64 x 48 cells laid flat and un-indexed, so every triangle has its own three vertices
+  // and one colour (the low-poly look). Its heights are fbm noise read at an offset that scrolls forward: the mesh glides
+  // toward the camera, and each time it has moved one row the rows shift by one and a fresh row of noise comes in at the
+  // far edge. Nothing is allocated per frame.
+  const NX = 64, NZ = 48, SIZE_X = 70, SIZE_Z = 44;
+  const DX = SIZE_X / NX, DZ = SIZE_Z / NZ, X0 = -SIZE_X / 2, Z0 = -27;
+  const STRIDE = NX + 1;
+  const heights = new Float32Array(STRIDE * (NZ + 1)); // row 0 is the far edge
+  let shifted = 0; // rows the land has moved since the start: the far row's world index is -shifted
+
+  const geometry = new THREE.PlaneGeometry(SIZE_X, SIZE_Z, NX, NZ).rotateX(-Math.PI / 2).toNonIndexed();
+  geometry.translate(0, 0, Z0 + SIZE_Z / 2);
+  geometry.deleteAttribute('normal'); // flat shading takes each face's normal from its own slope
+  geometry.deleteAttribute('uv');
+  const positions = geometry.attributes.position.array;
+  const VERTICES = geometry.attributes.position.count;
+  const ROW_TRIANGLES = NX * 2;
+  // The grid point each vertex stands on.
+  const at = new Uint16Array(VERTICES);
+  for (let v = 0; v < VERTICES; v++) {
+    at[v] = Math.round((positions[v * 3 + 2] - Z0) / DZ) * STRIDE + Math.round((positions[v * 3] - X0) / DX);
+  }
+  const colours = new Float32Array(VERTICES * 3);
+  geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3).setUsage(THREE.DynamicDrawUsage));
+
+  // The river valley the camera follows, as a function of the land's own z.
+  const valley = (wz) => 4.2 * Math.sin(wz * 0.043) + 1.8 * Math.sin(wz * 0.11 + 1.3);
+  function height(x, wz) {
+    const n = Kit.fbm2(x * 0.072 + 17.1, wz * 0.072, 4) * 0.5 + 0.5;
+    let h = Math.pow(n, 1.35) * 10.5 - 1.6;
+    const d = x - valley(wz);
+    h -= 3.6 * Math.exp(-(d * d) / 34);
+    return h < 0 ? 0 : h; // flat water at sea level
+  }
+  function fillRow(r) {
+    const wz = (r - shifted) * DZ;
+    for (let c = 0; c <= NX; c++) heights[r * STRIDE + c] = height(X0 + c * DX, wz);
+  }
+
+  const bands = {
+    water: new THREE.Color(P.water), sand: new THREE.Color(P.sand), snow: new THREE.Color(P.snow),
+    grass: P.grass.map((c) => new THREE.Color(c)), rock: P.rock.map((c) => new THREE.Color(c)),
+  };
+  const shade = new THREE.Color();
+  function hash(a, b) {
+    const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+  function faceColour(h, slope, j) {
+    if (h < 0.02) return shade.copy(bands.water);
+    if (h < 0.45) return shade.copy(bands.sand);
+    if (h < 2.9 - slope * 2.2) return shade.copy(bands.grass[Math.floor(j * 3) % 3]);
+    if (h < 4.6 + j * 0.5) return shade.copy(bands.rock[j < 0.5 ? 0 : 1]);
+    return shade.copy(bands.snow);
+  }
+
+  function rebuild() {
+    for (let v = 0; v < VERTICES; v++) positions[v * 3 + 1] = heights[at[v]];
+    for (let t = 0, v = 0; v < VERTICES; t++, v += 3) {
+      const ha = positions[v * 3 + 1], hb = positions[v * 3 + 4], hc = positions[v * 3 + 7];
+      const slope = (Math.max(ha, hb, hc) - Math.min(ha, hb, hc)) / DX;
+      // A jitter that belongs to the triangle's place in the world, so it travels with the land.
+      const j = hash(Math.floor(t / ROW_TRIANGLES) - shifted, t % ROW_TRIANGLES);
+      faceColour((ha + hb + hc) / 3, Math.min(1, slope * 0.6), j);
+      const lift = 0.94 + j * 0.1;
+      for (let k = 0; k < 9; k += 3) {
+        colours[v * 3 + k] = shade.r * lift;
+        colours[v * 3 + k + 1] = shade.g * lift;
+        colours[v * 3 + k + 2] = shade.b * lift;
+      }
+    }
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+  }
+  for (let r = 0; r <= NZ; r++) fillRow(r);
+  rebuild();
+  const land = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    vertexColors: true, flatShading: true, roughness: 0.92, metalness: 0,
+  }));
+  land.frustumCulled = false;
+  scene.add(land);
+
+  // A sheet of water over the sea floor that mirrors a blurred copy of the sky (and the sun, when it is ahead).
+  const mirror = new THREE.Scene();
+  mirror.add(new THREE.Mesh(dome, skyMaterial));
+  if (sun) {
+    const glint = new THREE.Sprite(sun.material);
+    glint.position.copy(sunDir).multiplyScalar(70);
+    glint.scale.copy(sun.scale);
+    mirror.add(glint);
+  }
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const skyMap = pmrem.fromScene(mirror, 0.02).texture;
+  pmrem.dispose();
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(SIZE_X, SIZE_Z).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({
+    color: P.water, roughness: 0.2, metalness: 0, envMap: skyMap, transparent: true, opacity: 0.86,
+  }));
+  sea.position.set(0, 0.03, Z0 + SIZE_Z / 2);
+  scene.add(sea);
+
+  const CAMERA_Z = 15.5, SPEED = 2.7;
+  let frac = 0, time = 0, bank = 0, lookY = 1;
+  const target = new THREE.Vector3();
+
+  // The camera's place in the land's own coordinates, to follow the valley.
+  const worldZAt = (z) => (z - Z0) - frac * DZ - shifted * DZ;
+  let camX = valley(worldZAt(CAMERA_Z - 2));
+
+  function place(dt) {
+    const ahead = valley(worldZAt(CAMERA_Z - 9));
+    const here = valley(worldZAt(CAMERA_Z - 2));
+    camX += (here - camX) * Math.min(1, dt * 1.2);
+    // A gentle bank into the valley's next bend.
+    const want = Kit.clamp((ahead - here) * 0.05, -0.18, 0.18);
+    bank += (want - bank) * Math.min(1, dt * 1.5);
+    camera.position.set(camX, 3.1 + Math.sin(time * 0.6) * 0.25, CAMERA_Z);
+    target.set(Kit.lerp(camX, ahead, 0.6), lookY, CAMERA_Z - 14);
+    camera.lookAt(target);
+    camera.rotateZ(-bank);
+    sky.position.copy(camera.position);
+    if (sun) sun.position.copy(camera.position).addScaledVector(sunDir, 70);
+  }
+
+  Kit.watch(document.body, () => {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // At most 38 degrees either side: a wide card sees a taller slice of land rather than the land's far sides.
+    const tanHalf = Math.min(Math.tan(THREE.MathUtils.degToRad(29)), Math.tan(THREE.MathUtils.degToRad(38)) / camera.aspect);
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(tanHalf));
+    camera.updateProjectionMatrix();
+    // The look-down angle follows the field of view, so the horizon keeps its place, about a third from the top.
+    lookY = 3.1 - 14 * 0.27 * tanHalf;
+    place(0);
+    renderer.render(scene, camera);
+  });
+
+  Kit.loop((dt) => {
+    time += dt;
+    frac += dt * SPEED / DZ;
+    let moved = false;
+    while (frac >= 1) {
+      frac -= 1;
+      shifted++;
+      heights.copyWithin(STRIDE, 0, STRIDE * NZ);
+      fillRow(0);
+      moved = true;
+    }
+    if (moved) rebuild();
+    land.position.z = frac * DZ;
+    place(dt);
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

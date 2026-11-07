@@ -1,0 +1,629 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Code card</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<script>
+  // The variant picks the theme before the first paint: kotlin is an always-dark editor, markdown follows the theme.
+  document.documentElement.classList.add(Kit.variant('kotlin') === 'markdown' ? 'v-markdown' : 'v-kotlin');
+</script>
+<style>
+  /* Token colours: light, then dark (the markdown's code block in the dark theme, and the kotlin editor always). */
+  :root {
+    --kw: #a626a4; --type: #b76b01; --fn: #3367d6; --str: #3f8f3e; --num: #c2410c; --com: #9a9eab;
+    --ann: #c7254e; --tpl: #0e7490; --op: #0e7490; --pun: #6b7080; --arg: #5a6274; --id: #2b3140;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --kw: #c792ea; --type: #ffcb6b; --fn: #82aaff; --str: #c3e88d; --num: #f78c6c; --com: #6b7298;
+      --ann: #ff9cac; --tpl: #89ddff; --op: #89ddff; --pun: #8f95b2; --arg: #b2bfd8; --id: #d6d9e8;
+    }
+  }
+  html.v-kotlin {
+    color-scheme: dark;
+    --kw: #c792ea; --type: #ffcb6b; --fn: #82aaff; --str: #c3e88d; --num: #f78c6c; --com: #6b7298;
+    --ann: #ff9cac; --tpl: #89ddff; --op: #89ddff; --pun: #8f95b2; --arg: #b2bfd8; --id: #d6d9e8;
+    --page1: #1e1f29; --page2: #16171f; --bar: #15161d; --bar-line: rgba(255, 255, 255, .06);
+    --tab: #1e1f29; --tab-ink: #e4e6f2; --dim: #6f7594;
+    --btn: rgba(255, 255, 255, .06); --btn-line: rgba(255, 255, 255, .09); --btn-ink: #cfd2e6;
+    --ok: #7ee2a8; --accent: #a88bff;
+    --fade0: rgba(22, 23, 31, 0); --fade1: #16171f;
+  }
+  html.v-markdown {
+    --page1: #ffffff; --page2: #ffffff; --bar: #f2f3f7; --bar-line: rgba(20, 22, 28, .08);
+    --tab: #ffffff; --tab-ink: #1d212b; --dim: #7a8193;
+    --btn: #ffffff; --btn-line: rgba(20, 22, 28, .12); --btn-ink: #2b3140;
+    --ok: #15803d; --accent: #0284c7; --accent-soft: rgba(14, 165, 233, .10);
+    --text: #262b36; --head: #0f1219; --quiet: #626a7d;
+    --code-bg: rgba(14, 165, 233, .10); --code-ink: #0369a1;
+    --block: #f5f7fb; --block-line: rgba(20, 22, 28, .07); --cell-head: #f4f6fa; --cell-line: rgba(20, 22, 28, .09);
+    --stable: #15803d; --stable-bg: #dcfce7; --new: #0369a1; --new-bg: #e0f2fe;
+    --fade0: rgba(255, 255, 255, 0); --fade1: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    html.v-markdown {
+      --page1: #15171d; --page2: #15171d; --bar: #0f1116; --bar-line: rgba(255, 255, 255, .07);
+      --tab: #15171d; --tab-ink: #eef0f6; --dim: #8a92a6;
+      --btn: rgba(255, 255, 255, .06); --btn-line: rgba(255, 255, 255, .10); --btn-ink: #dfe2ec;
+      --ok: #4ade80; --accent: #38bdf8; --accent-soft: rgba(56, 189, 248, .12);
+      --text: #dfe3ec; --head: #f5f7fb; --quiet: #9aa3b5;
+      --code-bg: rgba(56, 189, 248, .13); --code-ink: #8fd8fb;
+      --block: #0e1015; --block-line: rgba(255, 255, 255, .07); --cell-head: #1c1f27; --cell-line: rgba(255, 255, 255, .09);
+      --stable: #4ade80; --stable-bg: rgba(74, 222, 128, .13); --new: #7dd3fc; --new-bg: rgba(56, 189, 248, .15);
+      --fade0: rgba(21, 23, 29, 0); --fade1: #15171d;
+    }
+  }
+
+  .card {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    background: linear-gradient(180deg, var(--page1), var(--page2));
+  }
+  /* The header: window lights, the file's tab, and Copy. */
+  .bar {
+    flex: none; height: 40px; display: flex; align-items: flex-end; gap: 10px; padding: 0 8px 0 12px;
+    background: var(--bar); border-bottom: 1px solid var(--bar-line); position: relative;
+  }
+  .lights { display: flex; gap: 6px; align-self: center; flex: none; }
+  .lights i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+  .tab {
+    position: relative; top: 1px; min-width: 0; height: 31px; display: flex; align-items: center; gap: 7px;
+    padding: 0 13px 0 11px; border-radius: 9px 9px 0 0; background: var(--tab); color: var(--tab-ink);
+    border: 1px solid var(--bar-line); border-bottom: 0; font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+  }
+  .tab::after { /* The tab's top accent, as editors mark the active one. */
+    content: ''; position: absolute; left: 10px; right: 10px; top: -1px; height: 2px; border-radius: 0 0 2px 2px;
+    background: var(--accent);
+  }
+  .tab svg { width: 14px; height: 14px; flex: none; }
+  .tab span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grow { flex: 1; }
+  .copy {
+    position: relative; align-self: center; flex: none; height: 28px; display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px 0 9px; border-radius: 8px; border: 1px solid var(--btn-line); background: var(--btn);
+    color: var(--btn-ink); font-size: 12px; font-weight: 650; cursor: pointer; transition: transform .12s ease;
+  }
+  .copy::after { content: ''; position: absolute; inset: -7px -6px; } /* a 40 px tall target */
+  .copy:active { transform: scale(.95); }
+  .copy svg { width: 14px; height: 14px; }
+  .copy .done { display: none; }
+  .copy.ok { color: var(--ok); border-color: currentColor; }
+  .copy.ok .idle { display: none; }
+  .copy.ok .done { display: block; }
+
+  /* The body: scrolls inside itself, both ways for long lines of code. */
+  .view { position: relative; flex: 1; min-height: 0; }
+  .scroll { position: absolute; inset: 0; overflow: auto; -webkit-overflow-scrolling: touch; }
+  .fade {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 30px; pointer-events: none;
+    background: linear-gradient(180deg, var(--fade0), var(--fade1)); transition: opacity .25s ease;
+  }
+  .at-end .fade { opacity: 0; }
+
+  /* Kotlin: a gutter of line numbers that stays put when the code scrolls sideways. */
+  .sheet { position: relative; display: flex; width: max-content; min-width: 100%; font: 12px/18px var(--mono); }
+  .gutter {
+    position: -webkit-sticky; position: sticky; left: 0; z-index: 2; flex: none; min-width: 38px;
+    padding: 10px 9px 22px 10px; text-align: right; white-space: pre; color: #4f5475;
+    background: #1a1b24; border-right: 1px solid rgba(255, 255, 255, .05); font-size: 11px;
+  }
+  .gutter b { font-weight: 500; color: #b9bdd8; }
+  .src {
+    position: relative; z-index: 1; margin: 0; flex: 1; padding: 10px 18px 22px 12px;
+    font: inherit; color: var(--id); white-space: pre; tab-size: 4;
+  }
+  .row-hl { position: absolute; left: 0; right: 0; height: 18px; background: rgba(127, 82, 255, .14); pointer-events: none; }
+  .caret {
+    display: inline-block; width: 2px; height: 15px; margin: 0 -1px; vertical-align: -3px; border-radius: 1px;
+    background: #c9b6ff; animation: blink 1.1s steps(1, end) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .fold {
+    display: inline-block; padding: 0 5px; margin-left: 1px; line-height: 15px; border-radius: 4px;
+    color: #9aa0c2; background: rgba(255, 255, 255, .08); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  }
+  .t-kw { color: var(--kw); }
+  .t-type { color: var(--type); }
+  .t-fn { color: var(--fn); }
+  .t-str { color: var(--str); }
+  .t-tpl { color: var(--tpl); }
+  .t-num, .t-const { color: var(--num); }
+  .t-com { color: var(--com); font-style: italic; }
+  .t-ann { color: var(--ann); }
+  .t-op { color: var(--op); }
+  .t-pun { color: var(--pun); }
+  .t-arg { color: var(--arg); }
+
+  /* Markdown: a release-notes document. */
+  .md { padding: 14px 16px 26px; color: var(--text); font-size: 13.5px; line-height: 1.55; overflow-wrap: break-word; }
+  .md > :first-child { margin-top: 0; }
+  .md h1 { margin: 0 0 4px; font-size: 19px; line-height: 1.25; font-weight: 760; letter-spacing: -.02em; color: var(--head); }
+  .md h2 {
+    margin: 20px 0 7px; font-size: 14.5px; line-height: 1.3; font-weight: 700; letter-spacing: -.005em; color: var(--head);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .md h2::before { content: ''; width: 4px; height: 14px; border-radius: 2px; background: var(--accent); flex: none; }
+  .md h3 { margin: 16px 0 6px; font-size: 13.5px; color: var(--head); }
+  .md p { margin: 8px 0; }
+  .md p.meta { margin-top: 2px; color: var(--quiet); font-size: 12.5px; }
+  .md strong { font-weight: 680; color: var(--head); }
+  .md del { color: var(--quiet); }
+  .md .link { color: var(--accent); font-weight: 560; }
+  .md .issue { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .md code {
+    font: 500 11.5px/1 var(--mono); padding: 2px 5px; border-radius: 5px; background: var(--code-bg); color: var(--code-ink);
+    white-space: nowrap;
+  }
+  .md ul, .md ol { margin: 6px 0 8px; padding-left: 20px; }
+  .md li { margin: 3px 0; padding-left: 2px; }
+  .md li::marker { color: var(--accent); }
+  .md ul.tasks { list-style: none; padding-left: 2px; }
+  .md li.task { position: relative; padding-left: 25px; }
+  .md li.task .box {
+    position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 5px;
+    border: 1.5px solid var(--btn-line); background: var(--btn);
+  }
+  .md li.task.done .box { border-color: var(--accent); background: var(--accent); }
+  .md li.task.done .box::after {
+    content: ''; position: absolute; left: 4.5px; top: 1.5px; width: 4px; height: 8px;
+    border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  .md li.task.done { color: var(--quiet); }
+  .md blockquote {
+    margin: 10px 0; padding: 9px 12px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0;
+    background: var(--accent-soft); color: var(--text);
+  }
+  .md pre.block {
+    margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: var(--block); border: 1px solid var(--block-line);
+    font: 11.5px/1.6 var(--mono); color: var(--id); overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: pre;
+  }
+  .md pre.block code { all: unset; font: inherit; white-space: pre; }
+  .md table {
+    width: 100%; margin: 10px 0; border-collapse: separate; border-spacing: 0; font-size: 12.5px;
+    border: 1px solid var(--cell-line); border-radius: 10px; overflow: hidden;
+  }
+  .md th, .md td { padding: 6px 9px; text-align: left; border-bottom: 1px solid var(--cell-line); }
+  .md th { background: var(--cell-head); font-size: 11.5px; font-weight: 650; color: var(--quiet); letter-spacing: .02em; }
+  .md tr:last-child td { border-bottom: 0; }
+  .md td.center, .md th.center { text-align: center; }
+  .md .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .md .pill.stable { color: var(--stable); background: var(--stable-bg); }
+  .md .pill.new { color: var(--new); background: var(--new-bg); }
+  .md hr { border: 0; height: 1px; background: var(--cell-line); margin: 16px 0; }
+  /* The narrowest cards keep the dots and the tab: Copy keeps its icon (and its 40 px target). */
+  @media (max-width: 320px) {
+    .bar { gap: 8px; padding-left: 10px; }
+    .copy { padding: 0 8px; }
+    .copy #copy-label { display: none; }
+  }
+</style>
+</head>
+<body class="fixed nosel">
+<div class="card" id="card">
+  <header class="bar">
+    <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="tab" id="tab"></div>
+    <div class="grow"></div>
+    <button class="copy" id="copy" type="button" aria-label="Copy">
+      <svg class="idle" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="5.25" y="5.25" width="8" height="8.5" rx="2"/><path d="M10.5 3.6V3.5a1.75 1.75 0 0 0-1.75-1.75h-4.5A1.75 1.75 0 0 0 2.5 3.5v5.25A1.75 1.75 0 0 0 4.25 10.5h.25"/></svg>
+      <svg class="done" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>
+      <span id="copy-label">Copy</span>
+    </button>
+  </header>
+  <div class="view" id="view">
+    <div class="scroll" id="scroll"><div id="content"></div></div>
+    <div class="fade"></div>
+  </div>
+</div>
+
+<script type="text/plain" id="kotlin-src">
+package dev.supermux.webview.demo
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import dev.supermux.webview.*
+import kotlinx.serialization.json.JsonPrimitive
+
+private val ORIGIN = WebOrigin("previews")
+
+/**
+ * A chat of live previews: each agent
+ * message may carry a web page, shown
+ * in a rounded card as the list scrolls.
+ */
+@Composable
+fun WebViewDemo(
+    messages: List<Message>,
+    files: PreviewFiles,
+) {
+    var count by remember { mutableIntStateOf(0) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        reverseLayout = true,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(messages, key = { it.id }) { message ->
+            Bubble(message) {
+                message.preview?.let { preview ->
+                    PreviewCard(preview, files) { delta ->
+                        count += delta
+                        count
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewCard(
+    preview: Preview,
+    files: PreviewFiles,
+    onCount: (Int) -> Int,
+) {
+    val state = rememberWebViewState(
+        WebContent.Bundle(ORIGIN, files, "${preview.slug}.html"),
+    )
+    // The page asks over the bridge; the app answers.
+    DisposableEffect(state) {
+        val undo = state.bridge.handle("counter.add") { params ->
+            JsonPrimitive(onCount(params.int("delta") ?: 1))
+        }
+        onDispose { undo() }
+    }
+    WebView(
+        state = state,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp)),
+        sizing = WebSizing.WrapContentHeight(max = 560.dp),
+        activation = Activation.WhenVisible(settleMillis = 150),
+    )
+}
+</script>
+
+<script type="text/plain" id="markdown-src">
+# WebView 1.4 release notes
+
+_October 31, 2026_ · **12 contributors** · 48 pull requests
+
+Pages in lazy lists now stay live while they show, park when they scroll away, and come back exactly as they were.
+
+## Highlights
+
+- **Engine pool**: up to four live pages share warm engines
+- **Snapshots** cover a page until it paints: no white flash
+- `WrapContentHeight` sizes a view to its page, capped
+- Bridge calls time out after `10 s` instead of hanging
+
+## Upgrade checklist
+
+- [x] Bump `dev.supermux:webview` to `1.4.0`
+- [x] Serve pages as a `WebContent.Bundle`
+- [ ] Register handlers with `bridge.handle`
+- [ ] Re-run the perf lab on a real phone
+
+## Breaking changes
+
+> `WebSettings.cacheMode` is gone. Bundles are served from your own resources, so there is nothing left to cache.
+
+```kotlin
+val state = rememberWebViewState(
+    WebContent.Bundle(origin, files, "index.html"),
+)
+WebView(state, sizing = WebSizing.WrapContentHeight(560.dp))
+```
+
+## Platforms
+
+| Platform | Engine | Status |
+| --- | --- | :---: |
+| Android | System WebView | Stable |
+| iOS, macOS | WKWebView | Stable |
+| Windows | WebView2 | New |
+| Linux | WPE WebKit | New |
+
+## Fixed
+
+- A crashed engine no longer leaves a frozen page (#812)
+- ~~Flicker on rotation~~: the last frame stays up (#790)
+- Dark mode follows the app's theme, not the system's (#774)
+
+Thanks to everyone who filed issues and tried the betas.
+</script>
+
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    kotlin: {
+      name: 'kotlin', file: 'WebViewDemo.kt', src: 'kotlin-src', fold: [3, 12], caret: [14, 31],
+      icon: '<svg viewBox="0 0 16 16"><defs><linearGradient id="kt" x1="0" y1="1" x2="1" y2="0">' +
+        '<stop offset="0" stop-color="#e44857"/><stop offset=".47" stop-color="#c711e1"/><stop offset="1" stop-color="#7f52ff"/>' +
+        '</linearGradient></defs><path d="M1 1h14L8 8l7 7H1z" fill="url(#kt)"/></svg>'
+    },
+    markdown: {
+      name: 'markdown', file: 'RELEASE_NOTES.md', src: 'markdown-src',
+      icon: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" ' +
+        'stroke-linecap="round"><rect x="1" y="3.5" width="14" height="9" rx="2" opacity=".55"/>' +
+        '<path d="M3.6 10V6l1.9 2.2L7.4 6v4M10.9 6v3.8M9.3 8.4l1.6 1.7 1.6-1.7"/></svg>'
+    }
+  }, 'kotlin');
+
+  var SOURCE = document.getElementById(P.src).textContent.replace(/^\n/, '').replace(/\s+$/, '');
+  var scroll = document.getElementById('scroll'), content = document.getElementById('content');
+  var view = document.getElementById('view');
+  document.getElementById('tab').innerHTML = P.icon + '<span>' + P.file + '</span>';
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // A tiny Kotlin tokenizer: comments, strings (with their templates), chars, annotations, numbers, words and the rest.
+  var KW = {};
+  ('package import fun val var class interface object data sealed enum private internal public protected override ' +
+    'open abstract return if else when is in as for while do null true false this super by suspend inline const ' +
+    'lateinit companion typealias try catch finally throw').split(' ').forEach(function (k) { KW[k] = 1; });
+  var TOKEN = new RegExp([
+    '(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*)',                    // 1 comment
+    '("""[\\s\\S]*?"""|"(?:\\\\.|[^"\\\\\\n])*")',              // 2 string
+    "('(?:\\\\.|[^'\\\\\\n])+')",                               // 3 char
+    '(@[A-Za-z_]\\w*(?::\\w+)?)',                               // 4 annotation
+    '(0[xX][\\dA-Fa-f_]+L?|\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?[fFL]?)', // 5 number
+    '([A-Za-z_]\\w*)',                                          // 6 word
+    '(\\n)',                                                    // 7 line break
+    '([ \\t]+)',                                                // 8 blanks
+    '([=+\\-*/<>!?:&|%]+)',                                     // 9 operator
+    '([^\\s\\w])'                                               // 10 punctuation
+  ].join('|'), 'g');
+
+  function nextChar(src, at) {
+    while (at < src.length && (src[at] === ' ' || src[at] === '\t')) at++;
+    return src.slice(at, at + 2);
+  }
+
+  function tokenize(src) {
+    var out = [], m, prev = '', depth = 0;
+    TOKEN.lastIndex = 0;
+    while ((m = TOKEN.exec(src))) {
+      var s = m[0], t;
+      if (m[1]) t = 'com';
+      else if (m[2] || m[3]) t = 'str';
+      else if (m[4]) t = 'ann';
+      else if (m[5]) t = 'num';
+      else if (m[6]) {
+        var after = nextChar(src, TOKEN.lastIndex);
+        if (KW[s]) t = 'kw';
+        else if (after[0] === '(' || after[0] === '{' || prev === 'fun') t = 'fn';
+        else if (/^[A-Z][A-Z0-9_]+$/.test(s)) t = 'const';
+        else if (/^[A-Z]/.test(s)) t = 'type';
+        else if (depth > 0 && after[0] === '=' && after[1] !== '=' && prev !== '.') t = 'arg';
+        else t = 'id';
+      }
+      else if (m[7]) t = 'nl';
+      else if (m[8]) t = 'ws';
+      else if (m[9]) t = 'op';
+      else {
+        t = 'pun';
+        if (s === '(') depth++;
+        else if (s === ')') depth = Math.max(0, depth - 1);
+      }
+      out.push([t, s]);
+      if (t !== 'ws' && t !== 'nl') prev = s;
+    }
+    return out;
+  }
+
+  // Tokens as lines of [type, text]: a comment or string over several lines is cut at each break.
+  function toLines(tokens) {
+    var lines = [[]];
+    tokens.forEach(function (tk) {
+      if (tk[0] === 'nl') { lines.push([]); return; }
+      tk[1].split('\n').forEach(function (part, i) {
+        if (i > 0) lines.push([]);
+        if (part) lines[lines.length - 1].push([tk[0], part]);
+      });
+    });
+    return lines;
+  }
+
+  function lineHtml(line, caretAt) {
+    var html = '', col = 0;
+    line.forEach(function (tk) {
+      var t = tk[0], s = tk[1], piece;
+      if (t === 'ws' || t === 'id') piece = esc(s);
+      else if (t === 'str') {
+        piece = '<span class="t-str">' + s.split(/(\$\{[^}]*\}|\$[A-Za-z_]\w*)/).map(function (p, i) {
+          return i % 2 ? '<span class="t-tpl">' + esc(p) + '</span>' : esc(p);
+        }).join('') + '</span>';
+      } else piece = '<span class="t-' + t + '">' + esc(s) + '</span>';
+      if (caretAt !== undefined && caretAt >= col && caretAt < col + s.length) {
+        // The caret sits between tokens: split this one where it falls.
+        if (caretAt === col) piece = '<span class="caret"></span>' + piece;
+        else {
+          var a = s.slice(0, caretAt - col), b = s.slice(caretAt - col);
+          piece = lineHtml([[t, a]]) + '<span class="caret"></span>' + lineHtml([[t, b]]);
+        }
+        caretAt = undefined;
+      }
+      html += piece;
+      col += s.length;
+    });
+    if (caretAt !== undefined) html += '<span class="caret"></span>';
+    return html;
+  }
+
+  function renderKotlin() {
+    var lines = toLines(tokenize(SOURCE));
+    var numbers = [], code = [], row = 0, hlRow = -1;
+    for (var n = 1; n <= lines.length; n++) {
+      var line = lines[n - 1];
+      if (P.fold && n > P.fold[0] && n <= P.fold[1]) continue;
+      var html;
+      if (P.fold && n === P.fold[0]) {
+        html = '<span class="t-kw">import</span> <span class="fold">...</span>';
+      } else {
+        html = lineHtml(line, P.caret && P.caret[0] === n ? P.caret[1] : undefined);
+      }
+      if (P.caret && P.caret[0] === n) { hlRow = row; numbers.push('<b>' + n + '</b>'); } else numbers.push(String(n));
+      code.push(html);
+      row++;
+    }
+    content.innerHTML = '<div class="sheet">' +
+      (hlRow >= 0 ? '<div class="row-hl" style="top:' + (10 + hlRow * 18) + 'px"></div>' : '') +
+      '<div class="gutter" aria-hidden="true">' + numbers.join('\n') + '</div>' +
+      '<pre class="src">' + code.join('\n') + '</pre></div>';
+  }
+
+  // A tiny Markdown converter: headings, paragraphs, bullet and task lists, inline code, fenced code, quotes, tables.
+  function inline(s) {
+    var codes = [];
+    s = s.replace(/`([^`]+)`/g, function (_, c) { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    s = esc(s)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+      .replace(/(^|[^\w*])\*([^*\s][^*]*)\*(?!\w)/g, '$1<em>$2</em>')
+      .replace(/(^|[^\w])_([^_\s][^_]*)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<span class="link">$1</span>')
+      .replace(/(^|[\s(])#(\d+)\b/g, '$1<span class="issue">#$2</span>');
+    return s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return '<code>' + esc(codes[+i]) + '</code>'; });
+  }
+
+  function cell(text, align, tag) {
+    var body = /^(Stable|New|Beta)$/.test(text)
+      ? '<span class="pill ' + text.toLowerCase() + '">' + text + '</span>' : inline(text);
+    return '<' + tag + (align ? ' class="' + align + '"' : '') + '>' + body + '</' + tag + '>';
+  }
+
+  function markdown(src) {
+    var lines = src.split('\n'), out = [], i = 0, m;
+    var LIST = /^\s*([-*+]|\d+\.)\s+/, BREAK = /^(#{1,4}\s|```|>|\s*([-*+]|\d+\.)\s|\s*\|)/;
+    var cells = function (l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); };
+    while (i < lines.length) {
+      var line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      if ((m = line.match(/^```(\w*)/))) {
+        var lang = m[1], code = [];
+        for (i++; i < lines.length && !/^```/.test(lines[i]); i++) code.push(lines[i]);
+        i++;
+        var body = lang === 'kotlin' ? toLines(tokenize(code.join('\n'))).map(function (l) { return lineHtml(l); }).join('\n')
+          : esc(code.join('\n'));
+        out.push('<pre class="block"><code>' + body + '</code></pre>');
+      } else if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+        var level = Math.min(3, m[1].length);
+        out.push('<h' + level + '>' + inline(m[2]) + '</h' + level + '>');
+        i++;
+      } else if (/^>/.test(line)) {
+        var quote = [];
+        while (i < lines.length && /^>/.test(lines[i])) quote.push(lines[i++].replace(/^>\s?/, ''));
+        out.push('<blockquote>' + inline(quote.join(' ')) + '</blockquote>');
+      } else if (/^\s*\|/.test(line) && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1] || '')) {
+        var head = cells(line), aligns = cells(lines[i + 1]).map(function (c) {
+          return /^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : '';
+        });
+        var rows = [];
+        for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) rows.push(cells(lines[i]));
+        out.push('<table><thead><tr>' + head.map(function (c, k) { return cell(c, aligns[k], 'th'); }).join('') +
+          '</tr></thead><tbody>' + rows.map(function (r) {
+            return '<tr>' + r.map(function (c, k) { return cell(c, aligns[k], 'td'); }).join('') + '</tr>';
+          }).join('') + '</tbody></table>');
+      } else if (/^(-{3,}|\*{3,})\s*$/.test(line)) {
+        out.push('<hr>');
+        i++;
+      } else if (LIST.test(line)) {
+        var ordered = /^\s*\d/.test(line), items = [];
+        while (i < lines.length && LIST.test(lines[i])) items.push(lines[i++].replace(LIST, ''));
+        var tasks = items.every(function (it) { return /^\[[ xX]\]\s/.test(it); });
+        var tag = ordered ? 'ol' : 'ul';
+        out.push('<' + tag + (tasks ? ' class="tasks"' : '') + '>' + items.map(function (it) {
+          var t = it.match(/^\[([ xX])\]\s+(.*)$/);
+          if (!t) return '<li>' + inline(it) + '</li>';
+          var done = t[1] !== ' ';
+          return '<li class="task' + (done ? ' done' : '') + '"><span class="box" role="img" aria-label="' +
+            (done ? 'done' : 'to do') + '"></span>' + inline(t[2]) + '</li>';
+        }).join('') + '</' + tag + '>');
+      } else {
+        var para = [line.trim()];
+        for (i++; i < lines.length && lines[i].trim() && !BREAK.test(lines[i]); i++) para.push(lines[i].trim());
+        var text = para.join(' ');
+        // A line of only emphasis right under the title is the document's byline.
+        var meta = out.length === 1 && /^_/.test(text);
+        out.push('<p' + (meta ? ' class="meta"' : '') + '>' + inline(text) + '</p>');
+      }
+    }
+    return out.join('');
+  }
+
+  if (P.name === 'markdown') content.innerHTML = '<article class="md">' + markdown(SOURCE) + '</article>';
+  else renderKotlin();
+
+  // The fade at the bottom says there is more; it goes once the end is in view.
+  function edge() {
+    var end = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 4;
+    view.classList.toggle('at-end', end);
+  }
+  scroll.addEventListener('scroll', edge, { passive: true });
+  Kit.watch(scroll, edge);
+
+  // Copy: tells the app how many lines, and puts the text on the clipboard where the engine allows it.
+  var copyButton = document.getElementById('copy'), copyLabel = document.getElementById('copy-label'), resetTimer = 0;
+  function copyText(text) {
+    return new Promise(function (resolve) {
+      function fallback() {
+        try {
+          var area = document.createElement('textarea');
+          area.value = text;
+          area.setAttribute('readonly', '');
+          area.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;font-size:16px;' +
+            '-webkit-user-select:text;user-select:text;';
+          document.body.appendChild(area);
+          area.select();
+          area.setSelectionRange(0, text.length);
+          var ok = document.execCommand('copy');
+          document.body.removeChild(area);
+          resolve(!!ok);
+        } catch (e) {
+          resolve(false);
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { resolve(true); }, fallback);
+      } else {
+        fallback();
+      }
+    });
+  }
+  copyButton.addEventListener('click', function () {
+    var posted = Kit.post('code.copy', { lines: SOURCE.split('\n').length });
+    copyText(SOURCE).then(function (copied) {
+      copyButton.classList.toggle('ok', copied || posted);
+      copyLabel.textContent = copied || posted ? 'Copied' : 'Not allowed';
+      clearTimeout(resetTimer);
+      resetTimer = setTimeout(function () {
+        copyButton.classList.remove('ok');
+        copyLabel.textContent = 'Copy';
+      }, 1600);
+    });
+  });
+
+  // Where the reader was, kept while the engine shows another preview.
+  Kit.keep(function () { return { top: scroll.scrollTop, left: scroll.scrollLeft }; }, function (saved) {
+    if (typeof saved.top === 'number') scroll.scrollTop = saved.top;
+    if (typeof saved.left === 'number') scroll.scrollLeft = saved.left;
+    edge();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+package dev.supermux.webview.engine.webkit
+
+import dev.supermux.webview.bridge.BridgeCodec
+import dev.supermux.webview.bridge.BridgeShim
+import dev.supermux.webview.bridge.WebBridge
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlin.random.Random
+
+/**
+ * The scripts a WebKit engine installs, and the one it delivers with (spec §7, §9; the engine contract's **Delivery**).
+ *
+ * - [shim] is the common [BridgeShim], installed in the **page** world: it is the page's own `window.hostBridge`.
+ *   Its channel out is a `CustomEvent` named [outEvent] on `document`; host messages come back as [inEvent] events,
+ *   which a receiver installed with it hands to `window.__hostBridgeReceive`. It installs only in the main frame of a
+ *   document whose origin (`self.origin`, read at document start, before any page script) is in the list.
+ * - [relay] runs in the engine's **isolated** world, in every main-frame document. Only that world holds the native
+ *   message handler, [handlerName], so a page script can't talk to the engine except through the shim. It names each
+ *   document with a token of its own, reports `start`, `paint` (two animation frames after the document has content:
+ *   its first contentful paint, or its load, whichever comes first) and focus, and forwards the shim's [outEvent]s if
+ *   the document's origin is in the list ([RelayMessage]). Being in the isolated world, it runs with the page's
+ *   JavaScript off too.
+ *   - It acts on trusted events only (focus, blur, the back-forward cache's pageshow, the user's input): a page can make
+ *     up none of them.
+ *   - It caps what the page sends before it leaves the page's process, so a page posting in a loop can't flood the app's
+ *     main thread: a burst of [PAGE_MESSAGE_BURST], then [PAGE_MESSAGES_PER_SECOND]. A `$ready` passes apart from that,
+ *     once for the document and once for each `$hello` the host delivers: a page asking itself to announce in a loop
+ *     mints none.
+ *   - An engine that can't observe the document's title and same-document URL asks it for hints of their changes; one
+ *     that can't tell the user's navigations from a page's own asks it for the user's input, and puts [frameInput] in
+ *     the page's other frames.
+ * - [deliveryBody] is run by `callAsyncJavaScript` in the isolated world, with the arguments `json`, `target` and
+ *   `name`: it compares `self.origin`, which the page can't redefine in that world, with the target origin when the
+ *   message arrives, and only then dispatches it to the shim.
+ *
+ * The event names are random per engine, so other scripts in the page can't listen to the shim's channel or forge
+ * the host's messages without knowing them. Origins are given as the page itself sees them ([WebKitUrls.pageOrigins]).
+ */
+internal class WebKitScripts(val handlerName: String, val outEvent: String, val inEvent: String) {
+    /**
+     * The relay, for documents whose origins are [pageOrigins]. [mainFrame] is a JavaScript expression that is true in
+     * the main frame: the relay runs only there (a test runs it in an iframe). With [input], it reports the user's input
+     * ([RelayMessage.Input]), for an engine that has no other way to tell the user's navigations from a page's own: put
+     * [frameInput] in the page's other frames too. With [hints], it reports title and same-document URL changes
+     * ([RelayMessage.Title], [RelayMessage.Url]), for an engine that can't observe WebKit's own: it looks every 250 ms
+     * too, since `pushState` fires no event. Engines that observe them (macOS, Linux) run no such timer.
+     */
+    fun relay(pageOrigins: Set<String>, mainFrame: String = MAIN_FRAME, input: Boolean = false, hints: Boolean = false): String = RELAY
+        .replace("__MAIN_FRAME__", mainFrame)
+        .replace("__HANDLER__", jsString(handlerName))
+        .replace("__OUT__", jsString(outEvent))
+        .replace("__ASK__", jsString(askEvent))
+        .replace("__UP__", jsString(upEvent))
+        .replace("__ORIGINS__", jsArray(pageOrigins))
+        .replace("__MAX__", BridgeCodec.DEFAULT_MAX_REPLY_CHARS.toString())
+        .replace("__INPUT__", if (input) INPUT else "")
+        .replace("__HINTS__", if (hints) HINTS else "")
+        .replace("__READY__", jsString(WebBridge.READY_PREFIX))
+        .replace("__READY_MAX__", WebBridge.READY_MAX_CHARS.toString())
+        .replace("__IN__", jsString(inEvent))
+        .replace("__BURST__", PAGE_MESSAGE_BURST.toString())
+        .replace("__RATE__", PAGE_MESSAGES_PER_SECOND.toString())
+
+    /**
+     * The user's input in the page's frames other than the main one, where the relay doesn't run: for every frame, in
+     * the isolated world, with a relay of `input = true`. A frame has no token of the page's, so it reports under
+     * [FRAME_TOKEN]; the engine counts it for the page shown when it arrives. [mainFrame] as for [relay].
+     */
+    fun frameInput(mainFrame: String = MAIN_FRAME): String = FRAME_INPUT
+        .replace("__MAIN_FRAME__", mainFrame)
+        .replace("__HANDLER__", jsString(handlerName))
+        .replace("__TOKEN__", jsString(FRAME_TOKEN))
+        .replace("__INPUT__", INPUT)
+
+    /** The shim and its receiver, for documents whose origins are [pageOrigins], in the frame [mainFrame] names. */
+    fun shim(pageOrigins: Set<String>, mainFrame: String = MAIN_FRAME): String = BridgeShim.source(
+        sendExpression = SENDER.replace("__OUT__", jsString(outEvent)).replace("__ASK__", jsString(askEvent)).replace("__UP__", jsString(upEvent)),
+        mainFrameExpression = "($mainFrame) && ${jsArray(pageOrigins)}.indexOf(self.origin) >= 0",
+    ) + "\n" + RECEIVER.replace("__IN__", jsString(inEvent))
+
+    /** The shim asks whether the relay listens (the relay cancels it); and the relay says it does, when it starts. */
+    private val askEvent: String get() = "$outEvent-ask"
+    private val upEvent: String get() = "$outEvent-up"
+
+    /** The delivery script's body; `callAsyncJavaScript` passes `json`, `target` and `name` as its arguments. */
+    val deliveryBody: String =
+        "if (self.origin !== target) return false; document.dispatchEvent(new CustomEvent(name, { detail: json })); return true;"
+
+    companion object {
+        private const val MAIN_FRAME = "window === window.top"
+
+        /**
+         * The page messages a document may send at once before the relay caps them: a burst the bridge's own traffic
+         * (a document's announcement, its size, a reply, a few events) never comes near.
+         */
+        const val PAGE_MESSAGE_BURST: Int = 500
+
+        /**
+         * The page messages a document may send each second once its burst is spent: what the relay forwards to the app's
+         * main thread at most, however fast the page posts. The rest is dropped, as the engine contract lets a flood be.
+         */
+        const val PAGE_MESSAGES_PER_SECOND: Int = 500
+
+        /** The token [frameInput] reports under: a frame has none of the page's. */
+        const val FRAME_TOKEN: String = "0000000000000000"
+
+        /**
+         * A `callAsyncJavaScript` body that resolves after two animation frames, which run only while the page is drawn
+         * in a window: once it returns, the page has been drawn where its view is now.
+         */
+        const val REPAINT_BODY: String =
+            "await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); return true;"
+
+        /** Scripts with event names of their own, from [random]. */
+        fun random(random: Random = Random): WebKitScripts {
+            val token = (1..16).joinToString("") { "0123456789abcdef"[random.nextInt(16)].toString() }
+            return WebKitScripts(handlerName = "webview", outEvent = "webview-out-$token", inEvent = "webview-in-$token")
+        }
+
+        private fun jsString(text: String): String = JsonPrimitive(text).toString()
+
+        private fun jsArray(items: Set<String>): String = JsonArray(items.sorted().map(::JsonPrimitive)).toString()
+
+        private val RELAY = """
+(function () {
+  if (!(__MAIN_FRAME__)) return;
+  var handlers = window.webkit && window.webkit.messageHandlers;
+  var handler = handlers && handlers[__HANDLER__];
+  if (!handler) return;
+  var post = handler.postMessage.bind(handler), clock = performance.now.bind(performance);
+  var origins = __ORIGINS__, MAX = __MAX__, hex = '0123456789abcdef';
+  function token() {
+    var a = new Uint8Array(8), s = '';
+    crypto.getRandomValues(a);
+    for (var i = 0; i < 8; i++) s += hex.charAt(a[i] >> 4) + hex.charAt(a[i] & 15);
+    return s;
+  }
+  var doc = token();
+  function send(kind) { try { post(doc + ' ' + kind); } catch (e) {} }
+  function painted() { requestAnimationFrame(function () { requestAnimationFrame(function () { send('paint'); }); }); }
+  // The document has something to show once it has painted content, or has loaded: not at its parsing, when the screen
+  // may still show nothing but its background. A page with nothing contentful (a blank one) only loads.
+  var shown = false;
+  function content() { if (shown) return; shown = true; painted(); }
+  send('start');
+  try {
+    new PerformanceObserver(function (list, observer) {
+      if (!list.getEntriesByName('first-contentful-paint').length) return;
+      observer.disconnect();
+      content();
+    }).observe({ type: 'paint', buffered: true });
+  } catch (e) {}
+  if (document.readyState === 'complete') content(); else window.addEventListener('load', content);
+  // The window's focus as the user moves it: a page's own focus and blur events are not the view's.
+  window.addEventListener('focus', function (e) { if (e.isTrusted) send('focus'); });
+  window.addEventListener('blur', function (e) { if (e.isTrusted) send('blur'); });
+  __HINTS__
+  // The document's announcements the relay lets through: its own, and one for each hello the host delivers.
+  var readies = 1;
+  // Back from the back-forward cache, the page is a document anew, after its commit. Only WebKit restores one (a trusted
+  // pageshow). Capturing, at the window, this runs before the shim's own pageshow listener, which announces the page
+  // again: its announcement goes under the new token, whichever world's scripts WebKit ran first.
+  window.addEventListener('pageshow', function (e) {
+    if (!e.persisted || !e.isTrusted) return;
+    doc = token();
+    readies = 1;
+    send('start');
+    painted();
+  }, true);
+  __INPUT__
+  if (origins.indexOf(self.origin) < 0) return;
+  // What the page sends is capped here, before it leaves the page's process: a burst, then a rate. Its announcement
+  // (found as the bridge finds it) passes apart from that, once for the document and once for each hello the host
+  // delivers: the host never misses one it asked for, and a page that asks itself in a loop mints none. The hello is
+  // heard as its event goes down to the document, before the shim's own listener there answers it, whichever world's
+  // scripts WebKit ran first.
+  var READY = __READY__, READY_MAX = __READY_MAX__, BURST = __BURST__, RATE = __RATE__;
+  window.addEventListener(__IN__, function (e) {
+    var text = e.detail, message;
+    // A hello is an event of that name, as the shim tells one: short, so nothing longer is read.
+    if (typeof text !== 'string' || text.length > READY_MAX || text.indexOf('${'$'}hello') < 0) return;
+    try { message = JSON.parse(text); } catch (x) { return; }
+    if (message && message.t === 'event' && message.n === '${'$'}hello') readies++;
+  }, true);
+  var budget = BURST, refilled = clock();
+  function allowed(text) {
+    if (text.length <= READY_MAX && text.indexOf(READY) === 0) {
+      if (readies < 1) return false;
+      readies--;
+      return true;
+    }
+    var t = clock();
+    budget = Math.min(BURST, budget + (t - refilled) * RATE / 1000);
+    refilled = t;
+    if (budget < 1) return false;
+    budget -= 1;
+    return true;
+  }
+  document.addEventListener(__ASK__, function (e) { e.preventDefault(); });
+  document.addEventListener(__OUT__, function (e) {
+    var text = e.detail;
+    if (typeof text === 'string' && text.length <= MAX && allowed(text)) send('msg ' + text);
+  });
+  // WebKit may run the page world's scripts first: the shim then keeps what it said (its announcement) until now.
+  document.dispatchEvent(new CustomEvent(__UP__));
+})();
+""".trim()
+
+        /**
+         * The user's input, as trusted events show it, which no page script can make: `gesture` at a tap's pointerup, a
+         * click or a key but Escape (once per tap: its pointerup and click are one); `use` when the page scrolls within a
+         * second of the user's finger on it, or under their wheel (at most once a second). A drag that the app's list
+         * keeps to scroll itself ends in a pointercancel, so it is neither. Listening on the window as it captures, the
+         * relay hears them before the page does. Needs `send(kind)` and `clock()` in scope.
+         */
+        private val INPUT = """
+  var gestureAt = -1e9, pressedAt = -1e9, usedAt = -1e9;
+  function gesture(e) {
+    if (!e.isTrusted) return;
+    var t = clock();
+    if (t - gestureAt < 100) return;
+    gestureAt = t;
+    send('gesture');
+  }
+  function used(e) {
+    if (!e.isTrusted) return;
+    var t = clock();
+    if (t - usedAt < 1000) return;
+    usedAt = t;
+    send('use');
+  }
+  window.addEventListener('pointerup', gesture, true);
+  window.addEventListener('click', gesture, true);
+  window.addEventListener('keydown', function (e) { if (e.key !== 'Escape') gesture(e); }, true);
+  window.addEventListener('pointerdown', function (e) { if (e.isTrusted) pressedAt = clock(); }, true);
+  window.addEventListener('scroll', function (e) { if (clock() - pressedAt < 1000) used(e); }, true);
+  window.addEventListener('wheel', used, { capture: true, passive: true });
+""".trim()
+
+        /**
+         * Title and same-document URL changes, for an engine that can't observe WebKit's own (Kotlin/Native can't key-value
+         * observe): a hint, and the engine reads WebKit's value. pushState fires no event, so a timer looks too, slowed
+         * down by WebKit while the page is hidden. Needs `send(kind)` in scope.
+         */
+        private val HINTS = """
+  var lastHref = location.href, lastTitle = document.title;
+  function look() {
+    if (location.href !== lastHref) { lastHref = location.href; send('url'); }
+    if (document.title !== lastTitle) { lastTitle = document.title; send('title'); }
+  }
+  window.addEventListener('popstate', look);
+  window.addEventListener('hashchange', look);
+  window.addEventListener('load', look);
+  document.addEventListener('DOMContentLoaded', look);
+  setInterval(look, 250);
+""".trim()
+
+        /** [frameInput]'s script: [INPUT], in every frame but the main one. */
+        private val FRAME_INPUT = """
+(function () {
+  if (__MAIN_FRAME__) return;
+  var handlers = window.webkit && window.webkit.messageHandlers;
+  var handler = handlers && handlers[__HANDLER__];
+  if (!handler) return;
+  var post = handler.postMessage.bind(handler), prefix = __TOKEN__ + ' ', clock = performance.now.bind(performance);
+  function send(kind) { try { post(prefix + kind); } catch (e) {} }
+  __INPUT__
+})();
+""".trim()
+
+        /**
+         * The shim's channel out. WebKit doesn't promise which world's document-start scripts run first (seen both ways
+         * in the simulator), so until the relay is known to listen (it cancels the ask event, or announces itself with
+         * the up event) the sender keeps the shim's first messages, at most 64, and hands them over in order.
+         */
+        private val SENDER = """
+(function () {
+  var d = document, fire = d.dispatchEvent.bind(d), listen = d.addEventListener.bind(d), E = CustomEvent;
+  var up = false, waiting = [];
+  listen(__UP__, function () {
+    up = true;
+    var w = waiting;
+    waiting = [];
+    for (var i = 0; i < w.length; i++) fire(new E(__OUT__, { detail: w[i] }));
+  });
+  return function (s) {
+    if (!up) up = !fire(new E(__ASK__, { cancelable: true }));
+    if (up) fire(new E(__OUT__, { detail: s })); else if (waiting.length < 64) waiting.push(s);
+  };
+})()
+""".trim()
+
+        private val RECEIVER = """
+(function () {
+  var receive = window.__hostBridgeReceive;
+  if (typeof receive !== 'function') return;
+  document.addEventListener(__IN__, function (e) {
+    var text = e.detail;
+    if (typeof text === 'string') receive(text);
+  });
+})();
+""".trim()
+    }
+}
