@@ -65,5 +65,8 @@ rest with `context.degraded`.
   config dir **before it answers `initialize`**: 44–82 s per new session instead of 18–22 s. Until #102 mux-core
   shipped such an entry (`mux.js`) on every install, only to re-add `<mux-core>/skills` to `skills.paths`, which the
   core already does; a third-party JS plugin (superpowers ships one) still costs it. Without a JS plugin the same
-  install still runs, in the background (62 MB per session).
+  install still runs, in the background (62 MB per session). Since #102 a new session's config folder gets
+  `package.json`, `package-lock.json` and a `node_modules` link from one shared install per OpenCode version
+  (`<state>/opencode-plugin-deps/<version>`, copied once from a session's own finished install), and OpenCode skips
+  its install; only the first session after an OpenCode upgrade still installs.
 - Cursor: `prepare` runs `cursor-agent --version` on every launch: 2.6–7.3 s.

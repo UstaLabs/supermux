@@ -13,6 +13,7 @@ import { SESSION_INBOX_DIR } from "../../../shared/paths"
 
 const log = makeLogger("agents/opencode/core-host")
 import { readGlobalProviderConfig } from "./provider-config"
+import { seedPluginDeps, type OpenCodePluginDeps } from "./plugin-deps"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 
 export type OpenCodeDriverFactory = (options: OpenCodeOptions, overrides: SessionConfiguration) => AgentDriver
@@ -24,6 +25,8 @@ export type OpenCodeCoreHostOptions = {
   limits?: CoreLimits
   /** The broker's shared account registry (production); tests may omit it. */
   accounts?: AccountsOptions
+  /** One shared install of OpenCode's plugin dependencies (#102); absent: OpenCode installs them per session. */
+  pluginDeps?: OpenCodePluginDeps
 }
 
 export type OpenCodeCoreHost = Host
@@ -47,9 +50,9 @@ function opencodeOpts(stateDirectory: string, env: Record<string, string>, model
     inheritEnv: true,
     mcpServers: [],
     permissions,
-    // A fresh session config dir makes OpenCode install its `plugin` entries
-    // before it answers `initialize` (measured ~55 s on this box); the old
-    // `opencode serve` path paid the same cost behind its readiness wait.
+    // A config dir without OpenCode's plugin dependencies makes it install them before it answers `initialize`
+    // when a JS plugin is configured (44–99 s here, 177 s with a cold npm cache); the broker seeds them from one
+    // shared install per OpenCode version (plugin-deps.ts), so that is the first session after an upgrade only.
     setupTimeoutMs: 120_000,
     shutdownTimeoutMs: 2_000,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -136,6 +139,16 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         provider: readGlobalProviderConfig() ?? null,
         configHome,
       })
+      if (options.pluginDeps) {
+        const deps = options.pluginDeps
+        try {
+          const seeded = await seedPluginDeps({ configDir: join(configHome, "opencode"), version: deps.version(), store: deps.store, candidates: deps.candidates })
+          if (seeded !== "present") log.info("opencode_plugin_deps", { session: extra.sessionId, seeded })
+        } catch (err) {
+          // Never blocks a launch: OpenCode then installs for itself, as it did before.
+          log.warn("opencode_plugin_deps_failed", { session: extra.sessionId, err: err instanceof Error ? err.message : String(err) })
+        }
+      }
       return {
         env: prepared.env,
         context: {
