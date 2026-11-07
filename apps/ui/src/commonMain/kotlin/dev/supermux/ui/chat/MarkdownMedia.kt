@@ -13,12 +13,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.layout.ContentScale
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.hostPathFromFileUri
+import dev.supermux.fs.isWindowsHostPath
+import dev.supermux.fs.normalizeHostPath
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.Attachment
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.ui.MdBlock
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.editor.filePreviewKind
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.fs.isAbsoluteHostPath
 
 /**
  * Where a markdown surface may read host files from. [baseDir] (absolute) resolves a relative
@@ -43,27 +49,20 @@ private val schemeRegex = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
 fun resolveMarkdownMediaPath(url: String, baseDir: String?): String? {
     val u = url.trim()
     if (u.isEmpty() || u.startsWith("#")) return null
-    val raw = when {
-        u.startsWith("file://", ignoreCase = true) -> u.substring("file://".length)
-        schemeRegex.containsMatchIn(u) -> return null
-        else -> u
+    if (u.startsWith("file://", ignoreCase = true)) {
+        val file = "file://" + u.substring("file://".length).substringBefore('#').substringBefore('?')
+        return hostPathFromFileUri(file)?.let(::normalizeHostPath)
     }
-    val path = percentDecode(raw.substringBefore('#').substringBefore('?'))
+    // A Windows drive (`C:\proj\shot.png`) is a host path, not a `C:` URL.
+    if (!isWindowsHostPath(u) && schemeRegex.containsMatchIn(u)) return null
+    val path = percentDecode(u.substringBefore('#').substringBefore('?'))
     if (path.isEmpty()) return null
     val joined = when {
-        path.startsWith("/") -> path
-        baseDir.isNullOrEmpty() || !baseDir.startsWith("/") -> return null
-        else -> baseDir.trimEnd('/') + "/" + path
+        isAbsoluteHostPath(path) -> path
+        baseDir.isNullOrEmpty() || !isAbsoluteHostPath(baseDir) -> return null
+        else -> hostJoin(baseDir, path)
     }
-    val out = ArrayList<String>()
-    for (seg in joined.split('/')) {
-        when (seg) {
-            "", "." -> Unit
-            ".." -> if (out.isNotEmpty()) out.removeAt(out.lastIndex)
-            else -> out.add(seg)
-        }
-    }
-    return "/" + out.joinToString("/")
+    return normalizeHostPath(joined)
 }
 
 private fun percentDecode(s: String): String {
@@ -98,7 +97,7 @@ internal fun LocalMarkdownMedia(
     files: MarkdownFiles,
     onFailedClick: () -> Unit,
 ) {
-    val name = absPath.substringAfterLast('/')
+    val name = pathLeaf(absPath)
     val mime = LocalPlatform.current.files.probeMime(name)
     val viewer = LocalChatMediaViewer.current
     val viewerKey = LocalChatMediaEntry.current?.let { markdownMediaKey(it, absPath) }

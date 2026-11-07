@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.host.PairedHost
 import dev.supermux.net.KeepAwakePatch
 import dev.supermux.net.KeepAwakeState
@@ -198,19 +199,20 @@ class KeepAwakeLidFlowTest {
             loadPrefs = { saved },
             savePrefs = { saved = it },
             probe = { HostProbeResult.PortFree },
-            osEnv = FakeOs(OsEnv.Os.MAC),
+            osEnv = FakeOs(DesktopOs.MACOS),
             hostName = "testbox",
             io = dispatcher,
             scope = ts.backgroundScope,
             log = {},
+            identity = InstallIdentity(Files.createTempDirectory("ka-app").resolve("install.json")),
         )
         val lease = LidLease(ops, ts.backgroundScope)
         val controls = KeepAwakeControls(
             supervisor = sup,
-            os = FakeOs(OsEnv.Os.MAC),
+            os = FakeOs(DesktopOs.MACOS),
             user = "alex",
             home = home,
-            facts = PowerFactsCache(FakeOs(OsEnv.Os.MAC), dispatcher, battery = { true }, fileVault = { true }),
+            facts = PowerFactsCache(FakeOs(DesktopOs.MACOS), dispatcher, battery = { true }, fileVault = { true }),
             scope = ts.backgroundScope,
             io = dispatcher,
             lease = lease,

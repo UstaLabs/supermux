@@ -43,6 +43,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -147,6 +148,9 @@ import kotlinx.coroutines.launch
 /** The view tab strip's height. The collapsed sidebar's title band matches it. */
 val TAB_STRIP_HEIGHT = 32.dp
 
+/** What one pane's strip draws at its right end, [width] wide: the pane [groupId] names. */
+class PaneStripEnd(val groupId: String, val width: Dp, val content: @Composable () -> Unit)
+
 @Composable
 fun PaneHost(
     layout: LayoutNode,
@@ -223,6 +227,8 @@ fun PaneHost(
      * while active, is cut from so the two read as one piece. Null: a pane showing nothing.
      */
     sheetColor: @Composable (viewId: String?) -> Color = { MaterialTheme.colorScheme.surfaceContainerLow },
+    /** Drawn at the right end of one pane's strip, which reserves room for it. */
+    stripEnd: PaneStripEnd? = null,
     content: @Composable (viewId: String) -> Unit,
 ) {
     val ownedDrag = remember { PaneDragController() }
@@ -310,6 +316,7 @@ fun PaneHost(
             LocalTabTearOff provides tearOff,
             LocalSoleView provides (layout as? LayoutNode.Group)?.viewIds?.singleOrNull(),
             LocalSheetColor provides sheetColor,
+            LocalStripEnd provides stripEnd,
         ) {
         PaneHostNode(
             layout = layout,
@@ -554,6 +561,9 @@ private fun DrawScope.drawSheetTab(tone: Color, leftFlare: Boolean = true) {
     }
     drawPath(path, tone)
 }
+
+/** [PaneHost]'s stripEnd, read by the strip of the pane it names (only the strips read it). */
+private val LocalStripEnd = compositionLocalOf<PaneStripEnd?> { null }
 
 /** The tone the panes' sheets are drawn on, by view; provided by [PaneHost]. */
 private val LocalSheetColor = staticCompositionLocalOf<@Composable (String?) -> Color> {
@@ -1003,6 +1013,15 @@ fun PaneTabStrip(
     val addSlotWidth = if (dev.supermux.ui.adaptive.LocalPointerAvailable.current) 36.dp else 64.dp
     val addSlotPx = if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
     val rowPadPx = with(density) { TabRowPadding.toPx() }
+    // The one strip [PaneHost] puts something at the right end of keeps its tabs clear of it.
+    val end = LocalStripEnd.current?.takeIf { groupId.isNotEmpty() && it.groupId == groupId }
+    val endWidth = end?.width ?: 0.dp
+    val endPx = with(density) { endWidth.toPx() }
+    // The part of the strip its chrome keeps clear (the window's own buttons over a strip in the
+    // top band): the tabs share only the rest, so the + never scrolls out of view beside them.
+    // Measured by the strip below, a frame after the chrome's own inset lands.
+    var chromeKeepsPx by remember { mutableStateOf(0) }
+    val boundedStripPx = if (constraints.hasBoundedWidth) constraints.maxWidth else null
     // Chrome's widths: the strip shared out equally between TabMinWidth and TabMaxWidth, and past
     // that it scrolls. While the pointer is on the strip, a closed tab's room is not handed out
     // (room is only taken, for a new tab), so the next tab's × stays under the pointer.
@@ -1010,7 +1029,7 @@ fun PaneTabStrip(
     // cut it, and the others split what is left.
     val minPx = with(density) { TabMinWidth.toPx() }
     val maxPx = with(density) { TabMaxWidth.toPx() }
-    val availablePx = stripWidthPx - addSlotPx - rowPadPx
+    val availablePx = stripWidthPx - chromeKeepsPx - addSlotPx - rowPadPx - endPx
     val tabCount = displayIds.size.coerceAtLeast(1)
     val textMeasurer = rememberTextMeasurer()
     val activeTitle = titleFor(activeViewId)
@@ -1102,6 +1121,13 @@ fun PaneTabStrip(
             .then(chrome.strip("strip-$chromeKey"))
             .testTag("view-tab-strip"),
     ) {
+        // As wide as the room the chrome leaves the strip's content.
+        Spacer(
+            Modifier.fillMaxSize().onGloballyPositioned {
+                val keeps = boundedStripPx?.let { strip -> (strip - it.size.width).coerceAtLeast(0) } ?: 0
+                if (keeps != chromeKeepsPx) chromeKeepsPx = keeps
+            },
+        )
         // Absolute-positioned tabs: each id keeps composition identity and slides
         // (graphicsLayer translation) to its live-order slot — "transforms into"
         // the place the neighbour vacated.
@@ -1111,6 +1137,7 @@ fun PaneTabStrip(
         // gets its full intrinsic width; this Box only scrolls + clips the viewport.
         Box(
             Modifier
+                .padding(end = endWidth)
                 .fillMaxHeight()
                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
@@ -1328,6 +1355,21 @@ fun PaneTabStrip(
                         addSlot()
                     }
                 }
+            }
+        }
+        if (end != null) {
+            // Out of the tabs' scroll, pinned to the strip's right edge; like the tabs row, not a
+            // window-drag surface.
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(endWidth)
+                    .padding(top = TabTopInset)
+                    .then(chrome.tabs("strip-end-$chromeKey")),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                end.content()
             }
         }
     }

@@ -19,20 +19,17 @@ export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" 
   authed: boolean
 }
 
+/** opencode's data folder (auth.json, opencode.db): XDG on every OS, since opencode uses xdg-basedir. On Windows 11
+ *  (opencode 1.19.5) it made %USERPROFILE%\.local\share\opencode and never %LOCALAPPDATA%\opencode. */
 export function openCodeDataDir(opts: {
   home: string
   xdgDataHome?: string
   env?: Record<string, string | undefined>
   platform?: NodeJS.Platform
-  localAppData?: string
 }): string {
   const env = opts.env ?? process.env
-  const platform = opts.platform ?? process.platform
-  const pathJoin = platform === "win32" ? win32.join : join
-  const base = platform === "win32"
-    ? (opts.localAppData || env.LOCALAPPDATA || pathJoin(opts.home, "AppData", "Local"))
-    : (opts.xdgDataHome || env.XDG_DATA_HOME || pathJoin(opts.home, ".local", "share"))
-  return pathJoin(base, "opencode")
+  const pathJoin = (opts.platform ?? process.platform) === "win32" ? win32.join : join
+  return pathJoin(opts.xdgDataHome || env.XDG_DATA_HOME || pathJoin(opts.home, ".local", "share"), "opencode")
 }
 
 // Provider API keys opencode picks up from the environment. Presence of any one
@@ -51,7 +48,6 @@ export async function resolveOpenCodeAuth(opts: {
   env?: Record<string, string | undefined>
   fileExists?: (p: string) => boolean
   platform?: NodeJS.Platform
-  localAppData?: string
 }): Promise<OpenCodeAuthResult> {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   const env = opts.env ?? process.env

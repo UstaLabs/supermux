@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -20,16 +21,19 @@ class TakeoverTest {
     }
 
     private fun macEnv(m: Mac, uid: Long? = 501, failing: Set<List<String>> = emptySet(), scripted: Map<List<String>, List<OsEnv.RunResult>> = emptyMap()) =
-        FakeOsEnv(os = OsEnv.Os.MAC, home = m.home, uid = uid, failing = failing, scripted = scripted)
+        FakeOsEnv(os = DesktopOs.MACOS, home = m.home, uid = uid, failing = failing, scripted = scripted)
 
     private val printHost = listOf("launchctl", "print", "gui/501/dev.supermux.host")
     private val printBroker = listOf("launchctl", "print", "gui/501/dev.supermux.broker")
 
     private fun ok(r: Takeover.PrepareResult) = assertIs<Takeover.PrepareResult.Ok>(r).prepared
 
+    /** The copy of the app these tests act as: every unstamped definition they set up is its own. */
+    private val me = BrokerService.Owner("1234abcd1234abcd1234abcd1234abcd", ownsUnstamped = true)
+
     @Test fun the100KeepAliveIsNotAnOldService() {
         val m = Mac(); m.plist("dev.supermux.host", LegacyKeepAlive.plist)
-        assertTrue(Takeover.findOldServices(macEnv(m)).isEmpty(), "it runs the app; taking it over would boot out the app")
+        assertTrue(Takeover.findOldServices(macEnv(m), me).isEmpty(), "it runs the app; taking it over would boot out the app")
     }
 
     // ---- parsing / env ----
@@ -80,16 +84,16 @@ class TakeoverTest {
         val m = Mac()
         m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>"))
         m.plist("dev.supermux.host", plistText)
-        assertEquals(listOf("dev.supermux.host", "dev.supermux.broker"), Takeover.findOldServices(macEnv(m)).map { it.name })
+        assertEquals(listOf("dev.supermux.host", "dev.supermux.broker"), Takeover.findOldServices(macEnv(m), me).map { it.name })
     }
 
     @Test fun ourOwnManagedPlistIsNotAnOldService() {
         val m = Mac()
         m.plist("dev.supermux.host", BrokerService.launchdPlist(BrokerService.Spec(Path.of("/x/supermux-broker"), emptyMap(), m.state.resolve("l"))))
-        assertNull(Takeover.findOldService(macEnv(m)))
+        assertNull(Takeover.findOldService(macEnv(m), me))
         // a MUX_MANAGED_BY key alone is enough too
         m.plist("dev.supermux.host", plistText.replace("<key>MUX_WEB_PORT</key>", "<key>MUX_MANAGED_BY</key><string>x</string><key>MUX_WEB_PORT</key>"))
-        assertNull(Takeover.findOldService(macEnv(m)))
+        assertNull(Takeover.findOldService(macEnv(m), me))
     }
 
     @Test fun macDevCheckoutIsRejected() {
@@ -97,7 +101,7 @@ class TakeoverTest {
         m.plist("dev.supermux.broker", plistText.replace(
             "<string>/Users/alex/.mux/state/bin/supermux-broker</string>",
             "<string>/opt/homebrew/bin/bun</string><string>/Users/a/projects/supermux/src/main.ts</string>"))
-        assertTrue(Takeover.findOldServices(macEnv(m)).isEmpty())
+        assertTrue(Takeover.findOldServices(macEnv(m), me).isEmpty())
     }
 
     @Test fun plistWithMuxKeysOnlyInACommentProducesNoEnv() {
@@ -109,8 +113,8 @@ class TakeoverTest {
         val home = createTempDirectory()
         val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
         Files.writeString(dir.resolve("supermux.service"), res("linux-supermux.service"))
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
-        assertEquals("supermux.service", Takeover.findOldService(env)!!.name)
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        assertEquals("supermux.service", Takeover.findOldService(env, me)!!.name)
     }
 
     @Test fun linuxDevCheckoutUnitIsRejected() {
@@ -118,7 +122,7 @@ class TakeoverTest {
         val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
         Files.writeString(dir.resolve("supermux.service"),
             "[Service]\nExecStart=/usr/bin/true\nExecStart=sg render -c \"exec %h/.bun/bin/bun %h/projects/supermux/src/main.ts\"\n")
-        assertTrue(Takeover.findOldServices(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000)).isEmpty())
+        assertTrue(Takeover.findOldServices(FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000), me).isEmpty())
     }
 
     // ---- linux env sources ----
@@ -140,7 +144,7 @@ class TakeoverTest {
         val envFile = h.home.resolve("mux.env").also { Files.writeString(it, "# c\n\nMUX_FROM_FILE=\"f1\"\nMUX_OTHER=2\n") }
         val d = unit.resolveSibling("supermux.service.d").also { Files.createDirectories(it) }
         Files.writeString(d.resolve("override.conf"), "[Service]\nEnvironment=MUX_WHATSAPP_WEBHOOK_SECRET=s3\nEnvironmentFile=-$envFile\n")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, failing = setOf(showEnv))
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, failing = setOf(showEnv))
         val carried = ok(Takeover.prepare(listOf(old), createTempDirectory(), env)).carriedEnv
         assertEquals("s3", carried["MUX_WHATSAPP_WEBHOOK_SECRET"])
         assertEquals("f1", carried["MUX_FROM_FILE"])
@@ -150,7 +154,7 @@ class TakeoverTest {
     @Test fun linuxParsesScriptedSystemctlShow() {
         val (h, old) = linuxUnit()
         val envFile = h.home.resolve("m.env").also { Files.writeString(it, "MUX_FILE=x\n") }
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, scripted = mapOf(
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, scripted = mapOf(
             showEnv to listOf(OsEnv.RunResult(0, "NODE_ENV=production \"MUX_TELEGRAM_BOT_TOKEN=1:a b\" MUX_D=4\n", "")),
             showFiles to listOf(OsEnv.RunResult(0, "-$envFile (ignore_errors=yes)\n", "")),
         ))
@@ -162,7 +166,7 @@ class TakeoverTest {
         assumePosixHost()
         val (h, old) = linuxUnit()
         val state = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val prepared = ok(Takeover.prepare(listOf(old), state, env))
         val stopCmds = env.ran.filter { it.getOrNull(2) in setOf("disable", "is-active") }
         assertEquals(listOf(listOf("systemctl", "--user", "disable", "--now", "supermux.service"),
@@ -170,7 +174,7 @@ class TakeoverTest {
         assertTrue(Files.exists(state.resolve("takeover-backup/pending.json")))
         assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(state.resolve("takeover-backup/pending.json"))), "it holds the carried env")
         env.ran.clear()
-        assertTrue(Takeover.rollback(prepared, env))
+        assertTrue(Takeover.rollback(prepared, env, me))
         assertEquals(listOf("systemctl", "--user", "enable", "--now", "supermux.service"), env.ran.last())
         assertTrue(listOf("systemctl", "--user", "daemon-reload") in env.ran)
         assertFalse(Files.exists(state.resolve("takeover-backup/pending.json")))
@@ -179,7 +183,7 @@ class TakeoverTest {
     @Test fun linuxStillActiveFailsAndRollsBack() {
         val (h, old) = linuxUnit()
         val isActive = listOf("systemctl", "--user", "is-active", "supermux.service")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = h.home, uid = 1000,
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = h.home, uid = 1000,
             scripted = mapOf(isActive to List(20) { OsEnv.RunResult(0, "active\n", "") }))
         assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(listOf(old), createTempDirectory(), env))
         assertEquals(listOf("systemctl", "--user", "enable", "--now", "supermux.service"), env.ran.last())
@@ -190,7 +194,7 @@ class TakeoverTest {
     @Test fun prepareBacksUpDisablesBootsOutAndDoesNotDeleteThePlist() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env = macEnv(m, failing = setOf(printHost))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         assertEquals(listOf("launchctl", "disable", "gui/501/dev.supermux.host"), env.ran[0])
         assertEquals(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"), env.ran[1])
         assertEquals(printHost, env.ran[2])
@@ -204,17 +208,17 @@ class TakeoverTest {
         val m = Mac()
         val plist = m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>"))
         val env = macEnv(m, failing = setOf(printBroker))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         assertTrue(Files.exists(plist))
         env.ran.clear()
-        assertTrue(Takeover.rollback(p, env))
+        assertTrue(Takeover.rollback(p, env, me))
         // ours is unloaded first (assert its bootout), then enable precedes bootstrap
         assertEquals(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"), env.ran[0])
         val enable = env.ran.indexOf(listOf("launchctl", "enable", "gui/501/dev.supermux.broker"))
         val boot = env.ran.indexOf(listOf("launchctl", "bootstrap", "gui/501", plist.toString()))
         assertTrue(enable in 1 until boot)
         // a fresh prepare + commit deletes the old plist and the journal
-        val p2 = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        val p2 = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         Takeover.commit(p2, env)
         assertFalse(Files.exists(plist))
         assertFalse(Files.exists(m.state.resolve("takeover-backup/pending.json")))
@@ -223,16 +227,16 @@ class TakeoverTest {
     @Test fun commitKeepsTheSameLabelPlist() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env = macEnv(m, failing = setOf(printHost))
-        Takeover.commit(ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env)), env)
+        Takeover.commit(ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env)), env)
         assertTrue(Files.exists(plist))
     }
 
     @Test fun rollbackRestoresSameLabelPlistAndBootstrapsIt() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env = macEnv(m, failing = setOf(printHost))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         Files.writeString(plist, "ours")
-        assertTrue(Takeover.rollback(p, env))
+        assertTrue(Takeover.rollback(p, env, me))
         assertEquals(plistText, String(Files.readAllBytes(plist), Charsets.UTF_8))
         assertEquals(listOf("launchctl", "bootstrap", "gui/501", plist.toString()), env.ran.last())
     }
@@ -240,12 +244,12 @@ class TakeoverTest {
     @Test fun rollbackWaitsForOursToBeGoneBeforeBootstrappingTheSameLabel() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env0 = macEnv(m, failing = setOf(printHost))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env0), m.state, env0))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env0, me), m.state, env0))
         val alive = OsEnv.RunResult(0, "", "")
         val gone = OsEnv.RunResult(113, "", "Could not find service")
         // remove() waits once (3 polls alive), rollback's own wait then finds it gone at once
         val env = macEnv(m, scripted = mapOf(printHost to listOf(alive, alive, alive, gone, gone)))
-        assertTrue(Takeover.rollback(p, env))
+        assertTrue(Takeover.rollback(p, env, me))
         val boot = env.ran.indexOf(listOf("launchctl", "bootstrap", "gui/501", plist.toString()))
         val lastPrint = env.ran.lastIndexOf(printHost)
         assertTrue(lastPrint in 0 until boot)
@@ -254,11 +258,11 @@ class TakeoverTest {
     @Test fun rollbackRetriesBootstrap() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env0 = macEnv(m, failing = setOf(printHost))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env0), m.state, env0))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env0, me), m.state, env0))
         val boot = listOf("launchctl", "bootstrap", "gui/501", plist.toString())
         val env = macEnv(m, failing = setOf(printHost),
             scripted = mapOf(boot to listOf(OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(5, "", "busy"), OsEnv.RunResult(0, "", ""))))
-        assertTrue(Takeover.rollback(p, env))
+        assertTrue(Takeover.rollback(p, env, me))
         assertEquals(3, env.ran.count { it == boot })
         assertEquals(listOf(1_000L, 1_000L), env.sleeps)
     }
@@ -266,17 +270,17 @@ class TakeoverTest {
     @Test fun rollbackReportsFalseWhenBootstrapNeverSucceedsOrBackupGone() {
         val m = Mac(); val plist = m.plist("dev.supermux.host", plistText)
         val env0 = macEnv(m, failing = setOf(printHost))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env0), m.state, env0))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env0, me), m.state, env0))
         val boot = listOf("launchctl", "bootstrap", "gui/501", plist.toString())
-        assertFalse(Takeover.rollback(p, macEnv(m, failing = setOf(boot))))
+        assertFalse(Takeover.rollback(p, macEnv(m, failing = setOf(boot)), me))
         Files.delete(Path.of(p.olds.single().backup))
-        assertFalse(Takeover.rollback(p, macEnv(m)))
+        assertFalse(Takeover.rollback(p, macEnv(m), me))
     }
 
     @Test fun stillLoadedAfterBootoutFailsAndRollsBack() {
         val m = Mac(); m.plist("dev.supermux.host", plistText)
         val env = macEnv(m) // print always exits 0: never unloads
-        assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         assertTrue(env.ran.count { it == printHost } >= 10)
         assertTrue(env.ran.any { it.getOrNull(1) == "bootstrap" })
         assertFalse(Files.exists(m.state.resolve("takeover-backup/pending.json")))
@@ -285,7 +289,7 @@ class TakeoverTest {
     @Test fun nullUidOnMacFailsAndTouchesNothing() {
         val m = Mac(); val plist = m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>"))
         val env = macEnv(m, uid = null)
-        assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        assertIs<Takeover.PrepareResult.Failed>(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         assertTrue(Files.exists(plist))
         assertTrue(env.ran.isEmpty())
     }
@@ -293,9 +297,9 @@ class TakeoverTest {
     @Test fun aSecondTakeoverKeepsTheFirstBackup() {
         val m = Mac(); m.plist("dev.supermux.host", plistText)
         val env = macEnv(m, failing = setOf(printHost))
-        val a = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env)).olds.single().backup
+        val a = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env)).olds.single().backup
         Files.writeString(Path.of(a), "first")
-        val b = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env)).olds.single().backup
+        val b = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env)).olds.single().backup
         assertTrue(a != b)
         assertEquals("first", Files.readString(Path.of(a)))
     }
@@ -306,7 +310,7 @@ class TakeoverTest {
         m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>")
             .replace("Alex’s MacBook Air", "other").replace("<key>MUX_RELAY_DOMAIN</key>", "<key>MUX_EXTRA</key><string>e</string><key>MUX_RELAY_DOMAIN</key>"))
         val env = macEnv(m, failing = setOf(printHost, printBroker))
-        val p = ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        val p = ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         assertEquals(2, p.olds.size)
         assertEquals("Alex’s MacBook Air", p.carriedEnv["MUX_HOST_NAME"])
         assertEquals("e", p.carriedEnv["MUX_EXTRA"])
@@ -317,9 +321,9 @@ class TakeoverTest {
         val m = Mac()
         m.plist("dev.supermux.host", plistText.replace("<key>MUX_RELAY_DOMAIN</key>\n    <string>relay.supermux.dev</string>", ""))
         val env = macEnv(m, failing = setOf(printHost))
-        assertNull(ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env)).oldRelay)
+        assertNull(ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env)).oldRelay)
         m.plist("dev.supermux.host", plistText.replace("<string>relay.supermux.dev</string>", "<string></string>"))
-        assertEquals(false, ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env)).oldRelay)
+        assertEquals(false, ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env)).oldRelay)
     }
 
     // ---- journal ----
@@ -333,20 +337,63 @@ class TakeoverTest {
         val m = Mac()
         val plist = m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>"))
         val env = macEnv(m, failing = setOf(printBroker))
-        ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
+        ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
         val journal = m.state.resolve("takeover-backup/pending.json")
         assertTrue(Files.exists(journal))
 
         env.ran.clear()
-        assertTrue(Takeover.recoverPending(m.state, env, ourServiceHealthy = false))
+        assertTrue(Takeover.recoverPending(m.state, env, ourServiceHealthy = false, me = me))
         assertTrue(env.ran.any { it.getOrNull(1) == "bootstrap" })
         assertFalse(Files.exists(journal))
         assertTrue(Files.exists(plist))
 
-        ok(Takeover.prepare(Takeover.findOldServices(env), m.state, env))
-        assertTrue(Takeover.recoverPending(m.state, env, ourServiceHealthy = true))
+        ok(Takeover.prepare(Takeover.findOldServices(env, me), m.state, env))
+        assertTrue(Takeover.recoverPending(m.state, env, ourServiceHealthy = true, me = me))
         assertFalse(Files.exists(plist))
         assertFalse(Files.exists(journal))
-        assertFalse(Takeover.recoverPending(m.state, env, ourServiceHealthy = true))
+        assertFalse(Takeover.recoverPending(m.state, env, ourServiceHealthy = true, me = me))
+    }
+    // ── another copy of the app's definition (#77) ──
+
+    private val theirs = BrokerService.Owner("0123456789abcdef0123456789abcdef")
+    private fun stampedPlist(owner: BrokerService.Owner) = BrokerService.launchdPlist(
+        BrokerService.Spec(Path.of("/s/desktop-assets/bin/supermux-broker"), mapOf(BrokerService.INSTALL_ENV to owner.id), Path.of("/s/l.log")),
+    )
+
+    @Test fun anotherCopysManagedPlistIsAnOldServiceToTakeOver() {
+        val m = Mac()
+        m.plist("dev.supermux.host", stampedPlist(theirs))
+        assertEquals(listOf("dev.supermux.host"), Takeover.findOldServices(macEnv(m), me).map { it.name })
+        assertTrue(Takeover.findOldServices(macEnv(m), theirs).isEmpty(), "never one of the asking copy's own")
+    }
+
+    @Test fun anotherCopysUnitIsAnOldServiceButThe100UnitIsNot() {
+        val home = createTempDirectory()
+        val dir = home.resolve(".config/systemd/user").also { Files.createDirectories(it) }
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        Files.writeString(dir.resolve("supermux-host.service"), BrokerService.systemdUnit(
+            BrokerService.Spec(Path.of("/s/desktop-assets/bin/supermux-broker"), mapOf(BrokerService.INSTALL_ENV to theirs.id), Path.of("/s/l.log")),
+        ))
+        assertEquals(listOf("supermux-host.service"), Takeover.findOldServices(env, me).map { it.name })
+        Files.writeString(dir.resolve("supermux-host.service"), LegacyKeepAlive.unit)
+        assertTrue(Takeover.findOldServices(env, me).isEmpty(), "1.0.0's unit runs the app: taking it over could end the app")
+    }
+
+    @Test fun anInterruptedTakeoverOfAnotherCopyIsLeftToThatCopy() {
+        // The journal sits in the state dir every copy shares: only the copy that wrote it finishes it.
+        val m = Mac(); val plist = m.plist("dev.supermux.broker", plistText.replace("<string>dev.supermux.host</string>", "<string>dev.supermux.broker</string>"))
+        val env = macEnv(m, failing = setOf(printBroker))
+        ok(Takeover.prepare(Takeover.findOldServices(env, theirs), m.state, env, theirs))
+        env.ran.clear()
+        assertFalse(Takeover.recoverPending(m.state, env, ourServiceHealthy = false, me = BrokerService.Owner("1111222233334444aaaabbbbccccdddd")))
+        assertTrue(Files.exists(m.state.resolve("takeover-backup/pending.json")), "its journal stays for it")
+        assertTrue(env.ran.isEmpty(), "nothing restored or removed")
+        assertTrue(Files.exists(plist))
+        assertTrue(Takeover.recoverPending(m.state, env, ourServiceHealthy = false, me = theirs))
+    }
+
+    @Test fun anotherCopysInstallIdIsNeverCarried() {
+        val carried = Takeover.carriedEnv(mapOf(BrokerService.INSTALL_ENV to theirs.id, "MUX_TELEGRAM_BOT_TOKEN" to "1:a"))
+        assertEquals(mapOf("MUX_TELEGRAM_BOT_TOKEN" to "1:a"), carried)
     }
 }

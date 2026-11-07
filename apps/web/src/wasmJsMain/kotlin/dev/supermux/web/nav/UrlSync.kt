@@ -64,6 +64,7 @@ const val SETUP_PATH = "/setup"
  * Pure, and tested as such: the decision is the part worth pinning, and it needs no DOM.
  */
 fun shouldApplyInitialUrl(path: String, enabled: Boolean): Boolean =
+    // platform-ok: a URL's route
     enabled && path.substringBefore('?').trimEnd('/') != SETUP_PATH
 
 /**

@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
 import dev.supermux.chat.isRedactedReasoning
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.ui.theme.Space
@@ -39,7 +40,7 @@ private fun toolMark(tool: String): ToolMark = when {
     else -> ToolMark(tool)
 }
 
-private fun baseName(path: String) = path.trimEnd('/').substringAfterLast('/')
+private fun baseName(path: String) = pathLeaf(path)
 
 private fun humanize(name: String) = name.replace('_', ' ').replaceFirstChar { it.uppercase() }
 

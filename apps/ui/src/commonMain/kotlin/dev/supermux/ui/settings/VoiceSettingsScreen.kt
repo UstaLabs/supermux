@@ -93,6 +93,7 @@ import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.chat.resolveDictationMode
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
@@ -286,7 +287,10 @@ fun VoiceSettingsScreen(
     // Compact pushes the glossary as a sub-page (Android); anything wider expands it in place
     // (desktop — the rail owns navigation, so there is nowhere to push to).
     val pushed = compact
-    var glossaryOpen by remember { mutableStateOf(false) }
+    // Open or not, with the term being typed in it, kept for the page on display (#89): a rotation
+    // closed the glossary (on a phone, a page of its own) and emptied the field.
+    val form = rememberRetainedOnPage("voice:glossary") { GlossaryForm() }
+    var glossaryOpen by form::open
     val subPage = pushed && glossaryOpen
 
     // The sub-page's own back, registered BELOW the hub's — so it runs first and the gesture
@@ -810,7 +814,9 @@ private fun VoiceGlossarySection(
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
     val terms = remember { mutableStateListOf<String>() }
-    var newTerm by remember { mutableStateOf("") }
+    // The term being typed, kept with the open glossary (#89; see [GlossaryForm]).
+    val glossary = rememberRetainedOnPage("voice:glossary") { GlossaryForm() }
+    var newTerm by glossary::newTerm
     var loadState by remember { mutableStateOf<GlossaryLoadState>(GlossaryLoadState.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1229,4 +1235,19 @@ private fun ValueChip(
             }
         }
     }
+}
+
+/**
+ * The glossary, kept for the page on display (`rememberRetainedOnPage`, #89): open or not, and the
+ * term being typed, which goes when it closes, as it went with the glossary's composition.
+ */
+private class GlossaryForm {
+    private var shown by mutableStateOf(false)
+    var open: Boolean
+        get() = shown
+        set(value) {
+            shown = value
+            if (!value) newTerm = ""
+        }
+    var newTerm by mutableStateOf("")
 }

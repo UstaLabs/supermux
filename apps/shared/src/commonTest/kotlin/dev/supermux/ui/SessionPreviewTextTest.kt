@@ -94,4 +94,36 @@ class SessionPreviewTextTest {
         assertEquals("Merged dev, see the PR and this", messagePlainText("Merged `dev`, see [the PR](https://x.y/1) and **this**"))
         assertEquals("a b c", messagePlainText("a   b\t\tc"))
     }
+
+    // The overlay reads a whole message as plain text, but its links must still open (#62): each
+    // `[label](url)` keeps where its label lands. Bare URLs stay in the text as they are.
+    @Test fun aWholeMessageKeepsWhereItsLinksGo() {
+        val raw = "### Plan\n- see [the PR](https://x.y/1) and **[the docs](https://d.e/f)**\n- then https://a.b/c"
+        val plain = messagePlainLinked(raw)
+        assertEquals(messagePlainText(raw), plain.text)
+        assertEquals("Plan\n• see the PR and the docs\n• then https://a.b/c", plain.text)
+        assertEquals(
+            listOf("the PR" to "https://x.y/1", "the docs" to "https://d.e/f"),
+            plain.links.map { plain.text.substring(it.start, it.end) to it.url },
+        )
+    }
+
+    @Test fun aLinkWithNoLabelLeavesNothingToOpen() {
+        val plain = messagePlainLinked("see [](https://x.y/1) here")
+        assertEquals("see here", plain.text)
+        assertEquals(emptyList(), plain.links)
+    }
+
+    @Test fun aLinkThatWouldNotOpenKeepsOnlyItsLabel() {
+        val plain = messagePlainLinked("see [docs](javascript:void) and [site](https://x.y/1)")
+        assertEquals("see docs and site", plain.text)
+        assertEquals(listOf("site" to "https://x.y/1"), plain.links.map { plain.text.substring(it.start, it.end) to it.url })
+    }
+
+    // The marks it keeps links with can't be faked by the text itself.
+    @Test fun aMessageHoldingItsOwnMarksStillReads() {
+        val plain = messagePlainLinked("odd  marks  and [a link](https://x.y/1)")
+        assertEquals("odd marks and a link", plain.text)
+        assertEquals(listOf("a link" to "https://x.y/1"), plain.links.map { plain.text.substring(it.start, it.end) to it.url })
+    }
 }

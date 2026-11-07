@@ -109,6 +109,8 @@ for (const agent of AGENTS) for (const role of ["worker", "pa"] as const) {
       expect(after.instructions!.text).toContain('You are "c3-probe"')
       expect(Object.keys(after.files).filter((f) => f.startsWith("<work>/"))).toEqual([])
       expect(after.plugins).toEqual([])
+      // #102: each plugin's skill folder, linked into the session HOME's .cursor/skills.
+      expect(after.skills).toEqual(["<ROOT>/mux/plugins/mux-core/skills/mux-core-skill", "<ROOT>/mux/plugins/thirdparty/skills/thirdparty-skill"])
       expect(after.args).toEqual([])
     }
     if (agent === "claude" && role === "pa") {

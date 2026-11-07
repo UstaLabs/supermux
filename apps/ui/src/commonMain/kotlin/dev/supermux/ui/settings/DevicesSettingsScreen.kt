@@ -52,7 +52,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.chat.parseChatTs
 import dev.supermux.net.AddDeviceResponse
@@ -72,6 +69,9 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -154,7 +154,9 @@ fun DevicesSettingsScreen(
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // The add affordance follows the chrome: with our own Scaffold it is Android's FAB, otherwise
     // desktop's header button (the hub's detail pane paints no Scaffold for us to hang one on).
-    var showAdd by remember { mutableStateOf(false) }
+    // The page's dialogs, kept for the page on display (#89): see [DevicesForm].
+    val form = rememberRetainedOnPage("devices") { DevicesForm() }
+    var showAdd by form::showAdd
     if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
@@ -191,6 +193,7 @@ fun DevicesSettingsScreen(
         ) { padding ->
             DevicesSettingsBody(
                 actions = actions,
+                form = form,
                 modifier = modifier.padding(padding),
                 showHeaderAdd = false,
                 showAdd = showAdd,
@@ -200,6 +203,7 @@ fun DevicesSettingsScreen(
     } else {
         DevicesSettingsBody(
             actions = actions,
+            form = form,
             modifier = modifier,
             showHeaderAdd = true,
             showAdd = showAdd,
@@ -211,6 +215,7 @@ fun DevicesSettingsScreen(
 @Composable
 private fun DevicesSettingsBody(
     actions: DevicesSettingsActions,
+    form: DevicesForm,
     modifier: Modifier,
     showHeaderAdd: Boolean,
     showAdd: Boolean,
@@ -219,10 +224,16 @@ private fun DevicesSettingsBody(
     val cs = MaterialTheme.colorScheme
     var loadState by remember { mutableStateOf<DevicesLoadState>(DevicesLoadState.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
-    var revokeTarget by remember { mutableStateOf<String?>(null) }
-    var revokeBusy by remember { mutableStateOf(false) }
-    var revokeError by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+    var revokeTarget by form::revokeTarget
+    var revokeBusy by form::revokeBusy
+    var revokeError by form::revokeError
+    // The revoke finishes on the fleet's scope; the list on display reloads when it lands.
+    val scope = rememberRetainedScope()
+    LaunchedEffect(form, form.revoked) {
+        if (!form.revoked) return@LaunchedEffect
+        form.revoked = false
+        reloadKey++
+    }
 
     suspend fun loadOnce() {
         val previous = loadState
@@ -389,14 +400,14 @@ private fun DevicesSettingsBody(
                         revokeError = null
                         scope.launch {
                             val ok = actions.deviceRevoke(name)
-                            revokeBusy = false
+                            form.revokeBusy = false
                             if (ok) {
-                                revokeTarget = null
+                                form.revokeTarget = null
                                 // Refresh from the broker (do not trust a local-only filter).
-                                reloadKey++
+                                form.revoked = true
                             } else {
                                 // Keep the dialog open and surface the failure visibly.
-                                revokeError = "Couldn't revoke the device. Try again."
+                                form.revokeError = "Couldn't revoke the device. Try again."
                             }
                         }
                     },
@@ -421,8 +432,10 @@ private fun DevicesSettingsBody(
     // Android's page opened the same `AlertDialog`, so there is no compact sheet to branch to.
     if (showAdd) {
         AddDeviceDialog(
+            form = form.add,
             onAdd = actions.deviceAdd,
             onDismiss = { minted ->
+                form.add.reset()
                 onShowAddChange(false)
                 if (minted) reloadKey++
             },
@@ -432,19 +445,34 @@ private fun DevicesSettingsBody(
 
 @Composable
 private fun AddDeviceDialog(
+    form: AddDeviceForm,
     onAdd: suspend (String) -> AddDeviceResponse?,
     onDismiss: (minted: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var result by remember { mutableStateOf<AddDeviceResponse?>(null) }
+    val platform = LocalPlatform.current
+    // The name, and a link once minted, kept for the page on display; the mint runs on the
+    // fleet's scope and lands in [form] (#89). The device exists on the broker from that moment
+    // and its link opens once, so a rotation that dropped the dialog lost the only way to use it.
+    val scope = rememberRetainedScope()
+    var name by form::name
+    var busy by form::busy
+    var error by form::error
+    val result = form.result
     var copied by remember { mutableStateOf(false) }
     val minted = result != null
     val nameFocus = remember { FocusRequester() }
+
+    fun create(trimmed: String) {
+        busy = true
+        error = null
+        scope.launch {
+            val r = onAdd(trimmed)
+            form.busy = false
+            if (r == null) form.error = "Couldn't create the device. Try again."
+            else form.result = r
+        }
+    }
 
     // Autofocus the name field so typing immediately after opening the dialog works.
     // Retry across a couple of frames: AlertDialog content is not focusable on the first
@@ -481,14 +509,7 @@ private fun AddDeviceDialog(
                             .submitOnEnter(!busy && name.isNotBlank()) {
                                 val trimmed = name.trim()
                                 if (trimmed.isEmpty() || busy) return@submitOnEnter
-                                busy = true
-                                error = null
-                                scope.launch {
-                                    val r = onAdd(trimmed)
-                                    busy = false
-                                    if (r == null) error = "Couldn't create the device. Try again."
-                                    else result = r
-                                }
+                                create(trimmed)
                             }
                             .testTag("devices_add_name"),
                         colors = settingsFieldColors(),
@@ -504,7 +525,7 @@ private fun AddDeviceDialog(
                     }
                 }
             } else {
-                val url = result!!.url
+                val url = result.url
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.testTag("devices_pairing_result"),
@@ -559,14 +580,7 @@ private fun AddDeviceDialog(
                     onClick = {
                         val trimmed = name.trim()
                         if (trimmed.isEmpty()) return@TextButton
-                        busy = true
-                        error = null
-                        scope.launch {
-                            val r = onAdd(trimmed)
-                            busy = false
-                            if (r == null) error = "Couldn't create the device. Try again."
-                            else result = r
-                        }
+                        create(trimmed)
                     },
                     modifier = Modifier.testTag("devices_add_create"),
                 ) {
@@ -583,7 +597,7 @@ private fun AddDeviceDialog(
             } else {
                 TextButton(
                     onClick = {
-                        clipboard.setText(AnnotatedString(result!!.url))
+                        platform.copyToClipboard(form.result!!.url)
                         copied = true
                     },
                     modifier = Modifier.testTag("devices_add_copy"),
@@ -658,5 +672,35 @@ internal fun deviceLastSeen(
         diffSec < 3600L -> "${diffSec / 60}m"
         diffSec < 86_400L -> "${diffSec / 3600}h"
         else -> "${diffSec / 86_400}d"
+    }
+}
+
+/**
+ * The Devices page's dialogs, kept for the page on display (`rememberRetainedOnPage`, #89): which
+ * one is open, what is typed, and the call in flight, which runs on the fleet's scope and leaves
+ * its outcome here for the page on display.
+ */
+private class DevicesForm {
+    var showAdd by mutableStateOf(false)
+    val add = AddDeviceForm()
+    var revokeTarget by mutableStateOf<String?>(null)
+    var revokeBusy by mutableStateOf(false)
+    var revokeError by mutableStateOf<String?>(null)
+    /** A revoke landed: the list on display reloads. */
+    var revoked by mutableStateOf(false)
+}
+
+/** The add-device dialog (see [DevicesForm]): the name, the mint, and the one-time link it gave. */
+private class AddDeviceForm {
+    var name by mutableStateOf("")
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var result by mutableStateOf<AddDeviceResponse?>(null)
+
+    fun reset() {
+        name = ""
+        busy = false
+        error = null
+        result = null
     }
 }

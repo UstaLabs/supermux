@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import {
-  acquirePidFile, isBrokerProcessWith, looksLikeBrokerCommand, releasePidFile,
+  acquirePidFile, isBrokerProcessWith, isProcessAlive, looksLikeBrokerCommand, releasePidFile,
   type BrokerProbeDeps, type PidFileDeps,
 } from "./pid-file"
 
@@ -163,4 +163,10 @@ test("acquirePidFile with the real probes replaces a dead pid", async () => {
   writeFileSync(path, String(child.pid))
   acquirePidFile(path)
   expect(readFileSync(path, "utf8")).toBe(String(process.pid))
+})
+
+// #36: kill(pid, 0) answers EPERM for a live process that is someone else's (here root's init; on Windows a broker
+// in another session). Counting that as dead let a second broker take over the first one's broker.pid.
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a live process owned by another user is alive", () => {
+  expect(isProcessAlive(1)).toBe(true)
 })

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test"
-import { resolveSelfRename, buildNamingRule } from "./naming"
+import { resolveSelfRename, buildNamingRule, ensureUnique } from "./naming"
 
 // --- resolveSelfRename ------------------------------------------------------
 
@@ -60,4 +60,26 @@ test("buildNamingRule tells the agent it may rename only once", () => {
   const rule = buildNamingRule("My Cool 🎉")
   expect(rule).toMatch(/only.*once|once/i)
   expect(rule).not.toMatch(/rename again/i)
+})
+
+// A session's name becomes its home folder (agents/<kind>/<name>). On macOS and Windows a file system ignores letter
+// case: "Fix bug" and "fix bug" were two sessions sharing one home, their credentials and history mixed.
+test("ensureUnique: a name in another letter case is taken (the same folder on macOS and Windows)", () => {
+  for (const platform of ["darwin", "win32"] as const) {
+    expect(ensureUnique("Fix bug", new Set(["fix bug"]), platform)).toBe("Fix bug-2")
+    expect(ensureUnique("fix bug", new Set(["FIX BUG", "fix bug-2"]), platform)).toBe("fix bug-3")
+    expect(ensureUnique("other", new Set(["fix bug"]), platform)).toBe("other")
+  }
+})
+
+// Linux keeps letter case: "Test" and "test" always were two folders there. Folding case on Linux too renamed a
+// resumed archived "Test" to "Test-2" (a new home) whenever a "test" was live, an upgrade breaking what worked.
+test("ensureUnique on Linux: another letter case is another folder, as it always was", () => {
+  expect(ensureUnique("Test", new Set(["test"]), "linux")).toBe("Test")
+  expect(ensureUnique("test", new Set(["test"]), "linux")).toBe("test-2")
+})
+
+test("ensureUnique: names are compared as the folders they become", () => {
+  // "a/b" is the folder "a-b" (a / never nests a home).
+  expect(ensureUnique("a/b", new Set(["a-b"]))).toBe("a/b-2")
 })

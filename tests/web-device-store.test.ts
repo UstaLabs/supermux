@@ -77,3 +77,53 @@ test("touch writes at most once per interval", () => {
   expect(ds.list()[0]!.last_seen_at).toBe(first)
   clean()
 })
+
+// Card #86: the CLI (`supermux revoke`) and a hand edit change devices.json from
+// another process, so the broker's own revoke() never ran and the device's push
+// rows outlived it. Whoever removes the device, the broker's listeners hear it.
+test("a device removed by another process fires this instance's revoke listeners", () => {
+  clean()
+  const broker = new DeviceStore(PATH)
+  broker.mint("fold")
+  broker.mint("dev iphone")
+  const heard: string[] = []
+  broker.addRevokeListener((name) => heard.push(name))
+  expect(broker.list().length).toBe(2)       // the broker's cache is warm
+
+  new DeviceStore(PATH).revoke("dev iphone") // the CLI, in its own process
+  broker.list()                              // the broker's next read sees the edit
+
+  expect(heard).toEqual(["dev iphone"])
+  clean()
+})
+
+test("an unreadable devices.json revokes nobody", () => {
+  clean()
+  const broker = new DeviceStore(PATH)
+  broker.mint("fold")
+  const heard: string[] = []
+  broker.addRevokeListener((name) => heard.push(name))
+  expect(broker.list().length).toBe(1)
+
+  require("fs").writeFileSync(PATH, "{ half-written")
+  broker.list()
+  unlinkSync(PATH)
+  broker.list()
+
+  expect(heard).toEqual([])
+  clean()
+})
+
+test("the broker's own revoke fires its listeners once", () => {
+  clean()
+  const broker = new DeviceStore(PATH)
+  broker.mint("fold")
+  const heard: string[] = []
+  broker.addRevokeListener((name) => heard.push(name))
+
+  broker.revoke("fold")
+  broker.list()
+
+  expect(heard).toEqual(["fold"])
+  clean()
+})

@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BlobText
 import dev.supermux.net.FsDiffResult
@@ -590,7 +591,7 @@ fun EditorPanel(
                                             color = cs.primary,
                                         )
                                         Text(
-                                            editor.loadingPath!!.substringAfterLast('/'),
+                                            pathLeaf(editor.loadingPath!!),
                                             color = cs.onSurfaceVariant,
                                             fontSize = 12.sp,
                                             modifier = Modifier.padding(top = Space.sm),

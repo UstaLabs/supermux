@@ -64,6 +64,7 @@ import dev.supermux.editor.plugins.view.EditorSettings
 import dev.supermux.editor.plugins.view.ViewSettings
 import dev.supermux.editor.plugins.view.viewSettings
 import dev.supermux.editor.syntax.SyntaxBackend
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BlobText
 import dev.supermux.net.DiffFile
@@ -208,7 +209,7 @@ internal fun NativeWalkthroughRegion(
         modifier.testTag("walkthrough_native_region"),
         theme = rememberAppEditorTheme(),
         widgets = widgets,
-        label = path.substringAfterLast('/'),
+        label = pathLeaf(path),
         lineWrap = true,
     )
 }
@@ -366,6 +367,7 @@ private fun NativeFileDiffEditor(
                 val reverted = shown.view?.state?.doc?.toString()
                 if (reverted != null) scope.launch {
                     if (!applyRevert(support, repo, path, reverted, working.crlf, expected = working.text)) {
+                        // platform-ok: a git path, always /
                         notices.show("Couldn't revert that change: ${path.substringAfterLast('/')} changed since the diff was loaded")
                     }
                     // Either way the views are rebuilt from disk: a refused revert must not leave the
@@ -464,7 +466,7 @@ private fun NativeFileDiffEditor(
             if (baseView != null) {
                 if (p != null) SideBySideDiff(p, Modifier.fillMaxSize(), theme = theme, widgets = widgets, lineWrap = wrap, readOnly = true)
             } else {
-                InlineDiffEditor(workingView, Modifier.fillMaxSize(), theme = theme, widgets = widgets, label = path.substringAfterLast('/'), lineWrap = wrap, readOnly = true)
+                InlineDiffEditor(workingView, Modifier.fillMaxSize(), theme = theme, widgets = widgets, label = pathLeaf(path), lineWrap = wrap, readOnly = true)
             }
         }
     }

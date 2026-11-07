@@ -111,6 +111,25 @@ class BrokerApiUsageTest {
         assertEquals(false, resets.grants.single().useRequiresLimit)
     }
 
+    @Test fun antigravity_decodes_from_the_broker_shape_and_leniently() = runTest {
+        val usage = api(
+            """{"antigravity": {"windows": [
+                 {"id": "gemini-5h", "label": "Gemini Models · 5-hour", "used": 60.5, "resetsAt": "2026-11-07T17:19:08Z", "resetsAtIso": "2026-11-07T17:19:08.000Z"},
+                 {"id": null, "label": null, "used": null, "resetsAt": null}]},
+               "errors": {}, "source": {"antigravity": "live"}, "refreshing": ["antigravity"]}""",
+        ).usage()
+        val windows = assertNotNull(usage.antigravity).windows
+        assertEquals("Gemini Models · 5-hour", windows[0].label)
+        assertEquals(60.5, windows[0].used)
+        assertEquals("2026-11-07T17:19:08Z", windows[0].resetsAt)
+        assertEquals("", windows[1].label)
+        assertEquals(0.0, windows[1].used)
+        assertNull(windows[1].resetsAt)
+        assertEquals(listOf("antigravity"), usage.refreshing)
+        // An older broker sends no Antigravity at all.
+        assertNull(api("""{"claude": null}""").usage().antigravity)
+    }
+
     @Test fun the_claude_reset_result_is_lenient_too() = runTest {
         val r = api("""{"result": null, "resetsLeft": null, "cleared": null, "claude": {"resets": null}}""").redeemClaudeReset()
         assertEquals("", r.result)

@@ -2,7 +2,8 @@
 // into. A `..` entry (zip-slip) or a symlink pointing outside is refused before anything is moved
 // into place. Uses the host's own path rules (it runs where the archive was unpacked).
 import { lstatSync, readdirSync, readlinkSync } from "fs"
-import { dirname, isAbsolute, relative, resolve } from "path"
+import { dirname, resolve } from "path"
+import { paths } from "@supermux/platform"
 
 export interface WalkFs {
   list: (dir: string) => string[]
@@ -17,8 +18,7 @@ export const realWalkFs: WalkFs = {
 }
 
 function inside(root: string, p: string): boolean {
-  const rel = relative(root, p)
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
+  return paths.isInside(p, root)
 }
 
 /** The first entry under [root] that escapes it (a path, or a symlink target), or null. */

@@ -1,0 +1,162 @@
+# Test files that fail on Windows today. scripts/test-windows.ts (the `windows` lane in ci.yml) runs them anyway:
+# - a file NOT listed here that fails is a new Windows regression, and fails the lane;
+# - a listed file that now passes fails the lane too: take it off. The list only shrinks.
+# Format: <test file> | <why it fails on Windows> | <card>[ | flaky][ | hangs]
+# "flaky" exempts a file that fails only sometimes from the "now passes" check; "hangs" runs a file that never
+# finishes on Windows alone, with a short timeout, instead of letting it stall a chunk.
+# Refresh from a CI run's report (the windows-test-report artifact):
+#   bun scripts/test-windows.ts --from-report windows-test-report.json --write-quarantine tests/windows-quarantine.txt
+
+packages/supermux-core/tests/accounts-core.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "system accounts per agent with lazily read identity; registr" | #29
+packages/supermux-core/tests/accounts-homes.test.ts | CoreError: Shared files (history.jsonl) need symlinks, which supermux does not create on W; first: "claude home links shared entries to the root, creating missi" | #29
+packages/supermux-core/tests/accounts-login.test.ts | the ConPTY login test's Bun child never sees the typed line (it types \r, which real agy accepts: #70 checked on the VM): Bun's console stdin under ConPTY; then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/accounts-vault.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "file vault: 0700 dir, 0600 files, round trip, delete, missin" | #29
+packages/supermux-core/tests/acp-keeper.test.ts | an unhandled `read ECONNRESET` (node:net close) on keeper detach/re-attach fails whichever such test it lands in (passed in run 41877911651, failed twice in 41883601390) | #29 | flaky
+packages/supermux-core/tests/agents-table.test.ts | expect(received).toBe(expected); first: "README.md's agents table is exactly renderAgentsTable() once" | #29
+packages/supermux-core/tests/antigravity.test.ts | assertions fail, then the file never exits (a child outlives it: tree kill, platform step 6) | #29 | hangs
+packages/supermux-core/tests/auth.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "materializes owner-only credentials and preserves native ses" | #29
+packages/supermux-core/tests/claude-keeper.test.ts | expected true got false; first: "a keeper another process started under its own temp dir, too" | #29
+packages/supermux-core/tests/codex-catalog.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "multiAgentV1Args writes a private v1 catalog and passes it a" | #29
+packages/supermux-core/tests/codex-keeper.test.ts | an unhandled `read ECONNRESET` (node:net close) on keeper detach/re-attach fails whichever such test it lands in (passed in run 41877911651, failed in its re-run) | #29 | flaky
+packages/supermux-core/tests/compiled-entry.test.ts | TypeError: File URL path must be an absolute path; first: "module urls inside a compiled binary are recognised on every" | #29
+packages/supermux-core/tests/configuration.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "optional configuration and history > storage failure rolls b" | #29
+packages/supermux-core/tests/context-drivers.test.ts | runs a POSIX command Windows lacks; first: "opencode: no session context → the launch is byte-for-byte t" | #29
+packages/supermux-core/tests/context-update.test.ts | the keeper re-attach reset: an unhandled `read ECONNRESET` (node:net close), as in acp-keeper and codex-keeper; hidden until the lane's JUnit parse counted nested describe blocks | #29 | flaky
+packages/supermux-core/tests/core.test.ts | a conversation reset whose save fails: the failing save is made with POSIX file modes, which Windows ignores; hidden until the lane's JUnit parse counted nested describe blocks | #29
+packages/supermux-core/tests/detached.test.ts | expected true got false; first: "forget leaves alone a file that is not a socket, whatever a " | #29
+packages/supermux-core/tests/environment-claude.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareClaudeEnvironment > mcp.json matches the fixture byte" | #29
+packages/supermux-core/tests/environment-codex.test.ts | asserts POSIX file modes (0600); Windows reports 0666; hidden until the lane's JUnit parse counted nested describe blocks | #29
+packages/supermux-core/tests/environment-credentials.test.ts | asserts POSIX file modes (0600); Windows reports 0666; hidden until the lane's JUnit parse counted nested describe blocks | #29
+packages/supermux-core/tests/environment-cursor.test.ts | asserts POSIX file modes (0600); Windows reports 0666; hidden until the lane's JUnit parse counted nested describe blocks | #29
+packages/supermux-core/tests/environment-grok.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "config rewrite is idempotent" | #29
+packages/supermux-core/tests/environment-opencode.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "prepareOpenCodeEnvironment opencode.json matches the former " | #29
+packages/supermux-core/tests/integration.test.ts | keeper status did not appear, no echo of 2 (intermittent: passed in run 41849291342, failed in 41856835329) | #29 | flaky
+packages/supermux-core/tests/keeper-links.test.ts | no echo of 2; first: "a link planted where the keeper stages a journal rewrite is " | #29
+packages/supermux-core/tests/keeper-lost.test.ts | The agent did not start: ENOENT: no such file or directory, uv_spawn 'C:\Users\RUNNER~1\Ap; first: "opencode: resume with a host MCP server whose keeper dies in" | #29
+packages/supermux-core/tests/keeper-socket.test.ts | file locked or denied (EACCES); first: "keeperSocketPaths: <dir>/keeper.sock when it fits sun_path, " | #29
+packages/supermux-core/tests/keeper.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "journal cap drops oldest and reports firstSeq" | #29
+packages/supermux-core/tests/mcp-core.test.ts | expected /mcp\/bridge\.(ts/js)$/ got packages\\supermux-core\\src\\mcp\\bridge.ts"; first: "a host server in a context: registered, stored by name, laun" | #29
+packages/supermux-core/tests/mcp-host.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "socket path: <state>/mcp/mcp.sock when short; when too long," | #29
+packages/supermux-core/tests/opencode-subagent-permissions.test.ts | keeper exited before its socket appeared; first: "allow mode: a subagent's ask that OpenCode never relays over" | #29
+packages/supermux-core/tests/skill.test.ts | expected > 0 got null; first: "SKILL.md opens with frontmatter that names the skill and say" | #29
+packages/supermux-core/tests/state-links.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "Antigravity: a state file that is a link is replaced, never " | #29
+packages/supermux-core/tests/store-links.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "a record that is a link is never read through" | #29
+packages/supermux-core/tests/subagent-truth-matrix.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "API.md's per-agent table is exactly the one rendered from th" | #29
+packages/supermux-core/tests/subagents-acp-driver.test.ts | times out on Windows; first: "opencode: the task's child session is the direct target" | #29
+packages/supermux-core/tests/subagents-codex-driver.test.ts | Codex process exited; first: "a child's approval request is routed to the host with subage" | #29
+packages/supermux-core/tests/supermux.test.ts | The agent did not start: ENOENT: no such file or directory, uv_spawn 'C:\Users\RUNNER~1\Ap; first: "opencode with {} finishes a turn" | #29
+packages/supermux-core/tests/unix-socket.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "privateDirectory makes a missing directory 0700" | #29
+packages/supermux-core/tests/workdir.test.ts | expected Expected promise that rejects got Promise { <resolved> }; first: "refuseWorkdirsContainingState: create refuses a cwd that is " | #29
+src/channels/web/accounts-routes.test.ts | expected "done" got "failed"; first: "account login: a Codex login becomes a token account by defa" | #29
+src/channels/web/fs-routes.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "GET /fs/list returns a snapshot for an absolute path" | #29
+src/channels/web/project-routes.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "POST /project-catalog/:id/locations: adds an existing dir, 4" | #29
+src/channels/web/workspace-fs.test.ts | expected /traversal/ got ata\\Local\\Temp\\ws-fs-I1VUdF\\out\\passwd'"; first: "a symlink that points outside the root is refused" | #29
+src/cli-setup.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "runSetupCommand (fresh) > writes .env with default port + pu" | #29
+src/core/agents/agent-header.test.ts | expected "/home/u/.mux/agent-memory/3f9c.digest.md" got erything below is reference detail.\n\n---\n"; first: "agent header: name + id line, memory, user, home; no scope, " | #29
+src/core/agents/archive-guard.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "findEscape > a symlink pointing outside is caught (absolute " | #29
+src/core/agents/bin-dirs.test.ts | expects /-spelled bin dirs (/home/u/.opencode/bin); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/agents/claude/core-host.mux-shim.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "the preamble offers a shell read exactly when the Bash rules" | #29
+src/core/agents/claude/core-host.prompts.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "claude may read its inbox through allow rules (Read of the f" | #29
+src/core/agents/claude/session.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "claude core spawn/resume dialect > PA spawn registers before" | #29
+src/core/agents/core-bridge/core-adapter.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
+src/core/agents/detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "grok cred path is ~/.grok/auth.json" | #29
+src/core/agents/install.test.ts | never exits on Windows, killed by the timeout (run 41849291342) | #29 | hangs
+src/core/agents/instructions.test.ts | expected e/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl" got  to: [\"<session-id>\"], text, interrupt })."; first: "the inbox block names the session id, its inbox file and mes" | #29
+src/core/agents/opencode/core-host.prompts.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "opencode ask mode writes per-tool ask permissions" | #29
+src/core/agents/opencode/provider-config.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "uses LOCALAPPDATA for native Windows opencode auth without c" | #29
+src/core/editor/changes.test.ts | untracked symlinks are never followed: Windows reports the link's size differently (11 vs 9); hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/editor/repo-scanner-async.test.ts | expect(received).toEqual(expected); first: "scanReposAsync finds the same repos as scanRepos" | #29
+src/core/forge/credential-cli.test.ts | file locked or denied (EBUSY); first: "entrypoint: 'bun credential-cli.ts <id> get' prints creds fr" | #29
+src/core/forge/launcher.test.ts | expected "/opt/mux/repo" got ore\\\\forge\\\\credential-cli.ts\" \"$@\"\n"; first: "installCredentialLauncher writes an executable launcher poin" | #29
+src/core/forge/ssh-keys.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "ensureKeypair generates a 0600 ed25519 key + public key + fi" | #29
+src/core/fs/file-ops.test.ts | runs a POSIX command Windows lacks; first: "readText refuses non-regular files (FIFO) with EINVAL" | #29
+src/core/fs/file-system-service.subs.test.ts | expected 1 got 2; first: "a folder shared by two sockets under two paths is watched on" | #29
+src/core/fs/file-system-service.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "list returns a snapshot addressed by the path the caller use" | #29
+src/core/fs/paths.test.ts | expected "/a/c/d" got "D:\a\c\d"; first: "normalizeAbsPath resolves dot segments and strips the traili" | #29
+src/core/fs/repo-info.test.ts | expect(received).toEqual(expected); first: "reading git state never touches the git dir (no index.lock c" | #29
+src/core/fs/search-index.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "a repo scope searches tracked + untracked files, never ignor" | #29
+src/core/git/branches.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "repoToplevel: repo root for any path inside, null outside" | #29
+src/core/git/clone.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "projectDir composes host/owner/repo under the root" | #29
+src/core/git/clt-guard.test.ts | expected FHi\run\no-clt:/usr/bin:/bin:/usr/sbin:/sbin" got FHi\run\no-clt;/usr/bin:/bin:/usr/sbin:/sbin"; first: "darwin + Apple's stub + no CLT: shim written, PATH prepended" | #29
+src/core/git/exec.test.ts | times out on Windows; first: "runAsync kills the process at the timeout" | #29
+src/core/git/pr-gh.test.ts | expected "opened" got "gh_unavailable"; first: "openPullRequest returns opened + url when gh is available" | #29
+src/core/host-identity/keypair.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "key file is created 0600" | #29
+src/core/inbox/store.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "the inbox folder is private to the user (0700) and so is eac" | #29
+src/core/lsp/install.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "installEnv is non-interactive and sets GOBIN under mux lsp" | #29
+src/core/memory/agent-memory.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "ensureAgentMemoryFiles creates both files empty, in a privat" | #29
+src/core/project/images.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "write creates the dir 0700 and stores bytes under a uuid.ext" | #29
+src/core/runtime-assets-gc.test.ts | ENOENT: no such file or directory, chmod 'C:\Users\RUNNER~1\AppData\Local\Temp\mux-gc-2lRx; first: "sweepRuntimeAssets > an unremovable dir is skipped; the rest" | #29
+src/core/runtime-assets.test.ts | expects a /-spelled path (/runtime-assets/); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/runtime/index.test.ts | expected "Windows session backend is not initialized" got Received function did not throw; first: "session backend test override can be reset without leaking s" | #29
+src/core/runtime/tmux-backend.test.ts | expected 0 got undefined; first: "tmux session backend > preserves exact argv and env without " | #29
+src/core/session-manager/pane-owner.test.ts | expected "sess-123" got null; first: "reads MUX_SESSION_ID from the process or its child, null whe" | #29
+src/core/session-manager/shim-spawn.test.ts | expected "/src/shim/index.ts" got \\a\\supermux\\supermux\\src\\shim\\index.ts"; first: "shimSpawnSpec > source mode: bun + absolute shim entry path" | #29
+src/core/session-manager/socket-server.test.ts | connects to a Unix socket file (s1.sock): connect ENOENT on Windows, where the endpoint is a named pipe; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/session-manager/tmux.test.ts | spawns /bin/sh (uv_spawn ENOENT): Windows has none; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/sessiond/client.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "SessiondBackend > retains the legacy override and executable" | #29
+src/core/sessiond/server.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "sessiond server > refuses to replace a non-socket stale endp" | #29
+src/core/terminal/zmx/backend.test.ts | expected true got false; first: "workspace terminal backend contract (zmx) > ensure creates o" | #29
+src/core/terminal/zmx/helper.test.ts | expects /-spelled helper paths (/opt/mux/zmx/bin/mux-zmx-helper); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/terminal/zmx/names.test.ts | symlink without the privilege (#37); first: "zmx name and socket-path limits > a target socket path fits " | #29
+src/core/tunnels/tailscale.test.ts | expected true got false; first: "install with --yes (consent assumed) runs the platform insta" | #29
+src/core/update/apply.test.ts | archAssetKeyFor and friends assume the test runs on Linux (null for win32); hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/core/worktree/finish.test.ts | openPrForSession times out at 5 s (git push is slow on the runner); passed on the earlier Bun 1.3.14 runs | #29 | flaky
+src/core/worktree/inventory.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "lists every worktree with its owners (live / archived / orph" | #29
+src/core/worktree/service.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "worktrees whose repo is gone are one orphans summary, paged " | #29
+src/shared/paths.test.ts | expects /-joined state paths (…/host-key); on Windows join() writes \; hidden until the lane's JUnit parse counted nested describe blocks | #29
+src/shared/preflight.test.ts | expected true got false; first: "missing tmux is a WARNING, not fatal, when an agent CLI exis" | #29
+tests/agent-detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "authCredPath builds the per-kind credential paths" | #29
+tests/agent-rpc-internal-column.test.ts | file locked or denied (EBUSY); first: "sessions has an internal column defaulting to 0" | #29
+tests/agent-rpc-internal-hidden.test.ts | file locked or denied (EBUSY); first: "listVisible excludes internal sessions" | #29
+tests/agents/claude-auth.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "claudeCredentialsPath points at the file `claude login` writ" | #29
+tests/atomic-json.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "writeJsonAtomic uses 0o600 perms" | #29
+tests/boot-resumes-only-agents-e2e.test.ts | a Linux-only e2e harness: finds the keepers by reading /proc; first: "after a restart only the Agent runs; a message wakes a worker" | #78
+tests/broker-spawn-bind.test.ts | file locked or denied (EBUSY); first: "spawnSession binds the socket before opening the Core sessio" | #29
+tests/c3-launch-equivalence.test.ts | expect(received).toEqual(expected); first: "claude worker: the launch equals the pre-C3 baseline apart f" | #29
+tests/c3b-launch-modes.test.ts | expect(received).toEqual(expected); first: "external: claude worker launches exactly as C3a" | #29
+tests/chat-store.test.ts | file locked or denied (EBUSY); first: "setActive / getActive > sets and retrieves active session fo" | #29
+tests/commands-pa.test.ts | file locked or denied (EBUSY); first: "/spawnpa <name> creates a PA with default agent claude" | #29
+tests/commands.test.ts | file locked or denied (EBUSY); first: "/sessions lists registry" | #29
+tests/device-revoke-cascade.test.ts | file locked or denied (EBUSY); first: "DELETE /devices/iphone cascades to push_subscriptions" | #29
+tests/file-serving-endpoint.test.ts | file locked or denied (EBUSY); first: "GET /files/:id returns 401 without bearer" | #29
+tests/file-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "put writes the file, returns a 32-char hex file_id, and regi" | #29
+tests/integration/e2e.test.ts | file locked or denied (EBUSY); first: "kill-active fallback: most-recent other, else default PA" | #29
+tests/integration/web-cross-channel.test.ts | file locked or denied (EBUSY); first: "web send → onSendFromWeb fires → log entry surfaces" | #29
+tests/integration/workspace-terminal-cutover.test.ts | expect(received).toEqual(expected); first: "workspace terminal cutover: the manager left tmux > no works" | #29
+tests/migration-roles.test.ts | file locked or denied (EBUSY); first: "sessions table has role + is_default columns with correct de" | #29
+tests/no-legacy-names.test.ts | expect(received).toEqual(expected); first: "no legacy claudemux/agentmux identifiers survive in src/ or " | #29
+tests/preflight.test.ts | expected true got false; first: "missing tmux is a warning, not fatal (disables Claude agent " | #29
+tests/push-endpoints.test.ts | file locked or denied (EBUSY); first: "GET /push/vapid-public-key returns the public key without au" | #29
+tests/push-sender.test.ts | file locked or denied (EBUSY); first: "sendToChat returns ok:false if no subscription" | #29
+tests/push-subscriptions.test.ts | file locked or denied (EBUSY); first: "upsert + get round-trip" | #29
+tests/reconcile-startup.test.ts | file locked or denied (EBUSY); first: "reconcileOnStartup suspends sessions whose pids are dead (no" | #29
+tests/registry.test.ts | file locked or denied (EBUSY); first: "session lifecycle > register a session" | #29
+tests/repo-scanner.test.ts | expected "" got neradmin\AppData\Local\Temp\cmux-scan-mfrSga"; first: "scanRepos > workdir itself is a repo → relPath empty string" | #29
+tests/resolve-download-attachment.test.ts | file locked or denied (EBUSY); first: "synthetic 32-hex file_id resolves directly via FileStore (no" | #29
+tests/search-store.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "session search returns sessions by message text, filtered + " | #29
+tests/session-born-asleep-e2e.test.ts | a POSIX-only e2e harness: #!/bin/sh stubs for claude and tmux, chmod, and a PATH joined with ":", so `bun` is not found | #75
+tests/session-store.test.ts | file locked or denied (EBUSY); first: "register > creates session with UUID, active status, correct" | #29
+tests/session-tools.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "find_sessions returns a matching session with a transcript p" | #29
+tests/socket-transport.test.ts | runs a POSIX command Windows lacks; first: "shim connects through an explicit local endpoint" | #29
+tests/spawn-codex-attachments.test.ts | file locked or denied (EBUSY); first: "fresh codex spawn wires attachment resolver into registered " | #29
+tests/spawn-opencode.test.ts | file locked or denied (EBUSY); first: "opencode spawn threads ONE uuid through registry, socket bin" | #29
+tests/spawn-pa.test.ts | file locked or denied (EBUSY); first: "spawns a Claude PA and registers it as personal_assistant" | #29
+tests/storage-db.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "openDb creates the file with 0o600 perms" | #29
+tests/storage-messages-store.test.ts | file locked or denied (EBUSY); first: "append + get returns inserted entries newest-last" | #29
+tests/supervisor.test.ts | file locked or denied (EBUSY); first: "a live Agent is left alone, whatever its provider (no double" | #29
+tests/tag-prefix.test.ts | file locked or denied (EBUSY); first: "no tag prefix when session is active" | #29
+tests/telegram-inbound-eager-download.test.ts | file locked or denied (EBUSY); first: "photo inbound: registers synthetic file_id; bytes survive" | #29
+tests/telemetry-e2e.test.ts | runs a POSIX shell; first: "a forced test broker delivers broker.started and client.conn" | #29
+tests/terminal-manager.test.ts | drives tmux, which Windows has not; hidden until the lane's JUnit parse counted nested describe blocks | #29
+tests/transcribe-endpoint.test.ts | file locked or denied (EBUSY); first: "POST /sessions/:id/transcribe (multipart) → stores audio, pa" | #29
+tests/transform-outbound.test.ts | file locked or denied (EBUSY); first: "when channel supportsAttachments, files[] are registered + r" | #29
+tests/trust.test.ts | expected true got false; first: "registers BOTH the tools (mux-shim) and channel-only (mux-ch" | #29
+tests/upload-endpoint.test.ts | file locked or denied (EBUSY); first: "POST /upload returns 401 without bearer" | #29
+tests/upload-ws-binding.test.ts | file locked or denied (EBUSY); first: "send frame with this-device's file_id is accepted" | #29
+tests/vapid.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "persists with 0o600 perms" | #29
+tests/web-attachments-roundtrip.test.ts | file locked or denied (EBUSY); first: "upload + send → inbound message carries attachments" | #29
+tests/web-inbound-attachments.test.ts | file locked or denied (EBUSY); first: "web inbound with attachment: messages row carries attachment" | #29
+tests/web-push-roundtrip.test.ts | file locked or denied (EBUSY); first: "extractPreview returns truncated text" | #29
+tests/web-session-crud.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "POST /sessions → spawns and returns session" | #29
+tests/workdir-diff.test.ts | fails; first: "computeWorkdirDiff > untracked filename with shell metachara" | #29
+tests/workdir-paths.test.ts | symlink without the privilege (#37); first: "normalizeExistingWorkdir resolves symlinks to the actual dir" | #29

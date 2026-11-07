@@ -1,0 +1,29 @@
+{
+  "name": "@supermux/platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "What supermux needs from the OS that Node and Bun do not give it: one rule per gap, tested per OS.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "supermux-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test tests"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UstaLabs/supermux.git",
+    "directory": "packages/platform"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

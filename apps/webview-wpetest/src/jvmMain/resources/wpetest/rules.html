@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>rules</title></head>
+<body>
+<a id="link" href="https://lab.invalid/next-link">a link</a>
+<form id="form" action="https://lab.invalid/next-form" method="get"><input name="q" value="1"></form>
+<script>
+  window.__rules = {
+    click: function () { document.getElementById('link').click(); return true; },
+    submit: function () { document.getElementById('form').submit(); return true; },
+    assign: function () { location.href = 'https://lab.invalid/next-assign'; return true; },
+    reload: function () { location.reload(); return true; },
+    back: function () { history.back(); return true; }
+  };
+</script>
+</body>
+</html>

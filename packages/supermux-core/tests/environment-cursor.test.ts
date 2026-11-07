@@ -294,6 +294,14 @@ describe("ensureSharedCursorRuntime", () => {
     expect(readFileSync(join(shared, "versions", "build"), "utf8")).toBe("BUILD-A")
   })
 
+  test("a link inside the user's runtime points into the shared copy, not back at the user's install", () => {
+    const userRuntime = seedRealRuntime("BUILD-A")
+    symlinkSync("versions", join(userRuntime, "current"), "dir")
+    ensureSharedCursorRuntime(home("s1"), { sharedDir: shared, userRuntime })
+    rmSync(userRuntime, { recursive: true, force: true })
+    expect(readFileSync(join(shared, "current", "build"), "utf8")).toBe("BUILD-A")
+  })
+
   test("existing real runtime dir is migrated into the (empty) shared copy", () => {
     const h = home("s1")
     const link = join(h, RUNTIME_REL)

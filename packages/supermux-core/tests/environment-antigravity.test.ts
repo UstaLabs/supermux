@@ -1,9 +1,11 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { prepareAntigravityEnvironment, linkAntigravityCli, shareAntigravityHistory, writeAntigravityMcpConfig, writeAntigravityPlugins } from "../src/environment/index.js"
+import { antigravityLinks } from "../src/environment/antigravity.js"
+import { Unsupported } from "@supermux/platform"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -219,4 +221,53 @@ test("no real cli dir: the dangling cli link survives a second prepare", async (
   const u = fakeUser(); rmSync(join(u.user, ".gemini", "antigravity-cli"), { recursive: true })
   await prepareAntigravityEnvironment(spec(u)); await prepareAntigravityEnvironment(spec(u))
   expect(readlinkSync(join(u.shadow, ".gemini", "antigravity-cli"))).toBe(join(u.user, ".gemini", "antigravity-cli"))
+})
+
+// #37: on Windows without Developer Mode a file link is refused, and the shadow home silently lost the user's
+// .gitconfig and the like (agy's shell ran without the user's git identity). A small file is copied instead; folders
+// still link (a junction needs no privilege).
+test("where this host cannot link files, a small file is copied into the shadow home and folders still link", async () => {
+  const saved = antigravityLinks.linkFile
+  antigravityLinks.linkFile = () => { throw new Unsupported("files.linkFile", "no file links here") }
+  try {
+    const u = fakeUser()
+    await prepareAntigravityEnvironment(spec(u))
+    expect(lstatSync(join(u.shadow, ".gitconfig")).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(u.shadow, ".gitconfig"), "utf8")).toBe("[user]\nname=x\n")
+    expect(readlinkSync(join(u.shadow, ".ssh"))).toBe(join(u.user, ".ssh"))
+  } finally {
+    antigravityLinks.linkFile = saved
+  }
+})
+
+// Windows keeps the signed-in user's ntuser.dat.LOG1 / LOG2 locked, and they sit in every HOME under 1 MB, so their copy
+// threw EBUSY and took the whole shadow home with it: every Antigravity session, model list and usage read on a Windows
+// host without Developer Mode (#103). A file that can't be copied stays out, as a big one does, and is said once.
+test("a file the host can neither link nor copy (Windows' locked ntuser.dat.LOG1) stays out, said once; the shadow home is still made", async () => {
+  const savedLink = antigravityLinks.linkFile
+  const savedCopy = antigravityLinks.copyFile
+  antigravityLinks.linkFile = () => { throw new Unsupported("files.linkFile", "no file links here") }
+  antigravityLinks.copyFile = (target, path) => {
+    if (target.endsWith("ntuser.dat.LOG1")) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${target}' -> '${path}'`), { code: "EBUSY" })
+    }
+    savedCopy(target, path)
+  }
+  const warn = spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    const u = fakeUser()
+    writeFileSync(join(u.user, "ntuser.dat.LOG1"), "hive log")
+    await prepareAntigravityEnvironment(spec(u))
+    await prepareAntigravityEnvironment(spec(u))
+    expect(existsSync(join(u.shadow, "ntuser.dat.LOG1"))).toBe(false)
+    expect(readFileSync(join(u.shadow, ".gitconfig"), "utf8")).toBe("[user]\nname=x\n")
+    expect(readlinkSync(join(u.shadow, ".gemini", "antigravity-cli"))).toBe(join(u.user, ".gemini", "antigravity-cli"))
+    const said = warn.mock.calls.map((c) => c.join(" ")).filter((line) => line.includes("ntuser.dat.LOG1"))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain("EBUSY")
+  } finally {
+    antigravityLinks.linkFile = savedLink
+    antigravityLinks.copyFile = savedCopy
+    warn.mockRestore()
+  }
 })

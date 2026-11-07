@@ -77,7 +77,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
@@ -115,7 +114,7 @@ import dev.supermux.ui.editor.EditorPanel
 import dev.supermux.ui.editor.EditorPanelActions
 import dev.supermux.ui.editor.EditorPanelState
 import dev.supermux.ui.editor.PendingEditorOpen
-import dev.supermux.session.inferHomeDir
+import dev.supermux.fs.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toEditorPath
 import dev.supermux.ui.terminal.TerminalTabs
@@ -142,8 +141,21 @@ import dev.supermux.ui.chat.FinishBindings
 import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.ui.chat.rememberContinueSheetState
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.rememberRetained
 
 enum class SessionPanel { Chat, Editor, Terminal, Display }
+
+/**
+ * One session's open panel and the panels kept composed beside it. Kept by the fleet under
+ * [chatPanelsKey]: a rotation or a fold recreated this screen on its Chat tab (#89).
+ */
+internal class ChatPanels {
+    var active by mutableStateOf(SessionPanel.Chat)
+    var opened by mutableStateOf(setOf(SessionPanel.Chat))
+}
+
+/** Where [ChatPanels] is kept: per session, so another session still opens on its chat. */
+internal fun chatPanelsKey(sessionId: String) = "chat.panels:$sessionId"
 
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -236,7 +248,8 @@ fun ChatScreen(
     var showKillDialog by remember { mutableStateOf(false) }
     val showContinueSheet = rememberContinueSheetState()
     var headerMenuExpanded by remember { mutableStateOf(false) }
-    var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
+    val keptPanels = rememberRetained(chatPanelsKey(session.id)) { ChatPanels() }
+    var activePanel by keptPanels::active
 
     var pendingEditorOpen by remember(session.id) { mutableStateOf<PendingEditorOpen?>(null) }
     val tapScope = rememberCoroutineScope()
@@ -377,7 +390,7 @@ fun ChatScreen(
                 // Exposed proxy links (iOS sessionLinksMenu parity) — also in the phone header.
                 if (sessionLinks.isNotEmpty()) {
                     var showLinks by remember { mutableStateOf(false) }
-                    val uriHandler = LocalUriHandler.current
+                    val platform = LocalPlatform.current
                     Box {
                         Icon(
                             painter = painterResource(R.drawable.ic_globe),
@@ -399,7 +412,7 @@ fun ChatScreen(
                                             modifier = Modifier.size(18.dp),
                                         )
                                     },
-                                    onClick = { showLinks = false; uriHandler.openUri(proxyUrl(p)) },
+                                    onClick = { showLinks = false; platform.openUrl(proxyUrl(p)) },
                                 )
                             }
                         }
@@ -603,7 +616,7 @@ fun ChatScreen(
             }
         }
 
-        var openedPanels by remember { mutableStateOf(setOf(SessionPanel.Chat)) }
+        var openedPanels by keptPanels::opened
         // The just-tapped panel must compose in the SAME frame: openedPanels only catches up an
         // effect later, and that in-between frame — old panel already alpha-0, new panel not yet
         // composed — draws the bare background (with the old CodeMirror editor, a WebView built on
@@ -726,6 +739,9 @@ fun ChatScreen(
                             sessionName = session.name,
                             actions = da,
                             modifier = Modifier.fillMaxSize(),
+                            // Named now that the tab survives a rotation: its VNC password and
+                            // keyboard follow a rebuild of this panel, and only that.
+                            retainKey = "chat:${session.id}",
                         )
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

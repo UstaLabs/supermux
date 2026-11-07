@@ -149,6 +149,35 @@ test("discoverClaudeModels returns empty on network error", async () => {
   expect(models).toEqual([])
 })
 
+// #101: Claude Code on Windows can keep its login in Credential Manager (and delete the file) instead.
+test("discoverClaudeModels uses the login Claude Code keeps in Windows Credential Manager when there is no file", async () => {
+  let seenHeaders: Record<string, string> | undefined
+  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
+    seenHeaders = init?.headers
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ id: "claude-opus-5-5", display_name: "Claude Opus 5.5" }] }) })
+  })
+  const asked: Array<string | undefined> = []
+  const models = await discoverClaudeModels({
+    fetch: mockFetch as any,
+    env: {},
+    readCredentialFile: () => undefined,
+    readStoredLogin: async (configDir) => { asked.push(configDir); return JSON.stringify({ claudeAiOauth: { accessToken: "credman-token" } }) },
+  })
+  expect(models.map((m) => m.id)).toEqual(["claude-opus-5-5"])
+  expect(seenHeaders?.Authorization).toBe("Bearer credman-token")
+  expect(asked).toEqual([undefined])
+})
+
+test("discovery asks the store only without a file token: for an account, that account's folder; for a token account, never", async () => {
+  const ok = mock(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [] }) }))
+  const asked: string[] = []
+  const readStoredLogin = async (configDir?: string) => { asked.push(configDir ?? "system"); return null }
+  await discoverClaudeModels({ fetch: ok as any, env: {}, readStoredLogin, readCredentialFile: () => JSON.stringify({ claudeAiOauth: { accessToken: "file-token" } }) })
+  await discoverClaudeModels({ fetch: ok as any, readStoredLogin, readCredentialFile: () => undefined, launch: { env: { CLAUDE_CONFIG_DIR: "C:\\acct" } } })
+  await discoverClaudeModels({ fetch: ok as any, readStoredLogin, readCredentialFile: () => undefined, launch: { env: { CLAUDE_CODE_OAUTH_TOKEN: "t" } } })
+  expect(asked).toEqual(["C:\\acct"])
+})
+
 test("discoverClaudeModels reads a fresh Linux Claude login from the credentials file", async () => {
   let seenHeaders: Record<string, string> | undefined
   const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {

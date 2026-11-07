@@ -52,6 +52,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             requests = frame.requests,
             permissionModes = frame.permissionModes,
             muxHome = frame.muxHome,
+            homeDir = frame.homeDir,
             // Card #76: the snapshot's open streams are the whole truth about what is being written now.
             live = liveFromSnapshot(frame.streams),
             // A snapshot is a NEW broker connection: the broker disposed the old connection's
@@ -286,7 +287,8 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             closedRequests = state.closedRequests + (frame.session to receipts),
         )
     }
-    is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
+    // A frame this app sent that the broker doesn't know (an older broker): nothing the user can act on, so not shown.
+    is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE) state else state.copy(lastError = frame.reason.ifBlank { null })
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
     is ServerFrame.SubagentUpdate -> {
         val prev = state.subagents[frame.session] ?: emptyList()
@@ -484,3 +486,6 @@ fun mergeFetchedLog(fetched: List<LogEntry>, current: List<LogEntry>): List<LogE
     val known = fetched.mapTo(HashSet()) { it.id }
     return fetched + current.filter { it.id !in known && (it.ts > newestTs || it.id.startsWith("local-")) }
 }
+
+/** What a broker answers a frame it doesn't know with (`src/channels/web/index.ts`). */
+internal const val UNKNOWN_FRAME_TYPE = "unknown frame type"

@@ -65,9 +65,9 @@ test("a folder git is still checking files out into: waits until the checkout is
   expect(b.slept()).toBe(before)
 })
 
-// One rule compares the path with a session's folder and with a checkout's (the host's, through relative()): the same
-// folder spelled another way still holds it. Here a trailing separator; on Windows also `/` for `\` and another letter
-// case, which left every waking session's files pane unheld there.
+// One rule compares the path with a session's folder and with a checkout's (paths.isInside): the same folder spelled
+// another way still holds it. Here a trailing separator; on Windows also `/` for `\` and another letter case, which
+// left every waking session's files pane unheld there.
 test("a folder spelled another way (a trailing separator) still holds the path", async () => {
   const b = box({ sessions: [{ id: "s", workdir: "/wt/s/" }], waking: ["s"] })
   const ready = folderReady(b.deps, "/wt/s/src")

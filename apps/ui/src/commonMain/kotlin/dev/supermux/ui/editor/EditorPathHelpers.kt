@@ -10,6 +10,9 @@
 // discipline this module uses for web-view-adjacent logic.
 package dev.supermux.ui.editor
 
+import dev.supermux.fs.hostFileUri
+import dev.supermux.fs.hostJoin
+
 // ─── Markdown-preview toggle (M4g-1) ───────────────────────────────────────
 
 /** `.md` / `.markdown` → markdown preview eligible (parity EditorPane.swift:30-33). */
@@ -34,38 +37,16 @@ fun editorPreviewGate(activePath: String?, previewMode: Boolean, showDiff: Boole
 
 // ─── LSP file:// URI helpers (M4g-3) ──────────────────────────────────────────────────────────
 
-/** Join a directory and a workdir-relative path with exactly one '/' between them. */
-fun joinPath(dir: String, rel: String): String {
-    val d = dir.removeSuffix("/")
-    val r = rel.removePrefix("/")
-    return "$d/$r"
-}
-
-/** Characters `java.net.URLEncoder` (and `android.net.Uri.encode`) leave untouched, minus the `/`
- *  separators [pathToUri] preserves itself. */
-private const val UNRESERVED = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-*_"
-
-private const val HEX = "0123456789ABCDEF"
+/** A directory and a workdir-relative path joined with exactly one separator: the directory's (`\` on Windows). */
+fun joinPath(dir: String, rel: String): String = hostJoin(dir, rel)
 
 /**
- * `file://` URI for an absolute path, percent-encoding every character except the `/` separators
- * and [UNRESERVED] — a pure-Kotlin equivalent of desktop's `java.net.URLEncoder` (with `+` repaired
- * to `%20`) and Android's `android.net.Uri.encode(abs, "/")`, so the shared copy needs no JDK or
- * Android URI type. Non-ASCII is percent-encoded byte-by-byte as UTF-8, as both originals did.
+ * `file://` URI for an absolute host path: `file:///home/…`, `file:///C:/Users/…`, `file://server/share/…`. Each
+ * name is percent-encoded as desktop's `java.net.URLEncoder` did (with `+` repaired to `%20`) and byte-by-byte as
+ * UTF-8, by the one encoder in [hostFileUri].
  */
-fun pathToUri(abs: String): String {
-    val sb = StringBuilder("file://")
-    for (byte in abs.encodeToByteArray()) {
-        val c = byte.toInt().toChar()
-        if (byte >= 0 && (c == '/' || c in UNRESERVED)) {
-            sb.append(c)
-        } else {
-            val v = byte.toInt() and 0xFF
-            sb.append('%').append(HEX[v ushr 4]).append(HEX[v and 0x0F])
-        }
-    }
-    return sb.toString()
-}
+fun pathToUri(abs: String): String = hostFileUri(abs)
 
 /** Directory URI for a workdir — always trailing-slash. */
-fun dirUri(workdir: String): String = pathToUri(workdir.removeSuffix("/")) + "/"
+// platform-ok: a file URI
+fun dirUri(workdir: String): String = hostFileUri(workdir).let { if (it.endsWith('/')) it else "$it/" }

@@ -11,6 +11,7 @@ import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
@@ -28,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -108,21 +110,42 @@ internal class DesktopFileAccess : FileAccess {
         }
 }
 
-/** Strip any directory part and refuse an empty name — the attachment name is broker-supplied. */
-internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+/**
+ * The attachment's name (broker-supplied) as one file this OS can store: no directory part, never empty, `.` or `..`.
+ * On Windows also the broker's own rules (`paths.safeFolderName`, the shared vectors in
+ * packages/platform/tests/windows-names.json): no reserved character (`:` would write an NTFS alternate stream), no
+ * trailing dot or space (Windows drops them), no device name (`CON`, `NUL`, `COM1`...).
+ */
+internal fun safeFileName(name: String, windows: Boolean = isWindowsOs()): String {
+    val last = fileNameOf(name)
+    val clean = if (windows) last.replace(WINDOWS_RESERVED, "-").trimEnd('.', ' ') else last
+    return when {
+        clean.isBlank() || clean == "." || clean == ".." -> "file"
+        windows && WINDOWS_DEVICE.matches(clean) -> "_$clean"
+        else -> clean
+    }
+}
+
+private val WINDOWS_RESERVED = Regex("[<>:\"|?*\\u0000-\\u001f]")
+private val WINDOWS_DEVICE = Regex("(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\\..*)?")
 
 /**
- * Stage [bytes] under the JVM temp dir so the OS handler has a real path to open.
+ * Stage [bytes] in this process's private folder under the JVM temp dir, so the OS handler has a real path to open.
  *
  * `internal` (aliased as `stageAttachmentForTest`) because it is the only half of
  * [DesktopFileAccess.openExternally] a test can exercise — actually opening would fork a real
  * viewer on the developer's desktop.
  */
 internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
-    val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
-    File(dir, name).also { it.writeBytes(bytes) }
+    File(attachmentsDir, name).also { it.writeBytes(bytes) }
 }.getOrNull()
+
+/**
+ * This process's staging folder, made on first use. [java.nio.file.Files.createTempDirectory] gives it a name no one
+ * can guess and, on POSIX, owner-only permissions. A fixed `<tmp>/supermux-attachments` was shared on Linux, where /tmp
+ * belongs to every user: another one could make it first, read what was staged there, or plant a link in it.
+ */
+private val attachmentsDir: File by lazy { java.nio.file.Files.createTempDirectory("supermux-attachments-").toFile() }
 
 /**
  * Open a local file with the OS default handler (viewer / player / folder).
@@ -186,6 +209,9 @@ internal class DesktopMicCapture(
             AudioSystem.isLineSupported(DataLine.Info(TargetDataLine::class.java, DICTATION_FORMAT))
         }.getOrDefault(false)
 
+    /** Asked of the OS itself (see MicPresence): Java Sound lists a "default" line with no microphone behind it. */
+    override suspend fun trouble(): MicTrouble = withContext(Dispatchers.IO) { askMicTrouble(DesktopOs.current) }
+
     override val liveTranscript: LiveTranscript? get() = null
 }
 
@@ -212,7 +238,7 @@ internal class DesktopTtsEngine : TtsEngine {
 
     override suspend fun playAudioChunk(bytes: ByteArray) {
         val file = runCatching {
-            File.createTempFile("read-aloud-", ".mp3").also { it.deleteOnExit(); it.writeBytes(bytes) }
+            Files.createTempFile("read-aloud-", ".mp3").toFile().also { it.deleteOnExit(); it.writeBytes(bytes) }
         }.getOrNull() ?: return
         try {
             val cmd = playCommand(file.absolutePath) ?: return

@@ -1,4 +1,5 @@
 import { posix, win32 } from "path"
+import { paths } from "@supermux/platform"
 
 /** A Windows broker's absolute path: a drive and its root (`C:\`, `C:/`) or a share (`\\server\share`). */
 const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+\\[^\\/]+)/
@@ -38,10 +39,9 @@ function expandHome(path: string, home?: string): string {
 
 function isUnderManagedRoot(p: string, managedWorktreesRoot?: string): boolean {
   if (!managedWorktreesRoot) return false
-  const sep = managedWorktreesRoot.startsWith("/") ? "/" : "\\"
-  // A root ("/", "C:\") already ends in its separator.
-  const inside = managedWorktreesRoot.endsWith(sep) ? managedWorktreesRoot : managedWorktreesRoot + sep
-  return p === managedWorktreesRoot || p.startsWith(inside)
+  // The root's own kind of path decides (a registry may hold a Windows broker's paths): relative() of that flavour,
+  // which handles a root ("/", "C:\") and a Windows folder's letter case.
+  return paths.isInside(p, managedWorktreesRoot, WINDOWS_ABSOLUTE.test(managedWorktreesRoot) ? win32 : posix)
 }
 
 /**

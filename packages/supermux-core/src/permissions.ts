@@ -1,5 +1,6 @@
-import { isAbsolute, resolve, sep } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 import type { PermissionsSpec, ToolKind } from "./types.js"
+import { paths } from "@supermux/platform"
 
 const CLAUDE_MODES = new Set(["bypassPermissions", "acceptEdits", "default", "plan", "auto", "dontAsk"])
 const CODEX_POLICIES = new Set(["never", "on-request", "untrusted"])
@@ -86,10 +87,7 @@ const READISH: ReadonlySet<string> = new Set(["read", "search", "fetch", "other"
 function withinRoots(path: string, roots: readonly string[]): boolean {
   if (!isAbsolute(path)) return false
   const target = resolve(path)
-  return roots.some(root => {
-    const base = resolve(root)
-    return target === base || target.startsWith(base + sep)
-  })
+  return roots.some(root => paths.isInside(target, resolve(root)))
 }
 
 /**

@@ -36,7 +36,9 @@ test("cursor: the instructions block never reaches the broker as part of the use
   const env: Record<string, string> = { ECHO_USER: "1", PARAMS_TRACE: trace }
   const host = createCursorCoreHost({
     stateDirectory: state, smoke: async () => {}, sharedRuntime: null,
-    driverFactory: (options) => cursor({ ...options, command: process.execPath, commandArgs: [fixture], env: { ...options.env, ...env }, setupTimeoutMs: 5000 }),
+    // The fake agent's start and ACP handshake took 6.4 s on a loaded Windows runner (run 42374192956): 20 s, still well
+    // inside the test's 30 s, and the product gives Cursor 120 s.
+    driverFactory: (options) => cursor({ ...options, command: process.execPath, commandArgs: [fixture], env: { ...options.env, ...env }, setupTimeoutMs: 20_000 }),
   })
   const id = "cursor-instr", name = "cursor-instr-probe"
   const extra = { sessionHome: join(root, "agents", name), sessionName: name, sessionId: id, workdir: work, cwd: work }

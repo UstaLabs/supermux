@@ -6,6 +6,8 @@
 package dev.supermux.desktop.overlay
 
 import com.sun.jna.Callback
+import dev.supermux.desktop.platform.DesktopOs
+import dev.supermux.desktop.platform.openCommand
 import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 
@@ -98,6 +100,29 @@ internal object MacOverlayNative {
     private const val OCCLUSION_VISIBLE = 1L shl 1
 
     /** Screen Recording is allowed for supermux (its glasses). */
+    private val avFoundation by lazy { NativeLibrary.getInstance("AVFoundation") }
+
+    /** AVFoundation's capture devices, once its framework is loaded (its classes register as it loads); null if not. */
+    private fun captureDevices(): Pointer? {
+        avFoundation
+        return objc.getFunction("objc_getClass").invokePointer(arrayOf("AVCaptureDevice"))
+    }
+
+    /** AVMediaTypeAudio's value. */
+    private fun audio(): Pointer = ptr(cls("NSString"), "stringWithUTF8String:", "soun") ?: error("no NSString")
+
+    /** Whether there is a microphone at all: AVFoundation's default audio input. Null when it couldn't be asked. */
+    fun hasMic(): Boolean? = runCatching {
+        val devices = captureDevices() ?: return null
+        ptr(devices, "defaultDeviceWithMediaType:", audio()) != null
+    }.getOrNull()
+
+    /** Whether the microphone is kept from supermux: denied in Privacy & Security (2), or by a profile (1). */
+    fun micDenied(): Boolean? = runCatching {
+        val devices = captureDevices() ?: return null
+        long(devices, "authorizationStatusForMediaType:", audio()) in 1L..2L
+    }.getOrNull()
+
     fun canRecordScreen(): Boolean = runCatching { graphics.getFunction("CGPreflightScreenCaptureAccess").invokeInt(emptyArray()) != 0 }.getOrDefault(false)
 
     /** Asks for Screen Recording: macOS's prompt the first time, then its answer (true once allowed). */
@@ -111,6 +136,6 @@ internal object MacOverlayNative {
 
     /** Opens System Settings › Privacy & Security at [pane] ("ScreenCapture", "ListenEvent"). */
     fun openPrivacySettings(pane: String) {
-        runCatching { ProcessBuilder("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_$pane").start() }
+        runCatching { openCommand("x-apple.systempreferences:com.apple.preference.security?Privacy_$pane", DesktopOs.MACOS).start() }
     }
 }

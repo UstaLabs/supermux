@@ -26,6 +26,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +50,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.terminal.compose.TerminalSearchState
+import dev.supermux.terminal.compose.rememberTerminalSearchState
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.MonoFontFamily
 
 /**
@@ -138,6 +142,47 @@ internal fun TerminalSearchBar(search: TerminalSearchState, modifier: Modifier =
             BarIcon(Icons.Filled.Close, "Close find", "terminal_search_close") { search.close() }
         }
     }
+}
+
+/**
+ * Names the terminal a pane shows (a workspace's or a session's terminal id), so its find bar
+ * outlives the pane's composition (#89): a rotation or a width change rebuilt it closed and empty.
+ * Null, for a pane nobody names, keeps the find in the composition.
+ */
+val LocalTerminalFindKey = staticCompositionLocalOf<String?> { null }
+
+/**
+ * A surface's [TerminalSearchState], seeded from what [LocalTerminalFindKey]'s terminal keeps (the
+ * bar open, the query, the case toggle) and kept in step with it. The state itself stays the
+ * surface's: it holds the surface's own wiring and the matches, which the search finds again.
+ */
+@Composable
+internal fun rememberRetainedTerminalSearch(): TerminalSearchState {
+    val key = LocalTerminalFindKey.current ?: return rememberTerminalSearchState()
+    val kept = rememberRetained("terminal.find:$key") { TerminalFind() }
+    val search = remember(kept) {
+        TerminalSearchState().apply {
+            ignoreCase = kept.ignoreCase
+            updateQuery(kept.query)
+            if (kept.open) open()
+        }
+    }
+    LaunchedEffect(search, kept) {
+        snapshotFlow { Triple(search.isOpen, search.query, search.ignoreCase) }
+            .collect { (open, query, ignoreCase) ->
+                kept.open = open
+                kept.query = query
+                kept.ignoreCase = ignoreCase
+            }
+    }
+    return search
+}
+
+/** One terminal's find bar as plain values, kept for a rebuilt pane (`rememberRetained`, #89). */
+private class TerminalFind {
+    var open = false
+    var query = ""
+    var ignoreCase = true
 }
 
 /** "3/17", "No results", "…" while a search runs, "3/10000+" when it hit its cap. */

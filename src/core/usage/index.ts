@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, readdirSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
@@ -7,15 +6,17 @@ import { AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { SIGN_IN_EXPIRED } from "../accounts/broker-accounts"
 import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
+import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
+import { home } from "../../shared/home"
 
 const log = makeLogger("usage")
 
 // ── Types ──
 
 // `resetsAt` is the provider's raw value and its unit differs per provider:
-// ISO strings (claude/grok), unix seconds (codex), unix-ms strings (cursor).
+// ISO strings (claude/grok/antigravity), unix seconds (codex), unix-ms strings (cursor).
 // `resetsAtIso` is the broker-normalized ISO timestamp — clients read it and
 // need no per-provider unit logic. Optional in the type only so old fixtures
 // still compile; every fetcher sets it.
@@ -160,12 +161,28 @@ export interface GrokUsage {
   creditsKnown?: boolean
 }
 
+/**
+ * One Antigravity limit as agy's `/usage` reports it: a model group's 5-hour or weekly window. `used` is what is gone
+ * (agy reports what is left); `label` is "<agy's group name> · 5-hour" or "· weekly"; `resetsAt` is agy's ISO string.
+ */
+export interface AntigravityUsageWindow extends UsageWindow {
+  id: string
+  label: string
+}
+
+/** Antigravity's limits per model group (Gemini; Claude and GPT; Gemini 4 Argon on a Pro plan). agy reports no plan. */
+export interface AntigravityUsage {
+  windows: AntigravityUsageWindow[]
+}
+
 export interface UsageResponse {
   claude: ClaudeUsage | null
   codex: CodexUsage | null
   cursor: CursorUsage | null
   opencode: OpenCodeUsage | null
   grok: GrokUsage | null
+  /** The usage store's (./antigravity); the /usage command (fetchAllUsage) leaves Antigravity out. */
+  antigravity?: AntigravityUsage | null
   errors: Record<string, string>
   /** The code of an error that has one (`account_expired`: the provider refused the login, sign in again). */
   errorCodes?: Record<string, string>
@@ -173,12 +190,12 @@ export interface UsageResponse {
 
 // ── Credential paths ──
 
-const CLAUDE_CREDS = join(homedir(), ".claude", ".credentials.json")
-const CLAUDE_JSON  = join(homedir(), ".claude.json")
-const CLAUDE_VERSIONS_DIR = join(homedir(), ".local", "share", "claude", "versions")
-const CODEX_AUTH   = join(homedir(), ".codex", "auth.json")
-const OPENCODE_DB = join(openCodeDataDir({ home: homedir() }), "opencode.db")
-const GROK_AUTH   = join(homedir(), ".grok", "auth.json")
+const CLAUDE_CREDS = join(home(), ".claude", ".credentials.json")
+const CLAUDE_JSON  = join(home(), ".claude.json")
+const CLAUDE_VERSIONS_DIR = join(home(), ".local", "share", "claude", "versions")
+const CODEX_AUTH   = join(home(), ".codex", "auth.json")
+const OPENCODE_DB = join(openCodeDataDir({ home: home() }), "opencode.db")
+const GROK_AUTH   = join(home(), ".grok", "auth.json")
 
 // Undocumented but what `grok /usage` hits (cli-chat-proxy). Override via env for tests/mirrors.
 const GROK_BILLING_BASE =
@@ -192,7 +209,7 @@ const TIMEOUT_MS = 10_000
 function isoFromMs(ms: number): string | null {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null
 }
-function isoFromIsoLike(value: unknown): string | null {
+export function isoFromIsoLike(value: unknown): string | null {
   if (typeof value !== "string" || value === "") return null
   return isoFromMs(new Date(value).getTime())
 }
@@ -244,14 +261,39 @@ function claudeHeaders(token: string): Record<string, string> {
   }
 }
 
-function readClaudeToken(credsPath: string): string | null {
-  if (!existsSync(credsPath)) return null
-  const raw = JSON.parse(readFileSync(credsPath, "utf-8"))
-  const oauth = raw.claudeAiOauth ?? raw
-  const expiresAt = oauth.expiresAt
+/** Reads the login Claude Code keeps outside its credentials file (Windows Credential Manager); null when there is none. */
+export type ClaudeStoredLoginRead = () => Promise<string | null>
+
+/** The system login's: Claude Code run without CLAUDE_CONFIG_DIR. */
+const readSystemStoredLogin: ClaudeStoredLoginRead = () => readClaudeStoredLogin()
+
+/** The access token of a Claude login (`claudeAiOauth`, or the bare oauth object); null when it has none or it expired. */
+function claudeLoginToken(login: any): string | null {
+  const oauth = login?.claudeAiOauth ?? login
+  const expiresAt = oauth?.expiresAt
   if (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now()) return null
   if (typeof expiresAt === "number" && expiresAt < Date.now()) return null
-  return oauth.accessToken ?? oauth.access_token ?? null
+  const token = oauth?.accessToken ?? oauth?.access_token
+  return typeof token === "string" && token ? token : null
+}
+
+/**
+ * The login's token from its credentials file, else from where Claude Code keeps it instead: on Windows, with
+ * Anthropic's `tengu_windows_credman` rollout on, it moves the login into Credential Manager and deletes the file.
+ */
+async function readClaudeToken(credsPath: string, readStored: ClaudeStoredLoginRead): Promise<string | null> {
+  if (existsSync(credsPath)) {
+    const token = claudeLoginToken(JSON.parse(readFileSync(credsPath, "utf-8")))
+    if (token) return token
+  }
+  try {
+    const stored = await readStored()
+    return stored ? claudeLoginToken(JSON.parse(stored)) : null
+  } catch (err) {
+    // The store's own words stay in the broker log; the card gets a sentence.
+    log.warn("claude_stored_login_unreadable", { err: String(err) })
+    throw new Error("Couldn't read Claude's sign-in from Windows Credential Manager.")
+  }
 }
 
 const RESET_ID = /^[a-z0-9_-]{1,40}$/
@@ -286,10 +328,15 @@ function mapClaudeResets(block: any): ClaudeResets | null {
   }
 }
 
+/**
+ * [readStored] reads the same login's copy in the OS credential store: an added account's (its own CLAUDE_CONFIG_DIR)
+ * must pass its own, or it would read the system login's.
+ */
 export async function fetchClaudeUsage(
   credsPath: string = CLAUDE_CREDS,
+  readStored: ClaudeStoredLoginRead = readSystemStoredLogin,
 ): Promise<ClaudeUsage | null> {
-  const token = readClaudeToken(credsPath)
+  const token = await readClaudeToken(credsPath, readStored)
   if (!token) return null
   return fetchClaudeUsageWithToken(token)
 }
@@ -384,10 +431,10 @@ function readClaudeOrgUuid(claudeJsonPath: string): string | null {
 // spend a second reset.
 export async function redeemClaudeReset(
   grantId: string,
-  opts: { credsPath?: string; claudeJsonPath?: string; requestId?: string } = {},
+  opts: { credsPath?: string; claudeJsonPath?: string; requestId?: string; readStored?: ClaudeStoredLoginRead } = {},
 ): Promise<ClaudeResetResult> {
   if (!RESET_ID.test(grantId)) throw new Error("Invalid reset grant id")
-  const token = readClaudeToken(opts.credsPath ?? CLAUDE_CREDS)
+  const token = await readClaudeToken(opts.credsPath ?? CLAUDE_CREDS, opts.readStored ?? readSystemStoredLogin)
   if (!token) throw new Error("Claude credentials not found or token expired")
   const org = readClaudeOrgUuid(opts.claudeJsonPath ?? CLAUDE_JSON)
   if (!org) throw new Error("Claude organization not found")
@@ -558,7 +605,7 @@ export async function redeemCodexReset(
  */
 export function cursorAuthPath(): string {
   return authCredPath(AgentKind.Cursor, {
-    home: homedir(),
+    home: home(),
     xdgConfigHome: process.env.XDG_CONFIG_HOME,
     appData: process.env.APPDATA,
     platform: process.platform,

@@ -18,6 +18,11 @@ export type Account = {
   identity?: AccountIdentity
   /** Own history root, never linked to the shared one; never picked by the switch policy. */
   isolated?: boolean
+  /**
+   * Why the account was made isolated though nobody asked: "file_links_unsupported" when this host cannot create the
+   * file links sharing needs (Windows without Developer Mode, #37). For the app to say so.
+   */
+  isolatedBecause?: "file_links_unsupported"
   /** OpenCode api_key accounts: the provider id the key belongs to (e.g. "anthropic"). */
   provider?: string
   createdAt: string

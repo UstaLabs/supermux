@@ -15,6 +15,8 @@ import dev.supermux.editor.plugins.lsp.LspTextEdit
 import dev.supermux.editor.plugins.lsp.Positions
 import dev.supermux.editor.plugins.lsp.PositionEncoding
 import dev.supermux.editor.plugins.lsp.registerWidgets
+import dev.supermux.fs.hostPathFromFileUri
+import dev.supermux.fs.hostRelativePath
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -94,7 +96,7 @@ class LspHub internal constructor(private val store: DocumentStore, private val 
                 rootUri = dirUri(link.workdir),
                 onNavigate = { uri, range ->
                     // A definition outside the workdir (a dependency's source, the SDK) opens by its absolute path.
-                    val path = uriToWorkdirPath(uri, link.workdir) ?: decodeFileUri(uri)
+                    val path = uriToWorkdirPath(uri, link.workdir) ?: hostPathFromFileUri(uri)
                     if (path == null) println("[lsp] $uri is not a file: not opened")
                     else onNavigate(path, range.start.line + 1)
                 },
@@ -155,34 +157,10 @@ internal fun lspChanges(doc: Rope, edits: List<LspTextEdit>, encoding: PositionE
 
 /** A `file://` URI under [workdir] as a workdir-relative path (percent-decoded), or null outside it. */
 fun uriToWorkdirPath(uri: String, workdir: String): String? {
-    val abs = decodeFileUri(uri) ?: return null
-    val root = workdir.removeSuffix("/") + "/"
+    val abs = hostPathFromFileUri(uri) ?: return null
+    hostRelativePath(workdir, abs)?.let { return it.ifEmpty { null } }
     // clangd and friends canonicalise (/private/var for /var): compare loosely on that prefix.
-    val candidates = listOf(root, "/private$root")
-    for (r in candidates) if (abs.startsWith(r)) return abs.removePrefix(r).ifEmpty { null }
+    // platform-ok: /private is a macOS host's prefix; a Windows workdir never starts with /
+    if (workdir.startsWith('/')) hostRelativePath("/private$workdir", abs)?.let { return it.ifEmpty { null } }
     return null
-}
-
-private fun decodeFileUri(uri: String): String? {
-    if (!uri.startsWith("file://")) return null
-    val rest = uri.removePrefix("file://").let { if (it.startsWith("localhost/")) it.removePrefix("localhost") else it }
-    // Percent-escapes are UTF-8 bytes; everything else is text as it is (runs, so a surrogate pair stays whole).
-    val out = StringBuilder()
-    var i = 0
-    while (i < rest.length) {
-        if (rest[i] == '%') {
-            val bytes = ArrayList<Byte>()
-            while (i + 2 < rest.length && rest[i] == '%') {
-                val v = rest.substring(i + 1, i + 3).toIntOrNull(16) ?: break
-                bytes += v.toByte()
-                i += 3
-            }
-            if (bytes.isEmpty()) { out.append('%'); i++ } else out.append(bytes.toByteArray().decodeToString())
-            continue
-        }
-        val next = rest.indexOf('%', i).let { if (it < 0) rest.length else it }
-        out.append(rest, i, next)
-        i = next
-    }
-    return out.toString()
 }

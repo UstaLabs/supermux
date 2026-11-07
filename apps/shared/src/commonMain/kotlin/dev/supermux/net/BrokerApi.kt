@@ -29,12 +29,14 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.media.RangeResult
 import dev.supermux.util.PerfTrace
+import dev.supermux.proto.ClientLogEntry
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.push.NativePushRegistration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerialName
@@ -42,11 +44,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.Clock
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +85,17 @@ data class HostIdentity(
     val requirements: HostRequirements? = null,
     /** Authed and local callers: "Keep this computer awake". Null from an older broker. */
     val keepAwake: KeepAwakeState? = null,
+    /** Authed and local callers: a broker run from a checkout that moved under it. Null otherwise, or from an older broker. */
+    val checkoutMoved: CheckoutMoved? = null,
 )
+
+/**
+ * `GET /host`'s `checkoutMoved`: the broker runs from a checkout whose HEAD moved since it started ([runs] → [checkout],
+ * short commits), so what it starts now loads code it does not run. [message] is the sentence the apps show. A warning:
+ * the broker refuses nothing.
+ */
+@Serializable
+data class CheckoutMoved(val runs: String = "", val checkout: String = "", val message: String = "")
 
 /**
  * "Keep this computer awake" on a host (spec "Keep the computer awake while hosting"): `GET /host`'s
@@ -586,12 +600,17 @@ data class CreateProxyResponse(
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
 
-/** GET /me → paired status + optional relayUrl for native-push registration. */
+/**
+ * GET /me → paired status and the broker's relays. `relayUrl` is the connectivity relay when one is
+ * on, and the push relay on an older broker without one; `pushRelayUrl` is always the push relay
+ * (card #86).
+ */
 @Serializable
 data class MeResponse(
     val paired: Boolean = false,
     val device: String? = null,
     val relayUrl: String? = null,
+    val pushRelayUrl: String? = null,
 )
 
 // ─── Usage (GET /usage → fetchAllUsage) ──────────────────────────────────────
@@ -732,6 +751,20 @@ data class GrokUsage(
     val billingPeriodEnd: String? = null,
 )
 
+/** One Antigravity limit as agy reports it: a model group's 5-hour or weekly window. [resetsAt] is ISO-8601. */
+@Serializable
+data class AntigravityWindow(
+    val id: String = "",
+    /** "<agy's group name> · 5-hour" or "· weekly" ("Gemini Models · 5-hour"), made by the broker. */
+    val label: String = "",
+    val used: Double = 0.0,
+    val resetsAt: String? = null,
+)
+
+/** Antigravity's limits per model group. agy reports no plan. */
+@Serializable
+data class AntigravityUsage(val windows: List<AntigravityWindow> = emptyList())
+
 @Serializable
 data class UsageResponse(
     val claude: ClaudeUsage? = null,
@@ -739,6 +772,8 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
+    /** Absent on brokers older than #103. */
+    val antigravity: AntigravityUsage? = null,
     /** Per-provider failure text. Values are nullable: the broker records a null for a provider
      *  it could not reach without a message, and a null map VALUE is not something
      *  `coerceInputValues` can rescue (it only defaults properties). */
@@ -1707,6 +1742,13 @@ private data class RefreshUsageBody(
     val force: Boolean,
 )
 
+/** How every BrokerApi failure's message starts: they are all CancellationExceptions (see `decode`). */
+private const val UNAVAILABLE = "BrokerApi request unavailable"
+
+/** POST /client-logs body: app log lines for the broker's own log. */
+@Serializable
+private data class ClientLogsBody(val entries: List<ClientLogEntry>)
+
 /** POST $relayUrl/register body. */
 @Serializable
 private data class RegisterPushRelayBody(
@@ -1747,10 +1789,18 @@ class BrokerApi(
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
+        // platform-ok: a URL
         .trimEnd('/')
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
+    //
+    // encodeDefaults=true (card #97): a field that HAS a value is always sent, even when it equals
+    // the Kotlin default. The broker merges a write over what it stored and reads a missing field as
+    // "unchanged", so dropping defaults made the user's choice vanish whenever it was the default:
+    // "Switch accounts automatically" could not be turned off (`{autoSwitch:false}` went out as `{}`)
+    // and the curator could not go back to Off, 01:00 or Claude. Null stays the one way to say "not
+    // set" — explicitNulls=false above still leaves it out.
     //
     // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
     // that field's DEFAULT instead of throwing — the per-field leniency Android's hand-written
@@ -1764,6 +1814,7 @@ class BrokerApi(
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+        encodeDefaults = true
         coerceInputValues = true
     }
     internal var spawnTimeoutMillis: Long = 120_000
@@ -1811,12 +1862,12 @@ class BrokerApi(
                 return value
             }
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-            throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+            throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
             throw c
         } catch (e: Throwable) {
             println("[BrokerApi] request failed: ${e.message?.take(160)}")
-            throw CancellationException("BrokerApi request unavailable: ${e.message}")
+            throw CancellationException("$UNAVAILABLE: ${e.message}")
         }
     }
 
@@ -1844,7 +1895,7 @@ class BrokerApi(
             ""
         }
         println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+        throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
     }
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
@@ -2678,12 +2729,16 @@ class BrokerApi(
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
         getJson("$httpBase/settings/curator")
 
-    /** PUT /settings/curator → updated {config, nextRun} */
+    /**
+     * PUT /settings/curator → updated {config, nextRun}. A null model or effort ("Default") goes out
+     * as "", the broker's "back to the agent's own": null itself is never sent, and a key left out
+     * keeps whatever model was stored before.
+     */
     suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(config))
+            setBody(json.encodeToString(config.copy(model = config.model ?: "", reasoningLevel = config.reasoningLevel ?: "")))
         })
 
     /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
@@ -3493,11 +3548,76 @@ class BrokerApi(
     // ── Push registration ─────────────────────────────────────────────────────
 
     /**
-     * GET /me → returns the `relayUrl` field (null when the broker is not configured
-     * with a relay URL or the response can't be decoded).
+     * GET /me → the broker's push relay: `pushRelayUrl`, or `relayUrl` from a broker older than
+     * card #86; null when it names neither. With the hosted connectivity relay on, an older
+     * broker's `relayUrl` is the tunnel, which answers /register with a 404.
      */
-    suspend fun pushRelayUrl(): String? =
-        getJson<MeResponse>("$httpBase/me").relayUrl
+    suspend fun pushRelayUrl(): String? {
+        val me = getJson<MeResponse>("$httpBase/me")
+        return me.pushRelayUrl?.takeIf { it.isNotBlank() } ?: me.relayUrl
+    }
+
+    /**
+     * One phone's native-push registration with this broker: its push relay takes [pushToken]
+     * and returns a routing token, which this broker then stores with [pubkey]. How it ended also
+     * goes to the broker's log (client log, category "push", never a token): from 10-27 every
+     * phone failed here and only the phone's own log said so (card #86). A real cancellation is
+     * rethrown; every other failure is the result.
+     */
+    suspend fun registerNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val outcome = attemptNativePush(platform, pushToken, pubkey)
+        reportPush(platform, outcome)
+        return outcome
+    }
+
+    private suspend fun attemptNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val relayUrl = try {
+            pushRelayUrl()
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("me", failureOf(e))
+        }
+        if (relayUrl.isNullOrBlank()) return NativePushRegistration.NoPushRelay
+        val routingToken = try {
+            registerPushTokenWithRelay(relayUrl, platform, pushToken)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("relay", failureOf(e), relayUrl)
+        } ?: return NativePushRegistration.AwaitingBootstrap(relayUrl)
+        try {
+            registerPushDevice(platform, routingToken, pubkey)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("broker", failureOf(e), relayUrl)
+        }
+        return NativePushRegistration.Registered(routingToken, relayUrl)
+    }
+
+    /** Best effort: a broker that cannot take the report has the registration all the same. */
+    private suspend fun reportPush(platform: String, outcome: NativePushRegistration) {
+        val (event, details) = when (outcome) {
+            is NativePushRegistration.Registered -> "push_registered" to mapOf("relay" to outcome.relayUrl)
+            is NativePushRegistration.NoPushRelay -> "push_register_skipped" to mapOf("reason" to "no_push_relay")
+            is NativePushRegistration.AwaitingBootstrap ->
+                "push_register_pending" to mapOf("relay" to outcome.relayUrl, "reason" to "awaiting_bootstrap")
+            is NativePushRegistration.Failed -> "push_register_failed" to buildMap {
+                put("stage", outcome.stage)
+                put("error", outcome.error)
+                outcome.relayUrl?.let { put("relay", it) }
+            }
+        }
+        val data = JsonObject((details + ("platform" to platform)).mapValues { JsonPrimitive(it.value) })
+        val entry = ClientLogEntry("push", event, Clock.System.now().toEpochMilliseconds(), data)
+        try {
+            postJson("$httpBase/client-logs", ClientLogsBody(listOf(entry)))
+        } catch (e: Throwable) {
+            failureOf(e)
+        }
+    }
+
+    /** A failed request as text. Every BrokerApi failure arrives as a CancellationException
+     *  (see [decode]); a real cancellation is rethrown. */
+    private fun failureOf(e: Throwable): String {
+        if (e is CancellationException && e.message?.startsWith(UNAVAILABLE) != true) throw e
+        return (e.message ?: e::class.simpleName ?: "failed").take(300)
+    }
 
     /**
      * POST /push/device — registers this device with the broker after the app has
@@ -3519,6 +3639,7 @@ class BrokerApi(
      * Returns null only if the body lacks a usable routingToken (old relay).
      */
     suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String): String? {
+        // platform-ok: a URL
         val url = relayUrl.trimEnd('/') + "/register"
         val resp = postReturningJson<RegisterPushRelayBody, RegisterPushRelayResponse>(
             url,

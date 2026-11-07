@@ -3,7 +3,9 @@
 // Builds an InboundMessage from a grammy ctx, eagerly downloading any
 // attachment through FileStore so the rest of the system sees a synthetic
 // (channel-agnostic) file_id rather than a Telegram-namespaced one.
-import { readFileSync, unlinkSync } from "fs"
+import { mkdtempSync, readFileSync, unlinkSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 import { downloadAttachment, type DownloadableApi } from "../../core/session-manager/download"
 import type { FileStore, AttachmentKind } from "../../core/files/store"
 import type { InboundAttachment, InboundMessage } from "../channel"
@@ -11,11 +13,14 @@ import { makeLogger } from "../../shared/log"
 
 const log = makeLogger("channels/telegram/inbound")
 
-// /tmp staging dir for the raw download. FileStore.put copies the bytes into
-// the canonical store, so this file becomes garbage immediately. We attempt
-// best-effort cleanup; leaving them around is acceptable (Linux clears /tmp
-// on reboot) but tidy housekeeping helps in long-running deployments.
-const TG_INBOUND_TMP = "/tmp/cmux-tg-dl"
+// Staging for the raw download. FileStore.put copies the bytes into the canonical store, so this file becomes
+// garbage immediately; cleanup is best-effort. This process's own folder (mkdtemp: 0700 on POSIX) under the OS temp
+// dir: a fixed "/tmp/cmux-tg-dl" was `<drive>:\tmp\…` on Windows, outside the user's profile, and on a shared POSIX
+// host a name another user could create first.
+let stagingDir: string | undefined
+export function telegramStagingDir(): string {
+  return (stagingDir ??= mkdtempSync(join(tmpdir(), "cmux-tg-dl-")))
+}
 
 type Opts = {
   ctx: any
@@ -71,7 +76,7 @@ export async function normalizeTelegramInbound(opts: Opts): Promise<InboundMessa
     // behind would accumulate in /tmp over a long-running deployment).
     let tmpPath: string | undefined
     try {
-      tmpPath = await downloadAttachment(api, raw.file_id, TG_INBOUND_TMP)
+      tmpPath = await downloadAttachment(api, raw.file_id, telegramStagingDir())
       const bytes = readFileSync(tmpPath)
       const stored = await fileStore.put({
         kind: raw.kind,

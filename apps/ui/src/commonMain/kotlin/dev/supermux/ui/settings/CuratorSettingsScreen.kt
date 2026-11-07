@@ -73,6 +73,7 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -198,19 +199,22 @@ private fun CuratorSettingsBody(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
 
-    var curatorLoaded by remember { mutableStateOf(false) }
-    var curatorError by remember { mutableStateOf(false) }
-    var curatorReloadKey by remember { mutableStateOf(0) }
-    var enabled by remember { mutableStateOf(false) }
-    var hour by remember { mutableStateOf(1) }
-    var minute by remember { mutableStateOf(0) }
-    var agent by remember { mutableStateOf("claude") }
-    var model by remember { mutableStateOf<String?>(null) }
-    var reasoningLevel by remember { mutableStateOf<String?>(null) }
+    // The schedule being edited, and what it was loaded from, kept for the page on display (#89):
+    // a rotation reloaded it from the host over the user's unsaved changes.
+    val form = rememberRetainedOnPage("curator") { CuratorForm() }
+    var curatorLoaded by form::loaded
+    var curatorError by form::loadFailed
+    var curatorReloadKey by form::reloadKey
+    var enabled by form::enabled
+    var hour by form::hour
+    var minute by form::minute
+    var agent by form::agent
+    var model by form::model
+    var reasoningLevel by form::reasoningLevel
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var reasoningVisible by remember { mutableStateOf(false) }
     var reasoningOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var nextRun by remember { mutableStateOf<String?>(null) }
+    var nextRun by form::nextRun
     var curatorSaving by remember { mutableStateOf(false) }
     var curatorSaved by remember { mutableStateOf(false) }
     var curatorSaveError by remember { mutableStateOf<String?>(null) }
@@ -242,7 +246,13 @@ private fun CuratorSettingsBody(
         curatorLoaded = true
     }
 
-    LaunchedEffect(curatorReloadKey) { loadCuratorOnce() }
+    LaunchedEffect(curatorReloadKey) {
+        // Loaded already for this key: the screen was rebuilt (a rotation, a width change), not
+        // retried, and the user's changes since stay.
+        if (form.loadedKey == curatorReloadKey) return@LaunchedEffect
+        loadCuratorOnce()
+        form.loadedKey = curatorReloadKey
+    }
 
     LaunchedEffect(agent, curatorLoaded) {
         if (!curatorLoaded || curatorError) return@LaunchedEffect
@@ -605,3 +615,19 @@ private fun PickerChip(label: String, onClick: () -> Unit, testTag: String) {
 
 /** Two-digit clock field ("07"), replacing the JVM-only `"%02d".format(n)`. */
 private fun pad2(n: Int): String = if (n in 0..9) "0$n" else n.toString()
+
+/** The curator schedule being edited, kept for the page on display (`rememberRetainedOnPage`, #89). */
+private class CuratorForm {
+    var loaded by mutableStateOf(false)
+    var loadFailed by mutableStateOf(false)
+    var reloadKey by mutableStateOf(0)
+    /** The [reloadKey] the fields were last loaded for: -1 until the first load. */
+    var loadedKey = -1
+    var enabled by mutableStateOf(false)
+    var hour by mutableStateOf(1)
+    var minute by mutableStateOf(0)
+    var agent by mutableStateOf("claude")
+    var model by mutableStateOf<String?>(null)
+    var reasoningLevel by mutableStateOf<String?>(null)
+    var nextRun by mutableStateOf<String?>(null)
+}

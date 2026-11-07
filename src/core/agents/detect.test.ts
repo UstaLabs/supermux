@@ -20,6 +20,15 @@ test("grok detects installed+authed from binary and auth file", () => {
   })
 })
 
+// opencode uses XDG folders on every OS. On Windows 11 (opencode 1.19.5) it made %USERPROFILE%\.local\share\opencode
+// and never %LOCALAPPDATA%\opencode, which is where the broker used to look for a Windows user's credential.
+test("opencode's credential is in its XDG data folder on every OS, Windows included", () => {
+  expect(authCredPath("opencode", paths)).toBe("/home/u/.local/share/opencode/auth.json")
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  expect(authCredPath("opencode", win)).toBe("C:\\Users\\u\\.local\\share\\opencode\\auth.json")
+  expect(authCredPath("opencode", { ...win, xdgDataHome: "D:\\xdg" })).toBe("D:\\xdg\\opencode\\auth.json")
+})
+
 test("antigravity cred path is agy's OAuth token under ~/.gemini/antigravity-cli", () => {
   expect(authCredPath("antigravity", paths)).toBe("/home/u/.gemini/antigravity-cli/antigravity-oauth-token")
   expect(authCredPath("antigravity", { home: "C:\\Users\\u", platform: "win32" })).toBe("C:\\Users\\u\\.gemini\\antigravity-cli\\antigravity-oauth-token")
@@ -56,6 +65,13 @@ test("antigravity on Windows: agy's login in Credential Manager counts as authed
   const probes = { hasBinary: (b: string) => b === "agy", fileExists: () => false, antigravityKeyring: () => true }
   expect(detectAgent("antigravity", probes, win).authed).toBe(true)
   expect(detectAgent("antigravity", { ...probes, antigravityKeyring: () => false }, win).authed).toBe(false)
+})
+
+test("claude on Windows: its login in Credential Manager counts as authed with no credential file (#101)", () => {
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  const probes = { hasBinary: (b: string) => b === "claude", fileExists: () => false, claudeStoredLogin: () => true }
+  expect(detectAgent("claude", probes, win).authed).toBe(true)
+  expect(detectAgent("claude", { ...probes, claudeStoredLogin: () => false }, win).authed).toBe(false)
 })
 
 test("detectAgent always carries kind-derived auth capabilities", () => {

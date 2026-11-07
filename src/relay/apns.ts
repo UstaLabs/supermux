@@ -1,6 +1,7 @@
 import http2 from "node:http2"
 import type { PlatformPushAdapter } from "../core/push/native-sender"
 import { makeLogger } from "../shared/log"
+import { failureReason } from "./reason"
 
 const log = makeLogger("relay/apns")
 
@@ -116,9 +117,14 @@ export function createApnsAdapter(cfg: ApnsConfig, h2post: H2Post = defaultH2Pos
       // 410 Unregistered (and 400 BadDeviceToken) mean the token is dead and
       // must be dropped; everything else is treated as transient.
       const gone = res.status === 410 || /Unregistered|BadDeviceToken/.test(res.body)
-      return { ok: false, gone }
+      return { ok: false, gone, reason: failureReason("apns", res.status, apnsReason(res.body)) }
     },
   }
+}
+
+// APNs explains a refusal as {"reason":"BadDeviceToken"}.
+function apnsReason(body: string): string | undefined {
+  try { return (JSON.parse(body) as { reason?: string }).reason } catch { return undefined }
 }
 
 const H2_TIMEOUT_MS = 30_000

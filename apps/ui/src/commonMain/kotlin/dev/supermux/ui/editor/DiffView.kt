@@ -99,6 +99,8 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT
 import androidx.compose.runtime.collectAsState
@@ -163,22 +165,34 @@ fun DiffView(
     documents: DocumentStore? = null,
     /** A lazy file's base text by blob (repo, sha, force). Null: lazy files show "Couldn't load". */
     baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
+    /**
+     * Names the review drafts kept for a pane that a rotation or a width change rebuilds (#89): the
+     * comments being written and a post in flight. Null keeps them in this composition.
+     */
+    retainKey: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    // The drafts, and the posts that would clear them, outlive this composition when [retainKey]
+    // names the pane: a rotation used to drop a half-written comment, or cancel its post halfway
+    // and leave it to be sent twice (#89).
+    val review = if (retainKey != null) rememberRetained(retainKey) { DiffReviewKept() } else remember { DiffReviewKept() }
+    val reviewScope = if (retainKey != null) rememberRetainedScope() else scope
     // No-op wherever there is no vibrator (desktop): Android's tick on every toggle, kept.
     val haptic = rememberHaptics()
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
-    // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue).
-    var expandedFiles by remember { mutableStateOf(setOf<String>()) }
-    var expandedRepos by remember { mutableStateOf(setOf<String>()) }
-    var expandedFolders by remember { mutableStateOf(setOf<String>()) }
+    // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue). The
+    // open files go with the drafts: a composer kept open in a collapsed file would not show. The
+    // open repos and folders, and the base menu, are kept with them for a rebuilt pane (#89).
+    var expandedFiles by review::expandedFiles
+    var expandedRepos by review::expandedRepos
+    var expandedFolders by review::expandedFolders
     val uiPrefs = LocalUiPrefs.current
     val treeView by uiPrefs.editorDiffTreeView.collectAsState(EDITOR_DIFF_TREE_VIEW_DEFAULT)
     val sideBySide by uiPrefs.editorDiffSideBySide.collectAsState(EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
     // Kept by the pane, not the (lazy) file items: a rebuilt item finds its drafts and its scroll.
-    val nativeDrafts = remember { HashMap<String, MapReviewDrafts>() }
+    val nativeDrafts = review.native
     val baseCache = remember { BaseTextCache() }
     // Bumped by every new `repos` (a reload, even of an equal list): the files' working copies are re-read.
     val generation = remember { ReloadGeneration() }.of(repos)
@@ -205,17 +219,22 @@ fun DiffView(
         )
     } else null
     // `repo||path||newLine` of the line whose composer is open (null = none).
-    var composerFor by remember { mutableStateOf<String?>(null) }
-    var draft by remember { mutableStateOf("") }
-    var submitting by remember { mutableStateOf(false) }
+    var composerFor by review::composerFor
+    var draft by review::draft
+    var submitting by review::submitting
     var wrap by remember { mutableStateOf(true) }
-    var showBaseMenu by remember { mutableStateOf(false) }
+    var showBaseMenu by review::baseMenuOpen
 
     // Seed expansion to every repo, re-seeding when the repo set itself changes (parity with the
     // iOS seedRepos + onChange(of: repos.map(\.repo)) — DiffView.swift:61-69). [autoExpandAll] ALSO
     // seeds every file (see the KDoc above) — off by default, so normal behavior is unaffected.
+    // A rebuilt pane runs this again with the same inputs: that run keeps what the user opened. So
+    // does the empty diff it shows until its reload lands: there is nothing in it to open.
     val repoKey = repos.joinToString(" ") { r -> "${r.repo}:${r.files.joinToString { it.path }}" }
     LaunchedEffect(repoKey, autoExpandAll, treeView) {
+        val seed = "$repoKey|$autoExpandAll|$treeView"
+        if (repos.isEmpty() || review.seeded == seed) return@LaunchedEffect
+        review.seeded = seed
         expandedRepos = repos.map { it.repo }.toSet()
         if (autoExpandAll) {
             expandedFiles = repos.flatMap { r -> r.files.map { fileKey(r.repo, it.path) } }.toSet()
@@ -411,7 +430,7 @@ fun DiffView(
                                                     val body = draft.trim()
                                                     val newLine = line.newLine
                                                     if (body.isNotEmpty() && newLine != null) {
-                                                        scope.launch {
+                                                        reviewScope.launch {
                                                             submitting = true
                                                             onAddComment(repoId, path, newLine, line.content, hunkHeader, body)
                                                             draft = ""
@@ -456,7 +475,7 @@ fun DiffView(
                                             val body = draft.trim()
                                             val newLine = line.newLine
                                             if (body.isNotEmpty() && newLine != null) {
-                                                scope.launch {
+                                                reviewScope.launch {
                                                     submitting = true
                                                     onAddComment(repoId, path, newLine, line.content, hunkHeader, body)
                                                     draft = ""
@@ -499,7 +518,7 @@ fun DiffView(
                 Box(Modifier.weight(1f))
                 Button(
                     onClick = {
-                        scope.launch {
+                        reviewScope.launch {
                             submitting = true
                             onSubmit()
                             submitting = false
@@ -514,6 +533,25 @@ fun DiffView(
             }
         }
     }
+}
+
+/**
+ * The Changes pane's review drafts: the native diff's composer drafts per file, the patch rows'
+ * open composer and its draft, a post in flight, and the files open to show them. Kept for a
+ * rebuilt pane (`rememberRetained`, #89).
+ */
+private class DiffReviewKept {
+    var expandedFiles by mutableStateOf(setOf<String>())
+    var expandedRepos by mutableStateOf(setOf<String>())
+    var expandedFolders by mutableStateOf(setOf<String>())
+    var baseMenuOpen by mutableStateOf(false)
+    /** The inputs the open sets were last seeded from (see the seeding effect). */
+    var seeded: String? = null
+    /** By `"repo path"`. */
+    val native = HashMap<String, MapReviewDrafts>()
+    var composerFor by mutableStateOf<String?>(null)
+    var draft by mutableStateOf("")
+    var submitting by mutableStateOf(false)
 }
 
 // ── Adjustable diff-base picker (parity web/Android/iOS DiffView base menu) ─────────────

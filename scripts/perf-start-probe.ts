@@ -9,8 +9,9 @@
 //
 //   bun scripts/perf-start-probe.ts --url http://127.0.0.1:9901 --token TOKEN --workdir ~/projects/app
 //       [--agent claude] [--model M] [--runs 3] [--gap 15] [--label warm] [--message "Reply with just: ok"] [--keep]
-import { execFileSync } from "child_process"
 import { randomBytes } from "crypto"
+import { spawnCommandSync } from "../src/core/process/launcher"
+import { home } from "../src/shared/home"
 
 const argv = process.argv.slice(2)
 const opt = (name: string, fallback?: string): string | undefined => {
@@ -19,7 +20,7 @@ const opt = (name: string, fallback?: string): string | undefined => {
 }
 const url = (opt("url") ?? "").replace(/\/$/, "")
 const token = opt("token") ?? process.env.MUX_PROBE_TOKEN ?? ""
-const workdir = (opt("workdir") ?? "").replace(/^~(?=\/|$)/, process.env.HOME ?? "~")
+const workdir = (opt("workdir") ?? "").replace(/^~(?=\/|$)/, home())
 const agent = opt("agent", "claude")!
 const model = opt("model")
 const runs = Number(opt("runs", "1"))
@@ -126,8 +127,9 @@ async function once(n: number): Promise<Record<string, unknown>> {
     const repo = res.json?.repo_root as string | undefined
     const branch = res.json?.session_branch as string | undefined
     if (repo && wt && wt.includes("/worktrees/")) {
-      try { execFileSync("git", ["-C", repo, "worktree", "remove", "--force", wt], { stdio: "ignore" }) } catch { /* already gone */ }
-      if (branch) try { execFileSync("git", ["-C", repo, "branch", "-D", branch], { stdio: "ignore" }) } catch { /* already gone */ }
+      // Each just fails when it is already gone.
+      spawnCommandSync("git", ["-C", repo, "worktree", "remove", "--force", wt], { stdio: "ignore" })
+      if (branch) spawnCommandSync("git", ["-C", repo, "branch", "-D", branch], { stdio: "ignore" })
     }
   }
   return out

@@ -55,6 +55,32 @@ terminal marker, resizes, detaches/reattaches, kills only the broker, requires
 the same `mux-sessiond` PID and terminal to survive, then explicitly closes the
 terminal.
 
+## The CI lane (`windows` in .github/workflows/ci.yml)
+
+Every PR, and every push that touches TypeScript, runs on `windows-latest`:
+
+1. `bun scripts/test-windows.ts` runs the broker and core suite in chunks, against `tests/windows-quarantine.txt`.
+   The lane fails on:
+   - a new failure;
+   - a quarantined file that now passes (take it off: the list only shrinks);
+   - an entry for a file that no longer exists.
+
+   Tests stay OS-neutral: quarantine a Windows failure with a reason, never
+   `skipIf(process.platform === "win32")`.
+2. `bun scripts/windows/conpty-smoke.ts` checks the ConPTY and Job Object lifecycle, on the pinned Bun.
+3. `ci-smoke.ps1`, run through `run-as-standard-user.ps1` as a fresh standard user with Developer Mode off:
+   - a file symlink must fail (EPERM) and a junction must work;
+   - the broker and sessiond boot from source;
+   - a paired device uses a session's terminal;
+   - the broker is killed, and a new one reattaches to the same terminal.
+
+Refresh the quarantine from a run's `windows-test-report` artifact:
+
+    gh run download <run id> -n windows-test-report
+    bun scripts/test-windows.ts --from-report windows-test-report.json --write-quarantine tests/windows-quarantine.txt
+
+then replace each new "fails on Windows (first seen …)" reason with the real one.
+
 ## Evidence rules
 
 - Record Windows build, hardware architecture, Bun version and Bun executable

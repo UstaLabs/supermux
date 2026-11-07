@@ -179,6 +179,7 @@ private fun ReferencesPanel(scope: WidgetScope, client: LspClient) {
                         .testTag(LspTags.reference(i)).padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // platform-ok: a URI
                     val where = if (r.from == null) r.location.uri.substringAfterLast('/') + ":" else ""
                     BasicText("$where${r.line + 1}", style = dim)
                     Spacer(Modifier.width(8.dp))

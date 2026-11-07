@@ -20,4 +20,10 @@ class ProjectTilesTest {
         assertEquals("/opt/tools/app", homeRelativePath("/opt/tools/app", "/home/u"))
         assertEquals("/home/u/app", homeRelativePath("/home/u/app", ""))
     }
+
+    @Test fun homeShortensAWindowsPath() {
+        assertEquals("~\\proj", homeRelativePath("C:\\Users\\me\\proj", "C:\\Users\\me"))
+        assertEquals("~", homeRelativePath("c:\\users\\me", "C:\\Users\\me"))
+        assertEquals("D:\\x", homeRelativePath("D:\\x", "C:\\Users\\me"))
+    }
 }

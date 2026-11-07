@@ -1,14 +1,14 @@
-import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import type { AccountIdentity, AuthAdapter, HomeRoots, Materialized } from "../types.js"
 import { jwtPayload, readJson, requireSecret, str, unsupported } from "./shared.js"
+import { dirs } from "@supermux/platform"
 
 /** An account's own agy cli dir (token, settings). The driver links it into the session's shadow HOME as ~/.gemini/antigravity-cli and shares the real conversations/brain into it. */
 export const ANTIGRAVITY_CLI_DIR_ENV = "SUPERMUX_ANTIGRAVITY_CLI_DIR"
 
 /** The system login's cli dir: agy finds it only through $HOME, so always <home>/.gemini/antigravity-cli. */
 export function antigravityRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.antigravityRoot ?? join(homedir(), ".gemini", "antigravity-cli"))
+  return resolve(roots.antigravityRoot ?? join(dirs.home(), ".gemini", "antigravity-cli"))
 }
 
 /** `<cliDir>/antigravity-oauth-token` = `{ token, auth_method, id_token }`; the id_token JWT names the Google user. No file (or unreadable) → undefined; no id_token → {}. */

@@ -300,13 +300,18 @@ class DocumentStore(
         docs[path]?.content = content
     }
 
-    fun save(doc: Document) {
+    /**
+     * Writes [doc] on the store's own scope, so the write outlives whatever asked for it. [onResult]
+     * hears whether the file was written; it is not called when a save of this document is already
+     * running (that save answers its own caller).
+     */
+    fun save(doc: Document, onResult: (written: Boolean) -> Unit = {}) {
         if (doc.path in savingPaths) return
         // Snapshot the text NOW (before the launch): an edit typed while the write is in flight stays dirty.
         val snapshot = snapshotOf(doc)
         savingPaths = savingPaths + doc.path
         writeObservers.toList().forEach { it.writeStarted(doc.path) }
-        scope.launch { write(doc, snapshot) }
+        scope.launch { onResult(write(doc, snapshot)) }
     }
 
     /** [save], waiting for the write: true when the file was written (false also when a save of it is already running). */
@@ -384,6 +389,7 @@ class DocumentStore(
         changedPaths = changedPaths - normPath(doc.path)
     }
 
+    // platform-ok: an editor key is workdir-relative, always /
     private fun normPath(p: String): String = p.removePrefix("/")
 
     /**

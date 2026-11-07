@@ -102,10 +102,10 @@ class FileTreeMenuValidationTest {
 class FileTreeMenuTest {
     // The DIALOG path: a touch-only device (no hardware keyboard). The in-place path is
     // FileTreeInlineEditTest.
-    private fun host(content: @Composable () -> Unit): @Composable () -> Unit = {
+    private fun host(platform: FakePlatform = FakePlatform(), content: @Composable () -> Unit): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
-            LocalPlatform provides FakePlatform(),
+            LocalPlatform provides platform,
             LocalHardwareKeyboard provides false,
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
@@ -303,6 +303,27 @@ class FileTreeMenuTest {
         assertEquals(emptyList<String>(), opened)
     }
 
+    @Test fun copyPathAndCopyRelativePathGoThroughThePlatform() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        val platform = FakePlatform()
+        setContent(host(platform) { FileTreeWithActions(fs.service, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performMouseInput { rightClick(center) }
+        waitForIdle()
+        onNodeWithTag("tree_menu_copy_path").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").performMouseInput { rightClick(center) }
+        waitForIdle()
+        onNodeWithTag("tree_menu_copy_relative_path").performClick()
+        waitForIdle()
+
+        assertEquals(listOf("/w/a.kt", "a.kt"), platform.copied)
+    }
+
     @Test fun theMenuClosesForGoodWhenItsRowScrollsOutOfView() = runComposeUiTest {
         val fs = Fs()
         val view = TreeViewState("/w")
@@ -343,5 +364,24 @@ class FileTreeMenuTest {
         val op = fs.ops().single()
         assertEquals(JsonPrimitive("touch"), op["op"])
         assertEquals(JsonPrimitive("/w/n.kt"), op["path"])
+    }
+
+    // A Windows host refuses these characters and names, and names a file whatever its letter case; the folder the
+    // name goes in says which host's rules apply.
+    @Test fun aWindowsHostsNameRules() {
+        val win = "C:\\Users\\me\\proj"
+        assertEquals("A name can't contain “:”", validateNewName("a:b", emptyList(), inFolder = win))
+        assertEquals("A name can't contain “\\”", validateNewName("a\\b", emptyList(), inFolder = win))
+        assertEquals("A name can't contain “?”", validateNewName("why?.md", emptyList(), inFolder = win))
+        assertEquals("“CON” is reserved on Windows", validateNewName("CON", emptyList(), inFolder = win))
+        assertEquals("“nul.txt” is reserved on Windows", validateNewName("nul.txt", emptyList(), inFolder = win))
+        assertEquals("A name can't end with “.”", validateNewName("a.", emptyList(), inFolder = win))
+        assertEquals("A file with that name already exists", validateNewName("readme.md", listOf("README.md"), inFolder = win))
+        // A rename that only changes the letter case is the same file: allowed.
+        assertNull(validateNewName("Readme.md", listOf("readme.md"), current = "readme.md", inFolder = win))
+        assertNull(validateNewName("CONSOLE.md", emptyList(), inFolder = win))
+        // A POSIX host keeps its own rules: `:` and `\` are ordinary there, and README.md is not readme.md.
+        assertNull(validateNewName("a:b", emptyList(), inFolder = "/home/me/proj"))
+        assertNull(validateNewName("readme.md", listOf("README.md"), inFolder = "/home/me/proj"))
     }
 }

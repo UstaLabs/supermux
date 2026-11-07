@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
-import { mkdirSync, writeFileSync, renameSync, rmSync } from "fs"
+import { mkdirSync, writeFileSync, rmSync } from "fs"
 import { join } from "path"
+import { files } from "@supermux/platform"
 
 const EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }
 const MIME: Record<string, string> = Object.fromEntries(Object.entries(EXT).map(([m, e]) => [e, m]))
@@ -30,7 +31,7 @@ export class ProjectImages {
     const tmp = join(this.dir, `.${id}.tmp`)
     try {
       writeFileSync(tmp, bytes, { mode: 0o600 })
-      renameSync(tmp, join(this.dir, id))
+      files.replaceSync(tmp, join(this.dir, id))
     } catch (e) {
       rmSync(tmp, { force: true })
       throw e

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The dark window background before Compose draws (values/themes.xml has the light one). -->
+<resources>
+    <style name="Theme.WebViewSample" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF131318</item>
+    </style>
+</resources>

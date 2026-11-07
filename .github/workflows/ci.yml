@@ -63,6 +63,7 @@ jobs:
       wire: ${{ steps.f.outputs.wire }}
       zmx: ${{ steps.f.outputs.zmx }}
       terminal: ${{ steps.f.outputs.terminal }}
+      webview: ${{ steps.f.outputs.webview }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -84,6 +85,10 @@ jobs:
               - 'apps/gradle/**'
             android:
               - 'apps/android/**'
+            # The webview library (card #93): the library, its testing module, its sample and labs. What pins their
+            # toolchain (apps/gradle, the root build and settings) is `shared`, which starts the kotlin lane too.
+            webview:
+              - 'apps/webview-*/**'
             # The browser client: :ui compiled to Kotlin/Wasm and staged into
             # src/channels/web/static. `apps/ui` and `apps/shared` are most of
             # what it compiles, and `apps/gradle` pins the toolchain, so any of
@@ -173,6 +178,10 @@ jobs:
           node-version: "22"
       - name: Typecheck core package
         run: bun run typecheck:core
+      # @supermux/platform runs on Node 22 as well as Bun (platform-layer spec §3.3): its own tsconfig
+      # (NodeNext, Node's types only) is what catches a Bun-only API in it. Its tests run in `bun test` above.
+      - name: Typecheck platform package
+        run: bun run typecheck:platform
       - name: Build core package
         run: bun run build:core
       # The TypeScript examples against the build, as a project that copied one out would see it.
@@ -185,6 +194,62 @@ jobs:
       - name: Node 22 e2e (examples against fixture agents)
         run: node --test "e2e/*.e2e.mjs"
         working-directory: packages/supermux-core
+
+  # ── Windows: the broker on real Windows ─────────────────────────────────────
+  # The broker and core suite on windows-latest, minus tests/windows-quarantine.txt: the files that fail on Windows
+  # today. scripts/test-windows.ts fails the lane on a NEW failure and on a quarantined file that now passes, so the
+  # list only shrinks. Then the ConPTY/Job Object smoke, and a broker smoke as a STANDARD user: GitHub's runner is an
+  # administrator with UAC off, which on its own would hide the symlink class of bugs (#37).
+  # Bun is pinned to what the Windows release builds with (release.yml build-desktop-windows): this tests what ships.
+  # 1.4.x, not 1.3.14: it refuses .cmd arguments cmd.exe would split into a second command (tests/runtime-assumptions).
+  windows:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' ||
+      needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.wire == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          # Inside the job's temp folder, so the standard user below can read what bun install hard-links from it.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}\bun-cache
+      # The quick checks first (a minute or two), the suite (about 40 minutes) last.
+      - name: ConPTY and Job Object smoke
+        run: bun scripts/windows/conpty-smoke.ts
+      - name: Broker smoke as a standard user
+        if: always()
+        shell: pwsh
+        run: |
+          # No Developer Mode: it would let the standard user create symlinks and hide #37 again.
+          New-Item -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock -Force | Out-Null
+          Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock -Name AllowDevelopmentWithoutDevLicense -Value 0 -Type DWord
+          $bunDir = Join-Path $env:RUNNER_TEMP "bun"
+          New-Item -ItemType Directory -Force -Path $bunDir | Out-Null
+          Copy-Item (Get-Command bun).Source (Join-Path $bunDir "bun.exe") -Force
+          ./scripts/windows-vm/run-as-standard-user.ps1 `
+            -Script "$env:GITHUB_WORKSPACE\scripts\windows-vm\ci-smoke.ps1" `
+            -ScriptArgs @("-Repo", $env:GITHUB_WORKSPACE, "-Bun", (Join-Path $bunDir "bun.exe")) `
+            -ReadPaths @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)
+      # The files windows-desktop hands to `bun test` run there only: scripts/test-windows.ts reads its list here.
+      - name: Broker and core tests, against the Windows quarantine
+        if: always()
+        run: bun scripts/test-windows.ts --report windows-test-report.json
+      - name: Upload the Windows test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-report
+          path: windows-test-report.json
+          if-no-files-found: ignore
 
   # ── zmx: the POSIX workspace-terminal backend, against real processes ──────
   # The `ts` lane runs this backend's unit tests against a fake helper. This one
@@ -472,7 +537,7 @@ jobs:
           src/core/sessiond/session-store.test.ts
       - name: Test desktop native-host integration
         working-directory: apps
-        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --console=plain --no-daemon
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --tests 'dev.supermux.desktop.platform.ScreenWatchTest' --console=plain --no-daemon
 
   kotlin:
     needs: changes
@@ -481,10 +546,16 @@ jobs:
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.android == 'true' ||
       needs.changes.outputs.desktop == 'true' ||
-      needs.changes.outputs.wire == 'true'
+      needs.changes.outputs.wire == 'true' ||
+      needs.changes.outputs.webview == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The platform guard reads Kotlin too (tests/platform-boundary.test.ts): run it here so a Kotlin-only push,
+      # which skips the ts lane, is checked as well. It needs no install.
+      - uses: oven-sh/setup-bun@v2
+      - name: Platform guard (no OS decisions outside the platform layer)
+        run: bun test ./tests/platform-boundary.test.ts
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -526,6 +597,15 @@ jobs:
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
         run: xvfb-run -a ./gradlew :shared:jvmTest :ui:jvmTest :desktop:test --build-cache --console=plain
+
+      # The webview library (card #93): its JVM suites (the runtime, the desktop engines' logic against fakes, the
+      # sample's pool and chat checks; the real engines are checked on devices) and its ABI dump. A Linux runner can't
+      # build the iOS klibs: KGP keeps their part of the dump as it is, with a warning, and a Mac writes it
+      # (webview-mac-gradle :webview-compose:updateKotlinAbi). The default compiler daemon, as everywhere here: Kotlin
+      # 2.4's in-process strategy crashed the library's wasm test compile.
+      - name: Webview library (JVM, ABI dump)
+        working-directory: apps
+        run: xvfb-run -a ./gradlew :webview-compose:jvmTest :webview-compose:checkKotlinAbi :webview-sample:jvmTest --build-cache --console=plain
 
       # apps/android/google-services.json is gitignored (the real one carries the
       # app's API key), and without it :android:processDebugGoogleServices fails

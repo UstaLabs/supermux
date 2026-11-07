@@ -81,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.chatTimeLabel
+import dev.supermux.fs.pathLeaf
 import dev.supermux.net.MessageSearchHit
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -374,7 +375,7 @@ fun ChatSearchHitRow(hit: MessageSearchHit, query: String, now: Long, onClick: (
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            val project = hit.workdir.trimEnd('/').substringAfterLast('/')
+            val project = pathLeaf(hit.workdir)
             if (project.isNotEmpty()) {
                 Text(
                     "  ·  $project",

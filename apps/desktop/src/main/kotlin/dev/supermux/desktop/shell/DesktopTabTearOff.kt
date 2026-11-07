@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.ui.shell.windows.TabDragWorld
 import dev.supermux.ui.shell.windows.TearOffPlatform
 import dev.supermux.ui.shell.windows.WindowBounds
@@ -139,7 +140,7 @@ internal object DesktopTearOff : TearOffPlatform {
 
     /** Past the traffic lights on macOS, at their fallback width (DesktopWindowChrome.kt): a new window has no sidebar. */
     override fun newWindowTabOffset(): Offset =
-        Offset(chromeInsets(ChromeOs.of(), customChrome = false, sidebarControls = false).start.value, 0f)
+        Offset(chromeInsets(ChromeOs.of(dev.supermux.desktop.platform.DesktopOs.current), customChrome = false, sidebarControls = false).start.value, 0f)
 
     override fun setHidden(hostId: String, hidden: Boolean) {
         if (hidden) this.hidden.add(hostId) else this.hidden.remove(hostId)
@@ -236,13 +237,10 @@ internal object DesktopTearOff : TearOffPlatform {
     }
 
     /** A system-decorated window's frame, before any window has shown us the real one. */
-    private fun defaultFrameInsets(): Insets {
-        val os = System.getProperty("os.name").orEmpty().lowercase()
-        return when {
-            "mac" in os -> Insets(28, 0, 0, 0)
-            "win" in os -> Insets(31, 8, 8, 8)
-            else -> Insets(37, 0, 0, 0)
-        }
+    private fun defaultFrameInsets(): Insets = when (DesktopOs.current) {
+        DesktopOs.MACOS -> Insets(28, 0, 0, 0)
+        DesktopOs.WINDOWS -> Insets(31, 8, 8, 8)
+        DesktopOs.LINUX -> Insets(37, 0, 0, 0)
     }
 }
 

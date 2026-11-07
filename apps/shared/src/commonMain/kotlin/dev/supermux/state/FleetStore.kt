@@ -164,6 +164,9 @@ class FleetStore(
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
 
+    /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
+    val retainedUi = RetainedUiState(fleetScope)
+
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
@@ -501,6 +504,30 @@ class FleetStore(
             .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
 
     /**
+     * Each connected host's own home folder (record id → the homeDir its snapshot sent), so a host's
+     * paths shorten to `~` under ITS home, not under one home guessed for the whole fleet. A host whose
+     * broker sent none (an older broker) is absent. Keyed on the live [HostStore]s like
+     * [projectCatalogHosts].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val homeDirs: StateFlow<Map<String, String>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) {
+                flowOf(emptyMap())
+            } else {
+                val ids = synchronized(lock) {
+                    apps.map { app -> conns.entries.firstOrNull { it.value.app === app }?.key }
+                }
+                combine(apps.mapIndexed { i, app -> app.homeDir.map { home -> ids[i]?.let { id -> home?.let { id to it } } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<Pair<String, String>?>).filterNotNull().toMap()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyMap())
+
+    /**
      * The ACTIVE host's requirements ([HostStore.hostRequirements]) for the launcher's "needs git"
      * banner. Keyed on the live [HostStore] like [activeAgentModels]; null until that host spoke.
      */
@@ -792,17 +819,18 @@ class FleetStore(
     }
 
     /**
-     * Record a snapshot the CALLER just obtained, against the host the call STARTED on — never
-     * whatever is active by the time it returns, or a switch mid-flight would file host A's
-     * numbers under host B.
+     * Record [app]'s held snapshot against the host the call STARTED on — never whatever is active
+     * by the time it returns, or a switch mid-flight would file host A's numbers under host B.
      *
      * The per-host collector in [open] already carries `usage_updated` frames here, but it resumes
-     * on whichever thread the HTTP call completed on, so a fetch publishes its own result too and
-     * `usage()` returning is the point at which [usageSnapshot] is up to date.
+     * on whichever thread the HTTP call completed on, so a fetch publishes too and `usage()`
+     * returning is the point at which [usageSnapshot] is up to date. It publishes what the host
+     * HOLDS, read under the lock, never the answer it got: a frame that overtook the answer (card
+     * #101) is newer, and the collector may already have filed it.
      */
-    private fun publishUsage(recordId: String?, usage: UsageResponse?) = publishing { pub ->
+    private fun publishUsage(recordId: String?, app: HostStore) = publishing { pub ->
         val target = recordId ?: return@publishing
-        usageByHost[target] = usage
+        usageByHost[target] = app.usageSnapshot.value
         stageUsage(pub)
     }
 
@@ -952,6 +980,15 @@ class FleetStore(
      * single-workspace, and [updateViewing] has already cleared every other host's entry, so
      * re-asserting on the rest would resurrect presence the fleet deliberately dropped.
      */
+    /**
+     * Card #62: live text for [sessionIds] without their being on screen (the assistant overlay's Agent), asked of
+     * the host that owns each; every other host's pins are cleared. Presence for nothing ([HostStore.pinLive]).
+     */
+    fun pinLive(sessionIds: Set<String>) {
+        val byHost = sessionIds.groupBy { appFor(it) }
+        for (conn in conns.values) conn.app.pinLive(byHost[conn.app].orEmpty())
+    }
+
     fun reassertViewing() {
         activeApp()?.reassertViewing()
     }
@@ -1581,20 +1618,23 @@ class FleetStore(
     suspend fun setOnboarded(value: Boolean): Boolean = activeApp()?.setOnboarded(value) == true
     suspend fun usage(): UsageResponse? {
         val target = synchronized(lock) { activeRecordId() }
-        return activeApp()?.usage()?.also { publishUsage(target, it) }
+        val app = activeApp() ?: return null
+        return app.usage()?.also { publishUsage(target, app) }
     }
     /** POST /usage/refresh on the active host — the snapshot comes back with `refreshing` set. */
     suspend fun refreshUsage(): UsageResponse? {
         val target = synchronized(lock) { activeRecordId() }
-        return activeApp()?.refreshUsage()?.also { publishUsage(target, it) }
+        val app = activeApp() ?: return null
+        return app.refreshUsage()?.also { publishUsage(target, app) }
     }
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
     suspend fun redeemClaudeReset(): ClaudeResetResult? = activeApp()?.redeemClaudeReset()
     /** Replace the active host's held snapshot (the Codex redeem updates one provider in place). */
     fun applyUsage(usage: UsageResponse) {
         val target = synchronized(lock) { activeRecordId() }
-        activeApp()?.applyUsage(usage)
-        publishUsage(target, usage)
+        val app = activeApp() ?: return
+        app.applyUsage(usage)
+        publishUsage(target, app)
     }
     /** Null = the load FAILED (or no active host); empty = a real, empty glossary (cluster E5). */
     suspend fun fetchGlossary(): List<String>? = activeApp()?.fetchGlossary()
@@ -1944,6 +1984,7 @@ class FleetStore(
         /** Normalize a typed host URL (bare host → https://…, trim trailing slash); reject a
          *  non-http(s)/ws(s) scheme. Mirrors Android AppViewModel.normalizeHostUrl. */
         fun normalizeHostUrl(raw: String): String? {
+            // platform-ok: a URL
             val t = raw.trim().trimEnd('/')
             if (t.isBlank()) return null
             return when {

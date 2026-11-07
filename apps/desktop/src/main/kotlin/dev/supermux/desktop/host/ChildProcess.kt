@@ -48,14 +48,10 @@ class ProcessHandleChild(private val h: ProcessHandle) : ChildHandle {
 data class ChildLaunch(val argv: List<String>, val env: Map<String, String>, val workDir: Path?, val log: Path)
 
 fun defaultStartChild(l: ChildLaunch): ChildHandle {
-    val pb = ProcessBuilder(l.argv)
-    l.workDir?.let { pb.directory(it.toFile()) }
-    pb.environment().clear()
-    pb.environment().putAll(l.env)
     l.log.parent?.let { Files.createDirectories(it) }
-    pb.redirectOutput(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-    pb.redirectError(ProcessBuilder.Redirect.appendTo(l.log.toFile()))
-    return ProcessChild(pb.start())
+    // Its whole environment is ours ([ChildLaunch.env]); stdout and stderr both go to its log.
+    val command = dev.supermux.desktop.platform.OsCommand(l.argv, l.env, replaceEnv = true, workDir = l.workDir)
+    return ProcessChild(command.start(output = ProcessBuilder.Redirect.appendTo(l.log.toFile())))
 }
 
 /** A live process as the OS reports it. */
@@ -83,19 +79,24 @@ object SystemProcessTable : ProcessTable {
 /** The bundled broker, or a dev `bun … src/main.ts`. */
 fun isBrokerCommand(cmd: String): Boolean = "supermux-broker" in cmd || ("bun" in cmd && "src/main.ts" in cmd)
 
-/** `<stateDir>/desktop-broker.pid`: `pid:startInstantEpochMillis` of the app's broker child. */
+/** `<stateDir>/desktop-broker.pid`: `pid:startInstantEpochMillis:installId` of the app's broker child. */
 class ChildPidFile(private val file: Path) {
-    data class Record(val pid: Long, val startMillis: Long?)
+    /** [owner]: the install id of the copy of the app that started it ([InstallIdentity]); null from before ids. */
+    data class Record(val pid: Long, val startMillis: Long?, val owner: String? = null)
 
     fun read(): Record? = runCatching {
         val parts = Files.readString(file).trim().split(':')
-        Record(parts[0].toLong(), parts.getOrNull(1)?.toLongOrNull())
+        Record(parts[0].toLong(), parts.getOrNull(1)?.toLongOrNull(), parts.getOrNull(2)?.takeIf { it.isNotBlank() })
     }.getOrNull()
 
-    fun write(pid: Long, startMillis: Long?) {
+    fun write(pid: Long, startMillis: Long?, owner: String? = null) {
         runCatching {
             file.parent?.let { Files.createDirectories(it) }
-            Files.writeString(file, if (startMillis != null) "$pid:$startMillis" else "$pid")
+            Files.writeString(file, buildString {
+                append(pid)
+                if (startMillis != null || owner != null) append(':').append(startMillis ?: "")
+                if (owner != null) append(':').append(owner)
+            })
         }
     }
 

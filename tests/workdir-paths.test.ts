@@ -47,3 +47,10 @@ test("normalizeExistingWorkdir rejects missing paths and files", () => {
   expect(() => normalizeExistingWorkdir(join(root, "missing"))).toThrow(/does not exist/)
   expect(() => normalizeExistingWorkdir(file)).toThrow(/not a directory/)
 })
+
+// A Windows user types `~\src\app`: the host's own separator after `~` (and a home-prefixed `~` repaired either way).
+test.skipIf(process.platform !== "win32")("normalizeWorkdirInput expands ~\\ on a Windows host", () => {
+  expect(normalizeWorkdirInput("~\\src\\app", "C:\\Users\\me")).toBe("C:\\Users\\me\\src\\app")
+  expect(normalizeWorkdirInput("C:\\Users\\me\\~\\src", "C:\\Users\\me")).toBe("C:\\Users\\me\\src")
+  expect(normalizeWorkdirInput("~", "C:\\Users\\me\\")).toBe("C:\\Users\\me")
+})

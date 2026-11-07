@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process"
-import { accessSync, constants } from "node:fs"
 import { access, lstat, mkdir, readdir, readFile, rm, rmdir, chmod, symlink, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
@@ -11,6 +10,7 @@ import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
+import { files, proc } from "@supermux/platform"
 
 export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
@@ -138,14 +138,12 @@ function quote(arg: string): string {
   return `'${arg.replace(/'/g, `'\\''`)}'`
 }
 
-/** First of `names` found executable on PATH (absolute names are taken as is). */
+/** First of `names` found as a command on PATH (on Windows a .exe, .cmd or .ps1 too); absolute names are taken as is. */
 export function findCommand(names: string[], env: Record<string, string | undefined> = process.env): string | undefined {
   for (const name of names) {
     if (isAbsolute(name)) return name
-    for (const dir of (env.PATH ?? "").split(delimiter)) {
-      if (!dir) continue
-      try { accessSync(join(dir, name), constants.X_OK); return join(dir, name) } catch { /* next */ }
-    }
+    const found = proc.resolve([name], env)
+    if (found) return found
   }
   return undefined
 }
@@ -207,7 +205,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
         prepare: async dir => {
           await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
           // A junction needs no privilege on Windows (a "dir" symlink needs Developer Mode or admin).
-          await symlink(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"), process.platform === "win32" ? "junction" : "dir")
+          files.linkDirectory(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
           // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
           if (process.platform !== "win32") for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
@@ -258,15 +256,13 @@ const CONPTY_COLS = 600
 const CONPTY_ROWS = 50
 
 /**
- * The argv that starts `command` on Windows: an .exe directly, a .cmd/.bat shim (npm installs)
- * through cmd.exe. Each cmd.exe argument is double-quoted, which keeps & | < > ^ literal; the
- * characters double quotes cannot protect (" % !) are refused.
+ * The argv that starts the resolved `command` on Windows, by the broker launcher's one rule (proc.windowsLaunch): an
+ * .exe directly, a .cmd/.bat shim (npm installs) through cmd.exe with every word escaped and delayed expansion off, a
+ * .ps1 through PowerShell. Any character passes, so a user named "Ana!" (the .cmd path holds the "!") can sign in.
  */
-export function windowsLoginArgv(resolved: string, args: string[]): string[] {
-  if (!/\.(cmd|bat)$/i.test(resolved)) return [resolved, ...args]
-  const words = [resolved, ...args]
-  if (words.some(word => /["%!\r\n]/.test(word))) throw new CoreError("invalid_input", "A login argument contains a character cmd.exe cannot pass on (\" % !)")
-  return [process.env.ComSpec || "cmd.exe", "/d", "/s", "/c", `"${words.map(word => `"${word}"`).join(" ")}"`]
+export function windowsLoginArgv(resolved: string, args: string[], env: Record<string, string | undefined> = process.env): string[] {
+  const launch = proc.windowsLaunch(resolved, args, { env })
+  return [launch.command, ...launch.args]
 }
 
 /**
@@ -291,10 +287,10 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
   const emit = (chunk: string) => { for (const listener of output) listener(chunk) }
   let child: ReturnType<BunTerminalSpawn>
   try {
-    const argv = windowsLoginArgv(resolved, input.args)
-    child = bun.spawn(argv, {
-      // cmd.exe's /s /c line is already quoted: Bun must not quote it again.
-      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: argv[0] !== resolved,
+    const launch = proc.windowsLaunch(resolved, input.args, { env: input.env })
+    child = bun.spawn([launch.command, ...launch.args], {
+      // cmd.exe's /s /c line is already escaped: Bun must not quote it again. PowerShell's arguments it quotes.
+      cwd: input.cwd, env: input.env, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments === true,
       terminal: { cols: CONPTY_COLS, rows: CONPTY_ROWS, data: (_terminal, data) => emit(decoder.decode(data, { stream: true })) },
     })
   } catch (error) {
@@ -312,10 +308,7 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
     write: data => { try { terminal?.write(data) } catch { /* closed */ } },
     kill: () => {
       if (exited) return
-      if (process.platform !== "win32") { try { child.kill() } catch { /* gone */ } return }
-      try {
-        spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true }).on("error", () => { try { child.kill() } catch { /* gone */ } })
-      } catch { try { child.kill() } catch { /* gone */ } }
+      proc.killTree(child.pid)
     },
   }
 }
@@ -345,11 +338,10 @@ export const defaultLoginRunner: LoginRunner = input => {
   // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
   // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
   child.on("close", code => exit(code))
+  // The CLI and what it started: its group (spawned detached), or on Windows its tree.
   const signal = (name: NodeJS.Signals) => {
-    try {
-      if (child.pid && process.platform !== "win32") process.kill(-child.pid, name)
-      else child.kill(name)
-    } catch { /* already gone */ }
+    if (child.pid) proc.killTree(child.pid, { signal: name })
+    else try { child.kill(name) } catch { /* already gone */ }
   }
   return {
     onOutput: listener => { output.push(listener) },

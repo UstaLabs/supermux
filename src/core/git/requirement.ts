@@ -18,7 +18,8 @@
 import { execFile, spawn as nodeSpawn } from "child_process"
 import { delimiter, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, applyCltGuard, noCltDir } from "./clt-guard"
-import { powershell, readRegistryPathVia } from "../windows/user-install"
+import { registry, Unsupported } from "@supermux/platform"
+import { powershell, readRegistryPathVia, REGISTRY_PATH_KEYS } from "../windows/user-install"
 
 export type GitInstall = "xcode-select" | "mingit" | "winget" | "browser" | "manual"
 
@@ -65,13 +66,47 @@ export function bunWhich(bin: string, path: string): string | null {
 
 export type RegistryScope = "user" | "machine"
 
-/**
- * The real registry reader: the raw value through PowerShell as base64 UTF-16LE (`reg query`
- * prints in the OEM code page, which turned non-ASCII dirs into U+FFFD), null on any failure.
- */
-export function readRegistryPath(scope: RegistryScope): Promise<string | null> {
-  return readRegistryPathVia(powershell, scope).catch(() => null)
+/** How often PowerShell may read a registry `Path` where Bun has no ffi (a Windows ARM64 source run). */
+export const REGISTRY_FALLBACK_MS = 60_000
+
+export interface RegistryPathDeps {
+  /** The raw value in place (RegGetValueW); throws Unsupported where Bun has no ffi. */
+  native: (scope: RegistryScope) => string | null
+  /** The same value through PowerShell, as base64 UTF-16LE: a process for every read. */
+  powershell: (scope: RegistryScope) => Promise<string | null>
+  now: () => number
 }
+
+/**
+ * A registry `Path` reader for the git re-check. It reads in place through advapi32, so a tick starts no process
+ * (#100: it was two PowerShells every 10 s for as long as git was missing). Where Bun has no ffi it falls back to
+ * PowerShell, at most once every [fallbackMs] per scope. Any failure reads as null, "nothing there".
+ */
+export function registryPathReader(deps: RegistryPathDeps, fallbackMs = REGISTRY_FALLBACK_MS): (scope: RegistryScope) => Promise<string | null> {
+  const last = new Map<RegistryScope, { at: number; value: Promise<string | null> }>()
+  return async (scope) => {
+    try {
+      return deps.native(scope)
+    } catch (err) {
+      if (!(err instanceof Unsupported)) return null
+    }
+    const hit = last.get(scope)
+    if (hit && deps.now() - hit.at < fallbackMs) return hit.value
+    const value = deps.powershell(scope).catch(() => null)
+    last.set(scope, { at: deps.now(), value })
+    return value
+  }
+}
+
+/**
+ * The real registry reader: the raw value in place, else through PowerShell as base64 UTF-16LE (`reg query` prints in
+ * the OEM code page, which turned non-ASCII dirs into U+FFFD).
+ */
+export const readRegistryPath = registryPathReader({
+  native: (scope) => registry.readString(scope, REGISTRY_PATH_KEYS[scope], "Path"),
+  powershell: (scope) => readRegistryPathVia(powershell, scope),
+  now: Date.now,
+})
 
 /** The real async `xcode-select -p`: its exit code, 1 on any failure (5 s cap). */
 export function xcodeSelectExit(): Promise<number> {

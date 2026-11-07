@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 import { ngrokProvider } from "./ngrok"
 import type { ConnectCtx, Run, RunResult } from "./types"
 
@@ -21,16 +24,24 @@ function fakeRun(replies: Array<[string, Partial<RunResult>]> = []): {
   return { run, calls }
 }
 
-/** Minimal non-interactive ctx (no TTY, --yes). Override per test. */
+/** What the fake background starts and stops saw. */
+const started: string[][] = []
+const stopped: number[] = []
+
+/** Minimal non-interactive ctx (no TTY, --yes). Override per test. A background start gets pid 4242. */
 function ctx(over: Partial<ConnectCtx> & { run: Run }): ConnectCtx {
+  started.length = 0
+  stopped.length = 0
   return {
     port: "8787",
-    stateDir: "/tmp/mux-test",
+    stateDir: mkdtempSync(join(tmpdir(), "mux-ngrok-")),
     tty: false,
     yes: true,
     println: () => {},
     ask: async () => null,
     confirm: async (_p, def) => def,
+    startDetached: (argv) => { started.push(argv); return 4242 },
+    stopTree: (pid) => { stopped.push(pid) },
     ...over,
   }
 }
@@ -53,14 +64,15 @@ test("identity/modes match the contract (reserved is the stable default)", () =>
 
 test("up(reserved): uses publicUrlHint host → https://<domain>, stable", async () => {
   const { run, calls } = fakeRun()
-  const res = await ngrokProvider.up(
-    ctx({ run, mode: "reserved", publicUrlHint: "mux.ngrok.app" }),
-  )
+  const c = ctx({ run, mode: "reserved", publicUrlHint: "mux.ngrok.app" })
+  const res = await ngrokProvider.up(c)
   expect(res.publicUrl).toBe("https://mux.ngrok.app")
   expect(res.stable).toBe(true)
-  // The durable run binds the reserved domain, launched DETACHED (nohup) so it
-  // survives this CLI instead of hanging it.
-  expect(calls.some((c) => c.join(" ").includes("nohup ngrok http --domain=mux.ngrok.app 8787"))).toBe(true)
+  // The durable run binds the reserved domain, launched DETACHED so it survives
+  // this CLI instead of hanging it; no shell (Windows has none).
+  expect(started).toEqual([["ngrok", "http", "--domain=mux.ngrok.app", "8787"]])
+  expect(readFileSync(join(c.stateDir, "ngrok.pid"), "utf8")).toBe("4242")
+  expect(calls.some((argv) => argv[0] === "sh")).toBe(false)
 })
 
 test("up(reserved): with no hint, asks for the domain", async () => {
@@ -81,8 +93,8 @@ test("up(random): reads the URL from the local 4040 API, stable:false + caveat",
   expect(res.stable).toBe(false)
   expect(res.notes?.[0]).toContain("Throwaway URL")
   expect(res.notes?.[0]).toContain("ONE reserved domain")
-  // Launched DETACHED (nohup), then the URL is read from the local API via curl.
-  expect(calls.some((c) => c.join(" ").includes("nohup ngrok http 8787"))).toBe(true)
+  // Launched DETACHED, then the URL is read from the local API via curl.
+  expect(started).toEqual([["ngrok", "http", "8787"]])
   expect(calls.map((c) => c.join(" "))).toContain("curl -s http://127.0.0.1:4040/api/tunnels")
 })
 
@@ -124,7 +136,11 @@ test("down: best-effort `ngrok service uninstall`, swallows errors", async () =>
   const { run, calls } = fakeRun([
     ["service uninstall", { code: 1, stderr: "not installed" }],
   ])
-  await expect(ngrokProvider.down(ctx({ run }))).resolves.toBeUndefined()
+  const c = ctx({ run })
+  writeFileSync(join(c.stateDir, "ngrok.pid"), "4242")
+  await expect(ngrokProvider.down(c)).resolves.toBeUndefined()
+  expect(stopped).toEqual([4242])
+  expect(existsSync(join(c.stateDir, "ngrok.pid"))).toBe(false)
   expect(calls).toContainEqual(["ngrok", "service", "uninstall"])
 })
 

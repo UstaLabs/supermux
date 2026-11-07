@@ -7,8 +7,10 @@ import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { claudeStoredLoginPresent } from "./claude/stored-login"
 import { antigravityKeyringLogin } from "./antigravity/keyring"
 import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
+import { openCodeDataDir } from "./opencode/auth"
 
 export interface AgentStatus {
   kind: AgentKind
@@ -31,6 +33,8 @@ export interface DetectProbes {
   claudeAuthStatus?: AuthStatusRunner
   /** Injected keyring probe for agy's login; antigravity's module owns the default. */
   antigravityKeyring?: () => boolean
+  /** Injected Credential Manager probe for Claude Code's Windows login; claude's module owns the default. */
+  claudeStoredLogin?: () => boolean
 }
 
 export interface DetectPaths {
@@ -38,7 +42,6 @@ export interface DetectPaths {
   xdgConfigHome?: string
   xdgDataHome?: string
   appData?: string
-  localAppData?: string
   platform?: NodeJS.Platform
   /** Environment to treat as a credential source. Empty by default, so detection
    * reads no ambient state unless the caller opts in. Only claude uses it. */
@@ -74,10 +77,8 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
         : (paths.xdgConfigHome || pathJoin(paths.home, ".config")), "cursor", "auth.json")
     case "opencode":
       // opencode stores multi-provider creds in its XDG data dir (written by
-      // `opencode auth login`), NOT the config dir.
-      return pathJoin(platform === "win32"
-        ? (paths.localAppData || pathJoin(paths.home, "AppData", "Local"))
-        : (paths.xdgDataHome || pathJoin(paths.home, ".local", "share")), "opencode", "auth.json")
+      // `opencode auth login`), NOT the config dir, on every OS.
+      return pathJoin(openCodeDataDir({ home: paths.home, xdgDataHome: paths.xdgDataHome, env: {}, platform }), "auth.json")
     case "grok":
       return pathJoin(paths.home, ".grok", "auth.json")
     case "antigravity":
@@ -96,6 +97,7 @@ const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) =
     env: paths.env,
     fileExists: probes.fileExists,
     storedCredential: probes.hasCredential?.(AgentKind.Claude) ?? false,
+    storedLogin: probes.claudeStoredLogin ?? (() => claudeStoredLoginPresent(undefined, undefined, paths.platform)),
     runner: probes.claudeAuthStatus,
   }),
   codex: credFileOrStored(AgentKind.Codex),

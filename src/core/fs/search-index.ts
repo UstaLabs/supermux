@@ -3,6 +3,7 @@ import { join, relative, sep } from "path"
 import { gitAsync } from "../git/exec"
 import { GIT_READ, type RepoInfoCache } from "./repo-info"
 import type { SearchHit } from "./types"
+import { paths } from "@supermux/platform"
 
 const SKIP = new Set(["node_modules", ".git", "build", "dist", ".next", ".nuxt", "out", "target", ".gradle", "Pods"])
 const MAX_PATHS = 200_000
@@ -209,7 +210,8 @@ export class SearchIndexes {
   /** Something in folder `dir` changed: drop every index (built or building) whose scope contains it. */
   invalidateContaining(dir: string): void {
     for (const scope of new Set([...this.built.keys(), ...this.building.keys()])) {
-      if (dir === scope || scope === "/" || dir.startsWith(scope + sep)) this.invalidate(scope)
+      // relative()'s rule: a drive root (C:\) holds its folders too, which `scope + sep` (C:\\) never matched.
+      if (paths.isInside(dir, scope)) this.invalidate(scope)
     }
   }
 }

@@ -2,6 +2,7 @@ package dev.supermux.ui
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class MarkdownLinkTest {
     @Test fun links_bare_path_in_prose() {
@@ -70,7 +71,28 @@ class MarkdownLinkTest {
     @Test fun markdown_link_to_web_stays_url() {
         val url = "https://supermux-core-design.ustalabs.com/event-taxonomy-report.md"
         assertEquals(listOf(MdSpan("report", SpanStyleKind.LINK, url = url)), parseInlineMarkdown("[report]($url)"))
-        assertEquals(listOf(MdSpan("top", SpanStyleKind.LINK, url = "#top")), parseInlineMarkdown("[top](#top)"))
         assertEquals(listOf(MdSpan("m", SpanStyleKind.LINK, url = "mailto:a@b.co")), parseInlineMarkdown("[m](mailto:a@b.co)"))
+    }
+
+    // A link the app would refuse to open is no link at all: its label stays as plain text.
+    @Test fun a_link_that_would_not_open_is_plain_text() {
+        for (dest in listOf(
+            "javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:msgbox(1)", "data:text/html,x", "file://host/share/x.exe",
+            "#top",
+        )) {
+            assertEquals(listOf(MdSpan("docs", SpanStyleKind.PLAIN)), parseInlineMarkdown("[docs]($dest)"), dest)
+        }
+        assertEquals(listOf(MdSpan("see docs now", SpanStyleKind.PLAIN)), parseInlineMarkdown("see [docs](javascript:x) now"))
+    }
+
+    @Test fun an_image_that_would_not_open_is_plain_text() {
+        assertEquals(listOf(MdSpan("pic", SpanStyleKind.PLAIN)), parseInlineMarkdown("![pic](javascript:alert(1))"))
+    }
+
+    // `C:` is a drive, not a URL scheme: the link opens the file.
+    @Test fun aWindowsPathDestinationIsAFileNotAUrl() {
+        assertEquals(FilePathRef("C:\\Users\\me\\a.ts", 12), linkFileRef("C:\\Users\\me\\a.ts:12"))
+        assertEquals(FilePathRef("C:/Users/me/a.ts"), linkFileRef("C:/Users/me/a.ts"))
+        assertNull(linkFileRef("mailto:me@example.com"))
     }
 }

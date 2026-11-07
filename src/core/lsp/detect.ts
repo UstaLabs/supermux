@@ -2,10 +2,11 @@ import { existsSync } from "node:fs"
 import { findDartBin, findGoplsBin, findRustAnalyzerBin, resolveBinPath, type LspServerSpec } from "./catalog"
 
 // Whether a binary is available on PATH. Bun.which returns the resolved path
-// or null. Used to check install prerequisites (bun/go/rustup).
+// or null. Used to check install prerequisites (bun/go/rustup). PATH is passed:
+// without it Bun.which searches the PATH the process started with.
 export function isInstalled(bin: string): boolean {
   try {
-    return !!Bun.which(bin)
+    return !!Bun.which(bin, { PATH: process.env.PATH })
   } catch {
     return false
   }

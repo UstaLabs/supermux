@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, chmodSync, mkdirSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "fs"
 import { dirname } from "path"
 import webpush from "web-push"
+import { files } from "@supermux/platform"
 
 export interface VapidKeys {
   publicKey: string
@@ -33,7 +34,7 @@ export function loadOrGenerateVapid(path: string, subject: string): VapidKeys {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.tmp`
   writeFileSync(tmp, JSON.stringify(record, null, 2), { mode: 0o600 })
-  renameSync(tmp, path)
+  files.replaceSync(tmp, path)
   chmodSync(path, 0o600)
   return record
 }

@@ -13,7 +13,9 @@ import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.worktree.WorktreeCleanupSection
+import dev.supermux.ui.worktree.WorktreeCleanupTick
 import dev.supermux.workspace.viewTitle
 
 /**
@@ -39,9 +41,16 @@ fun CloseViewDialog(
     worktreeSize: suspend (worktreeId: String) -> Long? = { null },
     /** Close, then delete exactly the worktree ids the section displayed and the user confirmed. */
     onConfirmDeletingWorktree: ((worktreeIds: List<String>) -> Unit)? = null,
+    /**
+     * Names this asking, so its "also delete worktree" tick survives a rotation or a width change
+     * (#89); the section reports it again, with the ids it finds, once it has reloaded. Null keeps
+     * the tick in this composition.
+     */
+    retainKey: String? = null,
 ) {
     var deleteWt by remember(view.id) { mutableStateOf(false) }
     var deleteIds by remember(view.id) { mutableStateOf(emptyList<String>()) }
+    val tick = if (retainKey != null) rememberRetained(retainKey) { WorktreeCleanupTick() } else null
     val sessionId = view.chatSessionId()
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -53,6 +62,7 @@ fun CloseViewDialog(
                         listOf(chatWorkdir), setOfNotNull(sessionId), worktreeForWorkdir,
                         onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
                         size = worktreeSize,
+                        tick = tick,
                     )
                 }
             }

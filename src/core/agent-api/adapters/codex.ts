@@ -5,10 +5,10 @@
 // is fully unit-testable with no network or disk.
 
 import { writeFileSync } from "fs"
-import { homedir } from "os"
 import { join } from "path"
 import { defaultRead, jwtClaims, readJson, refreshOAuth } from "../auth"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
+import { home } from "../../../shared/home"
 
 const RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -94,7 +94,7 @@ export function codexAdapter(opts: CodexAdapterOpts = {}): AgentApi {
   const fetchFn = opts.fetchFn ?? fetch
   const read = opts.readFileFn ?? defaultRead
   const write: WriteFileFn = opts.writeFileFn ?? ((p, d) => writeFileSync(p, d, "utf8"))
-  const authPath = opts.authPath ?? join(homedir(), ".codex", "auth.json")
+  const authPath = opts.authPath ?? join(home(), ".codex", "auth.json")
 
   const loadTokens = (): any | null => readJson(read, authPath)?.tokens ?? null
 

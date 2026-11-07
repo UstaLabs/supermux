@@ -62,4 +62,119 @@ class HostPathsTest {
         assertFalse(sameHostPath("/home/Me", "/home/me"))
         assertTrue(sameHostPath("/home/me/", "/home//me"))
     }
+
+    @Test fun windowsCaseFoldingIsOrdinalLikeNtfsDottedIIsNotI() {
+        // NTFS upper-cases one character at a time with its own table: 'i' and 'İ' (U+0130) are two names.
+        // String.equals(ignoreCase = true) calls them equal, because it also compares the lower-case forms.
+        assertFalse(sameHostPath("C:\\proj\\i.txt", "C:\\proj\\\u0130.txt"))
+        assertTrue(sameHostPath("C:\\proj\\FILE", "c:\\PROJ\\file"))
+    }
+
+    @Test fun leafOnEitherSeparator() {
+        assertEquals("app", pathLeaf("C:\\Users\\me\\app\\"))
+        assertEquals("x", pathLeaf("/home/u/x/"))
+        assertEquals("TunnelWho", pathLeaf("D:\\Projects\\TunnelWho"))
+        assertEquals("erydor", pathLeaf("…\\yasinemre\\erydor"))
+        assertEquals("plain", pathLeaf("plain"))
+    }
+
+    @Test fun parentStaysInThePathsOwnSpellingAndStopsAtARoot() {
+        assertEquals("C:\\Users", hostParent("C:\\Users\\me"))
+        assertEquals("C:\\", hostParent("C:\\Users"))
+        assertNull(hostParent("C:\\"))
+        assertEquals("/home", hostParent("/home/me"))
+        assertEquals("/", hostParent("/home"))
+        assertNull(hostParent("/"))
+        assertEquals("\\\\server\\share", hostParent("\\\\server\\share\\app"))
+        assertNull(hostParent("\\\\server\\share"))
+        assertEquals("C:/Users", hostParent("C:/Users/me"))
+    }
+
+    @Test fun joinUsesTheRootsSeparatorForABrokerRelativePath() {
+        assertEquals("C:\\Users\\me\\app\\src\\Main.kt", hostJoin("C:\\Users\\me\\app", "src/Main.kt"))
+        assertEquals("C:\\app\\a.kt", hostJoin("C:\\app\\", "a.kt"))
+        assertEquals("/home/me/app/src/Main.kt", hostJoin("/home/me/app", "src/Main.kt"))
+        assertEquals("/home/me/app", hostJoin("/home/me/app", ""))
+    }
+
+    @Test fun normaliseResolvesDotsAndSeparatorsInTheHostsStyle() {
+        assertEquals("C:\\Users\\me\\proj\\src", normalizeHostPath("c:\\Users\\me\\proj/./lib/../src/"))
+        assertEquals("C:\\", normalizeHostPath("C:/"))
+        assertEquals("/a/c", normalizeHostPath("/a//b/../c/"))
+        assertEquals("/", normalizeHostPath("/"))
+        assertEquals("\\\\server\\share\\x", normalizeHostPath("\\\\server\\share\\y\\..\\x"))
+    }
+
+    @Test fun fileUriFollowsTheHost() {
+        assertEquals("file:///C:/Users/me/my%20app/a.kt", hostFileUri("C:\\Users\\me\\my app\\a.kt"))
+        assertEquals("file:///home/me/a%23b.kt", hostFileUri("/home/me/a#b.kt"))
+        assertEquals("file://server/share/a.kt", hostFileUri("\\\\server\\share\\a.kt"))
+    }
+
+    @Test fun inferHomeDirReadsBothHosts() {
+        assertEquals("C:\\Users\\me", inferHomeDir("C:\\Users\\me\\proj"))
+        assertEquals("/home/me", inferHomeDir("/home/me/proj"))
+        assertNull(inferHomeDir("/srv/proj"))
+    }
+
+    @Test fun aPosixNameMayHoldABackslash() {
+        assertEquals("/w/a\\b", hostJoin("/w", "a\\b"))
+        assertEquals("C:\\w\\a\\b", hostJoin("C:\\w", "a/b"))
+        assertEquals("/w", hostParent("/w/a\\b"))
+        assertEquals("a\\b", pathLeaf("/w/a\\b"))
+        assertEquals("a\\b", hostRelativePath("/w", "/w/a\\b"))
+    }
+
+    @Test fun rootOfEachKindOfHostPath() {
+        assertEquals("/", hostRoot("/home/me"))
+        assertEquals("c:\\", hostRoot("c:\\Users\\me"))
+        assertEquals("C:/", hostRoot("C:/Users/me"))
+        assertEquals("\\\\server\\share", hostRoot("\\\\server\\share\\app"))
+        assertNull(hostRoot("src/a.kt"))
+    }
+
+    @Test fun fileUriBackToAHostPath() {
+        assertEquals("C:\\Users\\me\\my app\\a.kt", hostPathFromFileUri("file:///C:/Users/me/my%20app/a.kt"))
+        assertEquals("C:\\Users\\me\\a.kt", hostPathFromFileUri("file:///c%3A/Users/me/a.kt"))
+        assertEquals("/home/me/a#b.kt", hostPathFromFileUri("file:///home/me/a%23b.kt"))
+        assertEquals("/home/me/é.kt", hostPathFromFileUri("file://localhost/home/me/%C3%A9.kt"))
+        assertEquals("\\\\server\\share\\a.kt", hostPathFromFileUri("file://server/share/a.kt"))
+        assertNull(hostPathFromFileUri("https://example.com/a.kt"))
+    }
+
+    // One encoder for every file URI the clients send: java.net.URLEncoder's set (the convergence
+    // EditorPanelLspUriTest pinned), so `! ~ ' ( )` are escaped and `* - _ .` stay.
+    @Test fun fileUriEscapesWhatUrlEncoderEscapes() {
+        assertEquals("file:///w/%21%7E%27%28%29.kt", hostFileUri("/w/!~'().kt"))
+        assertEquals("file:///w/a-b_c.d*e.kt", hostFileUri("/w/a-b_c.d*e.kt"))
+        assertEquals("file:///C:/w/a.kt", hostFileUri("C:\\w\\a.kt"))
+    }
+
+    // #29 step 11: the checks the apps wrote inline, in one place.
+    @Test fun anAbsoluteHostPathIsAPosixOneOrAWindowsOne() {
+        assertTrue(isAbsoluteHostPath("/home/me"))
+        assertTrue(isAbsoluteHostPath("C:\\Users\\me"))
+        assertTrue(isAbsoluteHostPath("c:/Users/me"))
+        assertTrue(isAbsoluteHostPath("\\\\server\\share\\x"))
+        assertFalse(isAbsoluteHostPath("src/a.kt"))
+        assertFalse(isAbsoluteHostPath("~/x"))
+    }
+
+    @Test fun aFileNameFromAnyHostLosesItsFolders() {
+        assertEquals("shot.png", fileNameOf("C:\\Users\\me\\shot.png"))
+        assertEquals("shot.png", fileNameOf("/home/me/shot.png"))
+        assertEquals("shot.png", fileNameOf("shots\\b/shot.png"))
+        assertEquals("shot.png", fileNameOf("shot.png"))
+    }
+
+    @Test fun aHostPathLosesItsTrailingSeparatorsButNotItsRoot() {
+        assertEquals("/a/b", trimHostPath("/a/b/"))
+        assertEquals("/", trimHostPath("/"))
+        assertEquals("/", trimHostPath("//"))
+        assertEquals("C:\\x", trimHostPath("C:\\x\\"))
+        assertEquals("C:\\", trimHostPath("C:\\"))
+        assertEquals("C:/", trimHostPath("C:/"))
+        // `C:` alone is the drive's current folder, not its root.
+        assertEquals("C:", trimHostPath("C:"))
+    }
 }

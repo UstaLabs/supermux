@@ -3,6 +3,8 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // @supermux/platform's source (packages/platform): its exports keep `types` → dist for @supermux/core's own tsc.
+    "customConditions": ["supermux-source"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,

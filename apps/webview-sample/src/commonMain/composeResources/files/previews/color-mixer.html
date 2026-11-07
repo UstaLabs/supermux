@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Colour mixer</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root { --thumb-ring: #ffffff; --panel: #f6f7fb; }
+  @media (prefers-color-scheme: dark) { :root { --thumb-ring: #e9ecf5; --panel: #1b1e27; } }
+  main { padding: 14px; }
+  .swatch {
+    position: relative; height: 92px; border-radius: 20px; padding: 14px 16px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    background: var(--colour); color: var(--ink);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06), 0 10px 26px -12px var(--colour);
+  }
+  .hex { font: 700 26px/1 var(--mono); letter-spacing: .02em; }
+  .name { font-size: 13px; font-weight: 600; opacity: .82; margin-top: 5px; }
+  .rgb { position: absolute; top: 12px; right: 14px; font: 600 11px/1 var(--mono); opacity: .7; }
+  .sliders { margin: 12px 2px 4px; }
+  .slider { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 10px; height: 42px; }
+  .slider label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .slider output { font: 600 12px/1 var(--mono); color: var(--fg); text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 40px; margin: 0;
+    background: transparent; cursor: pointer;
+  }
+  input[type=range]:focus { outline: none; }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 12px; border-radius: 999px; background: var(--track);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 28px; height: 28px; margin-top: -8px; border-radius: 50%;
+    background: var(--knob); border: 4px solid var(--thumb-ring);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 3px 10px rgba(0, 0, 0, .22);
+  }
+  input[type=range]::-moz-range-track { height: 12px; border-radius: 999px; background: var(--track); }
+  input[type=range]::-moz-range-thumb {
+    width: 20px; height: 20px; border-radius: 50%; background: var(--knob); border: 4px solid var(--thumb-ring);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+  }
+  /* Narrower than the chips and the button side by side, the button takes a row of its own. */
+  .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+  .chips { display: flex; gap: 6px; flex: none; }
+  .chip {
+    width: 40px; height: 40px; border-radius: 12px; border: 0; padding: 0; cursor: pointer; flex: none;
+    background: var(--c); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+    transition: transform .12s ease;
+  }
+  .chip:active { transform: scale(.9); }
+  .send {
+    flex: 1 0 116px; max-width: 300px; margin-left: auto; height: 44px; padding: 0 16px; border: 0; border-radius: 14px; cursor: pointer;
+    background: var(--colour); color: var(--ink); font-size: 14px; font-weight: 700; white-space: nowrap;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08), 0 6px 16px -8px var(--colour);
+    transition: transform .12s ease;
+  }
+  .send:active { transform: scale(.96); }
+</style>
+</head>
+<body class="wrap nosel" ontouchstart="">
+<main>
+  <div class="swatch" id="swatch">
+    <div class="rgb" id="rgb">rgb</div>
+    <div class="hex" id="hex">#000000</div>
+    <div class="name" id="name">Colour</div>
+  </div>
+  <div class="sliders">
+    <div class="slider"><label for="h">Hue</label><input id="h" type="range" min="0" max="360" step="1"><output id="ho"></output></div>
+    <div class="slider"><label for="s">Saturation</label><input id="s" type="range" min="0" max="100" step="1"><output id="so"></output></div>
+    <div class="slider"><label for="l">Lightness</label><input id="l" type="range" min="4" max="96" step="1"><output id="lo"></output></div>
+  </div>
+  <div class="foot">
+    <div class="chips" id="chips"></div>
+    <button class="send" id="send" type="button">Send to app</button>
+  </div>
+</main>
+<script>
+(function () {
+  var h = 14, s = 88, l = 60;
+  var inputs = { h: document.getElementById('h'), s: document.getElementById('s'), l: document.getElementById('l') };
+  var outputs = { h: document.getElementById('ho'), s: document.getElementById('so'), l: document.getElementById('lo') };
+  var root = document.documentElement;
+  var hexEl = document.getElementById('hex'), nameEl = document.getElementById('name'), rgbEl = document.getElementById('rgb');
+  var chipsEl = document.getElementById('chips'), sendEl = document.getElementById('send');
+
+  function hslToRgb(hh, ss, ll) {
+    ss /= 100; ll /= 100;
+    var k = function (n) { return (n + hh / 30) % 12; };
+    var a = ss * Math.min(ll, 1 - ll);
+    var f = function (n) { return ll - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); };
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+  }
+  function hex(rgb) {
+    return '#' + rgb.map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
+  }
+  function luminance(rgb) {
+    var c = rgb.map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  var HUES = [[8, 'Red'], [20, 'Vermilion'], [38, 'Orange'], [50, 'Amber'], [64, 'Yellow'], [85, 'Lime'],
+    [140, 'Green'], [165, 'Emerald'], [185, 'Teal'], [200, 'Cyan'], [215, 'Sky'], [240, 'Blue'], [258, 'Indigo'],
+    [280, 'Violet'], [300, 'Purple'], [325, 'Magenta'], [345, 'Pink'], [361, 'Red']];
+  function colourName(hh, ss, ll) {
+    if (ss < 10) {
+      return ll < 12 ? 'Black' : ll < 30 ? 'Charcoal' : ll < 50 ? 'Graphite' : ll < 70 ? 'Grey' : ll < 88 ? 'Silver' : 'White';
+    }
+    var base = 'Red';
+    for (var i = 0; i < HUES.length; i++) { if (hh < HUES[i][0]) { base = HUES[i][1]; break; } }
+    var tone = ll < 22 ? 'Deep' : ll < 36 ? 'Dark' : ll > 84 ? 'Pale' : ll > 68 ? 'Light' : '';
+    var vivid = ss < 32 ? 'Dusty' : (ss > 86 && ll >= 36 && ll <= 68) ? 'Vivid' : '';
+    return [tone, vivid, base].filter(Boolean).join(' ');
+  }
+
+  var lastPost = 0, trailing = 0;
+  function postLive() {
+    var now = performance.now();
+    var wait = 50 - (now - lastPost);
+    if (wait <= 0) {
+      lastPost = now;
+      Kit.post('colour.live', { hex: current.hex, name: current.name });
+    } else if (!trailing) {
+      trailing = setTimeout(function () { trailing = 0; postLive(); }, wait);
+    }
+  }
+
+  var current = {};
+  function render(post) {
+    var rgb = hslToRgb(h, s, l);
+    current = { hex: hex(rgb), name: colourName(h, s, l) };
+    var ink = luminance(rgb) > 0.42 ? 'rgba(15,17,24,.92)' : '#ffffff';
+    root.style.setProperty('--colour', current.hex);
+    root.style.setProperty('--ink', ink);
+    hexEl.textContent = current.hex.toUpperCase();
+    nameEl.textContent = current.name;
+    rgbEl.textContent = rgb.join(' · ');
+    inputs.h.value = h; inputs.s.value = s; inputs.l.value = l;
+    outputs.h.textContent = h + '°'; outputs.s.textContent = s + '%'; outputs.l.textContent = l + '%';
+    inputs.h.style.setProperty('--track', 'linear-gradient(90deg,' +
+      [0, 60, 120, 180, 240, 300, 360].map(function (d) { return 'hsl(' + d + ',' + Math.max(s, 40) + '%,' + Math.min(Math.max(l, 35), 65) + '%)'; }).join(',') + ')');
+    inputs.s.style.setProperty('--track', 'linear-gradient(90deg,hsl(' + h + ',0%,' + l + '%),hsl(' + h + ',100%,' + l + '%))');
+    inputs.l.style.setProperty('--track', 'linear-gradient(90deg,hsl(' + h + ',' + s + '%,4%),hsl(' + h + ',' + s + '%,50%),hsl(' + h + ',' + s + '%,96%))');
+    inputs.h.style.setProperty('--knob', 'hsl(' + h + ',' + Math.max(s, 40) + '%,' + Math.min(Math.max(l, 35), 65) + '%)');
+    inputs.s.style.setProperty('--knob', current.hex);
+    inputs.l.style.setProperty('--knob', current.hex);
+    renderChips();
+    if (post) postLive();
+  }
+
+  // The complement, the two analogous hues and a triad: tapping one takes its hue.
+  var CHIPS = [[180, 'complement'], [-30, 'analogous'], [30, 'analogous'], [120, 'triad']].map(function (p) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip';
+    b.title = p[1];
+    b.setAttribute('aria-label', p[1]);
+    b.addEventListener('click', function () { h = +b.dataset.hue; render(true); });
+    chipsEl.appendChild(b);
+    return { el: b, offset: p[0] };
+  });
+  function renderChips() {
+    CHIPS.forEach(function (chip) {
+      var hh = (((h + chip.offset) % 360) + 360) % 360;
+      chip.el.dataset.hue = hh;
+      chip.el.style.setProperty('--c', 'hsl(' + hh + ',' + s + '%,' + l + '%)');
+    });
+  }
+
+  ['h', 's', 'l'].forEach(function (key) {
+    inputs[key].addEventListener('input', function () {
+      var v = parseInt(inputs[key].value, 10);
+      if (key === 'h') h = v; else if (key === 's') s = v; else l = v;
+      render(true);
+    });
+  });
+
+  var sentTimer = 0;
+  sendEl.addEventListener('click', function () {
+    // Opened by hand there is no app to send it to: the button says so.
+    sendEl.textContent = Kit.post('colour.pick', { hex: current.hex, name: current.name }) ? 'Sent ✓' : 'No app here';
+    clearTimeout(sentTimer);
+    sentTimer = setTimeout(function () { sendEl.textContent = 'Send to app'; }, 1400);
+  });
+
+  Kit.keep(function () { return { h: h, s: s, l: l }; }, function (saved) {
+    if (typeof saved.h === 'number') h = saved.h;
+    if (typeof saved.s === 'number') s = saved.s;
+    if (typeof saved.l === 'number') l = saved.l;
+    render(false);
+  });
+
+  render(false);
+})();
+</script>
+</body>
+</html>

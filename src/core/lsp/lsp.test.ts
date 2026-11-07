@@ -1,8 +1,26 @@
 import { test, expect } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { delimiter, join } from "path"
+import { isInstalled } from "./detect"
 import { getCatalogServerById, languageIdForPath, launchCommand, resolveBinPath } from "./catalog"
 import { parseEditorConfig, parseCustomLspServerDef } from "../settings/editor-config"
 import { getServerById, resolveServerForPath } from "./registry"
 import { encodeMessage, MessageReader } from "./framing"
+
+/** A command named [name] in a new folder put at the front of PATH after start, as main.ts adds the agent bin folders. */
+function onPathAfterStart(name: string): () => void {
+  const dir = mkdtempSync(join(tmpdir(), "mux-late-bin-"))
+  if (process.platform === "win32") writeFileSync(join(dir, `${name}.cmd`), "@echo off\r\n")
+  else writeFileSync(join(dir, name), "#!/bin/sh\n", { mode: 0o755 })
+  const before = process.env.PATH
+  process.env.PATH = `${dir}${delimiter}${before ?? ""}`
+  return () => {
+    if (before === undefined) delete process.env.PATH
+    else process.env.PATH = before
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 test("resolveServerForPath maps extensions to the right server", () => {
   expect(resolveServerForPath("src/app.ts")?.id).toBe("typescript")
@@ -117,4 +135,11 @@ test("framing counts body length in bytes, not characters", () => {
   reader.push(encodeMessage(payload))
   expect(msgs).toEqual([payload])
   expect(JSON.parse(msgs[0]!).emoji).toBe("🚀")
+})
+
+test("a language server's prerequisite in a folder added to PATH after start counts as installed", () => {
+  const restore = onPathAfterStart("mux-late-lsp-tool")
+  try {
+    expect(isInstalled("mux-late-lsp-tool")).toBe(true)
+  } finally { restore() }
 })

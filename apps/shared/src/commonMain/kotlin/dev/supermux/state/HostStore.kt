@@ -98,6 +98,8 @@ import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlin.concurrent.Volatile
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.serialization.json.JsonArray
@@ -305,6 +307,12 @@ class HostStore(
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
+    /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
+    @Volatile private var livePinned: List<String> = emptyList()
+    /** The optional frames the broker said it takes (its last snapshot's `accepts`): nothing until it says. */
+    @Volatile private var brokerAccepts: Set<String> = emptySet()
+    /** A broker answered "unknown frame type" on this store already: said once in the log, never to the user. */
+    @Volatile private var unknownFrameLogged = false
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
@@ -334,6 +342,9 @@ class HostStore(
         _state.map { it.permissionModes }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val muxHome: StateFlow<String?> =
         _state.map { it.muxHome }.stateIn(projectionScope, SharingStarted.Eagerly, null)
+    /** The broker host's home folder: each host's own, where `inferHomeDir` guesses one from a path. */
+    val homeDir: StateFlow<String?> =
+        _state.map { it.homeDir }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentStateWithAgents() }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
@@ -454,6 +465,9 @@ class HostStore(
 
     private val _usage = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
+    /** Bumped by every write of [_usage], under [usageLock], so an HTTP answer can tell a newer snapshot overtook it. */
+    private var usageVersion = 0L
+    private val usageLock = SynchronizedObject()
 
     /**
      * What this host still needs to run agents (git), from the `host_requirements` frame the
@@ -694,6 +708,9 @@ class HostStore(
                 noChangesRoute = false
                 lastSentViewing = null
                 sendViewingIfChanged()
+                brokerAccepts = frame.accepts.toSet()
+                // The broker keeps live pins per socket: a new socket is told again (if it takes them at all).
+                if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
@@ -727,7 +744,7 @@ class HostStore(
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
-            is ServerFrame.UsageUpdated -> _usage.value = frame.usage
+            is ServerFrame.UsageUpdated -> holdUsage(frame.usage)
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
@@ -735,6 +752,11 @@ class HostStore(
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
+            // An older broker didn't know a frame this app sent: said once in the log (the reducer shows the user nothing).
+            is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
+                unknownFrameLogged = true
+                println("[HostStore] the broker answered \"$UNKNOWN_FRAME_TYPE\": it is older than this app; carrying on without it")
+            }
             else -> {}
         }
     }
@@ -843,6 +865,26 @@ class HostStore(
                 runApi("viewing send") { sendFrame(frame) }
             }
         }
+    }
+
+    /**
+     * Card #62: ask for [sessionIds]' live text without claiming they are on screen. The assistant overlay floats an
+     * Agent's reply over other apps as it is written; unlike [updateViewing] this is presence for nothing, so nothing
+     * is read and pushes still go out. Replaces the last set, and is sent again on every reconnect. Only an app that
+     * asked for live replies (Settings) gets any; an older broker ignores it.
+     */
+    fun pinLive(sessionIds: Collection<String>) {
+        val next = sessionIds.distinct()
+        if (next == livePinned) return
+        livePinned = next
+        sendLivePins()
+    }
+
+    private fun sendLivePins() {
+        // An older broker answers `live` with "unknown frame type": it gets none, and the overlay shows stored replies.
+        if (LIVE_FRAME !in brokerAccepts) return
+        val frame = ClientFrame.Live(livePinned)
+        stateScope.launch { runApi("live pins") { sendFrame(frame) } }
     }
 
     /**
@@ -1666,6 +1708,8 @@ class HostStore(
         workspaceId: String,
         kind: dev.supermux.workspace.NewViewKind,
         groupId: String,
+        /** Called when the broker did not create it. */
+        onFailed: () -> Unit = {},
         /** Called with the new view id once the broker has created it. */
         onCreated: (String) -> Unit = {},
     ) {
@@ -1687,7 +1731,10 @@ class HostStore(
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
                 .onSuccess { onCreated(it.id) }
-                .onFailure { println("[HostStore] addWorkspaceView failed: $it") }
+                .onFailure {
+                    println("[HostStore] addWorkspaceView failed: $it")
+                    onFailed()
+                }
         }
     }
 
@@ -2012,18 +2059,42 @@ class HostStore(
 
     /** GET /usage — per-provider usage (Claude / Codex / Cursor / opencode) + partial-failure
      *  [UsageResponse.errors]. Null on any transport/decode failure. A successful decode is
-     *  also held on [usageSnapshot] so the popover can paint immediately on the next open. */
-    suspend fun usage(): UsageResponse? =
-        runApi("usage") { api.usage() }?.also { _usage.value = it }
+     *  also held on [usageSnapshot] (unless a newer frame overtook it, see [fetchUsage]) so the
+     *  popover can paint immediately on the next open; the snapshot held is what returns. */
+    suspend fun usage(): UsageResponse? = fetchUsage("usage") { api.usage() }
 
     /** POST /usage/refresh — kick a live refresh (force ignores the 5-min throttle) and return
      *  the current snapshot immediately with [UsageResponse.refreshing] populated. Null on
      *  any transport/decode failure. */
     suspend fun refreshUsage(providers: List<String>? = null, force: Boolean = true): UsageResponse? =
-        runApi("refreshUsage") { api.refreshUsage(providers, force) }?.also { _usage.value = it }
+        fetchUsage("refreshUsage") { api.refreshUsage(providers, force) }
 
     /** Replace the held snapshot (Codex redeem updates one provider in place). */
-    fun applyUsage(usage: UsageResponse) { _usage.value = usage }
+    fun applyUsage(usage: UsageResponse) { holdUsage(usage) }
+
+    private fun holdUsage(usage: UsageResponse) = synchronized(usageLock) {
+        usageVersion++
+        _usage.value = usage
+    }
+
+    /**
+     * [call]'s answer, held unless a newer snapshot (a `usage_updated` frame, a redeem's swap) landed while it was in
+     * flight; returns the held one, or null when the call failed. A refresh's answer is snapshotted as its fetches
+     * start. When they all settle at once (no sign-in found), the broker's last `usage_updated`, nothing refreshing,
+     * reaches the app before that answer (card #101: Windows, 3 runs of 3), and holding the answer kept every card's
+     * spinner going for good.
+     */
+    private suspend fun fetchUsage(op: String, call: suspend () -> UsageResponse): UsageResponse? {
+        val asked = synchronized(usageLock) { usageVersion }
+        val answer = runApi(op) { call() } ?: return null
+        return synchronized(usageLock) {
+            if (usageVersion == asked) {
+                usageVersion++
+                _usage.value = answer
+            }
+            _usage.value
+        }
+    }
 
     /** POST /usage/codex/reset — redeem one banked Codex rate-limit reset; returns the refreshed
      *  Codex usage so the card can update in place. Null on any failure. */
@@ -2865,6 +2936,9 @@ internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): S
     else sessions.firstOrNull { it.name == resp.name }?.id
 
 /** Card #54: trace events go to a tracing broker this often; per-type stats every Nth time. */
+/** Card #62: the `live` frame's name, as a broker lists it in its snapshot's `accepts`. */
+private const val LIVE_FRAME = "live"
+
 private const val PERF_SHIP_MS = 2_000L
 private const val PERF_STATS_EVERY = 15
 

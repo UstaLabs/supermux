@@ -65,9 +65,9 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
+    "build": "tsc -p ../platform/tsconfig.json && tsc -p tsconfig.json && node scripts/vendor-platform.mjs",
+    "prepack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p ../platform/tsconfig.json && tsc -p tsconfig.json && node scripts/vendor-platform.mjs",
+    "typecheck": "tsc -p ../platform/tsconfig.json && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
     "typecheck:examples": "tsc -p examples/tsconfig.json",
     "test": "bun test tests",
     "test:e2e": "node --test \"e2e/*.e2e.mjs\"",

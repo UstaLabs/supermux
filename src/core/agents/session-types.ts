@@ -34,6 +34,8 @@ export type ResumeCtx = {
  * its provider share the context shape; the service passes it through blind. */
 export type CommandContextCtx = {
   sessionName: string
+  /** The session's id (absent for the launcher preview, which has no session). */
+  sessionId?: string
   /** The session's own live adapter, when the session is spawned. */
   adapter?: unknown
   /** Live same-kind adapters (launcher preview: the probe has no session of its own). */

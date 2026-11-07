@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.fs.DirState
 import dev.supermux.fs.FileSystemService
+import dev.supermux.fs.pathLeaf
 import dev.supermux.proto.Attachment
 import dev.supermux.media.AttachmentMedia
 import dev.supermux.ui.chat.DecodedImage
@@ -61,7 +62,7 @@ private val VIDEO_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm", "mkv")
 
 /** The preview for [path], or null for a file the text editor opens (SVG included: it is text). */
 fun filePreviewKind(path: String): FilePreviewKind? {
-    val ext = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
+    val ext = pathLeaf(path).substringAfterLast('.', "").lowercase()
     return when (ext) {
         in IMAGE_EXTENSIONS -> FilePreviewKind.Image
         in VIDEO_EXTENSIONS -> FilePreviewKind.Video
@@ -95,7 +96,7 @@ private fun rememberFileVersion(fileSystem: FileSystemService?, absPath: String)
     }
     val state by remember(fileSystem, dir) { fileSystem.dir(dir) }.collectAsState()
     val snap = (state as? DirState.Ready)?.snap ?: return null
-    val name = absPath.substringAfterLast('/')
+    val name = pathLeaf(absPath)
     val entry = snap.entries.firstOrNull { it.name == name } ?: return "gone"
     return "${entry.mtime}:${entry.size}"
 }
@@ -122,7 +123,7 @@ fun BinaryFilePreview(
             .onSuccess { bytes = it; error = null }
             .onFailure { error = it.message?.takeIf(String::isNotBlank) ?: "Couldn't load the file" }
     }
-    val name = absPath.substringAfterLast('/')
+    val name = pathLeaf(absPath)
     val mime = LocalPlatform.current.files.probeMime(name)
 
     Box(
@@ -205,7 +206,7 @@ fun BinaryFileCard(
     val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
     var busy by remember(absPath) { mutableStateOf(false) }
-    val name = absPath.substringAfterLast('/')
+    val name = pathLeaf(absPath)
     Column(
         modifier.fillMaxSize().padding(Space.xl).testTag("editor_binary_card"),
         horizontalAlignment = Alignment.CenterHorizontally,

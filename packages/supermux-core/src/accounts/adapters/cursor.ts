@@ -1,11 +1,11 @@
 import { mkdir } from "node:fs/promises"
-import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import type { AccountIdentity, AuthAdapter, HomeRoots, Materialized } from "../types.js"
 import { jwtPayload, readJson, requireSecret, str, unsupported } from "./shared.js"
+import { dirs } from "@supermux/platform"
 
 export function cursorRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.cursorRoot ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"))
+  return resolve(roots.cursorRoot ?? process.env.XDG_CONFIG_HOME ?? join(dirs.home(), ".config"))
 }
 
 /** `<config>/cursor/auth.json` `{ accessToken, refreshToken }`: the JWT `sub` names the user (email when present). */

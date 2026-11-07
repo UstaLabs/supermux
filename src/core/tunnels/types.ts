@@ -46,6 +46,10 @@ export interface ConnectCtx {
   println: Println
   ask: Ask
   confirm: Confirm
+  /** Starts [argv] in the background, its output into [log]: it outlives `supermux connect`. Returns its pid. */
+  startDetached: (argv: string[], log: string) => number
+  /** Ends a background tunnel [pid] and what it started. */
+  stopTree: (pid: number) => void
 }
 
 export interface TunnelMode {

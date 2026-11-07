@@ -209,4 +209,17 @@ class WorktreesSettingsScreenTest {
         waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_ign").assertExists(); true }.getOrDefault(false) }
         onNodeWithText("No changes · ignored: node_modules/, docs/", substring = true).assertExists()
     }
+
+    @Test fun sameNamedReposOnAWindowsHostShowTheirParentFolders() = runComposeUiTest {
+        val rows = listOf(
+            w("x").copy(repoName = "repo", repoRoot = "C:\\src\\a\\repo"),
+            w("y").copy(repoName = "repo", repoRoot = "C:\\src\\b\\repo"),
+        )
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) {
+            WorktreesSettingsScreen(actions = WorktreesSettingsActions(load = { WorktreeListDto("C:\\r", rows) }), topBarShown = true)
+        } }
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("wt_row_x").assertExists(); true }.getOrDefault(false) }
+        onNodeWithText("repo (C:\\src\\a)", substring = true).assertExists()
+        onNodeWithText("repo (C:\\src\\b)", substring = true).assertExists()
+    }
 }

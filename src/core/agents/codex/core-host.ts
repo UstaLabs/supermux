@@ -194,7 +194,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         context: {
           // The preamble names exactly the programs the rules were written for (none when there are no rules).
           instructions: sessionInstructions({ agent: "codex", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id, shellReads: prepared.readPrograms }),
-          plugins: sessionPlugins("codex", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          plugins: sessionPlugins("codex", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("codex", extra.sessionId, extra.sessionName)],
         },
       }

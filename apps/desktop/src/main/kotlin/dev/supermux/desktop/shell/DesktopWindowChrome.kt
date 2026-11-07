@@ -34,7 +34,7 @@ class DesktopWindowChrome(
 
     /** Room the controls take in the band; [sidebarControls]: the sidebar's controls sit there too. */
     fun insets(sidebarControls: Boolean): ChromeInsets = chromeInsets(
-        ChromeOs.of(),
+        ChromeOs.of(dev.supermux.desktop.platform.DesktopOs.current),
         customChrome = linux != null || windows != null,
         windowsCaptionButtons = windows?.captionButtonsWidth ?: WindowsCaptionButtonsFallbackWidth,
         macTrafficLights = trafficLightsInset,

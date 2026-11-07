@@ -10,7 +10,10 @@
 // provider is unit-testable with a faked Run — NO Bun.spawn, NO network here.
 // URLs are scraped from CLI output with `extractFirstUrl`.
 
-import { homedir } from "os"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
+import { join } from "path"
+import { home } from "../../shared/home"
+import { readLog, startBackground, stopBackground } from "./background"
 import { which, extractFirstUrl } from "./run"
 import { resolveMode, type TunnelProvider, type ConnectCtx, type TunnelResult } from "./types"
 
@@ -264,25 +267,21 @@ export const cloudflaredProvider: TunnelProvider = {
 
       // 4. Write the ingress config (the rule the old flow omitted → the 404). Back
       //    up a pre-existing NON-supermux config.yml before overwriting it.
-      const home = process.env.HOME || homedir()
-      const cfgDir = `${home}/.cloudflared`
-      const cfgPath = `${cfgDir}/config.yml`
+      const cfgDir = join(home(), ".cloudflared")
+      const cfgPath = join(cfgDir, "config.yml")
       const yaml = buildTunnelConfig({
         tunnelId,
-        credentialsFile: tunnelId ? `${cfgDir}/${tunnelId}.json` : undefined,
+        credentialsFile: tunnelId ? join(cfgDir, `${tunnelId}.json`) : undefined,
         port: ctx.port,
         host,
         wildcardBase,
       })
-      const wrote = await ctx.run([
-        "sh",
-        "-c",
-        `mkdir -p "${cfgDir}"; ` +
-          `if [ -f "${cfgPath}" ] && ! grep -q "Managed by supermux" "${cfgPath}"; then cp "${cfgPath}" "${cfgPath}.bak"; fi; ` +
-          `cat > "${cfgPath}" <<'SUPERMUX_CFG'\n${yaml}SUPERMUX_CFG\n`,
-      ])
-      if (wrote.code !== 0) {
-        ctx.println(`Couldn't write ${cfgPath}: ${wrote.stderr || wrote.stdout}. The host may keep returning 404 until the ingress config exists.`)
+      try {
+        mkdirSync(cfgDir, { recursive: true })
+        if (existsSync(cfgPath) && !readFileSync(cfgPath, "utf8").includes("Managed by supermux")) copyFileSync(cfgPath, `${cfgPath}.bak`)
+        writeFileSync(cfgPath, yaml)
+      } catch (error) {
+        ctx.println(`Couldn't write ${cfgPath}: ${error instanceof Error ? error.message : String(error)}. The host may keep returning 404 until the ingress config exists.`)
       }
 
       // 5. Install it as a persistent OS service (reads the config above). Best-
@@ -299,24 +298,17 @@ export const cloudflaredProvider: TunnelProvider = {
     }
 
     // quick: an anonymous, PERSISTENT tunnel. We must NOT scrape-then-kill — that
-    // kills the very tunnel we need. Launch it DETACHED (nohup ⇒ survives this
-    // short-lived CLI, reparented to init), log to a file, record its PID for
-    // down(), then poll the log for the *.trycloudflare.com URL it prints.
-    const log = `${ctx.stateDir}/cloudflared-quick.log`
-    const pidFile = `${ctx.stateDir}/cloudflared-quick.pid`
-    await ctx.run([
-      "sh",
-      "-c",
-      `mkdir -p "${ctx.stateDir}"; : > "${log}"; ` +
-        `nohup cloudflared tunnel --no-autoupdate --url http://localhost:${ctx.port} > "${log}" 2>&1 < /dev/null & ` +
-        `echo $! > "${pidFile}"`,
-    ])
+    // kills the very tunnel we need. Launch it DETACHED (it survives this
+    // short-lived CLI), log to a file, record its PID for down(), then poll the
+    // log for the *.trycloudflare.com URL it prints.
+    const log = join(ctx.stateDir, "cloudflared-quick.log")
+    const pidFile = join(ctx.stateDir, "cloudflared-quick.pid")
+    startBackground(ctx, ["cloudflared", "tunnel", "--no-autoupdate", "--url", `http://localhost:${ctx.port}`], log, pidFile)
 
     // Poll the log for the URL (cloudflared reports it within a few seconds).
     let url: string | undefined
     for (let i = 0; i < 20; i++) {
-      const r = await ctx.run(["sh", "-c", `cat "${log}" 2>/dev/null`])
-      url = extractFirstUrl(r.stdout, /trycloudflare\.com/)
+      url = extractFirstUrl(readLog(log), /trycloudflare\.com/)
       if (url) break
       await Bun.sleep(1000)
     }
@@ -339,14 +331,9 @@ export const cloudflaredProvider: TunnelProvider = {
    * steps are safe to run when nothing exists, and any error is swallowed.
    */
   async down(ctx: ConnectCtx): Promise<void> {
-    // Stop a detached quick tunnel if we started one (kill the recorded PID).
+    // Stop a detached quick tunnel if we started one (end the recorded PID's tree).
     try {
-      const pidFile = `${ctx.stateDir}/cloudflared-quick.pid`
-      await ctx.run([
-        "sh",
-        "-c",
-        `[ -f "${pidFile}" ] && kill "$(cat "${pidFile}")" 2>/dev/null; rm -f "${pidFile}"`,
-      ])
+      stopBackground(ctx, join(ctx.stateDir, "cloudflared-quick.pid"))
     } catch {
       // nothing to stop
     }

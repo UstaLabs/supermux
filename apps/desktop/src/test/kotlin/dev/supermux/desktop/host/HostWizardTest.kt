@@ -238,4 +238,24 @@ class HostWizardTest {
         }
         assertEquals("fresh-token", model.localToken)
     }
+
+    @Test fun a_host_set_up_elsewhere_says_so_when_no_pairing_code_can_be_made() {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        val model = HostWizardModel(
+            scope = scope,
+            hostName = "Mac",
+            provideHostId = { validHostId },
+            provideLocalUrl = { "http://127.0.0.1:9898" },
+            mintClaim = { null }, // the host has paired devices and this app holds none of its tokens
+            onPairThisComputer = { _, _, _ -> },
+            onInstallKeepAlive = {},
+            qrOf = { qrBitmap("x", sizePx = 64) },
+            whyNoClaim = { HOST_WIZARD_SET_UP_ELSEWHERE },
+        )
+        model.prepare()
+        val state = kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(5_000) { model.state.first { it !is HostWizardUiState.Preparing } }
+        }
+        assertEquals(HostWizardUiState.Error(HOST_WIZARD_SET_UP_ELSEWHERE), state)
+    }
 }

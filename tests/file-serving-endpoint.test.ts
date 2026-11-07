@@ -96,6 +96,53 @@ test("GET /files/:id honors open-ended Range request", async () => {
   expect(Array.from(buf)).toEqual([30, 40, 50])
 })
 
+// Stored files are served on the app's own origin, so a file a browser would run as a page (HTML, SVG,
+// XML, script) must never run there: it downloads, and a tab opened on it anyway gets no script and no
+// origin from the sandbox policy.
+const ACTIVE_MIMES = ["text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml", "text/javascript", "application/javascript"]
+
+for (const mime of ACTIVE_MIMES) {
+  test(`GET /files/:id serves ${mime} as a sandboxed download, never a page`, async () => {
+    const bytes = new TextEncoder().encode("<script>parent.pwned = 1</script>")
+    const { file_id } = await store.put({ kind: "document", mime, name: "evil.html", origin: "web-upload", bytes })
+    const res = await fetch(`http://127.0.0.1:${port}/files/${file_id}`, { headers: { Cookie: `cmux_token=${token}` } })
+    expect(res.status).toBe(200)
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="evil.html"`)
+    expect(res.headers.get("content-security-policy")).toBe("sandbox")
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+    await res.arrayBuffer()
+  })
+}
+
+test("an active type is recognised whatever its case or parameters", async () => {
+  const { file_id } = await store.put({ kind: "document", mime: "Text/HTML; charset=utf-8", origin: "web-upload", bytes: new Uint8Array([60]) })
+  const res = await fetch(`http://127.0.0.1:${port}/files/${file_id}`, { headers: { Cookie: `cmux_token=${token}` } })
+  expect(res.headers.get("content-disposition")).toBe("attachment")
+  await res.arrayBuffer()
+})
+
+test("a ranged read of an active file is protected the same way", async () => {
+  const { file_id } = await store.put({ kind: "photo", mime: "image/svg+xml", origin: "web-upload", bytes: new TextEncoder().encode("<svg/>") })
+  const res = await fetch(`http://127.0.0.1:${port}/files/${file_id}`, { headers: { Cookie: `cmux_token=${token}`, range: "bytes=0-2" } })
+  expect(res.status).toBe(206)
+  expect(res.headers.get("content-disposition")).toBe("attachment")
+  expect(res.headers.get("content-security-policy")).toBe("sandbox")
+  expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+  await res.arrayBuffer()
+})
+
+test("images, video and PDFs stay inline previews, with nosniff and the sandbox policy", async () => {
+  for (const [mime, name] of [["image/png", "a.png"], ["video/mp4", "clip.mp4"], ["application/pdf", "report.pdf"]] as const) {
+    const { file_id } = await store.put({ kind: "document", mime, name, origin: "session-outbound", bytes: new Uint8Array([0]) })
+    const res = await fetch(`http://127.0.0.1:${port}/files/${file_id}`, { headers: { Cookie: `cmux_token=${token}` } })
+    expect(res.headers.get("content-type")).toBe(mime)
+    expect(res.headers.get("content-disposition")).toBe(`inline; filename="${name}"`)
+    expect(res.headers.get("content-security-policy")).toBe("sandbox")
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+    await res.arrayBuffer()
+  }
+})
+
 test("GET /files/:id returns 404 when on-disk file is missing", async () => {
   // Row exists, but the file is gone (e.g. someone rm'd it, or a partial GC).
   // Without the eager existsSync check the handler returns a Bun.file() body

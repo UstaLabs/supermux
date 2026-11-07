@@ -667,6 +667,9 @@ class ProxiesSettingsScreenTest {
                 false
             }
         }
+        onNodeWithTag("proxy_url_copy_app.example.local").performClick()
+        waitForIdle()
+        assertEquals(listOf("https://app.example.local"), platform.copied)
         onNodeWithTag("proxy_url_open_app.example.local").performClick()
         waitForIdle()
         assertEquals(listOf("https://app.example.local"), platform.openedUrls)

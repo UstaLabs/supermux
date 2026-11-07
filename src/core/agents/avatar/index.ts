@@ -1,7 +1,7 @@
 // Agent avatars (FORMAT.md): validation, storage next to the Agent's memory, and a browser-free
 // contact-sheet preview (renderer.js → SVG → PNG with resvg).
 import { createHash } from "crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { Resvg } from "@resvg/resvg-js"
 import { getMuxHome } from "../../memory/init"
@@ -9,6 +9,7 @@ import { agentMemoryPaths } from "../../memory/agent-memory"
 
 // renderer.js is shared with tools/preview.ts and mirrored by the Kotlin renderer.
 import "./renderer.js"
+import { files } from "@supermux/platform"
 
 type Renderer = {
   render(spec: unknown, ctx: Record<string, unknown>, px: number, opts?: { clip?: boolean }): string
@@ -133,7 +134,7 @@ export function writeAvatar(agentId: string, text: string, home?: string): void 
   mkdirSync(agentMemoryPaths(agentId, home).dir, { recursive: true, mode: 0o700 })
   const tmp = `${p}.tmp-${process.pid}`
   writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 })
-  renameSync(tmp, p)
+  files.replaceSync(tmp, p)
 }
 
 const revCache = new Map<string, { mtimeMs: number; size: number; rev: string | undefined }>()

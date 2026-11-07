@@ -1,5 +1,6 @@
-import { chmodSync, copyFileSync, lstatSync, renameSync, unlinkSync, writeFileSync, type Stats } from "node:fs"
+import { chmodSync, copyFileSync, lstatSync, unlinkSync, writeFileSync, type Stats } from "node:fs"
 import { randomUUID } from "node:crypto"
+import { files } from "@supermux/platform"
 
 export function lstatSafe(path: string): Stats | undefined {
   try {
@@ -17,7 +18,7 @@ export function writeFileNoFollow(path: string, body: string, mode: number): voi
   try {
     writeFileSync(tmp, body, { encoding: "utf8", mode })
     chmodSync(tmp, mode)
-    renameSync(tmp, path)
+    files.replaceSync(tmp, path)
   } finally {
     try { unlinkSync(tmp) } catch { /* */ }
   }
@@ -31,7 +32,7 @@ export function copyFileReplace(src: string, dest: string): void {
   try {
     copyFileSync(src, tmp)
     chmodSync(tmp, 0o600)
-    renameSync(tmp, dest)
+    files.replaceSync(tmp, dest)
     chmodSync(dest, 0o600)
   } finally {
     try { unlinkSync(tmp) } catch { /* */ }

@@ -18,7 +18,7 @@ export type AntigravityCommandContext = {
 }
 
 export function commandContext(ctx: CommandContextCtx): AntigravityCommandContext {
-  return { skillsDirs: antigravitySkillsDirs(ctx.sessionName) }
+  return { skillsDirs: antigravitySkillsDirs(ctx.sessionId ?? "") }
 }
 
 export type AntigravitySessionAdapter = CoreAdapter

@@ -1,10 +1,14 @@
-import { test, expect } from "bun:test"
+import { test, expect, setDefaultTimeout } from "bun:test"
 import { execFileSync } from "child_process"
 import { mkdtempSync, watch, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { createWorktree } from "./manager"
 import { computeLiteStatus } from "./lite-status"
+
+// Each test starts a dozen or more git processes. On the Windows runner they take 1.7-5 s a test, so the slowest
+// crossed Bun's 5 s default there (run 41940384847).
+setDefaultTimeout(30_000)
 
 function g(cwd: string, ...a: string[]) { return execFileSync("git", ["-C", cwd, ...a], { encoding: "utf-8" }).trim() }
 function tmpRepo(): string {

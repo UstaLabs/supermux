@@ -5,13 +5,15 @@ import { join } from "path"
 import { getMuxHome } from "../memory/init"
 import { agentMemoryPaths } from "../memory/agent-memory"
 
-// How each agent loads a plugin skill. Cursor's ACP server ignores --plugin-dir, so it has none.
+// How each agent names and loads a plugin skill, as each showed them on a live install (#102, 2026-11-07): Claude and
+// Codex list `<plugin>:<name>`, the others the bare name; Codex reads the SKILL.md at the path it lists.
 const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
-  [AgentKind.Claude]: "Load one with your Skill tool before following it.",
-  [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them.",
-  [AgentKind.Codex]: "You have no skill tool: read the skill's `SKILL.md` from the codex plugin cache and follow its steps.",
-  [AgentKind.Grok]: "Read the skill's `SKILL.md` from its plugin directory and follow its steps.",
-  [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
+  [AgentKind.Claude]: "They are named `<plugin>:<name>` (e.g. `mux:browser`, `superpowers:brainstorming`): load one with your Skill tool before following it.",
+  [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them by name (e.g. `browser`).",
+  [AgentKind.Codex]: "Codex lists them as `<plugin>:<name>` (e.g. `mux:browser`) with the path of each `SKILL.md`. You have no skill tool: read that `SKILL.md` and follow its steps.",
+  [AgentKind.Grok]: "They are listed by name (e.g. `browser`): read the skill's `SKILL.md` from its plugin directory and follow its steps.",
+  [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name (e.g. `browser`), or read its `SKILL.md` and follow its steps.",
+  [AgentKind.Cursor]: "Cursor lists them by name (e.g. `browser`) with its other skills: use one, or read its `SKILL.md` and follow its steps.",
 }
 
 /** Who created this session (spec §3, §5): a session with delegate, or a council. */
@@ -54,25 +56,26 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
       "send files, call the `attach` tool with files[] (local paths) and an optional " +
       "caption. Keep responses concise.",
     ...(mem ? [
-      "- YOUR MEMORY: You have your own memory, keyed by your id (it stays yours if you are renamed):",
-      `  - \`${mem.digest}\` — current truth. Read it at the start of every conversation. Never edit it; the nightly curator writes it.`,
-      `  - \`${mem.history}\` — dated history. When you learn something about your own work or how the user wants you ` +
-        "to behave, append it under `## <title> (YYYY-MM-DD)`.",
+      "- YOUR MEMORY: You have your own memory, keyed by your id (it stays yours if you are renamed). Read it at the start of every conversation:",
+      `  - \`${mem.digest}\` — current truth. Never edit it; the nightly curator writes it, so it is empty until the curator has run.`,
+      `  - \`${mem.history}\` — dated history: read all of it while the digest is empty, otherwise its newest entries. ` +
+        "When you learn something about your own work or how the user wants you to behave, append it under `## <title> (YYYY-MM-DD)`.",
       "  No other session reads these files. `memory_search` also searches them for you.",
       `- THE USER: \`${join(home, "personal")}/\` holds who the user is and their preferences. Read it when it ` +
         "matters. Workers never see it, so never pass its contents to another session.",
     ] : []),
     "- MEMORY: `~/.mux` holds shared notes by topic (the domain index is below). When your " +
-      "task touches one of those topics, read `~/.mux/domains/<topic>.digest.md` (the current " +
-      "truth; `<topic>.md` is the dated history) before you start — it records gotchas you " +
-      "are expected to know. Skip this for trivial one-off requests.",
+      "task touches one of those topics, read its notes before you start — they record gotchas you " +
+      "are expected to know: `~/.mux/domains/<topic>.digest.md` (a curated summary) if it exists, then " +
+      "`~/.mux/domains/<topic>.md` (the dated history every session appends to) — all of it when there is " +
+      "no digest, otherwise its newest entries at the end, which the digest does not have yet. Skip this " +
+      "for trivial one-off requests.",
     "- LEARNING: When you discover something durable about a project — a fix, a gotcha, a decision — append " +
       "it under a `## <title> (YYYY-MM-DD)` heading in `~/.mux/domains/<topic>.md` (or " +
       "`domains/_inbox.md` if unsure) before you finish. Never edit `*.digest.md`.",
     ...(skills ? [
-      "- SKILLS: supermux installs skills as plugins, namespaced `<plugin>:<name>` (e.g. " +
-        `\`mux:browser\`, \`superpowers:brainstorming\`). ${skills} NEVER claim to have ` +
-        "applied a skill you have not actually loaded.",
+      "- SKILLS: supermux installs skills as plugins (e.g. `mux`, `superpowers`). " +
+        `${skills} NEVER claim to have applied a skill you have not actually loaded.`,
     ] : []),
     isAgent
       ? `- HOME: Your working directory is \`${opts.workdir}\`. Keep scratch files there; other projects are fine to work on when the user asks.`

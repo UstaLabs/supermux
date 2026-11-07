@@ -109,4 +109,12 @@ class MarkdownTableMediaTest {
         onNodeWithTag("attachment_video_poster").assertExists()
         onNodeWithTag("md_image").assertDoesNotExist()
     }
+
+    @Test fun windowsHostImages() {
+        assertEquals("C:\\proj\\docs\\img\\a.png", resolveMarkdownMediaPath("img/a.png", "C:\\proj\\docs"))
+        assertEquals("C:\\proj\\img\\a.png", resolveMarkdownMediaPath("..\\img\\a.png", "C:\\proj\\docs\\"))
+        assertEquals("C:\\proj\\shot.png", resolveMarkdownMediaPath("C:\\proj\\shot.png", null))
+        assertEquals("C:\\proj\\shot.png", resolveMarkdownMediaPath("file:///C:/proj/shot.png", null))
+        assertNull(resolveMarkdownMediaPath("https://example.com/a.png", "C:\\proj"))
+    }
 }

@@ -15,6 +15,7 @@ import dev.supermux.editor.plugins.diff.Review
 import dev.supermux.editor.plugins.diff.ReviewComposer
 import dev.supermux.editor.plugins.diff.ReviewThread
 import dev.supermux.editor.plugins.diff.UnifiedPatch
+import dev.supermux.fs.hostPathSegments
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.WalkthroughStep
 import kotlinx.coroutines.CoroutineScope
@@ -185,8 +186,12 @@ fun hunkHeaderFor(patch: String, line: Int): String {
     return best
 }
 
-/** A diff file's path in the workdir: [path] inside [repo] (a blank repo is the workdir itself). */
-fun repoPath(repo: String, path: String): String = if (repo.isBlank()) path else "$repo/$path"
+/**
+ * A diff file's path in the workdir: [path] inside [repo] (a blank repo is the workdir itself). [repo] is
+ * workdir-relative and a Windows broker sends it with `\`: an editor key is `/`-separated.
+ */
+fun repoPath(repo: String, path: String): String =
+    if (repo.isBlank()) path else (hostPathSegments(repo) + path).joinToString("/")
 
 /** A reply to [root]'s thread, on the root's current line (as the walkthrough's replies are). */
 fun replyBody(root: ReviewComment, body: String, deliver: String? = null): dev.supermux.net.AddCommentBody =

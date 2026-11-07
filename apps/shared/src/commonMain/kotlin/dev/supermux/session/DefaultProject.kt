@@ -1,5 +1,8 @@
 package dev.supermux.session
 
+import dev.supermux.fs.hostIsInside
+import dev.supermux.fs.hostJoin
+import dev.supermux.fs.sameHostPath
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
 
@@ -113,15 +116,14 @@ fun formatAgoShort(nowMs: Long, thenMs: Long): String {
 /**
  * Supermux's own folders, which the project picker leaves out: the broker's mux home (where the
  * home agent runs) and every agent's folder under `<mux home>/workspace/`. [muxHome] comes from
- * the broker in the host's own path form, so the separator is read off it (Windows hosts use `\`).
- * Null (an older broker) hides nothing.
+ * the broker in the host's own path form, and is compared by the host's rules (a Windows host's
+ * `\`, and its letter case). Null (an older broker) hides nothing.
  */
 fun isMuxInternalPath(path: String, muxHome: String?): Boolean {
     if (muxHome.isNullOrBlank()) return false
-    val sep = if ('/' !in muxHome && '\\' in muxHome) '\\' else '/'
-    val root = muxHome.trimEnd(sep)
-    val p = path.trimEnd(sep)
-    return p == root || p.startsWith("$root${sep}workspace$sep")
+    if (sameHostPath(path, muxHome)) return true
+    val workspace = hostJoin(muxHome, "workspace")
+    return hostIsInside(path, workspace) && !sameHostPath(path, workspace)
 }
 
 /**

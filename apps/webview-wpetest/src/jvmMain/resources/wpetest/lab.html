@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>wpelab</title>
+<style>
+  html, body { margin: 0; background: #ffffff; font: 16px/1.4 "DejaVu Sans", sans-serif; }
+  #stage { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; }
+  #box { position: absolute; left: 100px; top: 100px; width: 256px; height: 256px; background: #3060c0; }
+  #field { position: absolute; left: 400px; top: 40px; width: 600px; height: 36px; font-size: 20px; font-family: "IPAGothic", "DejaVu Sans", sans-serif; }
+  #link { position: absolute; left: 400px; top: 100px; font-size: 20px; }
+  #tall { position: absolute; left: 0; top: 0; width: 1px; height: 5000px; }
+  #marker { position: fixed; left: 0; top: 0; width: 16px; height: 16px; z-index: 10; background: rgb(0, 0, 90); }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="box"></div>
+<input id="field" autocomplete="off">
+<a id="link" href="#anchor">a link (the cursor check)</a>
+<div id="tall"></div>
+<div id="marker"></div>
+<script>
+(function () {
+  // The marker: a 16-bit counter, red the high byte, green the low byte, blue the sentinel 90 (0x5A).
+  var counter = 0, mode = 'idle', events = [];
+  var marker = document.getElementById('marker'), canvas = document.getElementById('stage'), ctx = canvas.getContext('2d');
+  var box = document.getElementById('box'), field = document.getElementById('field');
+  function show() { marker.style.background = 'rgb(' + ((counter >> 8) & 255) + ',' + (counter & 255) + ',90)'; }
+  function bump() { counter = (counter + 1) & 65535; show(); }
+  function size() { canvas.width = Math.round(innerWidth * devicePixelRatio); canvas.height = Math.round(innerHeight * devicePixelRatio); }
+  size();
+  addEventListener('resize', size);
+  function frame(t) {
+    if (mode === 'full') {
+      // Every pixel changes every frame: full-frame damage.
+      var h = (t / 8) % 360;
+      ctx.fillStyle = 'hsl(' + h + ',70%,50%)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'hsl(' + ((h + 180) % 360) + ',70%,50%)';
+      ctx.fillRect((t / 3) % canvas.width, 0, 200, canvas.height);
+      bump();
+    } else if (mode === 'box') {
+      box.style.background = 'hsl(' + ((t / 8) % 360) + ',70%,50%)';
+      bump();
+    } else if (mode === 'counter') {
+      bump();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  function report(o) { if (window.__lab) window.__lab.send(JSON.stringify(o)); }
+  addEventListener('pointerdown', function (e) { if (mode === 'input') bump(); events.push('pointerdown ' + e.button + ' ' + e.clientX + ',' + e.clientY); }, true);
+  addEventListener('keydown', function (e) { if (mode === 'input' && !e.isComposing) bump(); events.push('keydown ' + e.key + ' ' + e.code); }, true);
+  addEventListener('wheel', function (e) { events.push('wheel ' + e.deltaY); }, { capture: true, passive: true });
+  field.addEventListener('compositionstart', function () { events.push('compositionstart'); });
+  field.addEventListener('compositionupdate', function (e) { events.push('compositionupdate ' + e.data); });
+  field.addEventListener('compositionend', function (e) { events.push('compositionend ' + e.data); if (mode === 'input') bump(); });
+  field.addEventListener('input', function () { events.push('input ' + field.value); });
+  window.__labPage = {
+    setMode: function (m) { mode = m; if (m === 'idle') ctx.clearRect(0, 0, canvas.width, canvas.height); return counter; },
+    counter: function () { return counter; },
+    events: function () { var e = events; events = []; return e; },
+    value: function () { return field.value; },
+    clear: function () { field.value = ''; return true; },
+    focusField: function () { field.focus(); return document.activeElement === field; },
+    rect: function (id) { var r = document.getElementById(id).getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; },
+    scrollY: function () { return scrollY; },
+    origin: function () { return { origin: self.origin, secure: isSecureContext, href: location.href }; },
+    dark: function () { return matchMedia('(prefers-color-scheme: dark)').matches; }
+  };
+  if (window.__lab) window.__lab.on(function (text) {
+    var m = JSON.parse(text);
+    if (m.t === 'ping') report({ t: 'pong', id: m.id });
+    else if (m.t === 'spoof') {
+      // The page's own world can redefine its origin; the delivering script's world can't see that.
+      try { Object.defineProperty(window, 'origin', { get: function () { return m.origin; }, configurable: true }); } catch (e) {}
+      report({ t: 'spoofed', origin: self.origin });
+    } else if (m.t === 'probe') {
+      report({ t: 'probe', id: m.id, handlers: !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.webview) });
+    } else report({ t: 'got', m: m });
+  });
+  show();
+})();
+</script>
+</body>
+</html>

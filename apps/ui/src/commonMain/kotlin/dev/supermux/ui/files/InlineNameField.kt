@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.MonoFontFamily
 import kotlinx.coroutines.launch
 
@@ -68,18 +70,32 @@ fun InlineNameField(
     onDone: (name: String, refocusTree: Boolean) -> Unit,
     onCancel: (refocusTree: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** The folder the name goes in: its host's name rules apply. */
+    inFolder: String? = null,
+    /** Where the name being typed is kept: the pane's, which outlives this composition (#89). */
+    typed: TypedName? = null,
+    /** Where the commit and its result are kept: the pane's, likewise. */
+    op: FileOp? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    var field by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))) }
-    var serverError by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    val own = remember { TypedName(nameFieldValue(initial, folder)) }
+    val kept = typed ?: own
+    var field by kept::value
+    // With the pane's [op], a commit runs on the fleet's scope and the field on screen when it
+    // lands finishes it (#89): a rotation cancelled it with this field, after the host had made
+    // or moved the entry, so nothing selected it or moved the tabs open on it.
+    val ownOp = remember { FileOp() }
+    val state = op ?: ownOp
+    var serverError by state::error
+    var busy by state::busy
     // Once committed or cancelled, the field ignores everything (the blur its own removal causes).
     var finished by remember { mutableStateOf(false) }
     // onFocusChanged reports "not focused" once before the first focus: that is not a blur.
     var hadFocus by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val opScope = if (op != null) rememberRetainedScope() else scope
     val name = field.text
-    val invalid = validateNewName(name, siblings, current)
+    val invalid = validateNewName(name, siblings, current, inFolder)
     val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
 
     fun cancel(refocus: Boolean) {
@@ -95,13 +111,24 @@ fun InlineNameField(
             name == current -> cancel(refocus) // a rename that kept its name
             else -> {
                 busy = true
-                scope.launch {
-                    val r = onSubmit(name)
+                val submitted = name
+                opScope.launch {
+                    val r = onSubmit(submitted)
                     busy = false
-                    r.onSuccess { finished = true; onDone(name, refocus) }
-                        .onFailure { serverError = fsOpErrorMessage(it) }
+                    state.result = FileOpResult(submitted, refocus, r.exceptionOrNull())
                 }
             }
+        }
+    }
+    LaunchedEffect(state, state.result) {
+        val r = state.result ?: return@LaunchedEffect
+        state.result = null
+        val failure = r.failure
+        if (failure == null) {
+            finished = true
+            onDone(r.name, r.refocus)
+        } else {
+            serverError = fsOpErrorMessage(failure)
         }
     }
 
@@ -140,7 +167,17 @@ fun InlineNameField(
                             if (st.isFocused) {
                                 hadFocus = true
                             } else if (hadFocus && !finished && !busy) {
-                                if (commitsOnBlur(name, invalid, current)) commit(refocus = false) else cancel(refocus = false)
+                                // Decided on the next frame, on this field's own scope: the blur of
+                                // its own removal (a rotation or a width change rebuilding the
+                                // tree, #89) is not the user's, and that removal cancels the scope
+                                // before any frame, so the edit stays open, with its name, for the
+                                // new tree. A frame, not just a launch: on an immediate dispatcher
+                                // the launch runs inside the removal and committed the name.
+                                scope.launch {
+                                    withFrameNanos { }
+                                    if (finished || busy) return@launch
+                                    if (commitsOnBlur(name, invalid, current)) commit(refocus = false) else cancel(refocus = false)
+                                }
                             }
                         }
                         .onPreviewKeyEvent { e ->
@@ -176,3 +213,7 @@ fun InlineNameField(
         }
     }
 }
+
+/** A name field's first value: [initial], with a rename's stem selected (see [renameSelectionEnd]). */
+internal fun nameFieldValue(initial: String, folder: Boolean): TextFieldValue =
+    TextFieldValue(initial, TextRange(0, renameSelectionEnd(initial, folder)))

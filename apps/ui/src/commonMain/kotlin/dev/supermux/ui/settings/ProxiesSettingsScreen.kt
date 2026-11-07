@@ -56,9 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import dev.supermux.net.CreateProxyResponse
@@ -69,6 +67,8 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
@@ -168,7 +168,10 @@ fun ProxiesSettingsScreen(
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    var showCreate by remember { mutableStateOf(false) }
+    // The page's dialogs and what is typed in them, kept for the page on display (#89): a rotation
+    // closed them. Their calls run on the fleet's scope and land in [ProxiesForm].
+    val form = rememberRetainedOnPage("proxies") { ProxiesForm() }
+    var showCreate by form::showCreate
     if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
@@ -207,6 +210,7 @@ fun ProxiesSettingsScreen(
         ) { padding ->
             ProxiesSettingsBody(
                 actions = actions,
+                form = form,
                 modifier = modifier.padding(padding),
                 showHeaderExpose = false,
                 showCreate = showCreate,
@@ -216,6 +220,7 @@ fun ProxiesSettingsScreen(
     } else {
         ProxiesSettingsBody(
             actions = actions,
+            form = form,
             modifier = modifier,
             showHeaderExpose = true,
             showCreate = showCreate,
@@ -227,6 +232,7 @@ fun ProxiesSettingsScreen(
 @Composable
 private fun ProxiesSettingsBody(
     actions: ProxiesSettingsActions,
+    form: ProxiesForm,
     modifier: Modifier,
     showHeaderExpose: Boolean,
     showCreate: Boolean,
@@ -235,16 +241,29 @@ private fun ProxiesSettingsBody(
     val cs = MaterialTheme.colorScheme
     var loadState by remember { mutableStateOf<ProxiesLoadState>(ProxiesLoadState.Loading) }
     var reloadKey by remember { mutableStateOf(0) }
-    var removeTarget by remember { mutableStateOf<String?>(null) }
-    var removeBusy by remember { mutableStateOf(false) }
-    var removeError by remember { mutableStateOf<String?>(null) }
+    var removeTarget by form::removeTarget
+    var removeBusy by form::removeBusy
+    var removeError by form::removeError
     /** Domain pending make-public confirm; private→public only (making private is low-risk). */
-    var publicTarget by remember { mutableStateOf<String?>(null) }
-    var publicBusy by remember { mutableStateOf(false) }
-    var publicError by remember { mutableStateOf<String?>(null) }
+    var publicTarget by form::publicTarget
+    var publicBusy by form::publicBusy
+    var publicError by form::publicError
     var toggleError by remember { mutableStateOf<String?>(null) }
     val sessionNames by actions.sessionNames.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    // The confirms' calls finish on the fleet's scope; the list on display takes what they did.
+    val calls = rememberRetainedScope()
+    LaunchedEffect(form, form.changed) {
+        if (form.changed == 0) return@LaunchedEffect
+        form.changed = 0
+        reloadKey++
+    }
+    LaunchedEffect(form, form.madePublic) {
+        val domain = form.madePublic ?: return@LaunchedEffect
+        form.madePublic = null
+        val current = (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
+        loadState = ProxiesLoadState.Ready(current.map { if (it.domain == domain) it.copy(isPublic = true) else it })
+    }
 
     suspend fun loadOnce() {
         val previous = loadState
@@ -453,14 +472,14 @@ private fun ProxiesSettingsBody(
                         if (removeBusy) return@TextButton
                         removeBusy = true
                         removeError = null
-                        scope.launch {
+                        calls.launch {
                             val ok = actions.proxyRemove(domain)
-                            removeBusy = false
+                            form.removeBusy = false
                             if (ok) {
-                                removeTarget = null
-                                reloadKey++
+                                form.removeTarget = null
+                                form.changed++
                             } else {
-                                removeError = "Couldn't remove the proxy. Try again."
+                                form.removeError = "Couldn't remove the proxy. Try again."
                             }
                         }
                     },
@@ -513,19 +532,14 @@ private fun ProxiesSettingsBody(
                         if (publicBusy) return@TextButton
                         publicBusy = true
                         publicError = null
-                        scope.launch {
+                        calls.launch {
                             val ok = actions.proxySetPublic(domain, true)
-                            publicBusy = false
+                            form.publicBusy = false
                             if (ok) {
-                                publicTarget = null
-                                val current = (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
-                                loadState = ProxiesLoadState.Ready(
-                                    current.map {
-                                        if (it.domain == domain) it.copy(isPublic = true) else it
-                                    },
-                                )
+                                form.publicTarget = null
+                                form.madePublic = domain
                             } else {
-                                publicError = "Couldn't make the proxy public. Try again."
+                                form.publicError = "Couldn't make the proxy public. Try again."
                             }
                         }
                     },
@@ -549,8 +563,10 @@ private fun ProxiesSettingsBody(
     if (showCreate) {
         ExposePortDialog(
             sessions = sessionNames,
+            form = form.expose,
             onCreate = actions.proxyCreate,
             onDismiss = { created ->
+                form.expose.reset()
                 onShowCreateChange(false)
                 if (created) reloadKey++
             },
@@ -566,7 +582,6 @@ private fun ProxyRow(
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
     // Touch bump: LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard attached is
     // still a finger-sized target. The row breathes AND the two icon buttons grow to the 48dp
@@ -612,7 +627,7 @@ private fun ProxyRow(
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     IconButton(
-                        onClick = { clipboard.setText(AnnotatedString(url)) },
+                        onClick = { platform.copyToClipboard(url) },
                         modifier = Modifier
                             .size(iconButtonSize)
                             .testTag("proxy_url_copy_$tagSafe"),
@@ -668,18 +683,20 @@ private fun ProxyRow(
 @Composable
 private fun ExposePortDialog(
     sessions: List<String>,
+    form: ExposeForm,
     onCreate: suspend (sessionName: String, port: Int, domain: String?) -> CreateProxyResponse?,
     onDismiss: (created: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var selectedSession by remember { mutableStateOf(sessions.firstOrNull().orEmpty()) }
-    var portText by remember { mutableStateOf("") }
-    var domainText by remember { mutableStateOf("") }
+    val scope = rememberRetainedScope()
+    // The first session until the user picks one.
+    val selectedSession = form.session ?: sessions.firstOrNull().orEmpty()
+    var portText by form::portText
+    var domainText by form::domainText
     var sessionMenu by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var created by remember { mutableStateOf(false) }
+    var busy by form::busy
+    var error by form::error
+    val created by form::created
 
     val portValid = portText.toIntOrNull()?.let { it in 1..65535 } == true
     val canCreate = selectedSession.isNotBlank() && portValid && !busy
@@ -689,17 +706,24 @@ private fun ExposePortDialog(
         if (selectedSession.isBlank() || busy) return
         busy = true
         error = null
+        val session = selectedSession
+        val domain = domainText.trim().ifBlank { null }
         scope.launch {
-            val domain = domainText.trim().ifBlank { null }
-            val r = onCreate(selectedSession, port, domain)
-            busy = false
+            val r = onCreate(session, port, domain)
+            form.busy = false
             if (r == null) {
-                error = "Couldn't create the proxy. Try again."
+                form.error = "Couldn't create the proxy. Try again."
             } else {
-                created = true
-                onDismiss(true)
+                form.created = true
+                form.landed = true
             }
         }
+    }
+    // A created proxy closes the dialog on screen (#89: the create runs on the fleet's scope).
+    LaunchedEffect(form, form.landed) {
+        if (!form.landed) return@LaunchedEffect
+        form.landed = false
+        onDismiss(true)
     }
 
     AlertDialog(
@@ -737,7 +761,7 @@ private fun ExposePortDialog(
                                 DropdownMenuItem(
                                     text = { Text(name) },
                                     onClick = {
-                                        selectedSession = name
+                                        form.session = name
                                         sessionMenu = false
                                     },
                                     modifier = Modifier.testTag("proxies_create_session_item_$name"),
@@ -801,4 +825,47 @@ private fun ExposePortDialog(
         },
         modifier = Modifier.testTag("proxies_create_dialog"),
     )
+}
+
+/**
+ * The Proxies page's dialogs, kept for the page on display (`rememberRetainedOnPage`, #89): which
+ * one is open, what is typed in it, and its call in flight, which runs on the fleet's scope and
+ * leaves its outcome here for the page on display.
+ */
+private class ProxiesForm {
+    var showCreate by mutableStateOf(false)
+    val expose = ExposeForm()
+    var removeTarget by mutableStateOf<String?>(null)
+    var removeBusy by mutableStateOf(false)
+    var removeError by mutableStateOf<String?>(null)
+    var publicTarget by mutableStateOf<String?>(null)
+    var publicBusy by mutableStateOf(false)
+    var publicError by mutableStateOf<String?>(null)
+    /** Calls that changed the list since the page on display last reloaded it. */
+    var changed by mutableStateOf(0)
+    /** A proxy just made public, for the list on display to show so. */
+    var madePublic by mutableStateOf<String?>(null)
+}
+
+/** The "Expose port" dialog's fields and its create (see [ProxiesForm]); reset when it closes. */
+private class ExposeForm {
+    /** The session the user picked; null shows the first one. */
+    var session by mutableStateOf<String?>(null)
+    var portText by mutableStateOf("")
+    var domainText by mutableStateOf("")
+    var busy by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var created by mutableStateOf(false)
+    /** The create landed: the dialog on screen closes. */
+    var landed by mutableStateOf(false)
+
+    fun reset() {
+        session = null
+        portText = ""
+        domainText = ""
+        busy = false
+        error = null
+        created = false
+        landed = false
+    }
 }
