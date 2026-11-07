@@ -237,7 +237,7 @@ internal class DesktopTtsEngine : TtsEngine {
 
     override suspend fun playAudioChunk(bytes: ByteArray) {
         val file = runCatching {
-            File.createTempFile("read-aloud-", ".mp3").also { it.deleteOnExit(); it.writeBytes(bytes) }
+            Files.createTempFile("read-aloud-", ".mp3").toFile().also { it.deleteOnExit(); it.writeBytes(bytes) }
         }.getOrNull() ?: return
         try {
             val cmd = playCommand(file.absolutePath) ?: return

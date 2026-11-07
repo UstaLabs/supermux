@@ -114,7 +114,7 @@ private fun sameDir(a: String, b: String): Boolean = canonical(a) == canonical(b
 /** Where the broker's state lives (mirrors src/shared/paths.ts). */
 object BrokerPaths {
     fun defaultStateDir(): Path {
-        val home = System.getProperty("user.home") ?: "."
+        val home = SystemOsEnv.home.toString()
         val muxHome = System.getenv("MUX_HOME") ?: "$home/.mux"
         return Path.of(System.getenv("MUX_STATE_DIR") ?: "$muxHome/state")
     }

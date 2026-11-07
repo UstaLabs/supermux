@@ -1983,7 +1983,7 @@ fun main() {
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
                             // sessions. The one genuine per-host choice left in the shell.
                             sessionListMode = SessionListMode.Workspaces,
-                            homeFallback = System.getProperty("user.home").orEmpty(),
+                            homeFallback = dev.supermux.desktop.host.SystemOsEnv.home.toString(),
                             // The broker this app supervises is "this computer": its folders get
                             // the native folder dialog in the launcher.
                             isLocalHost = { id -> id != null && id == supervisor.hostId.value },

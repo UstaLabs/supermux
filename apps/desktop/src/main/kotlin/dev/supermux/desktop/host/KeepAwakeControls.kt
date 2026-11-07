@@ -45,7 +45,7 @@ class KeepAwakeControls(
     private val supervisor: HostSupervisor,
     private val os: OsEnv = supervisor.osEnv,
     private val user: String = System.getProperty("user.name") ?: "",
-    private val home: String? = System.getProperty("user.home"),
+    private val home: String? = SystemOsEnv.home.toString(),
     val facts: PowerFactsCache = PowerFactsCache(os),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val io: CoroutineDispatcher = Dispatchers.IO,
