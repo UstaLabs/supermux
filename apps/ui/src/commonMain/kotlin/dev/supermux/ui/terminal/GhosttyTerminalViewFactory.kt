@@ -44,6 +44,7 @@ import dev.supermux.net.SpecialKey
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalEvent
 import dev.supermux.net.CursorPos
+import dev.supermux.net.isOpenableLink
 import dev.supermux.terminal.OutputOrigin
 import dev.supermux.terminal.TerminalCursor
 import dev.supermux.terminal.TerminalEffect
@@ -508,7 +509,7 @@ private class GhosttyTerminalSurface(
 @Composable
 private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
     val uriHandler = LocalUriHandler.current
-    val openable = isOpenableTerminalLink(uri)
+    val openable = isOpenableLink(uri)
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("terminal_link_dialog"),
@@ -534,12 +535,6 @@ private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () ->
             }
         },
     )
-}
-
-/** Web and mail links open on this device; anything else (file://, ssh://, a custom scheme) is copy-only. */
-internal fun isOpenableTerminalLink(uri: String): Boolean {
-    val scheme = uri.substringBefore(':', missingDelimiterValue = "").lowercase()
-    return scheme == "http" || scheme == "https" || scheme == "mailto"
 }
 
 private const val BELL_FLASH_ALPHA = 0.14f
