@@ -119,4 +119,83 @@ class FileMediaStoreTest {
             Files.setPosixFilePermissions(locked, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
         }
     }
+
+    @Test fun aRetainedWriteIsContinuedByTheNextOpen() = runTest {
+        val w1 = assertNotNull(store.openResumable(key))
+        assertEquals(0L, w1.offset)
+        w1.append(byteArrayOf(1, 2, 3), 3)
+        w1.retain()
+        assertNull(store.read(key), "a partial is never an entry")
+        val w2 = assertNotNull(store.openResumable(key))
+        assertEquals(3L, w2.offset)
+        w2.append(byteArrayOf(4, 5), 2)
+        assertTrue(w2.commit())
+        assertContentEquals(byteArrayOf(1, 2, 3, 4, 5), store.read(key))
+        assertEquals(root.resolve("v1/rec-1/$id.mp4").toString(), store.path(key))
+    }
+
+    @Test fun anAbandonedWriteLeavesNothing() = runTest {
+        val w = assertNotNull(store.openResumable(key))
+        w.append(byteArrayOf(1, 2), 2)
+        w.abandon()
+        assertNull(store.path(key))
+        assertTrue(allFiles().isEmpty(), "found ${allFiles()}")
+        assertEquals(0L, assertNotNull(store.openResumable(key)).offset)
+    }
+
+    @Test fun twoOpensNeverShareAPartial() = runTest {
+        assertNotNull(store.openResumable(key)).apply { append(byteArrayOf(1, 2, 3), 3); retain() }
+        val a = assertNotNull(store.openResumable(key))
+        val b = assertNotNull(store.openResumable(key))
+        assertEquals(listOf(0L, 3L), listOf(a.offset, b.offset).sorted())
+        a.abandon()
+        b.abandon()
+    }
+
+    @Test fun clearRemovesPartials() = runTest {
+        assertNotNull(store.openResumable(key)).apply { append(byteArrayOf(1), 1); retain() }
+        store.clear()
+        assertEquals(0L, assertNotNull(store.openResumable(key)).offset)
+    }
+
+    @Test fun removeHostRemovesItsPartialsAndNoOthers() = runTest {
+        val other = MediaKey.of("rec-2", id, "clip.mp4", "video/mp4")!!
+        assertNotNull(store.openResumable(key)).apply { append(byteArrayOf(1), 1); retain() }
+        assertNotNull(store.openResumable(other)).apply { append(byteArrayOf(2, 2), 2); retain() }
+        store.removeHost("rec-1")
+        assertEquals(0L, assertNotNull(store.openResumable(key)).offset)
+        assertEquals(2L, assertNotNull(store.openResumable(other)).offset)
+    }
+
+    @Test fun anEndIsFinal() = runTest {
+        val w = assertNotNull(store.openResumable(key))
+        w.append(byteArrayOf(7), 1)
+        assertTrue(w.commit())
+        w.abandon()
+        w.retain()
+        assertFalse(w.commit(), "a write that has ended commits nothing more")
+        assertContentEquals(byteArrayOf(7), store.read(key))
+        assertEquals(listOf(root.resolve("v1/rec-1/$id.mp4")), allFiles(), "a later end must not leave a partial behind")
+    }
+
+    @Test fun whatAWriteLeavesOnDiskIsOnlyWhatItKept() = runTest {
+        val dir = root.resolve("v1/rec-1")
+        val w1 = assertNotNull(store.openResumable(key))
+        w1.append(byteArrayOf(1, 2), 2)
+        w1.retain()
+        assertEquals(listOf(dir.resolve("$id.mp4.partial")), allFiles())
+        val w2 = assertNotNull(store.openResumable(key))
+        w2.append(byteArrayOf(3), 1)
+        assertTrue(w2.commit())
+        assertEquals(listOf(dir.resolve("$id.mp4")), allFiles(), "neither the partial nor a part file may outlive the commit")
+    }
+
+    @Test fun aCommitThatCannotLandLeavesNothingBehind() = runTest {
+        val w = assertNotNull(store.openResumable(key))
+        w.append(byteArrayOf(1), 1)
+        // A directory stands where the entry belongs: the move cannot succeed, and no finished file is there to stand in.
+        Files.createDirectories(root.resolve("v1/rec-1/$id.mp4/in-the-way"))
+        assertFalse(w.commit())
+        assertTrue(allFiles().isEmpty(), "found ${allFiles()}")
+    }
 }

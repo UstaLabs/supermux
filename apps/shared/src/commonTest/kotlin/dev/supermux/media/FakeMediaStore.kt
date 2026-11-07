@@ -6,6 +6,9 @@ class FakeMediaStore(
     override val persistent: Boolean = true,
 ) : MediaStore {
     val entries = LinkedHashMap<String, ByteArray>()
+
+    /** What stopped resumable writes kept, by the same key as [entries]; an open takes its partial out. */
+    val partials = mutableMapOf<String, ByteArray>()
     val writes = mutableListOf<String>()
     var failReads = false
     var failWrites = false
@@ -20,6 +23,9 @@ class FakeMediaStore(
     override suspend fun uri(key: MediaKey): String? =
         if (hasFiles && entries.containsKey(key.relativePath)) "file:///cache/${key.relativePath}" else null
 
+    override suspend fun path(key: MediaKey): String? =
+        if (hasFiles && entries.containsKey(key.relativePath)) "/cache/${key.relativePath}" else null
+
     override suspend fun write(key: MediaKey, bytes: ByteArray): Boolean =
         writeStream(key) { append ->
             append(bytes, bytes.size)
@@ -33,6 +39,46 @@ class FakeMediaStore(
         if (!fill { buf, n -> chunks += buf.copyOf(n) }) return false
         entries[key.relativePath] = concat(chunks)
         return true
+    }
+
+    override suspend fun openResumable(key: MediaKey): ResumableWrite? {
+        if (!hasFiles) return null
+        writes += key.relativePath
+        return FakeResumableWrite(key.relativePath, partials.remove(key.relativePath) ?: ByteArray(0))
+    }
+
+    private inner class FakeResumableWrite(private val id: String, kept: ByteArray) : ResumableWrite {
+        private val chunks = mutableListOf(kept)
+        private var ended = false
+
+        override val offset: Long = kept.size.toLong()
+
+        override suspend fun append(buf: ByteArray, n: Int) {
+            check(!ended) { "the write has ended" }
+            chunks += buf.copyOf(n)
+        }
+
+        override suspend fun commit(): Boolean {
+            if (!end()) return false
+            if (failWrites) return false
+            entries[id] = concat(chunks)
+            return true
+        }
+
+        override suspend fun retain() {
+            if (end()) partials[id] = concat(chunks)
+        }
+
+        override suspend fun abandon() {
+            end()
+        }
+
+        /** True for the first end only. */
+        private fun end(): Boolean {
+            val first = !ended
+            ended = true
+            return first
+        }
     }
 
     override suspend fun delete(key: MediaKey) {
