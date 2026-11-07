@@ -661,6 +661,7 @@ suspend fun pickedFileFromUri(context: Context, uri: Uri): PickedFile? = withCon
     // process-wide store), and must not pin the activity that picked it.
     val resolver = context.applicationContext.contentResolver
     val mime = resolver.getType(uri) ?: "application/octet-stream"
+    // platform-ok: an Android content URI's segment
     var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
     var size: Long? = null
     runCatching {

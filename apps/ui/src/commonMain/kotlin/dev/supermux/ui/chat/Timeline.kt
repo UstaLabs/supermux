@@ -1577,6 +1577,7 @@ internal suspend fun resolvePlayableClip(att: Attachment, media: AttachmentMedia
     val bytes = runCatching { media.bytes(att) }.getOrNull() ?: return null
     // Name by the unique file_id so two clips never collide in the staging dir, and keep the
     // original extension — the native backends pick their demuxer from it.
+    // platform-ok: a file id, not a path
     val name = attachmentTempName("video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
     val located = runCatching { platform.files.stageTemp(name, bytes) }.getOrNull() ?: return null
     return PlayableClip(located, staged = bytes)

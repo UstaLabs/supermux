@@ -77,6 +77,7 @@ fun normalizeWorkdirKey(workdir: String, homeDir: String?): String {
     // A Windows host's path: its own separators, dots resolved, no trailing separator but at a root.
     if (isWindowsHostPath(expanded)) return normalizeHostPath(expanded)
     val normalized = expanded.replace(Regex("/+"), "/")
+    // platform-ok: the POSIX spelling: a Windows path returned above
     return if (normalized.length > 1) normalized.trimEnd('/') else normalized
 }
 
@@ -91,5 +92,6 @@ private fun expandHomePrefixedTilde(workdir: String, homeDir: String?): String {
 private fun normalizeHomeDir(homeDir: String?): String? {
     if (homeDir.isNullOrEmpty()) return null
     val normalized = homeDir.replace(Regex("/+"), "/")
+    // platform-ok: collapses POSIX slashes; a Windows home is normalised where it is used
     return if (normalized.length > 1) normalized.trimEnd('/') else normalized
 }

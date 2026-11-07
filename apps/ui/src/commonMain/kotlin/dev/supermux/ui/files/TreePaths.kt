@@ -86,6 +86,7 @@ fun affectedOpenPaths(workdir: String, oldAbs: String, newAbs: String?, open: Co
     for (rel in open) {
         if (!seen.add(rel)) continue
         if (!dev.supermux.ui.isAbsoluteEditorPath(rel)) {
+            // platform-ok: an open editor key, workdir-relative, always /
             val segs = rel.split('/').filter { it.isNotEmpty() }
             if (segs.isEmpty() || segs == listOf(".")) continue
         }

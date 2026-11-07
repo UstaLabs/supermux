@@ -67,6 +67,7 @@ fun breadcrumbsOf(rootPath: String, home: String?, max: Int = 3): Breadcrumbs {
     val rel = relativeToWorkdir(base, rootPath)
     if (rel != null && rel != ".") {
         var cur = base
+        // platform-ok: a workdir-relative path, always /
         for (seg in rel.split('/').filter { it.isNotEmpty() }) {
             cur = childOf(cur, seg)
             all += Crumb(seg, cur)
