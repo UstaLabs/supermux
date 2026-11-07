@@ -5,13 +5,14 @@ import { join } from "path"
 import { getMuxHome } from "../memory/init"
 import { agentMemoryPaths } from "../memory/agent-memory"
 
-// How each agent loads a plugin skill. Cursor's ACP server ignores --plugin-dir, so it has none.
+// How each agent loads a plugin skill.
 const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
   [AgentKind.Claude]: "Load one with your Skill tool before following it.",
   [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them.",
   [AgentKind.Codex]: "You have no skill tool: read the skill's `SKILL.md` from the codex plugin cache and follow its steps.",
   [AgentKind.Grok]: "Read the skill's `SKILL.md` from its plugin directory and follow its steps.",
   [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
+  [AgentKind.Cursor]: "Cursor lists them with its other skills: use one by its name, or read its `SKILL.md` and follow its steps.",
 }
 
 /** Who created this session (spec §3, §5): a session with delegate, or a council. */

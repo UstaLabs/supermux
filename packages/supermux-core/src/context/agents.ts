@@ -9,8 +9,8 @@
  * into place, and the links made here (a plugin, a skills folder) are new: making one never
  * follows one.
  */
-import { lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs"
-import { basename, join } from "node:path"
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs"
+import { basename, join, resolve } from "node:path"
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk"
 import { mappedPluginDrops, mappedPluginServers, readPlugin, writeSkillsPlugin } from "./plugins.js"
 import type {
@@ -19,7 +19,7 @@ import type {
 import { reloadOnlyUpdates } from "./update.js"
 import { writeAntigravityMcpConfig, writeAntigravityPlugins, type AntigravityPluginWrapper } from "../environment/antigravity.js"
 import { assertRealDirectory, realDirectoryIn, writePrivateFile } from "../private-files.js"
-import { files } from "@supermux/platform"
+import { dirs, files } from "@supermux/platform"
 
 const dropped = (context: LaunchContext, kind: ContextDrop["kind"], item: string) =>
   context.dropped.some(drop => drop.kind === kind && drop.item === item)
@@ -376,25 +376,88 @@ export function stripInstructionsEcho(text: string): string {
   return before + after
 }
 
-export function cursorContext(factoryServers: McpServer[]): AcpContextAdapter {
+/** `cursorContext` / `cursor()` options. */
+export type CursorContextOptions = {
+  /**
+   * Link the session's skills and its plugins' skills into `$HOME/.cursor/skills` at each launch: besides the
+   * workspace, the only place Cursor's ACP server reads skills from. Only for a HOME the host made for the session
+   * (see prepareCursorEnvironment): a launch with skills whose HOME is the core process's own home is refused.
+   */
+  homeSkills?: boolean
+}
+
+/** Plugin parts Cursor cannot take when it links skills (it takes a plugin's skills/ only). */
+function cursorPluginDrops(context: ResolvedContext): ContextDrop[] {
+  const drops: ContextDrop[] = []
+  for (const path of context.plugins) {
+    const parts = readPlugin(path)
+    for (const part of parts.unmapped) drops.push({ kind: "plugins", item: `${path} (${part})`, reason: `Cursor takes a plugin's skills only; it cannot apply ${part}` })
+    if (parts.opencodePlugins.length) drops.push({ kind: "plugins", item: `${path} (.opencode/plugins)`, reason: "OpenCode JS plugins only run on OpenCode" })
+    for (const server of parts.mcpServers) drops.push({ kind: "plugins", item: `${path} (mcpServers.${server.name})`, reason: "Cursor takes a plugin's skills only" })
+  }
+  return drops
+}
+
+/**
+ * Links every skill folder of [skillRoots] and of the plugins' skills/ into `<HOME>/.cursor/skills` (the first
+ * of a name wins: skills folders, then plugins, in order). The links an earlier launch made there are replaced;
+ * nothing else in the folder is touched. The folder belongs to a HOME made for the session, never the core's own.
+ */
+function linkHomeSkills(skillRoots: string[], plugins: string[], env: Record<string, string | undefined>): void {
+  const skills: Array<[string, string]> = []
+  const names = new Set<string>()
+  const collect = (root: string) => {
+    let entries: string[]
+    try { entries = readdirSync(root).sort() } catch { return }
+    for (const name of entries) {
+      if (names.has(name) || !existsSync(join(root, name, "SKILL.md"))) continue
+      names.add(name)
+      skills.push([name, join(root, name)])
+    }
+  }
+  for (const root of skillRoots) collect(root)
+  for (const path of plugins) { const root = readPlugin(path).skills; if (root) collect(root) }
+  const home = process.platform === "win32" ? env.USERPROFILE ?? env.HOME : env.HOME
+  if (!home || resolve(home) === resolve(dirs.home())) {
+    if (skills.length) throw new TypeError(`cursor homeSkills: ${home ? `HOME (${home}) is the home of the process running the core` : "the launch has no HOME"}; homeSkills needs a HOME made for the session (prepareCursorEnvironment)`)
+    return
+  }
+  const folder = join(home, ".cursor", "skills")
+  if (!skills.length && !existsSync(folder)) return
+  mkdirSync(folder, { recursive: true })
+  for (const name of readdirSync(folder)) {
+    const path = join(folder, name)
+    // recursive: Bun on Windows refuses a plain rm of a junction (EFAULT); it still only removes the link.
+    if (lstatSync(path).isSymbolicLink()) rmSync(path, { recursive: true, force: true })
+  }
+  for (const [name, dir] of skills) if (!existsSync(join(folder, name))) files.linkDirectory(dir, join(folder, name))
+}
+
+export function cursorContext(factoryServers: McpServer[], options: CursorContextOptions = {}): AcpContextAdapter {
+  const homeSkills = options.homeSkills === true
   return {
     support: {
       capabilities: {
         instructions: { support: "supported", note: "an embedded resource block (supermux://instructions, audience assistant) in front of the first prompt (Cursor's ACP server has no system-prompt channel); fixed at creation, kept by session/load, hidden from the user's echoed messages; subagents do not get it" },
-        skills: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir and reads skills only from the workspace and $HOME/.cursor/skills / $HOME/.agents/skills (host-owned); never written into the repo" },
-        plugins: { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir (verified live on 2026.09.18: neither plugin skills nor plugin rules load)" },
+        skills: homeSkills
+          ? { support: "supported", note: "each skill folder linked into the session HOME's .cursor/skills at launch (homeSkills: the host gives the session a HOME of its own)" }
+          : { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir and reads skills only from the workspace and $HOME/.cursor/skills / $HOME/.agents/skills (host-owned); never written into the repo" },
+        plugins: homeSkills
+          ? { support: "supported", note: "mapped: the plugin's skills/ folders linked into the session HOME's .cursor/skills (homeSkills); hooks, commands, agents, MCP servers and OpenCode JS plugins are dropped" }
+          : { support: "unsupported", note: "Cursor's ACP server ignores --plugin-dir (verified live on 2026.09.18: neither plugin skills nor plugin rules load)" },
         mcpServers: { support: "supported", note: "ACP session/new mcpServers (subagents get them too)" },
       },
-      drops: context => acpServerDrops(context, factoryServers),
+      drops: context => [...acpServerDrops(context, factoryServers), ...(homeSkills ? cursorPluginDrops(context) : [])],
       update: {
-        skills: { add: "reload", remove: "reload", note: "skills are unsupported on Cursor" },
-        plugins: { add: "reload", remove: "reload", note: "plugins are unsupported on Cursor" },
+        skills: { add: "reload", remove: "reload", note: homeSkills ? "Cursor reads $HOME/.cursor/skills at start: a change relaunches cursor-agent (new process + session/load)" : "skills are unsupported on Cursor" },
+        plugins: { add: "reload", remove: "reload", note: homeSkills ? "Cursor reads $HOME/.cursor/skills at start: a change relaunches cursor-agent (new process + session/load)" : "plugins are unsupported on Cursor" },
         mcpServers: { add: "reload", remove: "reload", note: "ACP mcpServers are passed at session/new|load: a change relaunches cursor-agent (new process + session/load)" },
       },
       // C0: Cursor does NOT re-list on notifications/tools/list_changed (a tool added later is "not found").
     },
-    launch(context) {
+    launch(context, env) {
       const use = applied(context)
+      if (homeSkills) linkHomeSkills(use.skills, use.plugins, env)
       return {
         args: [], env: {}, mcpServers: use.mcpServers.map(toAcp),
         ...(use.instructions !== undefined ? { firstPromptBlock: instructionsBlock(use.instructions) } : {}),

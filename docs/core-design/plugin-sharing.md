@@ -27,7 +27,7 @@ flowchart LR
   C --> GR[Grok: --plugin-dir per plugin]
   C --> OC[OpenCode: OPENCODE_CONFIG skills.paths + plugin JS]
   C --> AG[Antigravity: shadow ~/.gemini/config/plugins wrappers]
-  C --> CU[Cursor: dropped, unsupported]
+  C --> CU[Cursor: skill folders linked into the session HOME's .cursor/skills]
 ```
 
 ## Per agent
@@ -39,7 +39,7 @@ flowchart LR
 | Grok | has `skills/*/SKILL.md` | `grok agent --plugin-dir <ctx>/plugins/NN-<name>` per plugin | `zephyr-quokka-check` | `Read_file` on `SKILL.md` | relaunch |
 | OpenCode | `skills/` trees or `.opencode/plugins/*.js` | session `OPENCODE_CONFIG`: `skills.paths` (+ the global paths), `plugin: [file://…js]`; `.mcp.json` → ACP `mcpServers` | `zephyr-quokka-check` | native `skill` tool | relaunch |
 | Antigravity | `skills/` trees or `.mcp.json` | generated `supermux-<name>` wrappers in the session's shadow `~/.gemini/config/plugins`, servers in the shadow `mcp_config.json` | `zephyr-quokka-check` | reads `SKILL.md` | relaunch |
-| Cursor | `.cursor-plugin/plugin.json` | **none**: `cursor-agent acp` ignores `--plugin-dir`; the core drops plugins and skills | not listed | n/a, and its instructions have no SKILLS line | n/a |
+| Cursor | `.cursor-plugin/plugin.json` | `cursor-agent acp` ignores `--plugin-dir`; since #102 each skill folder is linked into the session HOME's `.cursor/skills` (`cursor({ homeSkills: true })`; the session has a HOME of its own) | `zephyr-quokka-check` | reads `SKILL.md` (its own SKILLS line since #102) | relaunch |
 
 Claude loads the whole plugin folder (hooks, `commands/`, `agents/` too). Grok gets the folder too; what it does
 with those parts was not tested. Codex, OpenCode and Antigravity map skills and stdio MCP servers only and drop the

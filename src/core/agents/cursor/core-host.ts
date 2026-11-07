@@ -97,6 +97,9 @@ function cursorOpts(
       stateDirectory,
       limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },
     },
+    // #102: the session's plugin skills are linked into its own HOME's .cursor/skills (prepare gives every
+    // session a HOME of its own), the only place cursor-agent's ACP server reads skills from.
+    homeSkills: true,
     ...(model ? { model } : {}),
   }
 }
@@ -165,10 +168,10 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     agent: "cursor",
     // Instructions (the first prompt's leading block: Cursor's ACP server has no system-prompt
-    // channel; nothing is written into the repo any more) and mux-shim (ACP mcpServers) are
-    // session context. Plugins are passed too but Cursor's ACP server cannot load them
-    // (--plugin-dir is ignored): "warn" drops them with context.degraded.
-    context: cursorContext([]).support,
+    // channel; nothing is written into the repo any more), plugins (their skills linked into the
+    // session HOME's .cursor/skills: --plugin-dir is ignored) and mux-shim (ACP mcpServers) are
+    // session context. "warn": plugin parts Cursor cannot take are dropped with context.degraded.
+    context: cursorContext([], { homeSkills: true }).support,
     contextPolicy: "warn",
     ...(options.accounts ? { accounts: options.accounts } : {}),
     // The broker's host MCP servers (C3b), registered in BOTH mux-shim modes so a record that
