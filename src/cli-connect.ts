@@ -23,6 +23,7 @@ import {
   restartBroker,
   mintPairLink,
   printPairLink,
+  localBrokerPort,
 } from "./core/tunnels/public-url"
 import { openDb } from "./core/storage/db"
 import { SettingsStore } from "./core/settings/store"
@@ -77,18 +78,6 @@ function parseFlags(args: string[]): Flags {
 /** Resolve the state dir from the CURRENT env (shared/paths.ts's rule, per call). */
 function resolveStateDir(): string {
   return process.env.MUX_STATE_DIR ?? join(muxHomeNow().path, "state")
-}
-
-/** Port from --port, else MUX_WEB_PORT in .env, else 8787. */
-function resolvePort(stateDir: string, flagPort?: string): string {
-  if (flagPort) return flagPort
-  try {
-    const port = readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_WEB_PORT")?.trim()
-    if (port) return port
-  } catch {
-    /* no .env yet */
-  }
-  return "8787"
 }
 
 /** Hosted relay domain from the setup-generated .env. Empty means explicitly disabled. */
@@ -314,7 +303,7 @@ export async function runConnectCommand(args: string[], deps: ConnectDeps = {}):
   const providers = deps.providers ?? PROVIDERS
   const stateDir = deps.stateDir ?? resolveStateDir()
   const tty = deps.tty ?? Boolean(process.stdin.isTTY)
-  const port = resolvePort(stateDir, flags.port)
+  const port = localBrokerPort(stateDir, flags.port)
   const ask = deps.ask ?? realAsk(tty)
   const confirm = deps.confirm ?? realConfirm(tty, flags.yes, ask)
   const run = deps.run ?? realRun
