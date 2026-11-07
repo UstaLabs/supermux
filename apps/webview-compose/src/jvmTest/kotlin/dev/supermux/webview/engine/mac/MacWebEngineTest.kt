@@ -818,6 +818,30 @@ class MacWebEngineTest {
         assertTrue(EngineEvent.FirstPaint in rig.events, "${rig.events}")
     }
 
+    /**
+     * A settle's repaint asked of the document a commit then replaces: WebKit never answers it when both share the
+     * WebContent process, as every bundle does since the floor moved to their scheme. The settle waited [REPAINT_MILLIS]
+     * for it, 1.5 s of every bundled preview's first paint (measured on the Mac, 2026-11-06). The new document is asked
+     * instead, and shown once it has drawn.
+     */
+    @Test fun aRepaintTheCommitOrphanedIsAskedOfTheNewDocument() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place() // the settle asks the document there now, the floor, to draw
+        val orphaned = rig.glue.ids("repaint").single()
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url, loading = true), 0.5f))
+        val asked = rig.glue.ids("repaint").last()
+        assertTrue(asked != orphaned, "the new document is asked to draw: ${rig.glue.calls}")
+        rig.relay(1, "$doc start")
+        rig.relay(1, "$doc paint")
+        rig.send(GlueEvent.Result(asked, true, null, null))
+        repeat(4) { rig.tick() }
+        assertTrue(EngineEvent.FirstPaint in rig.events, "shown once drawn: ${rig.events}")
+        assertEquals(0L, testScheduler.currentTime, "without waiting out the orphaned repaint")
+    }
+
     // --- Tests the mutants showed missing ---
 
     /** push()'s epoch filter: what an earlier document caused never reaches the subscriber. */

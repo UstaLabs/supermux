@@ -201,6 +201,9 @@ internal class MacWebEngine(
     private var placement = 0
     private var settling: Job? = null
 
+    /** The repaint request the settle waits on ([drawInPlace]): a commit makes it moot ([onCommitted]). */
+    private var settleRepaint: Long? = null
+
     /** The runtime's cover is lifted for its current document: the page shows, and takes input but while it reflows. */
     private var shown = false
     private var region = InputRegion.None
@@ -728,7 +731,7 @@ internal class MacWebEngine(
             if (quietMillis > 0) delay(quietMillis)
             if (serial != placement || !placed) return@launch
             if (needsRepaint) {
-                withTimeoutOrNull(REPAINT_MILLIS) { request { glue.repaint(it, WebKitScripts.REPAINT_BODY) } }
+                drawInPlace()
                 if (released || serial != placement) return@launch
             }
             if (!ticksInWindow(FRAMES_IN_PLACE) || serial != placement) return@launch
@@ -740,6 +743,25 @@ internal class MacWebEngine(
             surface?.redraw()
             onSurfaceReady()
         }
+    }
+
+    /**
+     * Has WebKit draw the page where it is now (two of its frames) and waits for it, at most [REPAINT_MILLIS]. A commit
+     * meanwhile makes the request moot ([onCommitted]): WebKit never answers one asked of a document that a commit
+     * replaces in the same WebContent process (a bundle's, since the floor is on their scheme). The new document is
+     * asked instead.
+     */
+    private suspend fun drawInPlace() {
+        withTimeoutOrNull(REPAINT_MILLIS) {
+            do {
+                val commit = commits
+                request { id ->
+                    settleRepaint = id
+                    glue.repaint(id, WebKitScripts.REPAINT_BODY)
+                }
+            } while (commits != commit)
+        }
+        settleRepaint = null
     }
 
     /** Takes a fresh motion cover when a motion starts and the last is old: it replaces the old one when it comes. */
@@ -900,8 +922,11 @@ internal class MacWebEngine(
         paintOnScreen = false
         commits++
         handingOff = -1
-        // A new document paints for itself: a replay's wait for the old one's is moot.
+        // A new document paints for itself: a replay's wait for the old one's is moot, and so is a settle's repaint asked
+        // of the old one, which WebKit may never answer: the settle asks the new document ([drawInPlace]).
         repaint = null
+        settleRepaint?.let { requests.remove(it)?.resume(null) }
+        settleRepaint = null
         // Not its commit: its content says when it can be shown ([handOff]). One that paints nothing contentful and
         // never loads is shown anyway, after a while: the cover doesn't stay up for good.
         val commit = commits
