@@ -104,12 +104,19 @@ test("an unknown OpenCode version seeds nothing", async () => {
   expect(existsSync(join(dir, "node_modules"))).toBe(false)
 })
 
+const windows = process.platform === "win32"
+
+/** A fake `opencode` (a .cmd shim on Windows, a shell script elsewhere) that runs [body] and counts its runs. */
+function writeFakeOpenCode(bin: string, count: string, body: string): void {
+  writeFileSync(bin, windows ? `@echo off\r\necho x>>"${count}"\r\n${body}\r\n` : `#!/bin/sh\necho x >> "${count}"\n${body}\n`)
+  if (!windows) chmodSync(bin, 0o755)
+}
+
 /** A fake `opencode` that prints [version] for --version and counts its runs. */
 function fakeOpenCode(dir: string, version: string): { bin: string; runs: () => number } {
-  const bin = join(dir, "opencode")
+  const bin = join(dir, windows ? "opencode.cmd" : "opencode")
   const count = join(dir, "runs")
-  writeFileSync(bin, `#!/bin/sh\necho x >> "${count}"\necho "${version}"\n`)
-  chmodSync(bin, 0o755)
+  writeFakeOpenCode(bin, count, `echo ${version}`)
   return { bin, runs: () => (existsSync(count) ? readFileSync(count, "utf8").trim().split("\n").length : 0) }
 }
 
@@ -125,7 +132,7 @@ test("OpenCodeVersions asks the binary once per binary, and again when the binar
   expect(runs()).toBe(1)
 
   // An upgrade replaces the binary.
-  writeFileSync(bin, `#!/bin/sh\necho x >> "${join(dir, "runs")}"\necho "1.19.0"\n`)
+  writeFakeOpenCode(bin, join(dir, "runs"), `echo 1.19.0`)
   utimesSync(bin, new Date(), new Date(Date.now() + 5_000))
   expect(versions.known()).toBeUndefined()
   expect(await versions.probe()).toBe("1.19.0")
@@ -161,9 +168,8 @@ test("two sessions seeded at once share one copy of the other session's install"
 test("OpenCodeVersions: no binary, or a failing one, gives no version", async () => {
   expect(await new OpenCodeVersions(() => null).probe()).toBeUndefined()
   const dir = tmp("oc-bin-")
-  const bin = join(dir, "opencode")
-  writeFileSync(bin, "#!/bin/sh\nexit 3\n")
-  chmodSync(bin, 0o755)
+  const bin = join(dir, windows ? "opencode.cmd" : "opencode")
+  writeFakeOpenCode(bin, join(dir, "runs"), windows ? "exit /b 3" : "exit 3")
   expect(await new OpenCodeVersions(() => bin).probe()).toBeUndefined()
 })
 

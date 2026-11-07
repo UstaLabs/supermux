@@ -41,6 +41,9 @@ function skill(folder: string, name: string): void {
   writeFileSync(join(folder, name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}\n---\n`)
 }
 
+/** A HOME made for the session, as prepareCursorEnvironment sets it (Windows reads %USERPROFILE%). */
+const homeEnv = (home: string) => ({ HOME: home, USERPROFILE: home })
+
 /** A skills folder (alpha) and a plugin whose skills/ has beta and its own alpha. */
 function skillsFixture() {
   const root = scratch()
@@ -60,7 +63,7 @@ function skillsFixture() {
 test("cursor with homeSkills: the session's skills and plugin skills are linked into $HOME/.cursor/skills", async () => {
   const f = skillsFixture()
   const home = scratch()
-  const driver = cursorDriver({ HOME: home }, true)
+  const driver = cursorDriver(homeEnv(home), true)
   expect(driver.context!.capabilities.skills.support).toBe("supported")
   expect(driver.context!.capabilities.plugins.support).toBe("supported")
 
@@ -77,7 +80,7 @@ test("cursor with homeSkills: the session's skills and plugin skills are linked 
 test("cursor without homeSkills writes nothing into HOME, and skills stay unsupported", async () => {
   const f = skillsFixture()
   const home = scratch()
-  const driver = cursorDriver({ HOME: home })
+  const driver = cursorDriver(homeEnv(home))
   expect(driver.context!.capabilities.skills.support).toBe("unsupported")
   expect(driver.context!.capabilities.plugins.support).toBe("unsupported")
 
@@ -92,10 +95,11 @@ test("cursor homeSkills: a link from an earlier launch is replaced, anything els
   const home = scratch()
   const linked = join(home, ".cursor", "skills")
   mkdirSync(linked, { recursive: true })
-  symlinkSync(join(scratch(), "gone"), join(linked, "stale"))
+  // A folder link from an earlier launch (a junction on Windows, which any user may make).
+  symlinkSync(scratch(), join(linked, "stale"), "junction")
   skill(linked, "mine")
 
-  const runtime = await open(cursorDriver({ HOME: home }, true), f.launch())
+  const runtime = await open(cursorDriver(homeEnv(home), true), f.launch())
   await runtime.close({ mode: "shutdown" })
 
   expect(readdirSync(linked).sort()).toEqual(["alpha", "beta", "mine"])
@@ -105,12 +109,15 @@ test("cursor homeSkills: a link from an earlier launch is replaced, anything els
 test("cursor homeSkills refuses to write into the home of the process running the core", async () => {
   const f = skillsFixture()
   const home = scratch()
-  const saved = process.env.HOME
-  process.env.HOME = home
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+  Object.assign(process.env, homeEnv(home))
   try {
-    await expect(open(cursorDriver({ HOME: home }, true), f.launch())).rejects.toThrow(/homeSkills/)
+    await expect(open(cursorDriver(homeEnv(home), true), f.launch())).rejects.toThrow(/homeSkills/)
     expect(existsSync(join(home, ".cursor"))).toBe(false)
   } finally {
-    process.env.HOME = saved
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })

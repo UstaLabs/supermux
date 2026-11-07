@@ -12,7 +12,7 @@ const provider = createHostProvider({
   create: () => createOpenCodeCoreHost({
     stateDirectory: join(STATE_DIR, "core", "opencode"),
     accounts: brokerAccountsOptions(),
-    pluginDeps: brokerPluginDeps(STATE_DIR, () => resolveCommand(["opencode"], process.env, process.platform)),
+    pluginDeps: brokerPluginDeps(STATE_DIR, () => resolveCommand(["opencode"], process.env)),
   }),
 })
 

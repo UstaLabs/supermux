@@ -43,7 +43,7 @@ export function cachedCursorSmoke(run: (opts: SmokeOptions) => Promise<void> = s
 }
 
 function binaryKey(env: Record<string, string>): string | undefined {
-  const command = resolveCommand(["cursor-agent"], env, process.platform)
+  const command = resolveCommand(["cursor-agent"], env)
   if (!command) return undefined
   try {
     const binary = realpathSync(command)

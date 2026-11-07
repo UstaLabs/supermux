@@ -417,9 +417,10 @@ function linkHomeSkills(skillRoots: string[], plugins: string[], env: Record<str
   }
   for (const root of skillRoots) collect(root)
   for (const path of plugins) { const root = readPlugin(path).skills; if (root) collect(root) }
-  const home = process.platform === "win32" ? env.USERPROFILE ?? env.HOME : env.HOME
-  if (!home || resolve(home) === resolve(dirs.home())) {
-    if (skills.length) throw new TypeError(`cursor homeSkills: ${home ? `HOME (${home}) is the home of the process running the core` : "the launch has no HOME"}; homeSkills needs a HOME made for the session (prepareCursorEnvironment)`)
+  // The launch's home by the runtime's rule (%USERPROFILE% on Windows): with none, the runtime's own, i.e. the core's.
+  const home = dirs.home({ env })
+  if (resolve(home) === resolve(dirs.home())) {
+    if (skills.length) throw new TypeError(`cursor homeSkills: the launch's home (${home}) is the home of the process running the core; homeSkills needs a HOME made for the session (prepareCursorEnvironment)`)
     return
   }
   const folder = join(home, ".cursor", "skills")

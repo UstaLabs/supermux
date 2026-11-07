@@ -7,7 +7,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "fs"
 import { randomBytes } from "crypto"
 import { dirname, join } from "path"
-import { files } from "@supermux/platform"
+import { files, proc } from "@supermux/platform"
 import { spawnCommand } from "../../process/launcher"
 
 const PACKAGE = "@opencode-ai/plugin"
@@ -163,7 +163,10 @@ function versionOf(command: string): Promise<string | undefined> {
       resolve(undefined)
       return
     }
-    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(undefined) }, 30_000)
+    const timer = setTimeout(() => {
+      if (child.pid !== undefined) proc.killTree(child.pid)
+      resolve(undefined)
+    }, 30_000)
     child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString("utf8") })
     child.on("error", () => { clearTimeout(timer); resolve(undefined) })
     child.on("close", (code) => {

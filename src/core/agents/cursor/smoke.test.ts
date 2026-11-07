@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { delimiter, join } from "path"
 import { cachedCursorSmoke } from "./smoke"
 
 const dirs: string[] = []
@@ -19,16 +19,18 @@ function tmp(): string {
 // on every Cursor session start. Once a binary has passed, the same binary is not asked again.
 test("the cursor-agent smoke runs once per binary, again when the binary changes, and a failure is never remembered", async () => {
   const dir = tmp()
-  const bin = join(dir, "cursor-agent")
+  // A .cmd shim on Windows, a shell script elsewhere: what each OS runs from PATH.
+  const windows = process.platform === "win32"
+  const bin = join(dir, windows ? "cursor-agent.cmd" : "cursor-agent")
   const count = join(dir, "runs")
   const runs = () => (existsSync(count) ? readFileSync(count, "utf8").trim().split("\n").length : 0)
   const install = (body: string, mtime: number) => {
-    writeFileSync(bin, `#!/bin/sh\necho x >> "${count}"\n${body}\n`)
-    chmodSync(bin, 0o755)
+    writeFileSync(bin, windows ? `@echo off\r\necho x>>"${count}"\r\n${body}\r\n` : `#!/bin/sh\necho x >> "${count}"\n${body}\n`)
+    if (!windows) chmodSync(bin, 0o755)
     utimesSync(bin, new Date(mtime), new Date(mtime))
   }
   const smoke = cachedCursorSmoke()
-  const opts = { home: tmp(), authEnv: { PATH: `${dir}:/usr/bin:/bin` } }
+  const opts = { home: tmp(), authEnv: { PATH: [dir, process.env.PATH ?? ""].join(delimiter) } }
 
   install(`echo 2026.09.18`, Date.now() - 60_000)
   await smoke(opts)
@@ -41,7 +43,7 @@ test("the cursor-agent smoke runs once per binary, again when the binary changes
   expect(runs()).toBe(2)
 
   // A broken binary fails every time.
-  install(`exit 3`, Date.now())
+  install(windows ? `exit /b 3` : `exit 3`, Date.now())
   await expect(smoke(opts)).rejects.toThrow(/exit 3/)
   await expect(smoke(opts)).rejects.toThrow(/exit 3/)
   expect(runs()).toBe(4)
