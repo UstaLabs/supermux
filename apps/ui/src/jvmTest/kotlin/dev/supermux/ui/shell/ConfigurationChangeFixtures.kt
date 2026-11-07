@@ -4,6 +4,7 @@ package dev.supermux.ui.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,18 +50,30 @@ import kotlinx.serialization.json.JsonPrimitive
 internal class Recreation(private val test: ComposeUiTest) {
     private var registry by mutableStateOf(SaveableStateRegistry(null) { true })
     private var shown by mutableStateOf(true)
+    /** How many times the content left the composition: a [recreate] must add exactly one. */
+    private var disposals = 0
 
     fun setContent(content: @Composable () -> Unit) = test.setContent {
         // The same call site before and after, so every rememberSaveable finds its key again.
-        if (shown) CompositionLocalProvider(LocalSaveableStateRegistry provides registry, content = content)
+        if (shown) {
+            DisposableEffect(Unit) { onDispose { disposals++ } }
+            CompositionLocalProvider(LocalSaveableStateRegistry provides registry, content = content)
+        }
     }
 
     fun recreate() {
         val saved = test.runOnIdle { registry.performSave() }
         shown = false
+        // A frame each way, so the content really goes and comes back even in a test that froze
+        // the clock (an endless animation on screen): `waitForIdle` alone advances no frame then,
+        // and a "recreation" that never disposed anything passed vacuously.
+        val before = disposals
+        test.mainClock.advanceTimeByFrame()
         test.waitForIdle()
+        check(disposals == before + 1) { "the recreation never disposed the content: nothing was tested" }
         registry = SaveableStateRegistry(saved) { true }
         shown = true
+        test.mainClock.advanceTimeByFrame()
         test.waitForIdle()
     }
 }
