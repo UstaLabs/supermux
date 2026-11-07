@@ -63,6 +63,10 @@ import dev.supermux.terminal.compose.TerminalSearchState
 import dev.supermux.terminal.compose.TerminalZoom
 import dev.supermux.terminal.compose.rememberTerminalAccessories
 import dev.supermux.terminal.compose.rememberTerminalClipboard
+import dev.supermux.ui.keys.KeyContext
+import dev.supermux.ui.keys.ProvideKeyScope
+import dev.supermux.ui.keys.keyScope
+import dev.supermux.ui.keys.rememberKeyScope
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
@@ -439,7 +443,10 @@ private class GhosttyTerminalSurface(
             bellFlash.animateTo(0f, tween(BELL_FLASH_MS))
         }
 
-        Box(modifier.testTag(TERMINAL_GRID_TAG)) {
+        // A terminal takes every key it can name; the app claims its own keys here first (KeyContext.Terminal).
+        val terminalKeys = rememberKeyScope(KeyContext.Terminal)
+        ProvideKeyScope(terminalKeys) {
+        Box(modifier.keyScope(terminalKeys).testTag(TERMINAL_GRID_TAG)) {
             // NOT keyed on the epoch. Re-keying would rebuild the renderer on every reconnect and
             // take the keyboard with it; `requestFullFrame` above is what makes the surviving
             // viewport model safe across a new screen, which is the only part that needed it.
@@ -488,6 +495,7 @@ private class GhosttyTerminalSurface(
             if (search.isOpen && active) {
                 TerminalSearchBar(search, Modifier.align(Alignment.TopEnd).padding(8.dp))
             }
+        }
         }
         pendingLink?.let { uri ->
             TerminalLinkDialog(

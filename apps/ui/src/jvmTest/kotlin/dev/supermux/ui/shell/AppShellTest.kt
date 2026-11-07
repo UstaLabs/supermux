@@ -10,13 +10,17 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.click
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
+import dev.supermux.ui.chat.CHAT_FIND_FIELD_TAG
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.TestWalkthroughSeam
 import dev.supermux.ui.prefs.InMemorySettingsStore
@@ -411,6 +415,24 @@ class AppShellTest {
         onRoot().performKeyInput { withKeyDown(mod) { pressKey(Key.B) } }
         waitForIdle()
         assertTrue(ui.sidebarCollapsed)
+    }
+
+    @Test fun cmd_f_after_a_transcript_click_opens_that_chats_find_bar() = runComposeUiTest {
+        // Through a real pane: the chat registers find in its pane's key scope, and a click in the
+        // transcript, which drops the focus, makes that pane the one the window's keys go to.
+        val app = twoWorkspaceApp()
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        setPlatformContent {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        // The transcript's own background, above the starter prompts (which are buttons).
+        onNodeWithTag("chat_body").performTouchInput { click(Offset(centerX, 8f)) }
+        waitForIdle()
+        onNodeWithTag(CHAT_FIND_FIELD_TAG).assertDoesNotExist()
+        onRoot().performKeyInput { withKeyDown(mod) { pressKey(Key.F) } }
+        waitForIdle()
+        onNodeWithTag(CHAT_FIND_FIELD_TAG).assertIsDisplayed()
     }
 
     // ── M5-3 notifications ──────────────────────────────────────────────────────────────────

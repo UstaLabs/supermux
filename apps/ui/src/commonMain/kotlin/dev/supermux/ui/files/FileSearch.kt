@@ -48,12 +48,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isAltPressed
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -141,22 +136,6 @@ fun recentEntry(workdir: String, relativePath: String): GoToEntry = GoToEntry(
     folder = relativePath.substringBeforeLast('/', ""),
     isDir = false,
 )
-
-/** ⌘P / Ctrl+P, and nothing else (no Shift, no Alt). */
-fun isGoToFileChord(letter: Char?, ctrlOrMeta: Boolean, shift: Boolean, alt: Boolean): Boolean =
-    letter?.uppercaseChar() == 'P' && ctrlOrMeta && !shift && !alt
-
-/**
- * The pane's key handler for ⌘P / Ctrl+P. Bubble phase, like the shell's shortcuts: it sees the
- * chord only when focus is inside the pane and nothing focused there consumed it.
- */
-fun Modifier.goToFileShortcut(onGoToFile: () -> Unit): Modifier = onKeyEvent { e ->
-    if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
-    val letter = if (e.key == Key.P) 'P' else null
-    if (!isGoToFileChord(letter, e.isCtrlPressed || e.isMetaPressed, e.isShiftPressed, e.isAltPressed)) return@onKeyEvent false
-    onGoToFile()
-    true
-}
 
 /**
  * The "Go to file…" field on top, [content] (the tree and its header) underneath; while the search

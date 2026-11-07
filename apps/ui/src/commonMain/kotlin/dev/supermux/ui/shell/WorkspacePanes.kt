@@ -120,6 +120,11 @@ import dev.supermux.ui.theme.GeistFontFamily
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.files.isFilesTreeView
 import dev.supermux.ui.files.nextFocusedFileView
+import dev.supermux.ui.keys.KeyContext
+import dev.supermux.ui.keys.LocalKeyScopeActive
+import dev.supermux.ui.keys.ProvideKeyScope
+import dev.supermux.ui.keys.keyScope
+import dev.supermux.ui.keys.rememberKeyScope
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
@@ -801,8 +806,13 @@ fun PhoneWorkspacePanes(
                         // Android actual is still exactly the alpha hide this used to be. Hidden
                         // under the switcher too, for the same reason: a platform view would draw
                         // over the grid.
-                        KeepAlivePanel(visible = id == tabs.selectedId && !hideUnderGrid) {
-                            CompositionLocalProvider(LocalPhoneTabsButton provides tabsButton) {
+                        val shown = id == tabs.selectedId && !hideUnderGrid
+                        KeepAlivePanel(visible = shown) {
+                            CompositionLocalProvider(
+                                LocalPhoneTabsButton provides tabsButton,
+                                // Hidden, here or with its whole workspace, a tab registers no commands.
+                                LocalKeyScopeActive provides (LocalKeyScopeActive.current && shown),
+                            ) {
                             Box(Modifier.fillMaxSize().recordInto(layer)) {
                             WorkspacePaneContent(
                                 viewId = id,
@@ -988,6 +998,17 @@ internal fun addPhoneView(
     app.addWorkspaceView(workspace.id, kind.wire, state, id)
 }
 
+/** A pane's [KeyContext], from its view's kind (ViewHost.kt's switch). */
+internal fun paneKeyContext(view: ViewDto): KeyContext = when (view.kind) {
+    "chat" -> KeyContext.Chat
+    // A terminal or a remote display is scoped where it is drawn, so every one is, not only a pane's.
+    "editor" -> when (view.stateString("mode")) {
+        "file", "diff" -> KeyContext.Editor
+        else -> KeyContext.Files
+    }
+    else -> KeyContext.Other
+}
+
 /**
  * One pane's body — identical at every width. Everything width-specific (the tab strip, the split
  * tree, the chat header mode) lives OUTSIDE this.
@@ -1044,6 +1065,9 @@ private fun WorkspacePaneContent(
         key(hostId, viewId) {
             // The store this VIEW belongs to (its chat session's host, else the workspace's).
             val viewApp = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: "")
+            // What the keyboard knows about this pane: its kind (a terminal keeps its keys) and its view.
+            val paneScope = rememberKeyScope(paneKeyContext(v), viewId)
+            ProvideKeyScope(paneScope) {
             ViewHost(
                 previewModeFor = { previewModes[it] == true },
                 view = v,
@@ -1128,11 +1152,12 @@ private fun WorkspacePaneContent(
                 // A press anywhere in a pane makes it the one Ctrl/Cmd+T opens a terminal beside,
                 // and in a file pane the file the Files tree follows. (The desktop JCEF editor is
                 // heavyweight and never reports presses; its tab does.)
-                modifier = Modifier.fillMaxSize().observePress(viewId) {
+                modifier = Modifier.fillMaxSize().keyScope(paneScope).observePress(viewId) {
                     ws.focusedViewId = viewId
                     if (v.filePathOrNull() != null) ws.focusedFileViewId = viewId
                 },
             )
+            }
         }
     }
 }

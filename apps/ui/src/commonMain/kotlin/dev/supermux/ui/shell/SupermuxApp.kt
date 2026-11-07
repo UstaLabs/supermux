@@ -135,6 +135,7 @@ import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.ui.host.HostSwitcher
 import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.LocalKeyScope
+import dev.supermux.ui.keys.LocalKeyScopeActive
 import dev.supermux.ui.keys.RegisterCommand
 import dev.supermux.ui.keys.ShortcutDispatcher
 import dev.supermux.ui.keys.ShortcutRoot
@@ -1618,7 +1619,10 @@ private fun ShellHome(
                         val visible = sessionId == ui.selectedId && activeWorkspace == null
                         key(sessionId) {
                             Box(Modifier.keepAlivePanel(visible)) {
-                                chatFallback(session, visible) { ui.selectedId = null }
+                                // Hidden, a chat registers no commands (its find would take ⌘F from the one shown).
+                                CompositionLocalProvider(LocalKeyScopeActive provides (LocalKeyScopeActive.current && visible)) {
+                                    chatFallback(session, visible) { ui.selectedId = null }
+                                }
                             }
                         }
                     }
