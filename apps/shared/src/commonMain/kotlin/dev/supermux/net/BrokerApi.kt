@@ -29,12 +29,14 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.media.RangeResult
 import dev.supermux.util.PerfTrace
+import dev.supermux.proto.ClientLogEntry
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.push.NativePushRegistration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerialName
@@ -42,11 +44,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import kotlin.time.Clock
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
 
@@ -596,12 +600,17 @@ data class CreateProxyResponse(
 @Serializable
 data class AddDeviceResponse(val url: String = "", val name: String = "")
 
-/** GET /me → paired status + optional relayUrl for native-push registration. */
+/**
+ * GET /me → paired status and the broker's relays. `relayUrl` is the connectivity relay when one is
+ * on, and the push relay on an older broker without one; `pushRelayUrl` is always the push relay
+ * (card #86).
+ */
 @Serializable
 data class MeResponse(
     val paired: Boolean = false,
     val device: String? = null,
     val relayUrl: String? = null,
+    val pushRelayUrl: String? = null,
 )
 
 // ─── Usage (GET /usage → fetchAllUsage) ──────────────────────────────────────
@@ -1717,6 +1726,13 @@ private data class RefreshUsageBody(
     val force: Boolean,
 )
 
+/** How every BrokerApi failure's message starts: they are all CancellationExceptions (see `decode`). */
+private const val UNAVAILABLE = "BrokerApi request unavailable"
+
+/** POST /client-logs body: app log lines for the broker's own log. */
+@Serializable
+private data class ClientLogsBody(val entries: List<ClientLogEntry>)
+
 /** POST $relayUrl/register body. */
 @Serializable
 private data class RegisterPushRelayBody(
@@ -1821,12 +1837,12 @@ class BrokerApi(
                 return value
             }
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-            throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+            throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
             throw c
         } catch (e: Throwable) {
             println("[BrokerApi] request failed: ${e.message?.take(160)}")
-            throw CancellationException("BrokerApi request unavailable: ${e.message}")
+            throw CancellationException("$UNAVAILABLE: ${e.message}")
         }
     }
 
@@ -1854,7 +1870,7 @@ class BrokerApi(
             ""
         }
         println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
+        throw CancellationException("$UNAVAILABLE: HTTP ${resp.status.value} ${text.take(200)}")
     }
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
@@ -3503,11 +3519,76 @@ class BrokerApi(
     // ── Push registration ─────────────────────────────────────────────────────
 
     /**
-     * GET /me → returns the `relayUrl` field (null when the broker is not configured
-     * with a relay URL or the response can't be decoded).
+     * GET /me → the broker's push relay: `pushRelayUrl`, or `relayUrl` from a broker older than
+     * card #86; null when it names neither. With the hosted connectivity relay on, an older
+     * broker's `relayUrl` is the tunnel, which answers /register with a 404.
      */
-    suspend fun pushRelayUrl(): String? =
-        getJson<MeResponse>("$httpBase/me").relayUrl
+    suspend fun pushRelayUrl(): String? {
+        val me = getJson<MeResponse>("$httpBase/me")
+        return me.pushRelayUrl?.takeIf { it.isNotBlank() } ?: me.relayUrl
+    }
+
+    /**
+     * One phone's native-push registration with this broker: its push relay takes [pushToken]
+     * and returns a routing token, which this broker then stores with [pubkey]. How it ended also
+     * goes to the broker's log (client log, category "push", never a token): from 10-27 every
+     * phone failed here and only the phone's own log said so (card #86). A real cancellation is
+     * rethrown; every other failure is the result.
+     */
+    suspend fun registerNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val outcome = attemptNativePush(platform, pushToken, pubkey)
+        reportPush(platform, outcome)
+        return outcome
+    }
+
+    private suspend fun attemptNativePush(platform: String, pushToken: String, pubkey: String): NativePushRegistration {
+        val relayUrl = try {
+            pushRelayUrl()
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("me", failureOf(e))
+        }
+        if (relayUrl.isNullOrBlank()) return NativePushRegistration.NoPushRelay
+        val routingToken = try {
+            registerPushTokenWithRelay(relayUrl, platform, pushToken)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("relay", failureOf(e), relayUrl)
+        } ?: return NativePushRegistration.AwaitingBootstrap(relayUrl)
+        try {
+            registerPushDevice(platform, routingToken, pubkey)
+        } catch (e: Throwable) {
+            return NativePushRegistration.Failed("broker", failureOf(e), relayUrl)
+        }
+        return NativePushRegistration.Registered(routingToken, relayUrl)
+    }
+
+    /** Best effort: a broker that cannot take the report has the registration all the same. */
+    private suspend fun reportPush(platform: String, outcome: NativePushRegistration) {
+        val (event, details) = when (outcome) {
+            is NativePushRegistration.Registered -> "push_registered" to mapOf("relay" to outcome.relayUrl)
+            is NativePushRegistration.NoPushRelay -> "push_register_skipped" to mapOf("reason" to "no_push_relay")
+            is NativePushRegistration.AwaitingBootstrap ->
+                "push_register_pending" to mapOf("relay" to outcome.relayUrl, "reason" to "awaiting_bootstrap")
+            is NativePushRegistration.Failed -> "push_register_failed" to buildMap {
+                put("stage", outcome.stage)
+                put("error", outcome.error)
+                outcome.relayUrl?.let { put("relay", it) }
+            }
+        }
+        val data = JsonObject((details + ("platform" to platform)).mapValues { JsonPrimitive(it.value) })
+        val entry = ClientLogEntry("push", event, Clock.System.now().toEpochMilliseconds(), data)
+        try {
+            postJson("$httpBase/client-logs", ClientLogsBody(listOf(entry)))
+        } catch (e: Throwable) {
+            failureOf(e)
+        }
+    }
+
+    /** A failed request as text. Every BrokerApi failure arrives as a CancellationException
+     *  (see [decode]); a real cancellation is rethrown. */
+    private fun failureOf(e: Throwable): String {
+        if (e is CancellationException && e.message?.startsWith(UNAVAILABLE) != true) throw e
+        return (e.message ?: e::class.simpleName ?: "failed").take(300)
+    }
 
     /**
      * POST /push/device — registers this device with the broker after the app has

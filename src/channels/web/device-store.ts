@@ -50,9 +50,25 @@ export class DeviceStore {
   private cached(): readonly DeviceRecord[] {
     const key = this.statKey()
     if (this.cache?.key !== key) {
-      this.setCache(key, readJsonOr<DeviceRecord[]>(this.path, []))
+      const previous = this.cache?.records
+      const loaded = readJsonOr<unknown>(this.path, undefined)
+      const records = Array.isArray(loaded) ? (loaded as DeviceRecord[]) : undefined
+      this.setCache(key, records ?? [])
+      // Another process (the CLI, a hand edit) removed devices: they are revoked
+      // all the same, and whatever outlives a device must hear it. A file that
+      // can't be read is not a revoke.
+      if (previous && records) {
+        const kept = new Set(records.map((r) => r.name))
+        for (const r of previous) if (!kept.has(r.name)) this.notifyRevoked(r.name)
+      }
     }
     return this.cache!.records
+  }
+
+  private notifyRevoked(name: string): void {
+    for (const fn of this.revokeListeners) {
+      try { fn(name) } catch { /* swallow */ }
+    }
   }
 
   // Callers mutate the array before write(); hand out copies so a failed
@@ -114,9 +130,7 @@ export class DeviceStore {
     const after = records.filter((r) => r.name !== name)
     if (after.length === before) return false
     this.write(after)
-    for (const fn of this.revokeListeners) {
-      try { fn(name) } catch { /* swallow */ }
-    }
+    this.notifyRevoked(name)
     return true
   }
 }

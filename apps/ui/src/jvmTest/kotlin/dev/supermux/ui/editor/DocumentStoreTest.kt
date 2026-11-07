@@ -279,6 +279,28 @@ class DocumentStoreTest {
         assertEquals("edited", doc.savedContent)
     }
 
+    @Test fun save_tells_its_caller_whether_the_file_was_written() = runTest {
+        var accept = false
+        val s = store(scope = this, fsWrite = { _, _ -> accept })
+        s.open("a.txt")
+        advanceUntilIdle()
+        s.update("a.txt", "edited")
+        val doc = s.get("a.txt")!!
+        val heard = mutableListOf<Boolean>()
+
+        s.save(doc) { heard += it }
+        advanceUntilIdle()
+        // Refused: the caller hears it, and the edit is still unsaved, so it can be tried again.
+        assertEquals(listOf(false), heard)
+        assertTrue(s.isDirty("a.txt"))
+
+        accept = true
+        s.save(doc) { heard += it }
+        advanceUntilIdle()
+        assertEquals(listOf(false, true), heard)
+        assertFalse(s.isDirty("a.txt"))
+    }
+
     @Test fun reload_refreshes_the_document_and_clears_its_stale_flag() = runTest {
         val s = store(scope = this)
         s.open("a.txt")

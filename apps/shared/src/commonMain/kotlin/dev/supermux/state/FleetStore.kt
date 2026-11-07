@@ -164,6 +164,9 @@ class FleetStore(
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
 
+    /** The UI state that outlives a recreation or a layout swap (see [RetainedUiState]); its work stops with [close]. */
+    val retainedUi = RetainedUiState(fleetScope)
+
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
@@ -976,6 +979,15 @@ class FleetStore(
      * single-workspace, and [updateViewing] has already cleared every other host's entry, so
      * re-asserting on the rest would resurrect presence the fleet deliberately dropped.
      */
+    /**
+     * Card #62: live text for [sessionIds] without their being on screen (the assistant overlay's Agent), asked of
+     * the host that owns each; every other host's pins are cleared. Presence for nothing ([HostStore.pinLive]).
+     */
+    fun pinLive(sessionIds: Set<String>) {
+        val byHost = sessionIds.groupBy { appFor(it) }
+        for (conn in conns.values) conn.app.pinLive(byHost[conn.app].orEmpty())
+    }
+
     fun reassertViewing() {
         activeApp()?.reassertViewing()
     }

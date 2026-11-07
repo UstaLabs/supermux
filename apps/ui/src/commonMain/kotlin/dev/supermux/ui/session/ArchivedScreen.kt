@@ -64,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -297,11 +298,15 @@ fun ArchivedScreen(
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val barOwned = (standalone || compact) && !topBarShown
 
-    // Internal nav: tapping a row opens a read-only chat view of that session.
-    var openedId by remember { mutableStateOf<String?>(null) }
-    var selectedProject by remember { mutableStateOf<String?>(null) }
+    // Internal nav: tapping a row opens a read-only chat view of that session. It, the project
+    // filter and the query are saved with the route: an Android rotation reopened the screen on the
+    // whole list (#89). Saved state, not `rememberRetained`: the route's composition is the same at
+    // every width (NavDisplay, above the shell's Compact/wide branch), and a new opening of the
+    // route must start from the whole list again, as it always did.
+    var openedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedProject by rememberSaveable { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var resumedIds by remember { mutableStateOf(setOf<String>()) }
     var restoredIds by remember { mutableStateOf(setOf<String>()) }
 
@@ -317,10 +322,12 @@ fun ArchivedScreen(
         groupArchivedWorkspaces(workspaces, home, projects, workspaceHost, homeOf = { homeDirs[it] })
     }
     val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
-    // Clear the filter if the selected project no longer has anything archived under it.
+    // Clear the filter if the selected project no longer has anything archived under it. Not
+    // against an empty list: that is a recreated screen's, still loading, and the saved filter
+    // must outlive it (#89).
     LaunchedEffect(sessionProjects, groups, useWorkspaces) {
         val keys = if (useWorkspaces) groups.map { it.key } else sessionProjects.map { it.key }
-        if (selectedProject != null && keys.none { it == selectedProject }) {
+        if (selectedProject != null && keys.isNotEmpty() && keys.none { it == selectedProject }) {
             selectedProject = null
         }
     }

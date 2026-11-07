@@ -182,7 +182,11 @@ fun ExplorerPane(
                 view = view,
                 fileSystem = fileSystem,
                 revealActive = revealActive,
-                onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+                onRevealActiveChange = { on ->
+                    // Turned on: reveal the active file now, even one this pane revealed before.
+                    if (on) view.edits.revealed = null
+                    scope.launch { prefs.putFilesRevealActive(on) }
+                },
                 // Creates at the tree's root; the tree below draws the dialog or the in-place row
                 // (it reads view.dialog / view.inlineEdit).
                 onNewEntry = if (fileSystem == null) null else { folder ->
@@ -457,6 +461,8 @@ fun DiffPane(
     diffDocuments: DocumentStore? = null,
     /** A lazy file's base text by blob (repo, sha, force). */
     baseText: (suspend (repo: String, sha: String, force: Boolean) -> BlobText)? = null,
+    /** Names the review drafts kept through a rotation or a width change (see [DiffView], #89). */
+    retainKey: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -559,6 +565,7 @@ fun DiffPane(
             postComment = onReviewAddComment,
             documents = diffDocuments,
             baseText = baseText,
+            retainKey = retainKey,
         )
         }
     }

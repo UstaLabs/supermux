@@ -49,6 +49,7 @@ import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -220,9 +221,13 @@ fun HostSwitcher(
     val cs = MaterialTheme.colorScheme
     val current = switcherHost(hosts, selected)
     var expanded by remember { mutableStateOf(false) }
-    var renameTarget by remember { mutableStateOf<HostView?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    var forgetTarget by remember { mutableStateOf<HostView?>(null) }
+    // Rename / Forget, and the name being typed, outlive this composition: a rotation or a width
+    // change (the Compact list's footer vs the wide sidebar's) rebuilt the switcher with them closed
+    // (#89). The footer's switcher and the collapsed rail's never show at once: one key.
+    val dialogs = rememberRetained("hosts.switcher") { HostDialogs() }
+    var renameTarget by dialogs::renameTarget
+    var renameText by dialogs::renameText
+    var forgetTarget by dialogs::forgetTarget
 
     Box(modifier) {
         if (compact) {
@@ -365,6 +370,13 @@ fun HostSwitcher(
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
     }
+}
+
+/** The host switcher's Rename / Forget and the name being typed, kept for a rebuilt switcher (`rememberRetained`, #89). */
+private class HostDialogs {
+    var renameTarget by mutableStateOf<HostView?>(null)
+    var renameText by mutableStateOf("")
+    var forgetTarget by mutableStateOf<HostView?>(null)
 }
 
 /** A menu row's live session count, then a check on the row that is the current scope. */

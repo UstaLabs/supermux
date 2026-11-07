@@ -60,6 +60,8 @@ import dev.supermux.net.WorktreeOrphansDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -153,15 +155,21 @@ fun WorktreesSettingsScreen(
     var orphanRows by remember { mutableStateOf<List<WorktreeSummaryDto>>(emptyList()) }
     var orphanTotal by remember { mutableStateOf(0) }
     var loadError by remember { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(setOf<String>()) }
-    var rowErrors by remember { mutableStateOf(mapOf<String, String>()) }
+    // The selection, and a batch delete with its progress, kept for the page on display (#89): a
+    // rotation emptied the selection and cancelled a batch between two of its requests, leaving
+    // the rest undeleted with no word of it. The batch runs on the fleet's scope and writes into
+    // [WorktreeBatch], where the page on display reads its progress.
+    val batch = rememberRetainedOnPage("worktrees") { WorktreeBatch() }
+    val batches = rememberRetainedScope()
+    var selected by batch::selected
+    var rowErrors by batch::rowErrors
     var sort by remember { mutableStateOf(WtSort.Size) }
-    var confirming by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf(false) }
+    var confirming by batch::confirming
+    var deleting by batch::deleting
     /** (done, total) while a chunked delete runs, else null. */
-    var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var progress by batch::progress
     /** Deleted from this screen since the last load — filtered out without re-sorting. */
-    var deleted by remember { mutableStateOf(setOf<String>()) }
+    var deleted by batch::deleted
     /** Bumped per successful load, so a refresh re-sorts even when the list comes back equal. */
     var loadEpoch by remember { mutableStateOf(0) }
     val sizes = actions.sizes()
@@ -353,7 +361,7 @@ fun WorktreesSettingsScreen(
                         deleting = true
                         val ids = selectedItems.map { it.id }
                         progress = 0 to ids.size
-                        scope.launch {
+                        batches.launch {
                             // Chunks of [DELETE_CHUNK], one after another: the broker deletes a
                             // batch sequentially, so a big one would otherwise sit silent for
                             // minutes. Each chunk's outcome is applied at once (rows removed /
@@ -506,4 +514,14 @@ private fun ignoredNote(w: WorktreeSummaryDto): String {
     if (w.ignored.isEmpty()) return ""
     val shown = w.ignored.take(3).joinToString { "${it.name}/" }
     return " · ignored: $shown" + if (w.ignored.size > 3) " +${w.ignored.size - 3}" else ""
+}
+
+/** The worktrees selected and a batch delete, kept for the page on display (`rememberRetainedOnPage`, #89). */
+private class WorktreeBatch {
+    var selected by mutableStateOf(setOf<String>())
+    var rowErrors by mutableStateOf(mapOf<String, String>())
+    var confirming by mutableStateOf(false)
+    var deleting by mutableStateOf(false)
+    var progress by mutableStateOf<Pair<Int, Int>?>(null)
+    var deleted by mutableStateOf(setOf<String>())
 }

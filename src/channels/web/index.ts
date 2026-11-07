@@ -61,6 +61,8 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { auditPushTargets } from "../../core/push/audit"
+import { PushRegistrationWatch } from "../../core/push/registration-watch"
 import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
@@ -615,6 +617,9 @@ export type ArchivedWorkspaceRow = Omit<import("../../core/workspace/dto").Works
   Partial<Pick<import("../../core/workspace/dto").WorkspaceDto, "views" | "layout">>
 
 /** What the web channel can do. main.ts also formats a delegated child's row with it, web channel or not. */
+/** Card #62: client frames an older broker doesn't know, which this one takes; listed in every snapshot (`accepts`). */
+const ACCEPTED_OPTIONAL_FRAMES = ["live"]
+
 export const WEB_CAPABILITIES: ChannelCapabilities = {
   multiplexesSessions: false,
   supportsReactions: false,
@@ -632,6 +637,7 @@ export class WebChannel implements Channel {
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
+  private readonly pushWatch?: PushRegistrationWatch
   private readonly vapidPublicKey?: string
   private readonly relayUrl?: string
   private readonly getHostInfo?: () => import("./host-route").HostInfo
@@ -645,6 +651,10 @@ export class WebChannel implements Channel {
   /** Card #76: replies being written, for the apps that asked (`subscribe.streams`). */
   private readonly live = new LiveReplies()
   private readonly liveSockets = new WeakMap<import("bun").ServerWebSocket<WSData>, LiveSocket>()
+  /** Card #76: the chats a socket shows, as its last viewing frame said. Their live text follows them. */
+  private readonly liveShown = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
+  /** Card #62: the chats a socket asked live text for without showing them (`live`: the assistant overlay's Agent). */
+  private readonly livePinned = new WeakMap<import("bun").ServerWebSocket<WSData>, string[]>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   /** The host's single file-system service (spec 2026-09-27). */
   readonly fss: FileSystemService<import("bun").ServerWebSocket<WSData>>
@@ -667,6 +677,7 @@ export class WebChannel implements Channel {
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
+    if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
     this.vapidPublicKey = opts.vapidPublicKey
     this.relayUrl = opts.relayUrl
     this.getHostInfo = opts.getHostInfo
@@ -764,6 +775,7 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
+    auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
     if (this.opts.perf) {
@@ -910,13 +922,20 @@ export class WebChannel implements Channel {
 
   /** Card #76: the chats this socket shows, for live text (an app that never asked has no live socket). */
   private watchLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
-    const socket = this.liveSockets.get(ws)
-    if (socket) this.live.watch(socket, sessions)
+    this.liveShown.set(ws, sessions)
+    this.rewatchLive(ws)
   }
 
-  private liveWatching(ws: import("bun").ServerWebSocket<WSData>): ReadonlySet<string> {
+  /** Card #62: chats this socket wants live text for without showing them. Presence, read and push are untouched. */
+  private pinLive(ws: import("bun").ServerWebSocket<WSData>, sessions: string[]): void {
+    this.livePinned.set(ws, sessions)
+    this.rewatchLive(ws)
+  }
+
+  /** Live text follows the chats shown and the chats pinned alike. */
+  private rewatchLive(ws: import("bun").ServerWebSocket<WSData>): void {
     const socket = this.liveSockets.get(ws)
-    return socket ? this.live.watching(socket) : new Set()
+    if (socket) this.live.watch(socket, [...(this.liveShown.get(ws) ?? []), ...(this.livePinned.get(ws) ?? [])])
   }
 
   /** Card #76: more of a reply (or thinking) being written in `session`. */
@@ -1322,6 +1341,7 @@ export class WebChannel implements Channel {
 
   private onWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     this.wsConnections.add({ ws, deviceName: ws.data.deviceName })
+    this.pushWatch?.connected(ws.data.deviceName, ws.data.surface)
   }
 
   // Lazily create the per-connection LSP bridge, stored on ws.data so its
@@ -1847,7 +1867,10 @@ export class WebChannel implements Channel {
       }
       const permissionModes = permissionCatalog()
       laps.lap("rest")
-      const snapshot = { type: "snapshot", sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
+      // Card #62: the optional frames this broker takes. An older one answers a frame it doesn't know with an
+      // error, which an app would show, so an app sends one of these only to a broker that lists it here.
+      const accepts = ACCEPTED_OPTIONAL_FRAMES
+      const snapshot = { type: "snapshot", accepts, sessions, logs, activity, bgTasks, subagents, councils, agentState, proxies, displays, workspaces, ...(lazyArchived ? { archivedLazy: true } : { archivedWorkspaces }), projects, projectMembership, commands, commandsResolved, homeDir: home(), muxHome: resolve(MUX_HOME), onboarded, reads, drafts, requests, permissionModes, ...(logTail !== undefined ? { partialLogs } : {}), ...(trimExtras ? { partialExtras } : {}), ...(liveSocket ? { streams: this.live.snapshot(liveSocket, logTail !== undefined ? fullLogs : sessions.map((s) => s.id ?? s.name)) } : {}), ...(perf ? { perf: true } : {}) }
       const text = JSON.stringify(snapshot)
       laps.lap("stringify")
       const sent = ws.send(text)
@@ -1883,6 +1906,16 @@ export class WebChannel implements Channel {
       ws.send(JSON.stringify({ type: "pong" }))
       return
     }
+    // Card #62: `live` asks for these chats' live text without showing them: the assistant overlay floats its
+    // Agent's reply over other apps as it is written. It replaces the last such set. Unlike `viewing` it is
+    // presence for nothing (the overlay is not a chat on screen), so nothing is read and pushes still go out.
+    if (frame.type === "live") {
+      const sessions = Array.isArray(frame.sessions)
+        ? frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
+        : []
+      this.pinLive(ws, sessions)
+      return
+    }
     if (frame.type === "viewing") {
       const visible = typeof frame.visible === "boolean" ? frame.visible : undefined
       if (visible === undefined) {
@@ -1905,7 +1938,7 @@ export class WebChannel implements Channel {
         return
       }
       this.opts.viewingTracker?.update(ws.data.deviceName, { session, visible })
-      this.watchLive(ws, session === null ? [] : visible ? [session] : [...this.liveWatching(ws)].filter((s) => s !== session))
+      this.watchLive(ws, session === null ? [] : visible ? [session] : (this.liveShown.get(ws) ?? []).filter((s) => s !== session))
       // A visible device sitting on an exact session has read it up to its
       // newest message. (Sitting on the list, session===null, does not count.)
       if (visible && typeof session === "string") this.opts.markRead?.(session)
@@ -2814,6 +2847,7 @@ export class WebChannel implements Channel {
       if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
         return new Response("platform + routingToken + pubkey required", { status: 400 })
       this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      this.pushWatch?.registered(auth.device.name, platform)
       return this.json({ ok: true })
     }
 
@@ -2916,10 +2950,14 @@ export class WebChannel implements Channel {
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
     // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
+    // `relayUrl` is the connectivity relay when one is on (the desktop pairs phones with it) and
+    // the push relay otherwise, which older phone apps read. `pushRelayUrl` is always the push
+    // relay: with the connectivity relay on, phones registering at `relayUrl` reached this broker
+    // and got a 404, so no phone could receive push (card #86).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
       const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
-      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl }, 200)
+      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl, pushRelayUrl: this.relayUrl }, 200)
       return this.json(a.throttled ? { error: "rate limited" } : { paired: false }, this.authFailureStatus(a))
     }
 

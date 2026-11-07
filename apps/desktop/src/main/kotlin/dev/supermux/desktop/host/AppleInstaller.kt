@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.delay
 
 /**
@@ -35,7 +36,7 @@ object AppleInstaller {
         intervalMs: Long = 500,
         pause: suspend (Long) -> Unit = { delay(it) },
     ): Boolean {
-        if (env.os != OsEnv.Os.MAC) return false
+        if (env.os != DesktopOs.MACOS) return false
         repeat(attempts) {
             pause(intervalMs)
             if (env.runResult(runningArgv).exit == 0) return env.run(frontArgv)

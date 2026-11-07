@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -140,6 +141,8 @@ import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.RetainedPage
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.NewProjectDialog
@@ -421,8 +424,12 @@ fun SupermuxApp(
     }
 
     // Per-session composer drafts, hoisted to the ROOT so switching sessions — and leaving the
-    // workspace entirely — preserves each draft. In-memory only (broker-side sync is M4).
-    val drafts = remember { mutableStateMapOf<String, String>() }
+    // workspace entirely — preserves each draft. Kept by the fleet, not by this composition: an
+    // Android rotation or fold recreates the whole composition, and a plain `remember` here lost
+    // every half-typed message with it (card #89). In-memory only (broker-side sync is M4).
+    val drafts = remember(fleet) { fleet.retainedUi.getOrPut("composer.drafts") { mutableStateMapOf<String, String>() } }
+    // Writes that must land even if this composition is gone by the time they run.
+    val retainedScope = fleet.retainedUi.scope
 
     // Headless-verification hook (no input injection on CI boxes); off by default.
     if (autoSelect) {
@@ -554,9 +561,12 @@ fun SupermuxApp(
     }
 
     // ── Persistent project settings (the header ⋮ → Settings) and "New project" (the list ⋮) ──
+    // Kept by the fleet, not by this composition: an Android rotation recreated the shell with
+    // both closed (#89). Read straight from the fleet: this is above where the shell provides it.
+    val projectDialogs = remember(fleet) { fleet.retainedUi.getOrPut("shell.project-dialogs") { ProjectDialogs() } }
     /** (hostId, projectId) of the open settings sheet. */
-    var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var newProjectOpen by remember { mutableStateOf(false) }
+    var projectSettingsTarget by projectDialogs::settingsTarget
+    var newProjectOpen by projectDialogs::newProjectOpen
     val catalogHosts by fleet.projectCatalogHosts.collectAsState()
     /** Each host's own home folder: a host's folders shorten under ITS home (the single [home] is the fallback). */
     val homeDirs by fleet.homeDirs.collectAsState()
@@ -577,37 +587,43 @@ fun SupermuxApp(
             validatePath = { h, path -> fleet.validatePathOn(h, path) },
         )
     }
-    projectSettingsTarget?.let { (hostId, projectId) ->
-        ProjectSettingsSheet(
-            hostId = hostId,
-            projectId = projectId,
-            projects = projectRefs,
-            home = home,
-            actions = projectSettingsActions,
-            onDismiss = { projectSettingsTarget = null },
-            loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
-        )
-    }
-    if (newProjectOpen) {
-        // The filtered host, else the only host; with several and no filter the dialog asks.
-        val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
-        NewProjectDialog(
-            hosts = newProjectHosts,
-            initialHost = singleHost,
-            onCreate = { h, name -> fleet.createProject(h, name) },
-            onCreated = { h, id ->
-                newProjectOpen = false
-                projectSettingsTarget = h to id
-            },
-            onDismiss = { newProjectOpen = false },
-        )
+    // Drawn above where the shell provides the fleet's retained state, so given it here: what is
+    // typed in either outlives the composition too (#89).
+    CompositionLocalProvider(dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi) {
+        projectSettingsTarget?.let { (hostId, projectId) ->
+            ProjectSettingsSheet(
+                hostId = hostId,
+                projectId = projectId,
+                projects = projectRefs,
+                home = home,
+                actions = projectSettingsActions,
+                onDismiss = { projectSettingsTarget = null },
+                loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
+            )
+        }
+        if (newProjectOpen) {
+            // The filtered host, else the only host; with several and no filter the dialog asks.
+            val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+            NewProjectDialog(
+                hosts = newProjectHosts,
+                initialHost = singleHost,
+                onCreate = { h, name -> fleet.createProject(h, name) },
+                onCreated = { h, id ->
+                    newProjectOpen = false
+                    projectSettingsTarget = h to id
+                },
+                onDismiss = { newProjectOpen = false },
+            )
+        }
     }
 
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
     val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) }, isLocalHost = isLocalHost)
+    // The launcher's writes run on the fleet's scope, not this composition's: its dispose flush is
+    // queued while an Android recreation is cancelling this very scope, so it never landed (#89).
     val launcherDraftFlushDefault: (dev.supermux.state.LauncherDraft) -> Unit = { draft ->
-        overlayScope.launch { uiPrefs.putLauncherDraft(draft) }
+        retainedScope.launch { uiPrefs.putLauncherDraft(draft) }
     }
     val launcherPane: @Composable (
         onBack: () -> Unit,
@@ -623,7 +639,7 @@ fun SupermuxApp(
             actions = launcherActions,
             permissionCatalog = permissionCatalog,
             loadPrefs = { uiPrefs.launcherPrefs.first() },
-            onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
+            onPrefsChange = { retainedScope.launch { uiPrefs.putLauncherPrefs(it) } },
             // A workspace tab keeps ITS OWN draft (just the text, in the tab's state) — never the
             // New Session screen's global one, which would drag another project's workdir,
             // worktree and text into this tab. The broker drops it when it binds the tab.
@@ -633,12 +649,12 @@ fun SupermuxApp(
                 { dev.supermux.state.LauncherDraft(text = tab.draftText) }
             },
             onDraftChange = if (tab == null) {
-                { overlayScope.launch { uiPrefs.putLauncherDraft(it) } }
+                { retainedScope.launch { uiPrefs.putLauncherDraft(it) } }
             } else {
                 { tab.onDraftText(it.text) }
             },
             onClearDraft = if (tab == null) {
-                { overlayScope.launch { uiPrefs.clearLauncherDraft() } }
+                { retainedScope.launch { uiPrefs.clearLauncherDraft() } }
             } else {
                 {}
             },
@@ -650,27 +666,28 @@ fun SupermuxApp(
             // Throws the broker's OWN refusal (bad workdir / spawn 4xx), which the screen's
             // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
             // the first message (text + pre-uploaded files) with the spawn, so nothing about it
-            // depends on this pane staying composed.
+            // depends on this pane staying composed. Answers the new session's id and does NOT
+            // open it: the spawn can outlive this composition (#89), and [onOpenSession] below is
+            // called by whichever launcher is on screen when it lands.
             onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
-                onCreated(
-                    if (tab == null) {
-                        launcherActions.createSessionWithFirstMessage(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
-                        )
-                    } else {
-                        // A workspace tab's composer: JOIN that workspace and fill this very tab.
-                        // Without workspaceId the broker mints a second workspace for the session.
-                        fleet.createSessionWithFirstMessageOrThrow(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
-                            workspaceId = tab.workspaceId,
-                            viewId = tab.viewId,
-                            permissionMode = permissionMode,
-                            account = account,
-                        )
-                    },
-                )
-                null
+                if (tab == null) {
+                    launcherActions.createSessionWithFirstMessage(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
+                    )
+                } else {
+                    // A workspace tab's composer: JOIN that workspace and fill this very tab.
+                    // Without workspaceId the broker mints a second workspace for the session.
+                    fleet.createSessionWithFirstMessageOrThrow(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                        workspaceId = tab.workspaceId,
+                        viewId = tab.viewId,
+                        permissionMode = permissionMode,
+                        account = account,
+                    )
+                }
             },
+            onOpenSession = onCreated,
+            retainKey = if (tab == null) "new-session" else "tab:${tab.viewId}",
             onSaveDraft = { workdir, agent, model, level, text, replaceDraftId ->
                 launcherActions.createDraftSession(workdir, agent, model, level, text, replaceDraftId)
             },
@@ -680,13 +697,15 @@ fun SupermuxApp(
                 val path = formatWorkdir(t.repoRoot ?: t.workdir, home)
                 if (t.branch.isNullOrBlank()) path else "$path · ${t.branch}"
             },
-            // A reopened task-list draft belongs to the New Session route, never to a tab.
+            // A reopened task-list draft belongs to the New Session route, never to a tab. Its id
+            // stays for the replace; its CONTENT is a one-shot seed (see `launcherDraftSeed`).
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
-            initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
+            initialDraft = if (tab == null) ui.launcherDraftSeed?.let { dId -> sessions.find { it.id == dId } } else null,
+            onInitialDraftApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             // The sidebar's "+" on a project; a workspace tab never consults projects.
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
-            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherProject() },
+            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,
@@ -750,7 +769,21 @@ fun SupermuxApp(
             openSession = { sid -> ui.focusChatTab(sid) },
         )
     }
-    CompositionLocalProvider(dev.supermux.ui.chat.LocalChatSearch provides chatSearch) {
+    // Staged attachment chips and their uploads, for a host that keeps none of its own (#89):
+    // Android's is process-wide, but on iOS and desktop a width-class change rebuilt the composer
+    // somewhere else in the tree and dropped every chip with its upload. The fleet keeps this one,
+    // and the uploads run on the fleet's scope.
+    val attachmentStore = dev.supermux.ui.chat.LocalComposerAttachmentStore.current
+        ?: remember(fleet) {
+            fleet.retainedUi.getOrPut("composer.attachments") {
+                dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
+            }
+        }
+    CompositionLocalProvider(
+        dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
+        dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
+        dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
+    ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             Modifier
@@ -939,7 +972,7 @@ fun SupermuxApp(
                                     }
                                 },
                                 tabDragState = tabDragState,
-                                listState = listState ?: androidx.compose.foundation.lazy.rememberLazyListState(),
+                                listState = listState ?: rememberSessionListState(),
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -1079,16 +1112,21 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
                                 EscapeBox("add_host_overlay", onEscape = { ui.goBack() }) {
-                                    AddHostScreen(
-                                        onBack = { ui.goBack() },
-                                        defaultDeviceName = defaultDeviceName,
-                                        onClaim = { payload, name -> fleet.addHost(payload, name) },
-                                        onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
-                                        onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
-                                        onAdded = { onAddedHost(); ui.goBack() },
-                                        needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
-                                        pendingScans = LocalPlatform.current.pendingScans(),
-                                    )
+                                    // One opening of the screen: a claim in flight and its outcome
+                                    // are kept for it through a rotation, and the next one starts
+                                    // clean (#89).
+                                    RetainedPage {
+                                        AddHostScreen(
+                                            onBack = { ui.goBack() },
+                                            defaultDeviceName = defaultDeviceName,
+                                            onClaim = { payload, name -> fleet.addHost(payload, name) },
+                                            onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
+                                            onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
+                                            onAdded = { onAddedHost(); ui.goBack() },
+                                            needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
+                                            pendingScans = LocalPlatform.current.pendingScans(),
+                                        )
+                                    }
                                 }
                             }
 
@@ -1193,11 +1231,15 @@ fun SupermuxApp(
                                 EscapeBox("displays_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DisplaysScreen(
-                                                actions = rememberDisplayActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // A page opening, so the viewer it has open survives a
+                                            // rotation and the next visit starts with none (#89).
+                                            RetainedPage {
+                                                DisplaysScreen(
+                                                    actions = rememberDisplayActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1209,11 +1251,15 @@ fun SupermuxApp(
                                 EscapeBox("devices_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DevicesSettingsScreen(
-                                                actions = rememberDevicesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // The same page as the hub's Devices section, so its
+                                            // dialogs and a minted link survive a rotation (#89).
+                                            RetainedPage {
+                                                DevicesSettingsScreen(
+                                                    actions = rememberDevicesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1225,11 +1271,14 @@ fun SupermuxApp(
                                 EscapeBox("proxies_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            ProxiesSettingsScreen(
-                                                actions = rememberProxiesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // As Devices above: the page keeps its dialogs (#89).
+                                            RetainedPage {
+                                                ProxiesSettingsScreen(
+                                                    actions = rememberProxiesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1530,7 +1579,7 @@ private fun ShellHome(
     // ── Compact: one full-bleed layer per surface. The workspace / chat layers stay composed
     //    (a WebView, a PTY and a transcript are expensive to rebuild) and the session list
     //    slides over them.
-    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState(0, 0) }
+    val listState = rememberSessionListState()
     val visitedSessions = rememberVisitedSessions(ui.selectedId, remember(sessions) { sessions.map { it.id }.toSet() })
     val workspaceBySession = remember(workspaces) {
         workspaces.flatMap { ws -> ws.views.mapNotNull { v -> v.chatSessionId()?.let { it to ws } } }.toMap()
@@ -1744,8 +1793,9 @@ private fun WorkspacePanel(
     unreadSessions: Set<String>,
     onTearOutTab: (String) -> Unit,
 ) {
-    // Set by PaneHost onCloseView; never ends work by itself.
-    var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+    // Set by PaneHost onCloseView; never ends work by itself. Kept with the workspace, which the
+    // phone layout shares, so the question outlives a rotation or a width change (#89).
+    val panesKept = rememberWorkspacePanesKept(current.id)
     val ws = rememberHostWorkspaceSession(
         current = current,
         wsApp = wsApp,
@@ -1890,8 +1940,8 @@ private fun WorkspacePanel(
             overlayScope = overlayScope,
             launcherPane = launcherPane,
             tabDragState = tabDragState,
-            closeCandidate = closeCandidate,
-            onCloseCandidate = { closeCandidate = it },
+            closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
+            onCloseCandidate = { panesKept.askToClose(it) },
             sessionNames = sessionNames,
             unreadSessions = unreadSessions,
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
@@ -2024,4 +2074,36 @@ internal fun gitBannerFor(
             }
         }
     }
+}
+
+/** The project settings sheet's target and whether "New project" is open, kept by the fleet (#89). */
+private class ProjectDialogs {
+    var settingsTarget by mutableStateOf<Pair<String, String>?>(null)
+    var newProjectOpen by mutableStateOf(false)
+}
+
+/**
+ * The session list's state, built from the one scroll position both layouts share (#89). The
+ * Compact list and the wide sidebar each kept their own, so turning a phone or opening a Fold put
+ * the list back at the top. The fleet keeps the position as plain numbers; each list builds a
+ * state from them and writes its scrolling back.
+ */
+@Composable
+private fun rememberSessionListState(): LazyListState {
+    val place = rememberRetained("shell:sessionList.place") { SessionListPlace() }
+    val state = rememberLazyListState(place.index, place.offset)
+    LaunchedEffect(state, place) {
+        snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                place.index = index
+                place.offset = offset
+            }
+    }
+    return state
+}
+
+/** Where the session list is scrolled to (see [rememberSessionListState]). */
+private class SessionListPlace {
+    var index = 0
+    var offset = 0
 }

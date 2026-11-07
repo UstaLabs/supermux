@@ -1,9 +1,9 @@
 import type { VapidKeys } from "./vapid"
 import type { PushSubscriptionStore } from "./subscriptions"
 import webpushDefault from "web-push"
-import { makeLogger } from "../../shared/log"
+import { makeLogger, type Logger } from "../../shared/log"
 
-const log = makeLogger("core/push/sender")
+const defaultLog = makeLogger("core/push/sender")
 
 export interface PushPayload {
   session: string
@@ -34,7 +34,9 @@ export function createPushSender(opts: {
   vapid: VapidKeys
   store: PushSubscriptionStore
   webpushAdapter?: WebPushAdapter
+  log?: Logger
 }): PushSender {
+  const log = opts.log ?? defaultLog
   const webpush: WebPushAdapter = opts.webpushAdapter ?? {
     sendNotification: (sub, payload) => webpushDefault.sendNotification(
       sub as any,
@@ -54,18 +56,21 @@ export function createPushSender(opts: {
     rec: { device: string; endpoint: string; keys: { p256dh: string; auth: string } },
     payload: PushPayload,
   ): Promise<{ ok: true } | { ok: false; gone: boolean }> {
+    // Logged like a native push (card #86): push_result / push_target_removed.
+    const target = { device: rec.device, transport: "web" }
     try {
       await webpush.sendNotification({ endpoint: rec.endpoint, keys: rec.keys }, JSON.stringify(payload))
       opts.store.markUsed(rec.device)
+      log.info("push_result", { ...target, ok: true })
       return { ok: true }
     } catch (err: any) {
       const status: number | undefined = err?.statusCode
       if (status === 404 || status === 410) {
-        log.info("push_subscription_gone", { device: rec.device, status })
         opts.store.remove(rec.device)
+        log.warn("push_target_removed", { ...target, reason: `http_${status}` })
         return { ok: false, gone: true }
       }
-      log.warn("push_send_failed", { device: rec.device, status: status ?? "?", err: err?.message ?? String(err) })
+      log.warn("push_result", { ...target, ok: false, status, reason: status ? `http_${status}` : "network", err: err?.message ?? String(err) })
       return { ok: false, gone: false }
     }
   }

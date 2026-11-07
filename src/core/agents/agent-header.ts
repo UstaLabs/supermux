@@ -54,18 +54,20 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
       "send files, call the `attach` tool with files[] (local paths) and an optional " +
       "caption. Keep responses concise.",
     ...(mem ? [
-      "- YOUR MEMORY: You have your own memory, keyed by your id (it stays yours if you are renamed):",
-      `  - \`${mem.digest}\` — current truth. Read it at the start of every conversation. Never edit it; the nightly curator writes it.`,
-      `  - \`${mem.history}\` — dated history. When you learn something about your own work or how the user wants you ` +
-        "to behave, append it under `## <title> (YYYY-MM-DD)`.",
+      "- YOUR MEMORY: You have your own memory, keyed by your id (it stays yours if you are renamed). Read it at the start of every conversation:",
+      `  - \`${mem.digest}\` — current truth. Never edit it; the nightly curator writes it, so it is empty until the curator has run.`,
+      `  - \`${mem.history}\` — dated history: read all of it while the digest is empty, otherwise its newest entries. ` +
+        "When you learn something about your own work or how the user wants you to behave, append it under `## <title> (YYYY-MM-DD)`.",
       "  No other session reads these files. `memory_search` also searches them for you.",
       `- THE USER: \`${join(home, "personal")}/\` holds who the user is and their preferences. Read it when it ` +
         "matters. Workers never see it, so never pass its contents to another session.",
     ] : []),
     "- MEMORY: `~/.mux` holds shared notes by topic (the domain index is below). When your " +
-      "task touches one of those topics, read `~/.mux/domains/<topic>.digest.md` (the current " +
-      "truth; `<topic>.md` is the dated history) before you start — it records gotchas you " +
-      "are expected to know. Skip this for trivial one-off requests.",
+      "task touches one of those topics, read its notes before you start — they record gotchas you " +
+      "are expected to know: `~/.mux/domains/<topic>.digest.md` (a curated summary) if it exists, then " +
+      "`~/.mux/domains/<topic>.md` (the dated history every session appends to) — all of it when there is " +
+      "no digest, otherwise its newest entries at the end, which the digest does not have yet. Skip this " +
+      "for trivial one-off requests.",
     "- LEARNING: When you discover something durable about a project — a fix, a gotcha, a decision — append " +
       "it under a `## <title> (YYYY-MM-DD)` heading in `~/.mux/domains/<topic>.md` (or " +
       "`domains/_inbox.md` if unsure) before you finish. Never edit `*.digest.md`.",

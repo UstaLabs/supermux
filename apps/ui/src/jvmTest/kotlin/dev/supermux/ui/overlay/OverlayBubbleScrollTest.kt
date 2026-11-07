@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.chat.setPlatformContent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -28,12 +29,13 @@ class OverlayBubbleScrollTest {
 
     private fun ComposeUiTest.bubble(text: String = long): OverlayUiState {
         val ui = OverlayUiState().apply {
+            // A stored reply nobody saw being written: it shows as it is, whole.
             reply = OverlayReply("r1", "Anya", text)
-            replyShown = text.length
             replyExpanded = true
             bubbleRoom = 700.dp
         }
-        setContent {
+        // The platform opens the reply's links (OverlayLinksTest); every chat surface reads it.
+        setPlatformContent {
             MaterialTheme {
                 OverlayBubble(ui, onOpen = {}, onClose = {}, onSendLocked = {}, onCancelLocked = {}, maxWidth = 340.dp)
             }

@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -310,7 +311,7 @@ object LidSleepHelper {
 
     /** Install with one admin prompt (the files travel inside the command). Blocking. */
     fun install(user: String, os: OsEnv, appBundle: String? = currentAppBundle(), log: (String) -> Unit = {}): Outcome {
-        if (os.os != OsEnv.Os.MAC) return Outcome.Failed("The lid helper is only for Macs.")
+        if (os.os != DesktopOs.MACOS) return Outcome.Failed("The lid helper is only for Macs.")
         if (!validUser(user)) return Outcome.Failed("Unsupported user name.")
         return try {
             val cmd = installCommand(daemonScript(user, appBundle?.takeIf(::safePath)), plist())
@@ -329,7 +330,7 @@ object LidSleepHelper {
 
     /** Boot out and remove the daemon with one admin prompt. Blocking. */
     fun uninstall(os: OsEnv, log: (String) -> Unit = {}): Outcome {
-        if (os.os != OsEnv.Os.MAC) return Outcome.Failed("The lid helper is only for Macs.")
+        if (os.os != DesktopOs.MACOS) return Outcome.Failed("The lid helper is only for Macs.")
         val r = os.runResult(adminArgv(uninstallCommand(), UNINSTALL_PROMPT), OsEnv.PROMPT_TIMEOUT_MS)
         log("lid helper uninstall: exit ${r.exit}${r.err.trim().takeIf { it.isNotEmpty() }?.let { " ($it)" } ?: ""}")
         return when {

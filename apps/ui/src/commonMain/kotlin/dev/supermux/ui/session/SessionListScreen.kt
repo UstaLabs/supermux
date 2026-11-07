@@ -146,6 +146,7 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.host.HostDot
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.AppearanceMode
@@ -444,17 +445,21 @@ fun SessionListScreen(
     }
 
     var menuExpanded by remember { mutableStateOf(false) }
-    var organizeProjectsOpen by remember { mutableStateOf(false) }
-    var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
-    var agentDialog by remember { mutableStateOf<AgentDialog?>(null) }
-    var renameWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
-    var archiveWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
+    // The dialogs, the name being typed and the multi-select live outside this composition: an
+    // Android rotation rebuilds the list, and a width change rebuilds it elsewhere in the tree (the
+    // Compact list vs the wide sidebar), and either one closed them (#89). One sidebar, one key.
+    val dialogs = rememberRetained("sidebar.dialogs") { SidebarDialogs() }
+    var organizeProjectsOpen by dialogs::organizeProjects
+    var renameTarget by dialogs::renameTarget
+    var agentDialog by dialogs::agentDialog
+    var renameWorkspaceTarget by dialogs::renameWorkspaceTarget
+    var renameText by dialogs::renameText
+    var killTarget by dialogs::killTarget
+    var archiveWorkspaceTarget by dialogs::archiveWorkspaceTarget
     // Multi-select: rows toggle instead of opening; the header becomes the batch-action bar.
-    var selecting by remember { mutableStateOf(false) }
-    var selectedWorkspaceIds by remember { mutableStateOf(setOf<String>()) }
-    var batchArchiveOpen by remember { mutableStateOf(false) }
+    var selecting by dialogs::selecting
+    var selectedWorkspaceIds by dialogs::selectedWorkspaceIds
+    var batchArchiveOpen by dialogs::batchArchiveOpen
     var openSwipeRowId by remember { mutableStateOf<String?>(null) }
     var expandedChildren by remember { mutableStateOf(setOf<String>()) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
@@ -463,11 +468,12 @@ fun SessionListScreen(
     var flatArchivedExpanded by remember { mutableStateOf(false) }
     var archivedFoldOpen by remember { mutableStateOf(false) }
     // Sidebar search (SidebarSearch.kt): the section header becomes a field; a query swaps the
-    // groups for its matches until the field closes.
-    var searchOpen by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    // groups for its matches until the field closes. Kept beside the dialogs, for the same reason.
+    val search = rememberRetained("sidebar.search") { SidebarSearchKept() }
+    var searchOpen by search::open
+    var searchQuery by search::query
     /** The result ↑/↓ have moved to; Enter opens it. Back to the top on every new query. */
-    var searchCursor by remember { mutableIntStateOf(0) }
+    var searchCursor by search::cursor
     val searchQ = searchQuery.trim()
     val searching = searchOpen && searchQ.isNotEmpty()
 
@@ -1731,9 +1737,13 @@ fun SessionListScreen(
             searchGlide = 0f
         }
     }
-    // A new query reads from the top: the field, then its best matches right under it.
+    // A new query reads from the top: the field, then its best matches right under it. The same
+    // query in a rebuilt list (this effect's first run) keeps the cursor where it was (#89).
     LaunchedEffect(searchQ) {
-        searchCursor = 0
+        if (search.cursorFor != searchQ) {
+            searchCursor = 0
+            search.cursorFor = searchQ
+        }
         if (!searchOpen) return@LaunchedEffect
         val header = listKeys.indexOf("chrome:section").coerceAtLeast(0)
         if (listState.firstVisibleItemIndex > header) listState.scrollToItem(header)
@@ -1867,7 +1877,7 @@ fun SessionListScreen(
         AlertDialog(
             onDismissRequest = { renameTarget = null },
             title = { Text("Rename session") },
-            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true, modifier = Modifier.testTag("sidebar_rename_field")) },
             confirmButton = {
                 TextButton(onClick = { onRename(target.id, renameText.trim()); renameTarget = null }) {
                     Text("Rename")
@@ -1880,7 +1890,7 @@ fun SessionListScreen(
         AlertDialog(
             onDismissRequest = { renameWorkspaceTarget = null },
             title = { Text("Rename workspace") },
-            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true, modifier = Modifier.testTag("sidebar_rename_field")) },
             confirmButton = {
                 TextButton(onClick = {
                     val sid = target.primarySessionId ?: target.chatSessionIds().firstOrNull()
@@ -2484,4 +2494,26 @@ private sealed interface AgentDialog {
     data class Rename(val id: String, val name: String) : AgentDialog
     data class Character(val id: String, val name: String) : AgentDialog
     data class Archive(val id: String, val name: String) : AgentDialog
+}
+
+/** The sidebar's open dialogs, the name being typed and the multi-select, kept for a rebuilt list (`rememberRetained`, #89). */
+private class SidebarDialogs {
+    var organizeProjects by mutableStateOf(false)
+    var renameTarget by mutableStateOf<SessionInfo?>(null)
+    var agentDialog by mutableStateOf<AgentDialog?>(null)
+    var renameWorkspaceTarget by mutableStateOf<WorkspaceDto?>(null)
+    var renameText by mutableStateOf("")
+    var killTarget by mutableStateOf<SessionInfo?>(null)
+    var archiveWorkspaceTarget by mutableStateOf<WorkspaceDto?>(null)
+    var selecting by mutableStateOf(false)
+    var selectedWorkspaceIds by mutableStateOf(setOf<String>())
+    var batchArchiveOpen by mutableStateOf(false)
+}
+
+/** The sidebar search: open, its query, and the ↑/↓ cursor with the query it moved under (`rememberRetained`, #89). */
+private class SidebarSearchKept {
+    var open by mutableStateOf(false)
+    var query by mutableStateOf("")
+    var cursor by mutableIntStateOf(0)
+    var cursorFor = ""
 }

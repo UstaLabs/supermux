@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -124,12 +125,7 @@ internal suspend fun HostSupervisor.binaries(): HostBinaries.SidecarBinaries {
     val bins = withContext(io) { materialize() }
     lastCopyFailed = bins.brokerPath == null && packaged()
     if (!lastCopyFailed) return bins
-    val os = when (osEnv.os) {
-        OsEnv.Os.MAC -> HostBinaries.Os.MAC
-        OsEnv.Os.LINUX -> HostBinaries.Os.LINUX
-        OsEnv.Os.WINDOWS -> HostBinaries.Os.WINDOWS
-        OsEnv.Os.OTHER -> HostBinaries.Os.OTHER
-    }
+    val os = osEnv.os
     val previous = stateDir.resolve(HostBinaries.BIN_SUBDIR).resolve(HostBinaries.fileName(HostBinaries.Binary.Broker, os))
     if (!Files.isRegularFile(previous)) {
         log("couldn't copy the broker out of the app")
@@ -245,8 +241,11 @@ internal suspend fun HostSupervisor.launchChildLocked(
     return why
 }
 
-private fun HostSupervisor.brokerEnvFor(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>) =
-    brokerEnv(prefs, bins, carried, stateDir, hostName, existingPath, userHome, osEnv.os)
+/** The broker's env. The host name is looked up on [HostSupervisor.io]: whoever calls a launch, it never stalls the UI. */
+private suspend fun HostSupervisor.brokerEnvFor(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>): Map<String, String> {
+    val name = withContext(io) { brokerHostName }
+    return brokerEnv(prefs, bins, carried, stateDir, name, existingPath, userHome, osEnv.os)
+}
 
 /**
  * What the child must not inherit from the app: every `MUX_*` key (including `MUX_SERVICE_UNIT` /
@@ -263,10 +262,22 @@ internal fun isInheritedServiceKey(key: String): Boolean {
 private val INHERITED_SERVICE_KEYS = setOf("INVOCATION_ID", "JOURNAL_STREAM", "XPC_SERVICE_NAME", "SUPERMUX_KEEP_ALIVE")
 
 /** The app's env minus [isInheritedServiceKey], plus ours. */
-private fun HostSupervisor.childEnv(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>): Map<String, String> {
+private suspend fun HostSupervisor.childEnv(prefs: HostingPrefs, bins: HostBinaries.SidecarBinaries, carried: Map<String, String>): Map<String, String> =
+    childEnvironment(baseEnv(), brokerEnvFor(prefs, bins, carried), osEnv.os)
+
+/**
+ * The child broker's environment: [base] (the app's own) minus [isInheritedServiceKey], then [ours]. On Windows a name
+ * ignores case, and Java's ProcessBuilder hands the child both `Path` and `PATH` when both are in its map, so which one
+ * the broker read was undefined: one key stays, with [base]'s spelling and our value (#29).
+ */
+internal fun childEnvironment(base: Map<String, String>, ours: Map<String, String>, os: DesktopOs): Map<String, String> {
     val out = LinkedHashMap<String, String>()
-    for ((k, v) in baseEnv()) if (!isInheritedServiceKey(k)) out[k] = v
-    out.putAll(brokerEnvFor(prefs, bins, carried))
+    for ((k, v) in base) if (!isInheritedServiceKey(k)) out[k] = v
+    if (os != DesktopOs.WINDOWS) {
+        out.putAll(ours)
+        return out
+    }
+    for ((k, v) in ours) out[out.keys.firstOrNull { it.equals(k, ignoreCase = true) } ?: k] = v
     return out
 }
 

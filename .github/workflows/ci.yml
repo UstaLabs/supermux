@@ -532,7 +532,7 @@ jobs:
           src/core/sessiond/session-store.test.ts
       - name: Test desktop native-host integration
         working-directory: apps
-        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --console=plain --no-daemon
+        run: ./gradlew.bat :desktop:test --tests 'dev.supermux.desktop.host.*' --tests 'dev.supermux.desktop.platform.DesktopOsTest' --tests 'dev.supermux.desktop.platform.ScreenWatchTest' --console=plain --no-daemon
 
   kotlin:
     needs: changes

@@ -63,6 +63,7 @@ import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
@@ -144,7 +145,10 @@ private fun DisplaysBody(
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val list by actions.displays.collectAsState()
-    var viewing by remember { mutableStateOf<DisplayStream?>(null) }
+    // The open viewer outlives a rotation or a width change (#89), and the next opening of the
+    // screen starts with none.
+    val viewer = rememberRetainedOnPage("displays:viewer") { DisplaysViewer() }
+    var viewing by viewer::stream
 
     fun stop(id: String) {
         scope.launch {
@@ -253,7 +257,8 @@ private fun DisplayRow(display: DisplayStream, onClick: () -> Unit, modifier: Mo
 private fun DisplayViewerDialog(stream: DisplayStream, actions: DisplayActions, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color.Black).testTag("display_viewer")) {
-            DisplayStreamSurface(stream, actions, Modifier.fillMaxSize())
+            // Named, so its VNC password and keyboard follow the viewer through a rebuild, and only that.
+            DisplayStreamSurface(stream, actions, Modifier.fillMaxSize(), retainKey = "displays:viewer")
             IconButton(
                 onClick = onClose,
                 modifier = Modifier.align(Alignment.TopStart).padding(Space.md).size(44.dp)
@@ -263,4 +268,9 @@ private fun DisplayViewerDialog(stream: DisplayStream, actions: DisplayActions, 
             }
         }
     }
+}
+
+/** The Displays screen's open viewer, kept for a rebuilt screen (see [DisplaysBody]). */
+private class DisplaysViewer {
+    var stream by mutableStateOf<DisplayStream?>(null)
 }
