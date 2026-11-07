@@ -21,7 +21,11 @@ test.skipIf(process.platform !== "win32" || realInstall)("assert-msi finds the o
     // No frpc.exe: the tunnel runs inside the broker (903e629ba), and an MSI without one is complete.
     for (const name of ["supermux-broker.exe", "mux-sessiond.exe"]) copyFileSync(process.execPath, join(resources, name))
     // Windows' variable names ignore case: drop every spelling of LOCALAPPDATA before setting it, so only one reaches it.
-    const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toUpperCase() !== "LOCALAPPDATA"))
+    // PSModulePath goes too: under the lane's PowerShell 7 it names PowerShell 7's modules, where Windows PowerShell 5.1
+    // finds no Get-FileHash ("not recognized"); without it, 5.1 builds its own.
+    const env: Record<string, string | undefined> = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !["LOCALAPPDATA", "PSMODULEPATH"].includes(name.toUpperCase())),
+    )
     env.LOCALAPPDATA = root
     const script = join(import.meta.dir, "..", "scripts", "windows-vm", "assert-msi.ps1")
     const run = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], { env, encoding: "utf8", windowsHide: true })
