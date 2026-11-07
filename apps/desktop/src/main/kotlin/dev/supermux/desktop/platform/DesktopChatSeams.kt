@@ -11,6 +11,7 @@ import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
@@ -206,6 +207,9 @@ internal class DesktopMicCapture(
         get() = runCatching {
             AudioSystem.isLineSupported(DataLine.Info(TargetDataLine::class.java, DICTATION_FORMAT))
         }.getOrDefault(false)
+
+    /** Asked of the OS itself (see MicPresence): Java Sound lists a "default" line with no microphone behind it. */
+    override suspend fun trouble(): MicTrouble = withContext(Dispatchers.IO) { askMicTrouble(DesktopOs.current) }
 
     override val liveTranscript: LiveTranscript? get() = null
 }

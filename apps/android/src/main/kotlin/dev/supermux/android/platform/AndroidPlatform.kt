@@ -198,6 +198,7 @@ class AndroidPlatform(
             hasRecordAudioPermission(context) ||
                 permissionHost.request(android.Manifest.permission.RECORD_AUDIO)
         },
+        onTrouble = { androidMicTrouble(context) },
     )
 
     /** "Display over other apps" for the assistant overlay (#62), and the mic for hold-to-talk. */
