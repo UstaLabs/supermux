@@ -1045,9 +1045,12 @@ class HostSupervisor(
         fun defaultBunPath(): String {
             HostBinaries.whichOnPath("bun")?.let { return it.toString() }
             val home = System.getProperty("user.home") ?: return "bun"
-            val local = Path.of(home, ".bun", "bin", "bun")
+            val local = installedBun(home, dev.supermux.desktop.platform.isWindowsOs())
             return if (Files.isExecutable(local)) local.toString() else "bun"
         }
+
+        /** Where bun's installer puts it when PATH has none: `~/.bun/bin/bun`, `bun.exe` on Windows. */
+        internal fun installedBun(home: String, windows: Boolean): Path = Path.of(home, ".bun", "bin", if (windows) "bun.exe" else "bun")
     }
 }
 

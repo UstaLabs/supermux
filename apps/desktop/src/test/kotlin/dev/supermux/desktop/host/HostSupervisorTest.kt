@@ -171,6 +171,12 @@ class HostSupervisorTest {
         assertEquals(listOf("lookup"), lookups)
     }
 
+    // A dev run from a checkout starts the broker with bun: off PATH, the installer's own place, bun.exe on Windows.
+    @Test fun aDevRunFindsBunWhereItsInstallerPutsIt() {
+        assertEquals(Path.of("C:\\Users\\a", ".bun", "bin", "bun.exe"), HostSupervisor.installedBun("C:\\Users\\a", windows = true))
+        assertEquals(Path.of("/home/a", ".bun", "bin", "bun"), HostSupervisor.installedBun("/home/a", windows = false))
+    }
+
     // 1
     @Test fun childModeStartsTheBrokerAsAChildWithTheManagedEnv() = runTest {
         val h = Harness(this)

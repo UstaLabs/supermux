@@ -161,7 +161,7 @@ val jbrHome = jbrImage.map { image -> if (macBuildHost) image.dir("Contents/Home
 val jbrLauncher = providers.provider<org.gradle.jvm.toolchain.JavaLauncher> {
     object : org.gradle.jvm.toolchain.JavaLauncher {
         override fun getExecutablePath(): org.gradle.api.file.RegularFile =
-            jbrHome.get().file("bin/java")
+            jbrHome.get().file(if (windowsBuildHost) "bin/java.exe" else "bin/java")
 
         override fun getMetadata(): org.gradle.jvm.toolchain.JavaInstallationMetadata =
             object : org.gradle.jvm.toolchain.JavaInstallationMetadata {

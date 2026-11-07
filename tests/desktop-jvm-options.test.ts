@@ -12,3 +12,8 @@ test("the desktop app's JVM refuses ambiguous Windows commands, packaged and in 
   expect(app.slice(0, app.indexOf("nativeDistributions"))).toContain("jvmArgs += macJvmArgs + linuxJvmArgs + windowsJvmArgs")
   expect(gradle.match(/jvmArgs\(macJvmArgs \+ linuxJvmArgs \+ windowsJvmArgs\)/g)?.length).toBe(2)
 })
+
+// The dev runs start the app on the JBR the build downloads; on a Windows build host its launcher is bin/java.exe.
+test("the dev runs' JBR launcher is bin/java.exe on a Windows build host", () => {
+  expect(gradle).toContain('file(if (windowsBuildHost) "bin/java.exe" else "bin/java")')
+})
