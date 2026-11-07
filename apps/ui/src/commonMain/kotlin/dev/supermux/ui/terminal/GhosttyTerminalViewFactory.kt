@@ -15,7 +15,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -63,6 +62,7 @@ import dev.supermux.terminal.compose.TerminalSearchState
 import dev.supermux.terminal.compose.TerminalZoom
 import dev.supermux.terminal.compose.rememberTerminalAccessories
 import dev.supermux.terminal.compose.rememberTerminalClipboard
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
@@ -506,8 +506,8 @@ private class GhosttyTerminalSurface(
  * any link can be copied.
  */
 @Composable
-private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
+internal fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    val platform = LocalPlatform.current
     val openable = isOpenableTerminalLink(uri)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -518,7 +518,7 @@ private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () ->
             if (openable) {
                 TextButton(
                     onClick = {
-                        runCatching { uriHandler.openUri(uri) }
+                        platform.openUrl(uri)
                         onDismiss()
                     },
                     modifier = Modifier.testTag("terminal_link_open"),

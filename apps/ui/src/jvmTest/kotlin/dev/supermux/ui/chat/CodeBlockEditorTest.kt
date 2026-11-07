@@ -15,10 +15,13 @@ import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.platform.FakePlatform
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -37,6 +40,14 @@ class CodeBlockEditorTest {
         // The surface's text node (the hidden input field holds only a window of it), named by the fence language.
         onNodeWithContentDescription("kotlin code").assert(hasText("val line20 = 20", substring = true))
         onNodeWithContentDescription("Copy").assertExists()
+    }
+
+    @Test fun theCopyButton_copiesTheCodeThroughThePlatform() = runComposeUiTest {
+        val platform = FakePlatform()
+        setPlatformContent(platform = platform) { MarkdownBody("```kotlin\n$code\n```") }
+        onNodeWithContentDescription("Copy").performClick()
+        waitForIdle()
+        assertEquals(listOf(code), platform.copied)
     }
 
     @Test fun block_isAsTallAsItsLines() = runComposeUiTest {
