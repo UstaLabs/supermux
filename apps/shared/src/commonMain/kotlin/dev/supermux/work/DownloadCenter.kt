@@ -169,7 +169,13 @@ class DownloadCenter(private val scope: CoroutineScope) {
     private fun relaunch(key: String, entry: Entry, item: Download): Job {
         listed.update { all -> listOf(item) + all.filter { it.key != key } }
         val source = entry.source
-        return scope.launch(start = CoroutineStart.LAZY) { download(key, source) }.also { entry.job = it }
+        val job = scope.launch(start = CoroutineStart.LAZY) { download(key, source) }
+        entry.job = job
+        // A job cancelled before its body ran — a Cancel right after the start, or a scope already over (a start
+        // after the fleet closed) — never reaches the catch in [download]: settle it here, or it would stay Running
+        // and every claim's await() would hang. [end] ignores a run that has already settled.
+        job.invokeOnCompletion { cause -> if (cause != null) end(key, job, DownloadState.Cancelled) }
+        return job
     }
 
     private suspend fun download(key: String, source: DownloadSource) {

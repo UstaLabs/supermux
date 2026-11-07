@@ -1,9 +1,13 @@
 package dev.supermux.work
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -13,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DownloadCenterTest {
@@ -207,5 +212,38 @@ class DownloadCenterTest {
         c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, stuck)
         advanceUntilIdle()
         assertIs<DownloadState.Failed>(c.items.value.single().state)
+    }
+
+    // A job cancelled before its body ran never reaches its own catch: the center must still settle it, or the
+    // item stays Running and every waiter hangs. Here the fleet has closed (its scope is over) before the start.
+    @Test fun aStartOnAnEndedScopeIsCancelledAndItsWaiterIsAnswered() = runTest {
+        val ended = CoroutineScope(StandardTestDispatcher(testScheduler) + Job()).apply { cancel() }
+        val c = DownloadCenter(ended)
+        val claim = c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, FakeSource())
+        runCurrent()
+        assertEquals(DownloadState.Cancelled, c.items.value.single().state)
+        assertNull(claim.await())
+    }
+
+    @Test fun aCancelBeforeTheJobFirstRanLeavesItCancelled() = runTest {
+        val c = center()
+        val s = FakeSource()
+        val claim = c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s)
+        c.cancel("k")
+        runCurrent()
+        assertEquals(DownloadState.Cancelled, c.items.value.single().state)
+        assertNull(claim.await())
+        assertEquals(0, s.fetches)
+    }
+
+    // The same when the scope ends between the start and the job's first run.
+    @Test fun aScopeEndingBeforeTheJobFirstRanLeavesItCancelled() = runTest {
+        val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+        val c = DownloadCenter(scope)
+        val claim = c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, FakeSource())
+        scope.cancel()
+        runCurrent()
+        assertEquals(DownloadState.Cancelled, c.items.value.single().state)
+        assertNull(claim.await())
     }
 }
