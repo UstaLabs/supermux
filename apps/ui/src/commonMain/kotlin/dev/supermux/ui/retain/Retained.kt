@@ -4,10 +4,13 @@
 package dev.supermux.ui.retain
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.state.RetainedUiState
+import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 
 /** The fleet's [RetainedUiState], provided by the shell. Null outside one (a test, a preview). */
@@ -30,3 +33,48 @@ fun <T : Any> rememberRetained(key: String, create: () -> T): T {
  */
 @Composable
 fun rememberRetainedScope(): CoroutineScope = LocalRetainedUiState.current?.scope ?: rememberCoroutineScope()
+
+/**
+ * The opening of the page on display, for [rememberRetainedOnPage] (#89). A page whose forms must
+ * start empty each time the user opens it (Settings' sections, Add host) gets a new value per
+ * opening, kept through a recreation and the Compact↔wide swap. Null: no page, so nothing resets.
+ */
+val LocalRetainedPage = staticCompositionLocalOf<String?> { null }
+
+/** A new [LocalRetainedPage] value: unique, so no earlier opening's forms match it. */
+fun newRetainedPageOpening(): String = Random.nextLong().toString(36)
+
+/**
+ * Gives [content] a page opening of its own ([LocalRetainedPage]), saved with the composition: a
+ * recreation and the swap keep it, a new opening of the page composes a new one. Put it where only
+ * a new opening composes it anew, above any Compact↔wide branch: a nav entry, a dialog's caller.
+ */
+@Composable
+fun RetainedPage(content: @Composable () -> Unit) {
+    val opening = rememberSaveable { newRetainedPageOpening() }
+    CompositionLocalProvider(LocalRetainedPage provides opening, content = content)
+}
+
+/**
+ * [rememberRetained] for a form on the page on display: a recreation and the Compact↔wide swap
+ * find it again, and the next opening of the page ([LocalRetainedPage]) starts from [create], as a
+ * new composition did before #89. One instance per [key], replaced rather than piled up, so a
+ * secret typed and then left is dropped at the next opening at the latest, and only ever in memory.
+ */
+@Composable
+fun <T : Any> rememberRetainedOnPage(key: String, create: () -> T): T {
+    val opening = LocalRetainedPage.current
+    val slot = rememberRetained(key) { PageSlot(opening, create()) }
+    val value = remember(slot, opening) {
+        if (slot.opening != opening) {
+            slot.opening = opening
+            slot.value = create()
+        }
+        slot.value
+    }
+    @Suppress("UNCHECKED_CAST")
+    return value as T
+}
+
+/** One [rememberRetainedOnPage] value and the page opening it belongs to. */
+private class PageSlot(var opening: String?, var value: Any)

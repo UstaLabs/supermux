@@ -70,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import dev.supermux.ui.retain.rememberRetainedOnPage
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsSectionHeader
@@ -120,7 +122,17 @@ fun LspSettingsScreen(
     var toggling by remember { mutableStateOf<String?>(null) }
     var installing by remember { mutableStateOf<String?>(null) }
     var removing by remember { mutableStateOf<String?>(null) }
-    var showAddForm by remember { mutableStateOf(false) }
+    // The "Add language server" form, open or not, what is typed in it and its save, kept for the
+    // page on display (#89): a rotation closed it with seven fields of typing gone. The save runs
+    // on the fleet's scope and leaves the new list in [LspAddForm.added] for the screen on display.
+    val add = rememberRetainedOnPage("lsp:add") { LspAddForm() }
+    val saves = rememberRetainedScope()
+    var showAddForm by add::open
+    LaunchedEffect(add, add.added) {
+        val list = add.added ?: return@LaunchedEffect
+        add.added = null
+        servers = list
+    }
 
     val installLog by lspInstallLog.collectAsState()
     val installDone by lspInstallDone.collectAsState()
@@ -245,13 +257,14 @@ fun LspSettingsScreen(
                         }
                     } else {
                         AddLspForm(
-                            onCancel = { showAddForm = false },
+                            form = add,
+                            onCancel = { add.close() },
                             onSubmit = { args, onResult ->
-                                scope.launch {
+                                saves.launch {
                                     val r = lspAddCustom(args)
                                     if (r?.ok == true && r.lsp != null) {
-                                        servers = r.lsp!!.servers
-                                        showAddForm = false
+                                        add.close()
+                                        add.added = r.lsp!!.servers
                                         onResult(null)
                                     } else {
                                         onResult(r?.error ?: "Couldn't add language server")
@@ -381,19 +394,20 @@ private fun LspServerRow(
 
 @Composable
 private fun AddLspForm(
+    form: LspAddForm,
     onCancel: () -> Unit,
     onSubmit: (AddCustomLspArgs, onResult: (String?) -> Unit) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    var label by remember { mutableStateOf("") }
-    var id by remember { mutableStateOf("") }
-    var command by remember { mutableStateOf("") }
-    var args by remember { mutableStateOf("") }
-    var extensions by remember { mutableStateOf("") }
-    var languageId by remember { mutableStateOf("") }
-    var installCmd by remember { mutableStateOf("") }
-    var saving by remember { mutableStateOf(false) }
-    var addError by remember { mutableStateOf<String?>(null) }
+    var label by form::label
+    var id by form::id
+    var command by form::command
+    var args by form::args
+    var extensions by form::extensions
+    var languageId by form::languageId
+    var installCmd by form::installCmd
+    var saving by form::saving
+    var addError by form::addError
 
     Column(
         Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("lsp_add_form"),
@@ -444,8 +458,8 @@ private fun AddLspForm(
                             installCmd = installCmd.trim().ifEmpty { null },
                         ),
                     ) { err ->
-                        saving = false
-                        if (err != null) addError = err
+                        form.saving = false
+                        if (err != null) form.addError = err
                     }
                 },
                 enabled = !saving,
@@ -526,4 +540,37 @@ internal fun slugId(label: String): String {
         .joinToString("-")
         .take(48)
     return slug.ifEmpty { "server" }
+}
+
+/**
+ * The "Add language server" form, kept for the page on display (`rememberRetainedOnPage`, #89):
+ * open or not, the fields, and a save in flight, which leaves the broker's new list in [added].
+ * Cancel and a save close it and empty it, as the form's own composition went before.
+ */
+private class LspAddForm {
+    var open by mutableStateOf(false)
+    var label by mutableStateOf("")
+    var id by mutableStateOf("")
+    var command by mutableStateOf("")
+    var args by mutableStateOf("")
+    var extensions by mutableStateOf("")
+    var languageId by mutableStateOf("")
+    var installCmd by mutableStateOf("")
+    var saving by mutableStateOf(false)
+    var addError by mutableStateOf<String?>(null)
+    /** The servers after a save, for the screen on display. */
+    var added by mutableStateOf<List<LspServer>?>(null)
+
+    fun close() {
+        open = false
+        label = ""
+        id = ""
+        command = ""
+        args = ""
+        extensions = ""
+        languageId = ""
+        installCmd = ""
+        saving = false
+        addError = null
+    }
 }

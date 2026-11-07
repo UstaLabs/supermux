@@ -35,6 +35,7 @@ class TreeViewState(
             edits.dialog = value
             edits.typed = null
             edits.permanent = false
+            edits.op = null
         }
     /**
      * The in-place New file / New folder / Rename field this pane has open, or null — the
@@ -45,12 +46,16 @@ class TreeViewState(
         set(value) {
             edits.inlineEdit = value
             edits.typed = null
+            edits.op = null
         }
     val list = LazyListState()
 
     /** The name being typed in the open [dialog] or [inlineEdit]: [initial] until something is. */
     fun typedName(initial: () -> TextFieldValue): TypedName =
         edits.typed ?: TypedName(initial()).also { edits.typed = it }
+
+    /** The op the open [dialog] or [inlineEdit] runs (see [FileOp]). */
+    fun fileOp(): FileOp = edits.op ?: FileOp().also { edits.op = it }
 
     /**
      * Open [action]: in place when [inline] (a hardware keyboard is available — see
@@ -128,12 +133,30 @@ class TreeViewEdits {
     var typed: TypedName? = null
     /** The delete dialog's second step: the trash is on another filesystem. */
     var permanent by mutableStateOf(false)
+    /** The op of the open [dialog] or [inlineEdit] (see [TreeViewState.fileOp]). */
+    var op: FileOp? = null
 }
 
 /** A name being typed in a Files dialog or in-place field. */
 class TypedName(initial: TextFieldValue) {
     var value by mutableStateOf(initial)
 }
+
+/**
+ * A create, rename or delete that a Files dialog or in-place field started (#89). It runs on the
+ * fleet's scope, so a rotation or a width change does not cut it off half done, and its [result]
+ * waits here for the dialog or field on screen, which finishes it with its own callbacks: the
+ * selection, the folders shown, the tabs open on a renamed or deleted path.
+ */
+class FileOp {
+    var busy by mutableStateOf(false)
+    /** The broker's refusal, shown in the dialog or under the field. */
+    var error by mutableStateOf<String?>(null)
+    var result by mutableStateOf<FileOpResult?>(null)
+}
+
+/** A finished [FileOp]: the [name] it ran for, whether an in-place field takes the tree's focus back, and its failure if any. */
+class FileOpResult(val name: String, val refocus: Boolean, val failure: Throwable?)
 
 /** Per-host, in-memory holder: one [TreeViewState] per Files view id. */
 class TreeViewStates {

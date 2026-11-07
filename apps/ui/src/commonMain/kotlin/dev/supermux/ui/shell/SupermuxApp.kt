@@ -140,6 +140,7 @@ import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.retain.RetainedPage
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.NewProjectDialog
@@ -1098,16 +1099,21 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
                                 EscapeBox("add_host_overlay", onEscape = { ui.goBack() }) {
-                                    AddHostScreen(
-                                        onBack = { ui.goBack() },
-                                        defaultDeviceName = defaultDeviceName,
-                                        onClaim = { payload, name -> fleet.addHost(payload, name) },
-                                        onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
-                                        onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
-                                        onAdded = { onAddedHost(); ui.goBack() },
-                                        needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
-                                        pendingScans = LocalPlatform.current.pendingScans(),
-                                    )
+                                    // One opening of the screen: a claim in flight and its outcome
+                                    // are kept for it through a rotation, and the next one starts
+                                    // clean (#89).
+                                    RetainedPage {
+                                        AddHostScreen(
+                                            onBack = { ui.goBack() },
+                                            defaultDeviceName = defaultDeviceName,
+                                            onClaim = { payload, name -> fleet.addHost(payload, name) },
+                                            onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
+                                            onClaimByUrl = { url, name, allow -> fleet.addHostByUrl(url, name, allow) },
+                                            onAdded = { onAddedHost(); ui.goBack() },
+                                            needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
+                                            pendingScans = LocalPlatform.current.pendingScans(),
+                                        )
+                                    }
                                 }
                             }
 
@@ -1228,11 +1234,15 @@ fun SupermuxApp(
                                 EscapeBox("devices_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DevicesSettingsScreen(
-                                                actions = rememberDevicesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // The same page as the hub's Devices section, so its
+                                            // dialogs and a minted link survive a rotation (#89).
+                                            RetainedPage {
+                                                DevicesSettingsScreen(
+                                                    actions = rememberDevicesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1244,11 +1254,14 @@ fun SupermuxApp(
                                 EscapeBox("proxies_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            ProxiesSettingsScreen(
-                                                actions = rememberProxiesSettingsActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // As Devices above: the page keeps its dialogs (#89).
+                                            RetainedPage {
+                                                ProxiesSettingsScreen(
+                                                    actions = rememberProxiesSettingsActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }

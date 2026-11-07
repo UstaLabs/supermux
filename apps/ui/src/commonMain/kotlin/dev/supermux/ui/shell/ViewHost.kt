@@ -315,7 +315,7 @@ fun ViewHost(
             // Not `?: hint`: BOTH hosts mint a Display view with an EMPTY displayId (the stream is
             // started separately), and `stateString` hands that back as "". A blank id therefore
             // means "whatever is running here", not "a stream that has gone away".
-            DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), modifier)
+            DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), "$workspaceId:${view.id}", modifier)
         }
         else -> UnknownViewHint(view.kind, modifier)
     }
@@ -797,6 +797,8 @@ private fun DiffPaneForWorkspace(
 private fun DisplayPanelForStream(
     actions: ShellActions,
     displayId: String,
+    /** The view, named so its VNC password survives a rotation or the width swap, and only that (#89). */
+    retainKey: String,
     modifier: Modifier,
 ) {
     val live by actions.display.displays.collectAsState()
@@ -825,6 +827,7 @@ private fun DisplayPanelForStream(
         sessionName = stream.sessionName,
         actions = actions.display,
         modifier = modifier.fillMaxSize().testTag("view_display"),
+        retainKey = retainKey,
     )
 }
 

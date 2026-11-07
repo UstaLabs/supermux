@@ -42,12 +42,15 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.RememberObserver
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.LocalSaveableStateRegistry
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +80,8 @@ import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.retain.newRetainedPageOpening
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -155,6 +160,11 @@ fun DisplayPanel(
     sessionName: String,
     actions: DisplayActions,
     modifier: Modifier = Modifier,
+    /**
+     * Names this panel, so a VNC password survives a rebuild of it (an Android recreation, the
+     * Compact↔wide swap) and nothing else. Null: kept only as long as this composition.
+     */
+    retainKey: String? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -179,7 +189,7 @@ fun DisplayPanel(
         contentAlignment = Alignment.Center,
     ) {
         when {
-            stream != null -> DisplayStreamSurface(stream, actions, Modifier.fillMaxSize())
+            stream != null -> DisplayStreamSurface(stream, actions, Modifier.fillMaxSize(), retainKey)
             !seeded -> CircularProgressIndicator(color = cs.primary)
             else -> DisplayEmptyState(
                 starting = starting,
@@ -211,6 +221,8 @@ fun DisplayStreamSurface(
     stream: DisplayStream,
     actions: DisplayActions,
     modifier: Modifier = Modifier,
+    /** See [DisplayPanel]'s: what a VNC password is kept under through a rebuild, if anything. */
+    retainKey: String? = null,
 ) {
     val platform = LocalPlatform.current
     val decoder = platform.videoDecoder()
@@ -219,7 +231,7 @@ fun DisplayStreamSurface(
         // shared chip/control bar/keyboard field with it — it is the only holder of the
         // ScrcpyClient, so the panel cannot draw that chrome on its behalf.
         DisplayTransport.VIDEO -> decoder!!.VideoSurface(stream.id, actions.connectScrcpy, modifier)
-        DisplayTransport.VNC -> VncView(stream.id, actions.connectVnc, stream.provider, modifier)
+        DisplayTransport.VNC -> VncView(stream.id, actions.connectVnc, stream.provider, retainKey, actions.displays, modifier)
         DisplayTransport.UNSUPPORTED ->
             Text(
                 "Unsupported display transport '${stream.transport}'",
@@ -316,9 +328,13 @@ private fun VncView(
     streamId: String,
     connectVnc: (String) -> VncClient,
     provider: String,
+    retainKey: String?,
+    /** The host connection the streams come from: a password is only ever handed back to it. */
+    source: Any,
     modifier: Modifier = Modifier,
 ) {
-    val client = remember(streamId) { connectVnc(streamId) }
+    val secret = rememberVncSecret(retainKey, streamId, source)
+    val client = remember(streamId) { connectVnc(streamId).also { c -> secret.accepted?.let(c::setPassword) } }
     val fb = remember(streamId) { VncFramebuffer() }
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
@@ -329,6 +345,24 @@ private fun VncView(
 
     LaunchedEffect(client) { client.run() }
     LaunchedEffect(client) { client.updates.collect { rects -> fb.applyUpdate(rects, client.size.value) } }
+    // The client's verdict on the password it holds: one the screen refused is never handed to a
+    // rebuilt view, and a connection that drops ends what the user gave, as it ended the client's
+    // own before #89 kept a copy. What is typed into an open prompt stays.
+    LaunchedEffect(client, secret) {
+        var connected = false
+        client.status.collect { now ->
+            when (now) {
+                VncStatus.CONNECTED -> connected = true
+                // Raised only without a password, or for a refused one.
+                VncStatus.NEEDS_PASSWORD -> secret.accepted = null
+                VncStatus.DISCONNECTED -> if (connected) {
+                    connected = false
+                    secret.accepted = null
+                }
+                VncStatus.CONNECTING -> Unit
+            }
+        }
+    }
     // Warm-display: with keepAlivePanel the panel stays composed across tab toggles, so onDispose
     // fires only on real teardown (leaving the session) — the right point.
     DisposableEffect(client) { onDispose { client.stop(); fb.release() } }
@@ -411,10 +445,107 @@ private fun VncView(
     if (showPassword) {
         VncPasswordPrompt(
             provider = provider,
-            onSubmit = { pw -> client.setPassword(pw); showPassword = false },
-            onDismiss = { showPassword = false },
+            password = secret.typed,
+            onPasswordChange = { secret.typed = it },
+            onSubmit = { pw ->
+                secret.accepted = pw
+                secret.typed = ""
+                client.setPassword(pw)
+                showPassword = false
+            },
+            onDismiss = {
+                secret.typed = ""
+                showPassword = false
+            },
         )
     }
+}
+
+/**
+ * A display's VNC password: what is typed into the prompt, and the one the user sent. In memory
+ * only, never saved.
+ *
+ * Kept for the client of a REBUILT view, and for nothing else (#89): an Android recreation
+ * (rotate, fold, dark mode…) and the Compact↔wide swap replace the view and its client, which
+ * asked for the password again and dropped what was half typed. Every other way a view goes
+ * (closed, another tab shown, its stream stopped, its host forgotten) forgets it, so the next one
+ * asks as it always did. A security behavior, so a view takes it over only when it can tell that
+ * it IS the rebuild ([VncSecretHold]); when it cannot, it asks.
+ */
+private class VncSecret {
+    /** The one the user sent: the client's own for reconnects, and a rebuilt view's client's. */
+    var accepted: String? = null
+    /** What is typed in the prompt, until it is sent or dismissed. */
+    var typed by mutableStateOf("")
+    /** The token of the view holding this, which that view's saved state carries through a recreation. */
+    var token: String? = null
+    /** That view's host connection: a forgotten and re-added host never gets this back. */
+    var source: Any? = null
+    /** Views holding this right now: two only while the swap builds the new layout. */
+    var holders = 0
+    /** The holding view's state was saved since it last composed, as a recreation saves it before disposing it. */
+    var saved = false
+
+    fun forget() {
+        accepted = null
+        if (typed.isNotEmpty()) typed = ""
+    }
+}
+
+/**
+ * One view's hold on its [VncSecret], from the composition that makes it until the view goes. Taken
+ * DURING composition: the swap composes the new layout before it disposes the old one, so the new
+ * view still finds the old one holding (#89).
+ */
+private class VncSecretHold(private val secret: VncSecret, token: String, source: Any) : RememberObserver {
+    init {
+        // The old view is still there (the swap), or this one's saved token came back from the same
+        // host (a recreation): the same open display, rebuilt. Anything else opens it anew.
+        val rebuilt = secret.holders > 0 || (secret.token == token && secret.source === source)
+        if (!rebuilt) secret.forget()
+        secret.token = token
+        secret.source = source
+        secret.holders++
+        secret.saved = false
+    }
+
+    override fun onRemembered() = Unit
+    override fun onForgotten() = release()
+    override fun onAbandoned() = release()
+
+    private fun release() {
+        secret.holders--
+        // Saved just before it went: an activity being recreated, whose new view takes this back.
+        // Otherwise nothing will: the view was closed, hidden or emptied. Not a rebuild, so forget.
+        if (secret.holders == 0 && !secret.saved) secret.forget()
+    }
+}
+
+/**
+ * The [VncSecret] of the VNC view named [retainKey] showing [streamId] (#89). Without a name it
+ * lives as long as this composition, as it did before. With one, it is the fleet's, under that
+ * name, and a [VncSecretHold] decides whether this view inherits it.
+ */
+@Composable
+private fun rememberVncSecret(retainKey: String?, streamId: String, source: Any): VncSecret {
+    if (retainKey == null) return remember(streamId) { VncSecret() }
+    val key = "vnc:$retainKey:$streamId"
+    val secret = rememberRetained(key) { VncSecret() }
+    // Saved under the display's own name rather than its place in the tree: a rotation can bring the
+    // display back in the other layout, and its token must still find it there.
+    val registry = LocalSaveableStateRegistry.current
+    val token = remember(registry, key) { registry?.consumeRestored(key) as? String ?: newRetainedPageOpening() }
+    remember(secret, token) { VncSecretHold(secret, token, source) }
+    DisposableEffect(registry, key, token, secret) {
+        val entry = registry?.registerProvider(key) {
+            secret.saved = true
+            token
+        }
+        onDispose { entry?.unregister() }
+    }
+    // Composed again after a save: that save was the app going to the background, not a recreation.
+    SideEffect { secret.saved = false }
+    return secret
 }
 
 /**
@@ -472,9 +603,14 @@ fun DisplayControlBar(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VncPasswordPrompt(provider: String, onSubmit: (String) -> Unit, onDismiss: () -> Unit) {
+private fun VncPasswordPrompt(
+    provider: String,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    onSubmit: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
-    var password by remember { mutableStateOf("") }
     val isMac = provider == "macos-screen"
     val explain = if (isMac) "This Mac's Screen Sharing requires a password to connect."
         else "This display requires a password to connect."
@@ -489,7 +625,7 @@ private fun VncPasswordPrompt(provider: String, onSubmit: (String) -> Unit, onDi
                     Text(explain)
                     OutlinedTextField(
                         value = password,
-                        onValueChange = { password = it },
+                        onValueChange = onPasswordChange,
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth().testTag("vnc_password_field"),
@@ -522,7 +658,7 @@ private fun VncPasswordPrompt(provider: String, onSubmit: (String) -> Unit, onDi
             Text(explain, color = cs.onSurfaceVariant, fontSize = 13.sp)
             OutlinedTextField(
                 value = password,
-                onValueChange = { password = it },
+                onValueChange = onPasswordChange,
                 label = { Text("Screen sharing password") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
