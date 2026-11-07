@@ -976,6 +976,15 @@ class FleetStore(
      * single-workspace, and [updateViewing] has already cleared every other host's entry, so
      * re-asserting on the rest would resurrect presence the fleet deliberately dropped.
      */
+    /**
+     * Card #62: live text for [sessionIds] without their being on screen (the assistant overlay's Agent), asked of
+     * the host that owns each; every other host's pins are cleared. Presence for nothing ([HostStore.pinLive]).
+     */
+    fun pinLive(sessionIds: Set<String>) {
+        val byHost = sessionIds.groupBy { appFor(it) }
+        for (conn in conns.values) conn.app.pinLive(byHost[conn.app].orEmpty())
+    }
+
     fun reassertViewing() {
         activeApp()?.reassertViewing()
     }

@@ -11,8 +11,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import dev.supermux.state.FleetStore
+import dev.supermux.state.LiveReply
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** [ChatState] collected off a [FleetStore] for one session. */
 @Composable
@@ -27,6 +30,8 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
     val subagents by fleet.subagents.collectAsState()
     val councils by fleet.councils.collectAsState()
     val sessions by fleet.sessions.collectAsState()
+    // Card #76: the reply being written, from the host that owns the chat (as the one-host form reads it).
+    val liveMap by (remember(fleet, sessionId) { fleet.appFor(sessionId) }?.liveReplies ?: NoLiveReplies).collectAsState()
     val listedSessions = remember(sessions) { sessions.mapTo(HashSet()) { it.id } }
     // Gate the holder READ on the capability: a host built without a WalkthroughSeam has none.
     val walkthrough = if (LocalPlatform.current.caps.walkthrough) {
@@ -48,8 +53,12 @@ fun rememberChatState(fleet: FleetStore, sessionId: String): ChatState {
         councils = councils[sessionId].orEmpty(),
         councilActivity = councilActivityOf(councils[sessionId].orEmpty(), agentState, activity),
         listedSessions = listedSessions,
+        live = liveMap[sessionId].orEmpty(),
     )
 }
+
+/** A chat whose host isn't known yet has nothing being written. */
+private val NoLiveReplies: StateFlow<Map<String, List<LiveReply>>> = MutableStateFlow(emptyMap())
 
 /** [ChatActions] wired to a [FleetStore] for one session. */
 @Composable

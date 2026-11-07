@@ -6,11 +6,12 @@ import { join } from "path"
 import { tmpdir } from "os"
 import { WebChannel, type WebChannelOpts } from "./index"
 import { DeviceStore } from "./device-store"
+import { ViewingTracker } from "../../core/push/viewing-tracker"
 
 let channel: WebChannel | undefined
 afterEach(async () => { if (channel) { await channel.stop(); channel = undefined } })
 
-async function boot(): Promise<string> {
+async function boot(extra: Partial<WebChannelOpts> = {}): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "mux-live-"))
   const devicesFile = join(dir, "devices.json")
   const opts: WebChannelOpts = {
@@ -24,6 +25,7 @@ async function boot(): Promise<string> {
     getSessionCommandsResolved: () => true,
     setMute: () => {},
     onSendFromWeb: () => {},
+    ...extra,
   }
   channel = new WebChannel(opts)
   await channel.start()
@@ -110,4 +112,64 @@ test("a reconnect gets the open streams of its on-screen chats in the snapshot",
   const old = await connect(token, { logTail: 1, fullLogs: ["a"] })
   expect((await old.snapshot).streams).toBeUndefined()
   app.ws.close(); old.ws.close()
+})
+
+// Card #62: the assistant overlay floats an Agent's reply over other apps as it is written. `live` asks for a
+// chat's live text without showing it: no presence, so nothing is read and pushes still go out.
+test("an app that pins a chat gets its live text with nothing on screen, and is not present there", async () => {
+  const tracker = new ViewingTracker()
+  const read: string[] = []
+  const token = await boot({ viewingTracker: tracker, markRead: (s) => { read.push(s) } })
+  const app = await connect(token, { streams: 1 })
+  app.ws.send(JSON.stringify({ type: "live", sessions: ["a"] }))
+  await Bun.sleep(30)
+  channel!.liveAppend("a", "k1", "reply", "Hel")
+  await until(() => live(app).length >= 1)
+  expect(live(app)[0]).toEqual({ type: "reply_stream", session: "a", stream: "k1", at: 0, text: "Hel" })
+  expect(tracker.isAnyPresentFor("a")).toBe(false)
+  expect(tracker.isAnyExactViewing("a")).toBe(false)
+  expect(read).toEqual([])
+  app.ws.close()
+})
+
+test("a pinned chat keeps its live text whatever the screen shows, until it is unpinned", async () => {
+  const token = await boot()
+  const app = await connect(token, { streams: 1 })
+  app.ws.send(JSON.stringify({ type: "live", sessions: ["a"] }))
+  // Another chat on screen, chat "a" left, then the app in the background: none of it is the pin's business.
+  app.ws.send(JSON.stringify({ type: "viewing", sessions: ["b"], visible: true }))
+  app.ws.send(JSON.stringify({ type: "viewing", session: "a", visible: false }))
+  app.ws.send(JSON.stringify({ type: "viewing", session: null, visible: false }))
+  await Bun.sleep(30)
+  channel!.liveAppend("a", "k1", "reply", "still")
+  await until(() => live(app).length >= 1)
+  expect(live(app)[0]).toEqual({ type: "reply_stream", session: "a", stream: "k1", at: 0, text: "still" })
+  app.ws.send(JSON.stringify({ type: "live", sessions: [] }))
+  await Bun.sleep(30)
+  channel!.liveAppend("a", "k1", "reply", " more")
+  await Bun.sleep(80)
+  expect(live(app).length).toBe(1)
+  app.ws.close()
+})
+
+test("a chat pinned mid-reply gets its text so far at once", async () => {
+  const token = await boot()
+  const app = await connect(token, { streams: 1 })
+  channel!.liveAppend("a", "k1", "reply", "one two")
+  await Bun.sleep(30)
+  app.ws.send(JSON.stringify({ type: "live", sessions: ["a"] }))
+  await until(() => live(app).length >= 1)
+  expect(live(app)[0]).toEqual({ type: "reply_stream", session: "a", stream: "k1", at: 0, text: "one two" })
+  app.ws.close()
+})
+
+test("an app that never asked for live text gets none for a pinned chat", async () => {
+  const token = await boot()
+  const old = await connect(token, {})
+  old.ws.send(JSON.stringify({ type: "live", sessions: ["a"] }))
+  await Bun.sleep(30)
+  channel!.liveAppend("a", "k1", "reply", "Hel")
+  await Bun.sleep(80)
+  expect(live(old)).toEqual([])
+  old.ws.close()
 })

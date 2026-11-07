@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -12,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.util.Log
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -119,13 +121,16 @@ class AndroidPlatform(
     /** FCM channel + POST_NOTIFICATIONS + relay registration. */
     override val push: PushRegistrar = AndroidPushRegistrar(context)
 
-    /** ACTION_VIEW into whatever the user set as their browser. Swallows the "no activity" case. */
+    /** ACTION_VIEW into whatever the user set as their browser. A failure is logged, never thrown. */
     override fun openUrl(url: String) {
         runCatching {
-            // No FLAG_ACTIVITY_NEW_TASK: the browser must sit on top of our task so Back returns
-            // to supermux (the behaviour of every call site this replaced).
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }
+            val view = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            // From an activity, no FLAG_ACTIVITY_NEW_TASK: the browser sits on top of our task, so Back
+            // returns to supermux. The assistant overlay (#62) has no activity, only a service's window,
+            // and Android starts nothing from there without a task of its own: it throws instead.
+            if (context.activity() == null) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(view)
+        }.onFailure { Log.w("SupermuxPlatform", "couldn't open $url", it) }
     }
 
     /** Parity with iOS `UIPasteboard.general.string`; the clip label is not user-visible. */
@@ -305,6 +310,16 @@ val ANDROID_CAPS = Caps(
     // A chat head over other apps (overlay/AssistantOverlayService.kt), behind its Appearance switch.
     assistantOverlay = true,
 )
+
+/** The activity behind this context, through any wrappers; null for a service's or a window's own context. */
+internal fun Context.activity(): Activity? {
+    var c: Context? = this
+    while (c is ContextWrapper) {
+        if (c is Activity) return c
+        c = c.baseContext
+    }
+    return null
+}
 
 /** A pick that completed with nobody awaiting it, tagged with what asked for it. */
 data class UnclaimedPick<R : Any>(val result: R, val kind: PickKind, val requester: String)

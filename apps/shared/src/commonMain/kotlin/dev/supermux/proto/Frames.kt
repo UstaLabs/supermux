@@ -1014,6 +1014,15 @@ sealed interface ClientFrame {
         val sessions: List<String>? = null,
     ) : ClientFrame
 
+    /**
+     * Card #62: live text (`reply_stream`) for [sessions] without their being on screen: the assistant overlay
+     * floats its Agent's reply over other apps as it is written. Replaces the last such set. Unlike [Viewing] it
+     * is presence for nothing, so nothing is read and pushes still go out. An older broker ignores it, and the
+     * overlay shows the stored reply instead.
+     */
+    @Serializable @SerialName("live")
+    data class Live(val sessions: List<String>) : ClientFrame
+
     @Serializable @SerialName("set_permission_mode")
     data class SetPermissionMode(val session: String, val mode: String) : ClientFrame
 
