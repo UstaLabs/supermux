@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { createHash } from "crypto"
 import { mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
@@ -88,3 +88,30 @@ test("a failing run yields no models", async () => {
   })
   expect(models).toEqual([])
 })
+
+// An empty picker alone never said why: the EBUSY on Windows (#103) and a signed-out agy both read as "no models".
+test("a failing discovery logs why, once per cause; after it works again a failure is said again", async () => {
+  const prev = process.env.MUX_LOG_LEVEL
+  process.env.MUX_LOG_LEVEL = "info"
+  const spy = spyOn(process.stderr, "write")
+  const said = () => spy.mock.calls.map((c) => String(c[0])).filter((line) => line.includes("antigravity_models_failed"))
+  const signedOut = async (): Promise<string> => {
+    throw new Error("agy exited 1: Fetching available models...\nError: Please sign in to view available models.")
+  }
+  try {
+    expect(await discoverAntigravityModels({ stateDir, userHome: fakeUser, run: signedOut })).toEqual([])
+    expect(await discoverAntigravityModels({ stateDir, userHome: fakeUser, run: signedOut })).toEqual([])
+    expect(await discoverAntigravityModels({ stateDir, userHome: fakeUser, run: async () => { throw new Error("agy timed out") } })).toEqual([])
+    expect(said()).toHaveLength(2)
+    expect(said()[0]).toContain("Please sign in to view available models.")
+    expect(said()[1]).toContain("agy timed out")
+
+    expect(await discoverAntigravityModels({ stateDir, userHome: fakeUser, run: async () => RAW })).toHaveLength(1)
+    await discoverAntigravityModels({ stateDir, userHome: fakeUser, run: signedOut })
+    expect(said()).toHaveLength(3)
+  } finally {
+    spy.mockRestore()
+    process.env.MUX_LOG_LEVEL = prev
+  }
+})
+
