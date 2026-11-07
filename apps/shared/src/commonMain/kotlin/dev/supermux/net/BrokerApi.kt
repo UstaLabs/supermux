@@ -1778,6 +1778,13 @@ class BrokerApi(
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
     //
+    // encodeDefaults=true (card #97): a field that HAS a value is always sent, even when it equals
+    // the Kotlin default. The broker merges a write over what it stored and reads a missing field as
+    // "unchanged", so dropping defaults made the user's choice vanish whenever it was the default:
+    // "Switch accounts automatically" could not be turned off (`{autoSwitch:false}` went out as `{}`)
+    // and the curator could not go back to Off, 01:00 or Claude. Null stays the one way to say "not
+    // set" — explicitNulls=false above still leaves it out.
+    //
     // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
     // that field's DEFAULT instead of throwing — the per-field leniency Android's hand-written
     // usage parser had, and which the typed decode has to keep now that it replaced it (a broker
@@ -1790,6 +1797,7 @@ class BrokerApi(
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+        encodeDefaults = true
         coerceInputValues = true
     }
     internal var spawnTimeoutMillis: Long = 120_000
@@ -2704,12 +2712,16 @@ class BrokerApi(
     suspend fun getCuratorSettings(): CuratorSettingsResponse =
         getJson("$httpBase/settings/curator")
 
-    /** PUT /settings/curator → updated {config, nextRun} */
+    /**
+     * PUT /settings/curator → updated {config, nextRun}. A null model or effort ("Default") goes out
+     * as "", the broker's "back to the agent's own": null itself is never sent, and a key left out
+     * keeps whatever model was stored before.
+     */
     suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(config))
+            setBody(json.encodeToString(config.copy(model = config.model ?: "", reasoningLevel = config.reasoningLevel ?: "")))
         })
 
     /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
