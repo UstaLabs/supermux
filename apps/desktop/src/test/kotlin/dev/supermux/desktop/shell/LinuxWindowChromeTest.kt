@@ -38,6 +38,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.keys.KeyOs
 import java.awt.Frame
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -230,8 +231,8 @@ class LinuxWindowChromeTest {
 
     @Test
     fun shortcutsReadAsAMenuShowsThem() {
-        assertEquals("Ctrl+N", MenuShortcut(Key.N, ctrl = true).label)
-        assertEquals("Ctrl+Shift+V", MenuShortcut(Key.V, ctrl = true, shift = true).label)
+        assertEquals("Ctrl+N", MenuShortcut(Key.N, ctrl = true).label(KeyOs.Other))
+        assertEquals("Ctrl+Shift+V", MenuShortcut(Key.V, ctrl = true, shift = true).label(KeyOs.Other))
         assertEquals(KeyShortcut(Key.N, ctrl = true), MenuShortcut(Key.N, ctrl = true).toKeyShortcut())
     }
 

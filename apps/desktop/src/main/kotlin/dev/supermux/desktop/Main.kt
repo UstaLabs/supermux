@@ -21,6 +21,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
@@ -37,8 +38,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -166,7 +165,11 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
-import dev.supermux.desktop.shell.MenuShortcut
+import dev.supermux.desktop.shell.menuChords
+import dev.supermux.desktop.shell.menuShortcutFor
+import dev.supermux.ui.keys.AppCommand
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.ShortcutDispatcher
 import dev.supermux.desktop.shell.WindowsTitleBarHeight
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
@@ -906,9 +909,17 @@ fun main() {
 
         // Linux custom chrome: the main menu lives behind the ☰ button, and F10 / Alt+F/E/V open it.
         val mainMenuState = remember { MainMenuState() }
+        // The main window's keyboard: the menu bar drives it, and its menu keys gate the Linux menu.
+        val shortcuts = remember { ShortcutDispatcher() }
         Window(
             onPreviewKeyEvent = { e ->
+                // The window sees every key before Compose sends it to a layer. The dispatcher notes a press of a macOS
+                // menu key here, so that the menu's own firing of it right after is ignored (ShortcutDispatcher.onWindowKey).
+                shortcuts.onWindowKey(e)
+                // F10 / Alt+F/E/V open the Linux and Windows menu, but never over a terminal or remote screen:
+                // Alt+F there is the shell's (forward a word), as in VS Code.
                 e.type == KeyEventType.KeyDown &&
+                    !shortcuts.tracker.focusIsOpaque &&
                     mainMenuState.onWindowKey(e.key, e.isAltPressed, e.isCtrlPressed, e.isShiftPressed, e.isMetaPressed)
             },
             // Close hides to the tray (spec D3); without a tray there is nowhere to hide, so it quits.
@@ -968,23 +979,18 @@ fun main() {
             }
             var showUnpairConfirm by remember { mutableStateOf(false) }
 
-            // Menu bar (paired only). DEDUPE DECISION: the View toggle items are clickable-only —
-            // they carry NO KeyShortcut, because the in-app `Modifier.shellShortcuts` already
-            // owns Ctrl/Cmd+B/E/T/D; registering the same accelerator on the menu would risk a
-            // double-toggle (menu action + the key event still bubbling to the modifier). File ▸
-            // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
-            // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
-            // the key event still bubbling to shellShortcuts) is harmless.
-            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or — under the
-            // Linux custom chrome, which has no system frame to hang a menu bar in — the main-menu
-            // button in the sidebar band.
+            // Menu bar (paired only). The keys come from the keymap (DefaultKeymap), so the menu shows ⌘N on a
+            // Mac and Ctrl+N elsewhere. The items run through the dispatcher and grey out when their command can't run.
+            // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or, under the Linux custom
+            // chrome (no system frame to hang a menu bar in), the main-menu button in the sidebar band.
             val perfPanelVisible by dev.supermux.util.PerfTrace.panelVisible.collectAsState()
             val mainMenu = listOf(
                 MainMenuGroup(
                     "File",
                     'F',
                     listOf(
-                        MainMenuEntry.Action("New Session", MenuShortcut(Key.N, ctrl = true)) { ui.openLauncher() },
+                        MainMenuEntry.Action("New Session", menuShortcutFor(AppCommands.NewSession), enabled = shortcuts.rememberCanInvoke(AppCommands.NewSession)) { shortcuts.invokeFromMenu(AppCommands.NewSession) },
+                        MainMenuEntry.Action("New Terminal", menuShortcutFor(AppCommands.NewTerminal), enabled = shortcuts.rememberCanInvoke(AppCommands.NewTerminal)) { shortcuts.invokeFromMenu(AppCommands.NewTerminal) },
                         // Through the seam (cluster G1); AppShell binds the live registry into it.
                         MainMenuEntry.Action("Move workspace to New Window") { DesktopWindowHostController.tearOutCanvas() },
                         MainMenuEntry.Action("Move group to New Window") {
@@ -1001,7 +1007,7 @@ fun main() {
                         MainMenuEntry.Action("Archived…") { ui.openArchived() },
                         MainMenuEntry.Action("Displays…") { ui.openDisplays() },
                         MainMenuEntry.Action("Usage…") { ui.openUsage() },
-                        MainMenuEntry.Action("Settings…") { ui.openSettings() },
+                        MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
                         // Existing items keep working — they open the Settings hub focused on
                         // that section (same overlay as Settings…, not a separate stack).
                         MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
@@ -1014,15 +1020,9 @@ fun main() {
                     "Edit",
                     'E',
                     listOf(
-                        // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
-                        // The accelerator exists only while a chat composer has the focus: a
-                        // window-wide Ctrl+V would steal every paste from the code editor (M5 B2).
-                        MainMenuEntry.Action(
-                            "Paste image",
-                            // The same Ctrl+V as pasteImageShortcut, as menu data.
-                            pasteImageShortcut(dev.supermux.ui.chat.ChatInputFocus.focused)
-                                ?.let { MenuShortcut(Key.V, ctrl = true) },
-                        ) { ui.requestPasteImage() },
+                        // ⌘V / Ctrl+V in the composer pastes an image itself (Composer.kt); the menu item has no
+                        // key, or it would take every paste from the code editor.
+                        MainMenuEntry.Action("Paste image") { ui.requestPasteImage() },
                     ),
                 ),
                 MainMenuGroup(
@@ -1033,9 +1033,12 @@ fun main() {
                         // old shell's four fixed panes. A workspace has no fixed panes — views are
                         // created, split and closed on its own layout tree, from the tab strip's
                         // "+" — so there is nothing here to check on or off.
-                        MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed) {
-                            ui.sidebarCollapsed = !ui.sidebarCollapsed
-                        },
+                        MainMenuEntry.Toggle(
+                            "Show Sidebar",
+                            checked = !ui.sidebarCollapsed,
+                            shortcut = menuShortcutFor(AppCommands.ToggleSidebar),
+                            enabled = shortcuts.rememberCanInvoke(AppCommands.ToggleSidebar),
+                        ) { shortcuts.invokeFromMenu(AppCommands.ToggleSidebar) },
                         // Card #54: this launch's timeline, chat opens, WebSocket and HTTP traffic.
                         MainMenuEntry.Toggle("Load Timings", checked = perfPanelVisible) {
                             dev.supermux.util.PerfTrace.panelVisible.value = !perfPanelVisible
@@ -1043,7 +1046,13 @@ fun main() {
                     ),
                 ),
             )
-            if (paired && linuxChrome == null && windowsChrome == null) DesktopMenuBar(mainMenu)
+            val nativeMenu = paired && linuxChrome == null && windowsChrome == null
+            if (nativeMenu) DesktopMenuBar(mainMenu)
+            // macOS fires a menu key equivalent even when Compose already used the key (the JDK hands the key to
+            // Java first, then lets the menu act: AWTView.m). The dispatcher stays the one judge of a key: it notes
+            // the press (onWindowKey above), and the menu's echo of it is ignored (invokeFromMenu). A menu item
+            // clicked with the mouse runs normally.
+            SideEffect { shortcuts.nativeMenuChords = if (nativeMenu && isMacOs()) mainMenu.menuChords() else emptySet() }
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
@@ -1978,6 +1987,7 @@ fun main() {
                         SupermuxApp(
                             fleet = fleet,
                             ui = ui,
+                            shortcuts = shortcuts,
                             notify = notificationController,
                             appForeground = LocalWindowInfo.current.isWindowFocused && screenSeen,
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
@@ -2360,9 +2370,13 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
     )
 }
 
-/** Edit ▸ Paste image's accelerator: Ctrl+V while a chat composer is focused, none otherwise (the editor's paste stays its own). */
-internal fun pasteImageShortcut(chatInputFocused: Boolean): KeyShortcut? =
-    if (chatInputFocused) KeyShortcut(Key.V, ctrl = true) else null
+/**
+ * [ShortcutDispatcher.canInvoke] for a menu item, as state that changes only when the answer does. The menu is built
+ * in the window's own composition, which would otherwise recompose on every focus move.
+ */
+@Composable
+private fun ShortcutDispatcher.rememberCanInvoke(command: AppCommand): Boolean =
+    remember(this, command) { derivedStateOf { canInvoke(command) } }.value
 
 /**
  * Card #54: write each host's live sessions, workspaces, projects and preview lines to the desktop's

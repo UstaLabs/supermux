@@ -36,8 +36,8 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
  * The Displays overlay's wiring into [AppShell] — the desktop half of cluster G4 (the screen's own
  * behaviour is `:ui`'s `DisplaysScreenTest`).
  *
- * The overlay suppresses the screen's Back (the HostScopePicker is its chrome) and `shellShortcuts`
- * is gated off while any overlay is up, so ESCAPE is the only way out: the G4 review caught it as a
+ * The overlay suppresses the screen's Back (the HostScopePicker is its chrome) and the shortcuts
+ * are gated off while any overlay is up, so ESCAPE is the only way out: the G4 review caught it as a
  * one-way door and this pins the handler the Settings / AppUpdate entries already had.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
