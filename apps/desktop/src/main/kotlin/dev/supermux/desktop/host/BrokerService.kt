@@ -558,13 +558,45 @@ Terminal=false
         OsEnv.Os.OTHER -> false
     }
 
+    /**
+     * Whether our service definition is installed. On Windows `schtasks` answers, and a query that fails is not "no
+     * task" (#29): it let install write over a task it could not see, and remove report "removed" and delete the task
+     * loop's env file. When Windows cannot say, this throws [TaskStateUnknown], so every caller fails closed.
+     */
     fun isInstalled(env: OsEnv = SystemOsEnv): Boolean = when (env.os) {
         OsEnv.Os.MAC -> Files.exists(env.home.resolve("Library/LaunchAgents/$LAUNCHD_LABEL.plist"))
         OsEnv.Os.LINUX -> Files.exists(env.home.resolve(".config/systemd/user/$SYSTEMD_UNIT")) ||
             Files.exists(env.home.resolve(".config/autostart/$XDG_AUTOSTART_FILE"))
-        OsEnv.Os.WINDOWS -> env.runResult(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME)).exit == 0
+        OsEnv.Os.WINDOWS -> when (windowsTaskState(env)) {
+            TaskState.PRESENT -> true
+            TaskState.ABSENT -> false
+            TaskState.UNKNOWN -> throw TaskStateUnknown()
+        }
         OsEnv.Os.OTHER -> false
     }
+
+    /** Whether [WINDOWS_TASK_NAME] is registered; [UNKNOWN] when Windows could not say. */
+    internal enum class TaskState { PRESENT, ABSENT, UNKNOWN }
+
+    /** Windows could not say whether our task is registered, so nothing may be written over it or removed (#29). */
+    class TaskStateUnknown :
+        IllegalStateException("Windows could not say whether the \"$WINDOWS_TASK_NAME\" task is registered (schtasks failed); nothing was changed")
+
+    /**
+     * `/Query /TN` answers for our task. When it fails, its error text is in the user's language and cannot be read,
+     * so the whole list (`/Query /FO CSV /NH`, whose first field is each task's path: data, not words) tells "not
+     * registered" from a query that failed. The list failing as well is [TaskState.UNKNOWN].
+     */
+    internal fun windowsTaskState(env: OsEnv): TaskState {
+        if (env.runResult(listOf("schtasks", "/Query", "/TN", WINDOWS_TASK_NAME)).exit == 0) return TaskState.PRESENT
+        val list = env.runResult(listOf("schtasks", "/Query", "/FO", "CSV", "/NH"))
+        if (list.exit != 0) return TaskState.UNKNOWN
+        return if (taskListed(list.out, WINDOWS_TASK_NAME)) TaskState.PRESENT else TaskState.ABSENT
+    }
+
+    /** Pure: whether `schtasks /Query /FO CSV /NH` output [csv] lists [name] at the root folder (names ignore case). */
+    internal fun taskListed(csv: String, name: String): Boolean =
+        csv.lineSequence().any { it.trimStart().startsWith("\"\\$name\"", ignoreCase = true) }
 
     /**
      * True iff a definition of [me]'s is installed: it carries [me]'s id. Every copy of the app (and
@@ -952,14 +984,15 @@ Terminal=false
         val xml = windowsTaskXml(spec, envFile)
         val run = listOf("schtasks", "/Run", "/TN", WINDOWS_TASK_NAME)
         return runCatching {
+            // Compare with what is REGISTERED: that is what runs. Asked before anything is written: when Windows cannot
+            // say (isInstalled throws), nothing is (#29).
+            val wasInstalled = isInstalled(env)
+            val registered = if (wasInstalled) registeredTaskXml(env) else null
             // The loop reads its env from here on every (re)start: write it before anything runs.
             // With a BOM: Windows PowerShell reads a BOM-less script in the ANSI code page.
             writePrivate(envFile, "\uFEFF" + windowsEnvFile(spec))
             // An older version kept a copy of the definition, env included, next to it.
             Files.deleteIfExists(env.localAppData.resolve(WINDOWS_TASK_XML))
-            val wasInstalled = isInstalled(env)
-            // Compare with what is REGISTERED: that is what runs.
-            val registered = if (wasInstalled) registeredTaskXml(env) else null
             val unchanged = wasInstalled && sameTaskAction(registered, xml)
             // The 1.0.0 task (same name) runs the app: never "the previous broker" to fall back to.
             val wasOurs = wasInstalled && registered?.let(::isLegacyDefinition) != true

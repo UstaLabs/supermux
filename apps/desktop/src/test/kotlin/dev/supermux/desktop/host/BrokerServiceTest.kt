@@ -527,6 +527,70 @@ class BrokerServiceTest {
         assertTrue(run !in env.ran)
     }
 
+    // ── Windows: a failed `schtasks /Query` is not "no task" (#29, Ahmet) ─────────────────────────────────────────
+    // `/Query /TN` failing used to read as "not registered": install wrote over a task it could not see, and remove
+    // said "removed" and deleted the task loop's env file. Its error text is in the user's language, so the whole task
+    // list (`/Query /FO CSV /NH`, whose names are data) tells "not there" from "no answer"; no answer fails closed.
+
+    private val queryTask = listOf("schtasks", "/Query", "/TN", "Supermux Host")
+    private val listTasks = listOf("schtasks", "/Query", "/FO", "CSV", "/NH")
+    private fun listing(csv: String) = mapOf(listTasks to List(4) { OsEnv.RunResult(0, csv, "") })
+
+    @Test fun windowsInstallWritesNothingWhenSchtasksCannotSayWhatIsRegistered() {
+        val home = createTempDirectory()
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
+        val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env, me))
+        assertTrue("Supermux Host" in r.message, r.message)
+        assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true }, "nothing registered: ${env.ran}")
+        assertTrue(run !in env.ran)
+        assertFalse(Files.exists(home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE)), "no env file written")
+    }
+
+    @Test fun windowsInstallWritesNothingWhenTheAnswerTurnsUnknownBeforeItWrites() {
+        // install() reads the task again (what is registered, which is what runs) before it acts: an answer that turns
+        // into "no answer" in between must still write nothing. The third listing is the one install reads last.
+        val home = createTempDirectory()
+        val absent = OsEnv.RunResult(0, "", "")
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask),
+            scripted = mapOf(listTasks to listOf(absent, absent, OsEnv.RunResult(1, "", "failed"))))
+        assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env, me))
+        assertFalse(Files.exists(home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE)), "no env file written")
+        assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true }, "nothing registered: ${env.ran}")
+    }
+
+    @Test fun windowsRemoveKeepsEverythingWhenSchtasksCannotSayWhatIsRegistered() {
+        val home = createTempDirectory()
+        val envFile = home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE)
+        Files.createDirectories(envFile.parent)
+        envFile.writeText("the task loop's env")
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
+        assertIs<BrokerService.Result.Failed>(BrokerService.remove(env, me))
+        assertTrue(Files.exists(envFile), "the task loop's env file stays")
+        assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true }, "nothing ended or deleted: ${env.ran}")
+    }
+
+    @Test fun aTaskTheListNamesIsRegisteredThoughItsOwnQueryFailed() {
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
+            scripted = listing("\"\\Microsoft\\Other\",\"N/A\",\"Ready\"\r\n\"\\Supermux Host\",\"N/A\",\"Running\"\r\n"))
+        assertTrue(BrokerService.isInstalled(env))
+    }
+
+    @Test fun aTaskTheListDoesNotNameIsNotRegistered() {
+        // Not a longer name that starts with ours, nor our name in another folder: the task we register is at the root.
+        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
+            scripted = listing("\"\\Supermux Host 2\",\"N/A\",\"Ready\"\r\n\"\\Folder\\Supermux Host\",\"N/A\",\"Ready\"\r\n"))
+        assertFalse(BrokerService.isInstalled(env))
+    }
+
+    @Test fun theTaskListIsReadByItsNamesNotItsWords() {
+        // The other fields are in the user's language; the first is the task's path.
+        assertTrue(BrokerService.taskListed("\"\\Supermux Host\",\"Nicht zutreffend\",\"Wird ausgeführt\"\r\n", "Supermux Host"))
+        assertTrue(BrokerService.taskListed("\"\\SUPERMUX HOST\",\"N/A\",\"Ready\"", "Supermux Host"), "task names ignore case")
+        assertFalse(BrokerService.taskListed("\"\\Supermux Host 2\",\"N/A\",\"Ready\"", "Supermux Host"))
+        assertFalse(BrokerService.taskListed("\"\\Folder\\Supermux Host\",\"N/A\",\"Ready\"", "Supermux Host"))
+        assertFalse(BrokerService.taskListed("", "Supermux Host"))
+    }
+
     @Test fun stopIsWindowsOnlyAndKillsByPid() {
         val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), uid = 501)
         assertFalse(BrokerService.stop(mac))
