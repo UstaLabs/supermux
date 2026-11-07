@@ -377,7 +377,7 @@ class SessionLauncherProjectsTest {
             Harness(
                 catalog = flowOf(catalog),
                 initialProjectId = request,
-                // The shell consumes the route's request once applied (ShellUiState.consumeLauncherProject).
+                // The shell consumes the route's request once applied (ShellUiState.consumeLauncherSeeds).
                 onInitialProjectApplied = { applied++; request = null },
             )
         }

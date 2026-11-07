@@ -421,8 +421,12 @@ fun SupermuxApp(
     }
 
     // Per-session composer drafts, hoisted to the ROOT so switching sessions — and leaving the
-    // workspace entirely — preserves each draft. In-memory only (broker-side sync is M4).
-    val drafts = remember { mutableStateMapOf<String, String>() }
+    // workspace entirely — preserves each draft. Kept by the fleet, not by this composition: an
+    // Android rotation or fold recreates the whole composition, and a plain `remember` here lost
+    // every half-typed message with it (card #89). In-memory only (broker-side sync is M4).
+    val drafts = remember(fleet) { fleet.retainedUi.getOrPut("composer.drafts") { mutableStateMapOf<String, String>() } }
+    // Writes that must land even if this composition is gone by the time they run.
+    val retainedScope = fleet.retainedUi.scope
 
     // Headless-verification hook (no input injection on CI boxes); off by default.
     if (autoSelect) {
@@ -606,8 +610,10 @@ fun SupermuxApp(
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
     val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) }, isLocalHost = isLocalHost)
+    // The launcher's writes run on the fleet's scope, not this composition's: its dispose flush is
+    // queued while an Android recreation is cancelling this very scope, so it never landed (#89).
     val launcherDraftFlushDefault: (dev.supermux.state.LauncherDraft) -> Unit = { draft ->
-        overlayScope.launch { uiPrefs.putLauncherDraft(draft) }
+        retainedScope.launch { uiPrefs.putLauncherDraft(draft) }
     }
     val launcherPane: @Composable (
         onBack: () -> Unit,
@@ -623,7 +629,7 @@ fun SupermuxApp(
             actions = launcherActions,
             permissionCatalog = permissionCatalog,
             loadPrefs = { uiPrefs.launcherPrefs.first() },
-            onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
+            onPrefsChange = { retainedScope.launch { uiPrefs.putLauncherPrefs(it) } },
             // A workspace tab keeps ITS OWN draft (just the text, in the tab's state) — never the
             // New Session screen's global one, which would drag another project's workdir,
             // worktree and text into this tab. The broker drops it when it binds the tab.
@@ -633,12 +639,12 @@ fun SupermuxApp(
                 { dev.supermux.state.LauncherDraft(text = tab.draftText) }
             },
             onDraftChange = if (tab == null) {
-                { overlayScope.launch { uiPrefs.putLauncherDraft(it) } }
+                { retainedScope.launch { uiPrefs.putLauncherDraft(it) } }
             } else {
                 { tab.onDraftText(it.text) }
             },
             onClearDraft = if (tab == null) {
-                { overlayScope.launch { uiPrefs.clearLauncherDraft() } }
+                { retainedScope.launch { uiPrefs.clearLauncherDraft() } }
             } else {
                 {}
             },
@@ -650,27 +656,28 @@ fun SupermuxApp(
             // Throws the broker's OWN refusal (bad workdir / spawn 4xx), which the screen's
             // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
             // the first message (text + pre-uploaded files) with the spawn, so nothing about it
-            // depends on this pane staying composed.
+            // depends on this pane staying composed. Answers the new session's id and does NOT
+            // open it: the spawn can outlive this composition (#89), and [onOpenSession] below is
+            // called by whichever launcher is on screen when it lands.
             onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account ->
-                onCreated(
-                    if (tab == null) {
-                        launcherActions.createSessionWithFirstMessage(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
-                        )
-                    } else {
-                        // A workspace tab's composer: JOIN that workspace and fill this very tab.
-                        // Without workspaceId the broker mints a second workspace for the session.
-                        fleet.createSessionWithFirstMessageOrThrow(
-                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
-                            workspaceId = tab.workspaceId,
-                            viewId = tab.viewId,
-                            permissionMode = permissionMode,
-                            account = account,
-                        )
-                    },
-                )
-                null
+                if (tab == null) {
+                    launcherActions.createSessionWithFirstMessage(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId, permissionMode, account,
+                    )
+                } else {
+                    // A workspace tab's composer: JOIN that workspace and fill this very tab.
+                    // Without workspaceId the broker mints a second workspace for the session.
+                    fleet.createSessionWithFirstMessageOrThrow(
+                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                        workspaceId = tab.workspaceId,
+                        viewId = tab.viewId,
+                        permissionMode = permissionMode,
+                        account = account,
+                    )
+                }
             },
+            onOpenSession = onCreated,
+            retainKey = if (tab == null) "new-session" else "tab:${tab.viewId}",
             onSaveDraft = { workdir, agent, model, level, text, replaceDraftId ->
                 launcherActions.createDraftSession(workdir, agent, model, level, text, replaceDraftId)
             },
@@ -680,13 +687,15 @@ fun SupermuxApp(
                 val path = formatWorkdir(t.repoRoot ?: t.workdir, home)
                 if (t.branch.isNullOrBlank()) path else "$path · ${t.branch}"
             },
-            // A reopened task-list draft belongs to the New Session route, never to a tab.
+            // A reopened task-list draft belongs to the New Session route, never to a tab. Its id
+            // stays for the replace; its CONTENT is a one-shot seed (see `launcherDraftSeed`).
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
-            initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
+            initialDraft = if (tab == null) ui.launcherDraftSeed?.let { dId -> sessions.find { it.id == dId } } else null,
+            onInitialDraftApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             // The sidebar's "+" on a project; a workspace tab never consults projects.
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
-            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherProject() },
+            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherSeeds() },
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,
@@ -750,7 +759,10 @@ fun SupermuxApp(
             openSession = { sid -> ui.focusChatTab(sid) },
         )
     }
-    CompositionLocalProvider(dev.supermux.ui.chat.LocalChatSearch provides chatSearch) {
+    CompositionLocalProvider(
+        dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
+        dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
+    ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
             Modifier

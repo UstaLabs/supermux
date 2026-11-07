@@ -102,6 +102,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import dev.supermux.ui.retain.rememberRetained
+import dev.supermux.ui.retain.rememberRetainedScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -280,6 +282,13 @@ fun SessionLauncherScreen(
     workspaceLabel: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
+    /** [initialDraft]'s prefill was applied — the shell consumes it, one-shot per navigation like the project below. */
+    onInitialDraftApplied: () -> Unit = {},
+    /**
+     * Names this launcher's state that outlives the screen (a send still in flight) — unique per
+     * launcher: the New Session route, or one pending workspace tab.
+     */
+    retainKey: String = "new-session",
     /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
     micCapture: MicCapture? = null,
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
@@ -317,7 +326,12 @@ fun SessionLauncherScreen(
     var knownProjects by remember { mutableStateOf(emptyList<String>()) }
     /** [knownProjects] is a definite answer (not a failed or unasked `listProjectsOrNull`). */
     var projectsListed by remember { mutableStateOf(false) }
-    var submitting by remember { mutableStateOf(false) }
+    // A send in flight is the launcher's, not this composition's: an Android rotation recreated
+    // the screen mid-spawn and cancelled it with the old scope, so the new session might start
+    // with nothing opening it and the draft (never cleared) came back to be sent twice (#89).
+    val submission = rememberRetained("launcher.submit:$retainKey") { LauncherSubmission() }
+    val submitScope = rememberRetainedScope()
+    var submitting by submission::inFlight
     var error by remember { mutableStateOf<String?>(null) }
     // Dictation's own failure line, hoisted out of the composer so it renders under [error].
     var micError by remember { mutableStateOf<String?>(null) }
@@ -344,6 +358,7 @@ fun SessionLauncherScreen(
         if (!s.reasoningLevel.isNullOrBlank()) reasoningLevel = s.reasoningLevel
         val t = s.draftPayload?.text.orEmpty()
         message = TextFieldValue(t, TextRange(t.length))
+        onInitialDraftApplied()
     }
 
     var lastSeenAgent by remember { mutableStateOf<String?>(null) }
@@ -595,9 +610,10 @@ fun SessionLauncherScreen(
     // draft cancels any still-pending delay (draftCleared is a KEY, so flipping it relaunches this
     // effect, cancelling the in-flight coroutine before its delay elapses). Without this a pending
     // save from just before submit would re-write the just-cleared draft — a resurrection race that
-    // must not depend on the caller closing the launcher promptly.
-    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared) {
-        if (launcherRestoring || draftCleared) return@LaunchedEffect
+    // must not depend on the caller closing the launcher promptly. Nor while a send is in flight:
+    // a launcher recreated under one restores the sent text, and must not write it back (#89).
+    LaunchedEffect(workdir, workdirTouched, useWorktree, baseBranch, message.text, launcherRestoring, draftCleared, submitting) {
+        if (launcherRestoring || draftCleared || submitting) return@LaunchedEffect
         delay(400)
         onDraftChange(
             LauncherDraft(
@@ -614,7 +630,7 @@ fun SessionLauncherScreen(
     // which must not be resurrected.
     DisposableEffect(Unit) {
         onDispose {
-            if (!launcherRestoring && !draftCleared) {
+            if (!launcherRestoring && !draftCleared && !submitting) {
                 onDraftFlush(
                     LauncherDraft(
                         workdir = if (workdirTouched) workdir else null,
@@ -906,39 +922,62 @@ fun SessionLauncherScreen(
             StagedUpload(it.source, it.name, it.mime, if (it.mime.startsWith("audio")) "voice" else null)
         }
         // Cleared BEFORE the spawn, not after: a workspace tab flips to its chat (disposing this
-        // screen and cancelling this coroutine) as soon as the broker binds it, and the dispose
-        // flush must not write the just-sent text back. A failure re-arms the draft save.
+        // screen) as soon as the broker binds it, and the dispose flush must not write the
+        // just-sent text back. A failure re-arms the draft save.
         draftCleared = true
         // Card #75: one trace from this Send to the first reply on screen.
         PerfTrace.beginStart(wd.trim(), "agent" to agent, "model" to model, "worktree" to wantsWorktree, "files" to toUpload.size)
-        scope.launch {
+        val sentAgent = agent
+        val sentModel = model
+        val sentLevel = reasoningLevel
+        val sentText = message.text.trim()
+        val replaceDraftId = activeDraftId
+        val sentMode = permissionMode
+        val sentAccount = chosenAccount()
+        // On the fleet's scope (see [submission]): the spawn finishes even if this screen is
+        // recreated under it, and its outcome waits in [submission] for whichever launcher is on
+        // screen when it lands (the effects below), since this one's may be gone by then.
+        submitScope.launch {
             // A retained chip list (Android) outlives this screen, so the next launcher must not
-            // open with this message's files. Kept only on a real failure, for the retry; a
-            // cancellation is this screen being disposed by the very spawn that succeeded.
+            // open with this message's files. Kept only on a real failure, for the retry.
             var failed = false
             try {
                 val sessionId = onSubmit(
-                    wd.trim(), agent, model, reasoningLevel, message.text.trim(),
-                    toUpload, wantsWorktree, base, activeDraftId, permissionMode, chosenAccount(),
+                    wd.trim(), sentAgent, sentModel, sentLevel, sentText,
+                    toUpload, wantsWorktree, base, replaceDraftId, sentMode, sentAccount,
                 )
                 onClearDraft()
-                if (sessionId != null) onOpenSession?.invoke(sessionId)
+                submission.created = sessionId
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                draftCleared = false
                 failed = true
-                error = e.message ?: "Failed to create session"
-                // The chosen agent's CLI is not on the host: offer the install, not just the text.
-                agentNotInstalled(e)?.let { kind ->
-                    if (agentSetup != null) {
-                        refusedAgent = kind.ifEmpty { agent }
-                        refusedMessage = e.message
-                        agentStatusesReload++
-                    }
-                }
+                submission.failure = e
             } finally {
-                submitting = false
+                submission.inFlight = false
                 if (!failed) staged.clear()
+            }
+        }
+    }
+
+    // A send's outcome, read by the launcher on screen when it lands — the one that sent it, or
+    // the one a rotation put in its place.
+    LaunchedEffect(submission.created) {
+        val id = submission.created ?: return@LaunchedEffect
+        submission.created = null
+        draftCleared = true
+        onOpenSession?.invoke(id)
+    }
+    LaunchedEffect(submission.failure) {
+        val e = submission.failure ?: return@LaunchedEffect
+        submission.failure = null
+        draftCleared = false
+        error = e.message ?: "Failed to create session"
+        // The chosen agent's CLI is not on the host: offer the install, not just the text.
+        agentNotInstalled(e)?.let { kind ->
+            if (agentSetup != null) {
+                refusedAgent = kind.ifEmpty { agent }
+                refusedMessage = e.message
+                agentStatusesReload++
             }
         }
     }
@@ -1672,4 +1711,14 @@ private fun WorktreePicker(
             ) { bodyContent() }
         }
     }
+}
+
+/**
+ * A launcher's send, kept outside its composition (`rememberRetained`, card #89): whether one is in
+ * flight, and its outcome until a launcher on screen reads it.
+ */
+private class LauncherSubmission {
+    var inFlight by mutableStateOf(false)
+    var created by mutableStateOf<String?>(null)
+    var failure by mutableStateOf<Exception?>(null)
 }

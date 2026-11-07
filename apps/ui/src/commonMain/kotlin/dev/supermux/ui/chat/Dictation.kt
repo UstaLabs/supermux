@@ -58,7 +58,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +74,8 @@ import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
+import dev.supermux.ui.retain.LocalRetainedUiState
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -989,8 +990,8 @@ class DictationController(
         return coveredText?.takeIf { coveredSpeech >= 0 && speechSamples - coveredSpeech < minSamples }
     }
 
-    fun stopMic() {
-        haptic.perform(HapticKind.Tick)
+    fun stopMic(tick: Boolean = true) {
+        if (tick) haptic.perform(HapticKind.Tick)
         if (listening) {
             listening = false
             partialJob?.cancel()
@@ -1116,20 +1117,40 @@ class DictationController(
             return
         }
         scope.launch {
-            if (mic.requestPermission()) startMic() else micDenied = true
+            if (mic.requestPermission()) {
+                // Asked on a scope that can outlive the composer: never start a recording nothing shows.
+                if (attached) startMic()
+            } else {
+                micDenied = true
+            }
         }
+    }
+
+    /** False once the composer owning this controller has left the screen: nothing starts recording after that. */
+    private var attached = true
+
+    /**
+     * The composer owning this dictation left the screen while it ran, and not by the user's hand:
+     * an Android rotation or fold recreated it, the window crossed a width class, the session was
+     * switched. What was said is not thrown away (#89): it is stopped and transcribed into the
+     * draft as Stop would, on [scope], which outlives the composer when the shell retains it (the
+     * draft does too). A transcription already under way just finishes.
+     */
+    fun finishOnLeave() {
+        attached = false
+        if (active) stopMic(tick = false)
     }
 }
 
 /**
  * Remembers a [DictationController] over `Platform.mic` and installs its Compose-scoped effects
- * (glossary load, the elapsed-seconds timer, banner auto-clear, cancel-on-leave).
+ * (glossary load, the elapsed-seconds timer, banner auto-clear, finish-or-cancel on leave).
  *
  * The controller is `remember(resetKey)`-SCOPED, not a bare `remember {}`: both composers stay
  * composed across session switches, so one shared controller with repointed closures would leak
- * session A's in-flight dictation into B. Rekeying gives each session a fresh controller and the
- * `DisposableEffect(resetKey)` cancels the outgoing one's pending POST. Pass the session id in
- * chat, a constant in the launcher.
+ * session A's in-flight dictation into B. Rekeying gives each session a fresh controller; the
+ * outgoing one finishes into A's own draft (its closures were last bound to A), or is cancelled
+ * where nothing outlives the composition. Pass the session id in chat, a constant in the launcher.
  */
 @Composable
 fun rememberDictation(
@@ -1145,7 +1166,10 @@ fun rememberDictation(
     transcribeWarm: (suspend (String) -> Unit)? = null,
     openDictationStream: OpenDictationStream? = null,
 ): DictationController {
-    val scope = rememberCoroutineScope()
+    // The fleet's scope when the shell retains state: a recording the composer leaves behind can
+    // then still finish into the draft (see [DictationController.finishOnLeave]).
+    val retained = LocalRetainedUiState.current != null
+    val scope = rememberRetainedScope()
     val haptic = rememberHaptics()
     val controller = remember(resetKey, mic) { DictationController(mic, scope, haptic) }
 
@@ -1194,10 +1218,11 @@ fun rememberDictation(
             controller.errorMessage = null
         }
     }
-    // Cancel any in-flight recording when the host leaves composition / switches away, so a
-    // backgrounded recording never leaks the mic or posts stale audio.
+    // The host leaves composition or switches away: never leave the mic open behind it. With a
+    // retained scope the recording is finished into the draft rather than thrown away (#89);
+    // without one its transcription could not outlive this composition, so it is cancelled.
     DisposableEffect(controller) {
-        onDispose { controller.cancelMic() }
+        onDispose { if (retained) controller.finishOnLeave() else controller.cancelMic() }
     }
     return controller
 }

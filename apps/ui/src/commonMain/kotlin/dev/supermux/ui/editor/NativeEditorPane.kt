@@ -113,8 +113,12 @@ fun NativeDocumentEditor(
     /** Where a definition or reference in ANOTHER file opens (a workdir-relative path, a 1-based line). */
     onNavigate: ((path: String, line: Int) -> Unit)? = null,
 ) {
-    val native = remember(documents, doc) { documents.nativeFor(doc) } ?: return
-    val hub = remember(documents) { documents.lspHub() }
+    // Keyed on the document's native as well: the store can drop it while this pane is composed.
+    // The store outlives a width-class swap now (#89), and the layout being swapped out disposes
+    // its views after this one already took them; the pane then makes new ones rather than drawing
+    // a closed document.
+    val native = remember(documents, doc, doc.native) { documents.nativeFor(doc) } ?: return
+    val hub = remember(documents, native) { documents.lspHub() }
     if (hub != null && onNavigate != null) androidx.compose.runtime.SideEffect { hub.onNavigate = onNavigate }
     // The document joins its server's client (one per session and server, the store's) and stays
     // in it after this pane goes: its view outlives the pane, so no didClose on a tab switch.
