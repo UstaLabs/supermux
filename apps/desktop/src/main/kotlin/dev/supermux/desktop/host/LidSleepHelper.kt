@@ -72,6 +72,7 @@ object LidSleepHelper {
     fun validUser(user: String?): Boolean =
         user != null && user.length <= 64 && USER_RE.matches(user) && user != "." && user != ".." && !user.startsWith("-")
 
+    // platform-ok: a macOS path (this helper is macOS-only)
     fun safePath(path: String): Boolean = SAFE_PATH_RE.matches(path) && ".." !in path.split('/')
 
     /** `/Users/<user>/.mux/state/lidsleep.lease`. */
@@ -82,6 +83,7 @@ object LidSleepHelper {
 
     /** The daemon watches `/Users/<user>`: an account whose home is elsewhere can't use it. */
     fun homeSupported(user: String, home: String?): Boolean =
+        // platform-ok: a macOS path (this helper is macOS-only)
         validUser(user) && home != null && home.trimEnd('/') == "/Users/$user"
 
     /**
@@ -91,10 +93,12 @@ object LidSleepHelper {
     fun appBundlePath(candidates: List<String?>): String? {
         for (c in candidates) {
             if (c.isNullOrBlank()) continue
+            // platform-ok: a macOS path (this helper is macOS-only)
             val parts = c.split('/')
             val i = parts.indexOfFirst { it.endsWith(".app") }
             if (i <= 0) continue
             val bundle = parts.take(i + 1).joinToString("/")
+            // platform-ok: a macOS path (this helper is macOS-only)
             if (bundle.startsWith("/") && safePath(bundle)) return bundle
         }
         return null

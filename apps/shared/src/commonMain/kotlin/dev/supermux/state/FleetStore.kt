@@ -1984,6 +1984,7 @@ class FleetStore(
         /** Normalize a typed host URL (bare host → https://…, trim trailing slash); reject a
          *  non-http(s)/ws(s) scheme. Mirrors Android AppViewModel.normalizeHostUrl. */
         fun normalizeHostUrl(raw: String): String? {
+            // platform-ok: a URL
             val t = raw.trim().trimEnd('/')
             if (t.isBlank()) return null
             return when {

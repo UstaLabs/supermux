@@ -147,6 +147,7 @@ class LspClient(
             put("clientInfo", buildJsonObject { put("name", "supermux-editor") })
             put("rootUri", config.rootUri?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: JsonNull)
             config.rootUri?.let { root ->
+                // platform-ok: a URI
                 put("workspaceFolders", buildJsonArray { add(buildJsonObject { put("uri", root); put("name", root.substringAfterLast('/')) }) })
             }
             put("capabilities", clientCapabilities())
@@ -285,5 +286,6 @@ internal fun normalizeUri(uri: String): String {
     flush()
     var s = sb.toString()
     if (s.startsWith("file:///") && s.length > 9 && s[9] == ':') s = s.substring(0, 8) + s[8].lowercaseChar() + s.substring(9)
+    // platform-ok: a URI
     return s.trimEnd('/')
 }

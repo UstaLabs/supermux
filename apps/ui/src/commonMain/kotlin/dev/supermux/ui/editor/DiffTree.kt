@@ -48,6 +48,7 @@ fun buildDiffTree(files: List<DiffFile>): List<DiffTreeNode> {
     val rootFiles = mutableListOf<DiffTreeNode.File>()
 
     for (file in files) {
+        // platform-ok: a git path, always /
         val parts = file.path.split('/').filter { it.isNotEmpty() }
         if (parts.isEmpty()) continue
         if (parts.size == 1) {

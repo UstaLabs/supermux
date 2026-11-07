@@ -120,6 +120,7 @@ fun toGoToEntry(workdir: String, hit: SearchHit): GoToEntry? {
     val relStart = path.length - rel.length
     // [rel] is `/`-separated; the hit's own tail may use the host's other separator.
     if (relStart < 0 || !path.replace('\\', '/').endsWith(rel)) return null
+    // platform-ok: a hit's workdir-relative path, always /
     val name = rel.substringAfterLast('/')
     val folder = rel.substringBeforeLast('/', "")
     return GoToEntry(

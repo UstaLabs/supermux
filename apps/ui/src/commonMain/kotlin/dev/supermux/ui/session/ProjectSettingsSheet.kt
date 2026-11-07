@@ -72,6 +72,7 @@ import dev.supermux.workspace.ProjectRef
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.sameHostPath
 
 /** Test tags of the project settings sheet and the "New project" prompt. */
 object ProjectSettingsTestIds {
@@ -125,10 +126,8 @@ fun projectImageMime(file: PickedFile): String? {
  * The id of [owner]'s location at [path] — how "Move here" finds what to move after a 409, which
  * names only the owning project. Compared without trailing slashes (the broker normalizes them).
  */
-fun locationIdForPath(owner: ProjectDto, path: String): String? {
-    val want = path.trimEnd('/').ifEmpty { "/" }
-    return owner.locations.firstOrNull { it.path.trimEnd('/').ifEmpty { "/" } == want }?.id
-}
+fun locationIdForPath(owner: ProjectDto, path: String): String? =
+    owner.locations.firstOrNull { sameHostPath(it.path, path) }?.id
 
 /**
  * The sheet's broker seam — every call is routed to the project's OWN host by recordId.

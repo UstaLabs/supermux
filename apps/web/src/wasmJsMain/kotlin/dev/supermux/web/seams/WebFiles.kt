@@ -1,6 +1,7 @@
 package dev.supermux.web.seams
 
 import dev.supermux.chat.mimeForFileName
+import dev.supermux.chat.webHandoff
 import dev.supermux.net.BlobChunkSource
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.PickKind
@@ -32,6 +33,9 @@ private fun blobOf(bytes: ByteArray, mime: String): Blob = makeBlob(bytes.toInt8
 /**
  * "Save as…" is a download; "open with" is a new tab on a blob URL. Nothing touches a real path.
  *
+ * A blob URL has the app's own origin, so a type the browser would run as a page or a script (HTML, XML, SVG,
+ * JavaScript) is never opened in a tab: it downloads as opaque bytes ([webHandoff]).
+ *
  * BOTH are gesture-bound: a browser only honours a synthetic download click or a `window.open`
  * when it runs in the SAME TICK as the user gesture that caused it. These are `suspend` functions,
  * so a caller that awaits anything (a fetch, a decode) before calling them resumes on a later tick
@@ -40,12 +44,7 @@ private fun blobOf(bytes: ByteArray, mime: String): Blob = makeBlob(bytes.toInt8
  */
 object WebFiles : FileAccess {
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
-        val url = URL.createObjectURL(blobOf(bytes, mime))
-        val a = document.createElement("a") as HTMLAnchorElement
-        a.href = url
-        a.download = name
-        a.click()
-        window.setTimeout({ URL.revokeObjectURL(url); null }, 10_000)
+        download(name, webHandoff(mime, open = false).mime, bytes)
         return SavedFile(name = name, location = "Downloads")
     }
 
@@ -53,7 +52,12 @@ object WebFiles : FileAccess {
     override suspend fun openSaved(saved: SavedFile): Boolean = false
 
     override suspend fun openExternally(name: String, mime: String, bytes: ByteArray): Boolean {
-        val url = URL.createObjectURL(blobOf(bytes, mime))
+        val handoff = webHandoff(mime, open = true)
+        if (handoff.download) {
+            download(name, handoff.mime, bytes)
+            return true
+        }
+        val url = URL.createObjectURL(blobOf(bytes, handoff.mime))
         window.open(url, "_blank", "noopener")
         window.setTimeout({ URL.revokeObjectURL(url); null }, 60_000)
         return true
@@ -63,6 +67,15 @@ object WebFiles : FileAccess {
 
     /** No temp directory in a browser tab; the inline video player falls back to its own path. */
     override suspend fun stageTemp(name: String, bytes: ByteArray): String? = null
+
+    private fun download(name: String, mime: String, bytes: ByteArray) {
+        val url = URL.createObjectURL(blobOf(bytes, mime))
+        val a = document.createElement("a") as HTMLAnchorElement
+        a.href = url
+        a.download = name
+        a.click()
+        window.setTimeout({ URL.revokeObjectURL(url); null }, 10_000)
+    }
 }
 
 /** A hidden `<input type=file>` per pick; resolves with the chosen files or empty on cancel. */

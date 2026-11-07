@@ -130,6 +130,7 @@ fun projectFolderName(path: String): String = pathLeaf(path).ifEmpty { path }
 /** Whether the omnibox should treat [query] as a folder path rather than a name to search. */
 fun looksLikePath(query: String): Boolean {
     val q = query.trim()
+    // platform-ok: does it look like a path on any host (a Windows one is checked below)
     return q.startsWith("/") || q.startsWith("~") || q.startsWith(".") || q.contains('/') || q.contains('\\') ||
         isWindowsHostPath(q)
 }

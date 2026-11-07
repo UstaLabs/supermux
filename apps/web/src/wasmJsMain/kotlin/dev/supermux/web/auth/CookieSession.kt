@@ -41,6 +41,7 @@ sealed interface SessionState {
  * "this browser may never pair".
  */
 class CookieSession(baseUrl: String = window.location.origin, private val http: HttpClient) {
+    // platform-ok: a URL
     private val base = baseUrl.trimEnd('/')
     private val api = BrokerApi(base, "", http)
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }

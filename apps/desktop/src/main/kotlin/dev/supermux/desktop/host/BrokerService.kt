@@ -261,6 +261,7 @@ Terminal=false
             windowsArgument(script),
         ).joinToString(" ")
         val executable = spec.broker.toString()
+        // platform-ok: the broker's own path, either separator: the task script is tested off Windows too
         val separator = maxOf(executable.lastIndexOf('\\'), executable.lastIndexOf('/'))
         val workingDirectory = if (separator > 0) executable.substring(0, separator) else "."
         return """<?xml version="1.0" encoding="UTF-16"?>
