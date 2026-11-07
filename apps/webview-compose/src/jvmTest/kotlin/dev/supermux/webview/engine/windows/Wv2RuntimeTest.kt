@@ -10,14 +10,14 @@ import kotlinx.coroutines.test.runTest
 
 class Wv2RuntimeTest {
     private fun host(
-        os: String = "Windows 11",
+        windows: Boolean = true,
         glue: String? = null,
         start: Int = WinGlue.START_OK,
         version: String? = "156.0.4314.56",
         opened: WinEvent.Environment = WinEvent.Environment(1, 0, "156.0.4314.56"),
         folders: MutableList<File> = mutableListOf(),
     ) = Wv2Runtime.Host(
-        osName = os,
+        windows = windows,
         loadGlue = { glue },
         start = { start },
         runtimeVersion = { version },
@@ -53,7 +53,7 @@ class Wv2RuntimeTest {
     }
 
     @Test fun eachFailureSaysWhyWithItsReason() = runTest {
-        assertEquals(UnavailableReason.NotImplemented, (Wv2Runtime.load(host(os = "Linux")) as Wv2Runtime.State.Unavailable).reason)
+        assertEquals(UnavailableReason.NotImplemented, (Wv2Runtime.load(host(windows = false)) as Wv2Runtime.State.Unavailable).reason)
         assertEquals(UnavailableReason.NativeLibraryFailed, (Wv2Runtime.load(host(glue = "no glue")) as Wv2Runtime.State.Unavailable).reason)
         val capture = Wv2Runtime.load(host(start = WinGlue.START_NO_CAPTURE)) as Wv2Runtime.State.Unavailable
         assertEquals(UnavailableReason.NotImplemented, capture.reason)

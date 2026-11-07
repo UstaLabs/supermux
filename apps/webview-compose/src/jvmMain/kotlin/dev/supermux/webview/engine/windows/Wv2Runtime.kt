@@ -30,7 +30,7 @@ internal object Wv2Runtime {
 
     /** The outside world [load] reads: the system's ([system]) or a test's. */
     class Host(
-        val osName: String,
+        val windows: Boolean,
         val loadGlue: () -> String?,
         val start: () -> Int,
         val runtimeVersion: () -> String?,
@@ -41,7 +41,7 @@ internal object Wv2Runtime {
     ) {
         companion object {
             fun system(): Host = Host(
-                osName = System.getProperty("os.name").orEmpty(),
+                windows = WinPlatform.isWindows,
                 loadGlue = { WinNativeLibrary.ensureLoaded() },
                 start = { WinGlue.start() },
                 runtimeVersion = { WinGlue.runtimeVersion() },
@@ -83,7 +83,7 @@ internal object Wv2Runtime {
     }
 
     internal suspend fun load(host: Host): State {
-        if (!host.osName.startsWith("Windows")) return State.Unavailable(UnavailableReason.NotImplemented, "not Windows")
+        if (!host.windows) return State.Unavailable(UnavailableReason.NotImplemented, "not Windows")
         host.loadGlue()?.let { return State.Unavailable(UnavailableReason.NativeLibraryFailed, it) }
         when (host.start()) {
             WinGlue.START_OK -> Unit

@@ -147,10 +147,7 @@ class MacNativeLibraryTest {
         assertNull(GlueLoading { }.ensureLoaded())
     }
 
-    @Test fun macOsAndItsVersionAreReadFromTheJvm() {
-        assertTrue(MacPlatform.isMac("Mac OS X"))
-        assertTrue(!MacPlatform.isMac("Linux"))
-        assertTrue(!MacPlatform.isMac("Windows 11"))
+    @Test fun theMacOsVersionIsReadFromTheJvm() {
         assertEquals(26, MacPlatform.majorVersion("26.6.2"))
         assertEquals(10, MacPlatform.majorVersion("10.15.7"))
         assertEquals(0, MacPlatform.majorVersion(""))

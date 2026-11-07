@@ -31,6 +31,8 @@ import dev.supermux.webview.testing.MacEngineTesting
 import kotlinx.coroutines.delay
 import java.io.File
 import kotlin.system.exitProcess
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 
 /**
  * The desktop sample: `./gradlew :webview-sample:run`, or on the Mac through `device-checks/mac-*.sh`. With the macOS
@@ -65,7 +67,7 @@ fun main(args: Array<String>) {
     System.getProperty("webview.sample.draw")?.let { return linuxDrawLabMain(it) }
     System.getProperty("webview.sample.probe")?.let { probe ->
         // On Windows, the ephemeral check's probe reads an ephemeral store; any other name is a profile, as on Linux.
-        val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
+        val windows = hostOs == OS.Windows
         return if (windows && probe == "ephemeral") windowsProbeMain() else linuxProfileProbeMain(probe)
     }
     if (System.getProperty("webview.sample.engine") == "wpe") return wpeMain(System.getProperty("webview.sample.out")?.let(::File))

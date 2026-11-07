@@ -1,11 +1,13 @@
 package dev.supermux.webview.engine.windows
 
 import dev.supermux.webview.engine.desktop.MemoryHooks
+import dev.supermux.webview.engine.desktop.hostDesktop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jetbrains.skiko.OS
 
 internal object WinPlatform {
-    val isWindows: Boolean = System.getProperty("os.name").orEmpty().startsWith("Windows")
+    val isWindows: Boolean = hostDesktop == OS.Windows
 }
 
 /** Windows' low-memory notification (D21) for the runtimes web views use, once the glue runs (off the EDT). */

@@ -1,5 +1,6 @@
 package dev.supermux.webview.runtime
 
+import dev.supermux.webview.engine.desktop.hostDesktop
 import dev.supermux.webview.engine.mac.MacPlatform
 import dev.supermux.webview.engine.mac.MacWebEngineFactory
 import kotlinx.coroutines.async
@@ -17,7 +18,7 @@ class PlatformDefaultsJvmTest {
      * of decoded ones on every desktop.
      */
     @Test fun theDesktopDefaultIsThisOsesPool() {
-        assertEquals(desktopRuntimeConfig(System.getProperty("os.name").orEmpty()), RuntimeConfig.platformDefault())
+        assertEquals(desktopRuntimeConfig(hostDesktop), RuntimeConfig.platformDefault())
         assertEquals(128L shl 20, RuntimeConfig.platformDefault().snapshotCacheBytes)
         assertEquals(64L shl 20, RuntimeConfig.platformDefault().decodedSnapshotBytes)
     }

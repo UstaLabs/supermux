@@ -51,6 +51,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 
 /** The size the checks show an engine's surface at, in pixels: at 1.0 density (Xvfb, `sun.java2d.uiScale=1`), dp. */
 const val SURFACE_WIDTH: Int = 320
@@ -80,7 +82,7 @@ class CheckScope internal constructor(private val host: CheckHost, private val s
     private val robot = Robot().apply { autoDelay = 0 }
 
     /** On Windows the checks type and press keys through the sample's test DLL; elsewhere through the X server. */
-    private val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
+    private val windows = hostOs == OS.Windows
 
     /** A new engine of this platform, as the pool would get it. */
     suspend fun engine(profile: WebProfile = WebProfile.Ephemeral): WebEngine = engine(EngineConfig(profile))

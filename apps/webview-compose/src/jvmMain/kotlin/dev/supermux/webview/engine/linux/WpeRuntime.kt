@@ -1,11 +1,13 @@
 package dev.supermux.webview.engine.linux
 
 import dev.supermux.webview.UnavailableReason
+import dev.supermux.webview.engine.desktop.hostDesktop
 import dev.supermux.webview.engine.webkit.WebKitUrls
 import java.io.File
 import java.security.MessageDigest
 import java.util.Properties
 import java.util.concurrent.TimeUnit
+import org.jetbrains.skiko.OS
 
 /**
  * The WPE runtime the Linux engine needs: WPE WebKit 2.54 and the engine's glue, built by runtime/linux and shipped by
@@ -147,7 +149,7 @@ internal object WpeRuntime {
     }
 
     private fun load(): State {
-        if (!System.getProperty("os.name").orEmpty().startsWith("Linux")) return State.Unavailable(UnavailableReason.NotImplemented, "not Linux")
+        if (hostDesktop != OS.Linux) return State.Unavailable(UnavailableReason.NotImplemented, "not Linux")
         val osArch = System.getProperty("os.arch").orEmpty()
         val arch = archOf(osArch) ?: return State.Unavailable(UnavailableReason.NoWpe, "no WPE runtime is built for $osArch")
         val home = System.getProperty("user.home")
