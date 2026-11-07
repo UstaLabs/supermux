@@ -214,9 +214,9 @@ class MarkdownGfmTest {
                 MdSpan("a ", SpanStyleKind.PLAIN),
                 MdSpan("b", SpanStyleKind.BOLD),
                 MdSpan(" ", SpanStyleKind.PLAIN),
-                MdSpan("c", SpanStyleKind.LINK, url = "u"),
+                MdSpan("c", SpanStyleKind.LINK, url = "https://example.com/u"),
             ),
-            parseInlineMarkdown("a **b** [c](u)"),
+            parseInlineMarkdown("a **b** [c](https://example.com/u)"),
         )
     }
 

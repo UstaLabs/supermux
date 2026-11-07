@@ -39,6 +39,8 @@ import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.windows.AndroidWindowHostController
 import dev.supermux.android.update.AndroidAppUpdater
 import dev.supermux.android.pairing.rememberQrScanLauncher
+import dev.supermux.net.isOpenableLink
+import dev.supermux.net.linkScheme
 import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
@@ -123,6 +125,7 @@ class AndroidPlatform(
 
     /** ACTION_VIEW into whatever the user set as their browser. A failure is logged, never thrown. */
     override fun openUrl(url: String) {
+        if (!isOpenableLink(url)) { Log.w("SupermuxPlatform", "not opening a ${linkScheme(url) ?: "relative"} link"); return }
         runCatching {
             val view = Intent(Intent.ACTION_VIEW, Uri.parse(url))
             // From an activity, no FLAG_ACTIVITY_NEW_TASK: the browser sits on top of our task, so Back
