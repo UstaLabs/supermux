@@ -205,7 +205,9 @@ class MediaCache(
     private suspend fun downloadToStore(key: MediaKey, download: RangeDownload, sizeHint: Long?, stamp: Stamp): Stored {
         var network: Boolean? = null
         val written = safe("download", false) {
-            store.writeStream(key) { append -> downloadInRanges(download, rangeBytes, sizeHint, append).also { network = it } }
+            store.writeStream(key) { append ->
+                (downloadInRanges(download, rangeBytes, sizeHint, append) == RangeOutcome.Complete).also { network = it }
+            }
         }
         return when {
             written && keepIfCurrent(key, stamp) -> Stored.Yes
