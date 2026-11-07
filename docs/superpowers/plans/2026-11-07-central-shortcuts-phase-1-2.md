@@ -1147,9 +1147,10 @@ Expected: `the_sidebar_key_works_with_nothing_focused` FAILS (`expected true`), 
 with
 ```kotlin
         ShortcutRoot(shortcuts, Modifier.fillMaxSize()) {
-            // The window's commands. Off while a page is up (Settings, Archived, New session…): it is modal, so a
-            // key it leaves unused must not change the layout behind it.
-            RegisterCommand(AppCommands.NewSession, enabled = !ui.overlayOpen) { onNewSession(); true }
+            // The window's commands. Those that change the layout are off while a page is up (Settings, Archived,
+            // New session…): it is modal, so a key must not change the layout behind it. New session and Settings
+            // open a page of their own, so they work over another page.
+            RegisterCommand(AppCommands.NewSession, enabled = !ui.launcherOpen) { onNewSession(); true }
             RegisterCommand(AppCommands.MoveToNewWindow, enabled = !ui.overlayOpen) { onMoveToNewWindow(); true }
             RegisterCommand(AppCommands.ToggleSidebar, enabled = !ui.overlayOpen) {
                 ui.sidebarCollapsed = !ui.sidebarCollapsed
@@ -1240,8 +1241,7 @@ Expected: compilation passes; `theGoToFileKeyFocusesTheField` PASSES already (th
 /** A pane's [KeyContext], from its view's kind (ViewHost.kt's switch). */
 internal fun paneKeyContext(view: ViewDto): KeyContext = when (view.kind) {
     "chat" -> KeyContext.Chat
-    "terminal" -> KeyContext.Terminal
-    "display" -> KeyContext.Display
+    // A terminal or remote display is scoped where it is drawn (Step 3b), so every one is, not only a pane's.
     "editor" -> when (view.stateString("mode")) {
         "file", "diff" -> KeyContext.Editor
         else -> KeyContext.Files
@@ -1289,6 +1289,27 @@ to
         }
 ```
 Imports: `dev.supermux.ui.keys.{KeyContext, ProvideKeyScope, keyScope, rememberKeyScope}`.
+
+- [ ] **Step 3b: The terminal and the remote display are scoped where they are drawn.** This covers every terminal, not only workspace panes: Android's chat terminal tabs too.
+  - In `apps/ui/src/commonMain/kotlin/dev/supermux/ui/terminal/GhosttyTerminalViewFactory.kt` (~line 444), change `Box(modifier.testTag(TERMINAL_GRID_TAG)) {` to:
+    ```kotlin
+        // A terminal takes every key it can name; the app claims its own keys here first (KeyContext.Terminal).
+        val terminalKeys = rememberKeyScope(KeyContext.Terminal)
+        ProvideKeyScope(terminalKeys) {
+        Box(modifier.keyScope(terminalKeys).testTag(TERMINAL_GRID_TAG)) {
+    ```
+    Then close the extra `}` after that `Box`'s own closing brace.
+  - In `apps/ui/src/commonMain/kotlin/dev/supermux/ui/display/DisplayPanel.kt`, the surface tagged `"vnc_surface"` gets the same treatment:
+    - `val displayKeys = rememberKeyScope(KeyContext.Display)` before it;
+    - `.keyScope(displayKeys)` right after `.testTag("vnc_surface")`;
+    - the surface wrapped in `ProvideKeyScope(displayKeys) { … }`.
+  - Imports: `dev.supermux.ui.keys.{KeyContext, ProvideKeyScope, keyScope, rememberKeyScope}`.
+
+- [ ] **Step 3c: Hidden content registers nothing.** Kept-alive content stays composed while hidden: up to 10 workspaces, the phone's last tabs, Android's visited chats. Its root-level registrations (go to file, a session-only chat's find) would otherwise compete with the visible ones. `RegisterCommand` already honours `LocalKeyScopeActive`; provide it at the four keep-alive sites:
+  - `shell/WorkspaceKeepAlive.kt`, in `WorkspaceKeepAliveHost`: `content(workspaceId, active)` becomes `CompositionLocalProvider(LocalKeyScopeActive provides active) { content(workspaceId, active) }`.
+  - `shell/WorkspacePanes.kt:804`: inside `KeepAlivePanel(visible = id == tabs.selectedId && !hideUnderGrid) { … }`, wrap the content in `CompositionLocalProvider(LocalKeyScopeActive provides (id == tabs.selectedId && !hideUnderGrid)) { … }`.
+  - `terminal/TerminalTabs.kt:434`: the same, with `id == activeId`.
+  - `shell/SupermuxApp.kt:1620`: inside `Box(Modifier.keepAlivePanel(visible)) { … }`, the same with `visible`.
 
 - [ ] **Step 4: Find in chat through the registry.** In `ChatPanel.kt`, delete these lines from the `Column` modifier chain:
 ```kotlin
@@ -1584,14 +1605,17 @@ fun List<MainMenuGroup>.menuChords(): Set<KeyChord> = flatMap { it.entries }.map
     }
 }.toSet()
 ```
-Change `MainMenuEntry.Toggle` to carry a shortcut:
+Give `MainMenuEntry.Action` and `MainMenuEntry.Toggle` an `enabled` flag, and give Toggle a shortcut too:
 ```kotlin
-    data class Toggle(val label: String, val checked: Boolean, val shortcut: MenuShortcut? = null, val onToggle: () -> Unit) : MainMenuEntry
+    data class Action(val label: String, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onClick: () -> Unit) : MainMenuEntry
+    data class Toggle(val label: String, val checked: Boolean, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onToggle: () -> Unit) : MainMenuEntry
 ```
-In `DesktopMenuBar`, change the toggle line to:
+In `DesktopMenuBar`:
 ```kotlin
-                        is MainMenuEntry.Toggle -> CheckboxItem(entry.label, checked = entry.checked, shortcut = entry.shortcut?.toKeyShortcut()) { entry.onToggle() }
+                        is MainMenuEntry.Action -> Item(entry.label, enabled = entry.enabled, shortcut = entry.shortcut?.toKeyShortcut(), onClick = entry.onClick)
+                        is MainMenuEntry.Toggle -> CheckboxItem(entry.label, checked = entry.checked, enabled = entry.enabled, shortcut = entry.shortcut?.toKeyShortcut()) { entry.onToggle() }
 ```
+In `MainMenuButton`, pass `entry.enabled` through to the row (`DropdownMenuItem(enabled = …)`).
 In `MainMenuButton`, the Action row's trailing text `Text(s.label, …)` becomes `Text(s.label(), …)`. Then `grep -rn 'MenuShortcut\|MainMenuEntry.Toggle' apps/desktop/src` and fix every other reader of `.label` (now `label()`) and every positional `Toggle(…)` call (the new `shortcut` sits third). Add a trailing shortcut to the Toggle row the same way: `trailingIcon = entry.shortcut?.let { s -> { Text(s.label(), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) } }`. Imports: `dev.supermux.editor.core.KeyChord`, `dev.supermux.ui.keys.{AppCommand, DefaultKeymap, KeyOs, composeKeyOf, currentKeyOs, formatChord, keyNameOf}`.
 
 - [ ] **Step 4: `Main.kt`.**
@@ -1603,6 +1627,9 @@ In `MainMenuButton`, the Action row's trailing text `Text(s.label, …)` becomes
 (b) The `Window(onPreviewKeyEvent = …)` becomes:
 ```kotlin
             onPreviewKeyEvent = { e ->
+                // The window sees every key before Compose sends it to a layer. The dispatcher notes a press of a macOS
+                // menu key here, so that the menu's own firing of it right after is ignored (ShortcutDispatcher.onWindowKey).
+                shortcuts.onWindowKey(e)
                 // F10 / Alt+F/E/V open the Linux and Windows menu, but never over a terminal or remote screen:
                 // Alt+F there is the shell's (forward a word), as in VS Code.
                 e.type == KeyEventType.KeyDown &&
@@ -1613,16 +1640,16 @@ In `MainMenuButton`, the Action row's trailing text `Text(s.label, …)` becomes
 (c) Replace the comment block that starts `// Menu bar (paired only). DEDUPE DECISION:` (through `// button in the sidebar band.`) with:
 ```kotlin
             // Menu bar (paired only). The keys come from the keymap (DefaultKeymap), so the menu shows ⌘N on a
-            // Mac and Ctrl+N elsewhere. On macOS the menu runs its own keys (see nativeMenuChords below).
+            // Mac and Ctrl+N elsewhere. The items run through the dispatcher and grey out when their command can't run.
             // One menu, two renderings (DesktopMainMenu.kt): the native menu bar, or, under the Linux custom
             // chrome (no system frame to hang a menu bar in), the main-menu button in the sidebar band.
 ```
 (d) Menu entries: in the File group, make the first entries:
 ```kotlin
-                        MainMenuEntry.Action("New Session", menuShortcutFor(AppCommands.NewSession)) { ui.openLauncher() },
-                        MainMenuEntry.Action("New Terminal", menuShortcutFor(AppCommands.NewTerminal)) { shortcuts.invoke(AppCommands.NewTerminal) },
+                        MainMenuEntry.Action("New Session", menuShortcutFor(AppCommands.NewSession), enabled = shortcuts.canInvoke(AppCommands.NewSession)) { shortcuts.invokeFromMenu(AppCommands.NewSession) },
+                        MainMenuEntry.Action("New Terminal", menuShortcutFor(AppCommands.NewTerminal), enabled = shortcuts.canInvoke(AppCommands.NewTerminal)) { shortcuts.invokeFromMenu(AppCommands.NewTerminal) },
 ```
-change `MainMenuEntry.Action("Settings…") { ui.openSettings() }` to `MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings)) { ui.openSettings() }`. In the Edit group, replace the Paste image entry and its comments with:
+change `MainMenuEntry.Action("Settings…") { ui.openSettings() }` to `MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.canInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) }`. In the Edit group, replace the Paste image entry and its comments with:
 ```kotlin
                         // ⌘V / Ctrl+V in the composer pastes an image itself (Composer.kt); the menu item has no
                         // key, or it would take every paste from the code editor.
@@ -1630,17 +1657,21 @@ change `MainMenuEntry.Action("Settings…") { ui.openSettings() }` to `MainMenuE
 ```
 In the View group:
 ```kotlin
-                        MainMenuEntry.Toggle("Show Sidebar", checked = !ui.sidebarCollapsed, shortcut = menuShortcutFor(AppCommands.ToggleSidebar)) {
-                            ui.sidebarCollapsed = !ui.sidebarCollapsed
-                        },
+                        MainMenuEntry.Toggle(
+                            "Show Sidebar",
+                            checked = !ui.sidebarCollapsed,
+                            shortcut = menuShortcutFor(AppCommands.ToggleSidebar),
+                            enabled = shortcuts.canInvoke(AppCommands.ToggleSidebar),
+                        ) { shortcuts.invokeFromMenu(AppCommands.ToggleSidebar) },
 ```
 (e) Replace `if (paired && linuxChrome == null && windowsChrome == null) DesktopMenuBar(mainMenu)` with:
 ```kotlin
             val nativeMenu = paired && linuxChrome == null && windowsChrome == null
             if (nativeMenu) DesktopMenuBar(mainMenu)
             // macOS fires a menu key equivalent even when Compose already used the key (the JDK hands the key to
-            // Java, then lets the menu act: AWTView.m). Its keys are the menu's alone; the dispatcher only
-            // swallows them, so nothing runs twice and a focused terminal never sees them.
+            // Java first, then lets the menu act: AWTView.m). The dispatcher stays the one judge of a key: it notes
+            // the press (onWindowKey above), and the menu's echo of it is ignored (invokeFromMenu). A menu item
+            // clicked with the mouse runs normally.
             SideEffect { shortcuts.nativeMenuChords = if (nativeMenu && isMacOs()) mainMenu.menuChords() else emptySet() }
 ```
 (f) Pass the dispatcher to the app: in the `SupermuxApp(` call (~line 1978), add the argument `shortcuts = shortcuts,`.
@@ -1677,6 +1708,7 @@ Run the branch's desktop app on this box under Xvfb or the noVNC display (`mux:b
 - [ ] Ctrl+P from a chat pane focuses "Go to file…" in the Files pane.
 - [ ] With the Settings page open, Ctrl+B does nothing.
 - [ ] Open a dialog (Rename session), press Ctrl+N: nothing opens behind it.
+- [ ] In the composer, and again in a terminal, press Ctrl+,: Settings opens and no `,` is typed (AWT follows Ctrl+, with a typed `,`; the dispatcher swallows that echo).
 
 Fix anything that fails, test-first, with its own commit.
 
@@ -1686,10 +1718,12 @@ Fix anything that fails, test-first, with its own commit.
 - [ ] **Step 2: Check on the Mac:**
   - ⌘N with nothing focused opens New session **once**.
   - ⌘T from a focused terminal opens **exactly one** terminal. This is the menu-vs-dispatcher check.
+  - With a dialog open (Rename session), ⌘N opens nothing behind it. File › New Terminal clicked with the mouse opens one terminal.
+  - With Settings open, ⌘B does nothing and View › Show Sidebar is greyed out.
   - ⌃T in the terminal reaches the shell.
   - The menu bar shows ⌘N, ⌘T, ⌘, and ⌘B.
   - ⌘F after a transcript click opens the find bar.
-  - If the menu does **not** fire after Compose used the key (⌘T then does nothing), set `nativeMenuChords` to `emptySet()` on macOS too and re-check. Record which behaviour the Mac showed in the spec's "As built".
+  - If ⌘T opens two terminals, the menu fired BEFORE Java saw the key. Then reverse the echo: `invokeFromMenu` notes the command, and the dispatcher ignores the key press that follows within the same second. If ⌘T opens none, the menu does not fire after Compose used the key; set `nativeMenuChords` to `emptySet()`. Record what the Mac showed in the spec's "As built".
 - [ ] **Step 3: Release the lease** (delete `.lease`).
 - [ ] **Step 4: Record it.** Append "As built (phase 1–2)" to the spec: the content-root + focus-keeper deviation and its reason (the `CanvasLayersComposeSceneImpl` finding), the Mac menu result, and anything Task 10 changed. Append the durable facts to `~/.mux/domains/claudemux.md`. Commit the spec with `git add -f` (docs are ignored; the fleet force-adds specs).
 - [ ] **Step 5: The train.** Message Muxie: branch `mux/central-shortcut-system`, the tip SHA, card #96, "phase 2: desktop wiring; targeted tests green; Linux + Mac checked". Cc Tally. Then `issues comment 96` with the same summary.
