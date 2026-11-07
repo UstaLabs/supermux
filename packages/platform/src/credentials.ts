@@ -1,6 +1,7 @@
-// The OS credential store, read-only: whether it holds a generic credential, never what is in it. Windows' Credential
-// Manager is read through Bun's ffi (advapi32 CredReadW), loaded only on win32 and only under Bun, so Node still loads
-// this package. Where the store cannot be read, the answer is Unsupported or the OS's error, never a silent "no".
+// The OS credential store, read-only. Whether it holds a generic credential is read through Bun's ffi (advapi32
+// CredReadW), loaded only on win32 and only under Bun, so Node still loads this package. A secret that another CLI
+// stored with Bun.secrets (Claude Code's Windows login) is read back through Bun.secrets itself. Where the store cannot
+// be read, the answer is Unsupported or the OS's error, never a silent "no".
 import { createRequire } from "node:module"
 import { Unsupported } from "./errors.js"
 
@@ -22,6 +23,37 @@ export function hasGenericCredential(service: string, account: string, options: 
   const read = options.windowsRead === undefined ? windowsReader() : options.windowsRead
   if (!read) throw new Unsupported("credentials.hasGenericCredential", "reading Windows Credential Manager needs Bun's ffi, which this runtime does not have")
   return read(`${service}:${account}`)
+}
+
+/** One Bun.secrets entry: what [readSecret] asks the store for. */
+export interface SecretQuery {
+  service: string
+  name: string
+}
+
+export interface SecretOptions {
+  /** The OS whose store to ask; the running one by default (tests force the others). */
+  platform?: NodeJS.Platform
+  /** Bun.secrets.get; null where Bun is missing (Node). */
+  get?: ((query: SecretQuery) => Promise<string | null>) | null
+}
+
+/**
+ * The secret stored for [service] and [name] the way Bun.secrets stores one (on Windows the generic credential
+ * `service/name`), or null when there is none. Windows only for now: elsewhere, and under Node, it throws [Unsupported];
+ * a store that fails (an SSH key logon has no credential vault) rejects with the OS's error.
+ */
+export async function readSecret(service: string, name: string, options: SecretOptions = {}): Promise<string | null> {
+  const platform = options.platform ?? process.platform
+  if (platform !== "win32") throw new Unsupported("credentials.readSecret", `reading the credential store is not implemented on ${platform} yet`)
+  const get = options.get === undefined ? bunSecretsGet() : options.get
+  if (!get) throw new Unsupported("credentials.readSecret", "reading a stored secret needs Bun.secrets, which this runtime does not have")
+  return get({ service, name })
+}
+
+function bunSecretsGet(): ((query: SecretQuery) => Promise<string | null>) | null {
+  const secrets = (globalThis as { Bun?: { secrets?: { get?: (query: SecretQuery) => Promise<string | null> } } }).Bun?.secrets
+  return typeof secrets?.get === "function" ? (query) => secrets.get!(query) : null
 }
 
 const CRED_TYPE_GENERIC = 1

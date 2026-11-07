@@ -10,6 +10,7 @@ import { join } from "path"
 import type { Account, Materialized } from "../../../packages/supermux-core/src/accounts/index.js"
 import { CODEX_TOKEN_ENV } from "../../../packages/supermux-core/src/accounts/adapters/codex.js"
 import { displayLabel, sharedAccounts } from "../accounts/broker-accounts"
+import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import {
   fetchClaudeUsage,
   fetchClaudeUsageWithToken,
@@ -32,18 +33,29 @@ export interface AccountUsageTarget {
 
 const QUOTA_AGENTS = new Set<string>(["claude", "codex", "cursor", "grok"])
 
+export interface AccountUsageDeps {
+  /** The login Claude Code keeps in the OS credential store for a CLAUDE_CONFIG_DIR (Windows Credential Manager). */
+  claudeStoredLogin: (configDir: string) => Promise<string | null>
+}
+
+const DEPS: AccountUsageDeps = { claudeStoredLogin: (configDir) => readClaudeStoredLogin(configDir) }
+
 /** Fetches one account's usage from its materialized launch env; null = no credentials found. */
 export async function fetchUsageForEnv(
   agent: string,
   materialized: Materialized,
   account: Pick<Account, "identity">,
+  deps: AccountUsageDeps = DEPS,
 ): Promise<unknown | null> {
   const env = materialized.env
   switch (agent) {
-    case "claude":
+    case "claude": {
       if (env.CLAUDE_CODE_OAUTH_TOKEN) return fetchClaudeUsageWithToken(env.CLAUDE_CODE_OAUTH_TOKEN)
-      if (env.CLAUDE_CONFIG_DIR) return fetchClaudeUsage(join(env.CLAUDE_CONFIG_DIR, ".credentials.json"))
+      const configDir = env.CLAUDE_CONFIG_DIR
+      // Claude Code names the stored copy after the folder exactly as it got it, so the raw value, never a joined path.
+      if (configDir) return fetchClaudeUsage(join(configDir, ".credentials.json"), () => deps.claudeStoredLogin(configDir))
       return null
+    }
     case "codex":
       if (env[CODEX_TOKEN_ENV]) return fetchCodexUsageWithToken(env[CODEX_TOKEN_ENV], account.identity?.accountId)
       if (env.CODEX_HOME) return fetchCodexUsage(join(env.CODEX_HOME, "auth.json"))
