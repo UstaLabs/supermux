@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -219,5 +220,20 @@ class PaneHostTest {
         // viewport clips it and only the wrapper's green shows through.
         val overflowX = with(density) { 140.dp.roundToPx() }
         assertEquals(Color.Green, pixels[overflowX, y], "expected overflow past the strip to be clipped")
+    }
+
+    @Test
+    fun onlyTheNamedPanesStripCarriesTheEnd() = runComposeUiTest {
+        setContent {
+            PaneHost(
+                layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+                    LayoutNode.Group("g1", listOf("a"), "a"),
+                    LayoutNode.Group("g2", listOf("b"), "b"),
+                )),
+                onLayoutChange = {},
+                stripEnd = PaneStripEnd("g2", 66.dp) { Box(Modifier.size(20.dp).testTag("the-end")) },
+            ) { Text("body") }
+        }
+        onAllNodesWithTag("the-end").assertCountEquals(1)
     }
 }

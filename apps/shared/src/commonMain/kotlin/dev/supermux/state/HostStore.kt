@@ -1703,6 +1703,8 @@ class HostStore(
         workspaceId: String,
         kind: dev.supermux.workspace.NewViewKind,
         groupId: String,
+        /** Called when the broker did not create it. */
+        onFailed: () -> Unit = {},
         /** Called with the new view id once the broker has created it. */
         onCreated: (String) -> Unit = {},
     ) {
@@ -1724,7 +1726,10 @@ class HostStore(
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
                 .onSuccess { onCreated(it.id) }
-                .onFailure { println("[HostStore] addWorkspaceView failed: $it") }
+                .onFailure {
+                    println("[HostStore] addWorkspaceView failed: $it")
+                    onFailed()
+                }
         }
     }
 
