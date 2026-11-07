@@ -167,7 +167,7 @@ object DesktopHostBootstrap {
             token = token,
             directUrl = directUrl,
             hostId = hostId,
-            platform = System.getProperty("os.name"),
+            platform = System.getProperty("os.name"), // platform-ok: the OS's own name, kept as the host record's label
         )
         runCatching(onStoreChanged).onFailure { System.err.println("supermux host: fleet refresh failed: ${it.message}") }
     }
