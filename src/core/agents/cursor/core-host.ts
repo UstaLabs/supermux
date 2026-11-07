@@ -12,7 +12,7 @@ import { makeLogger } from "../../../shared/log"
 import { resolveCommand, type FileExists } from "../../process/launcher"
 import { isGrokAgentPath } from "../detect"
 
-import { smokeCursorAgent } from "./smoke"
+import { cachedCursorSmoke } from "./smoke"
 import { HOME } from "../../session-manager/spawn-helper"
 import { STATE_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
@@ -158,11 +158,14 @@ function userConfigDir(): string {
   return process.env.XDG_CONFIG_HOME || join(HOME, ".config")
 }
 
+/** One per process: a cursor-agent binary that passed is not asked again (#102). */
+const defaultSmoke = cachedCursorSmoke()
+
 export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCoreHost {
   if (!options.stateDirectory) throw new Error("stateDirectory is required")
   const stateDirectory = options.stateDirectory
   const factory = options.driverFactory
-  const smoke = options.smoke ?? smokeCursorAgent
+  const smoke = options.smoke ?? defaultSmoke
   return createHost({
     stateDirectory,
     limits: options.limits ?? { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },

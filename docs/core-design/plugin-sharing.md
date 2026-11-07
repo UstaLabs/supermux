@@ -70,4 +70,5 @@ rest with `context.degraded`.
   `package.json`, `package-lock.json` and a `node_modules` link from one shared install per OpenCode version
   (`<state>/opencode-plugin-deps/<version>`, copied once from a session's own finished install), and OpenCode skips
   its install; only the first session after an OpenCode upgrade still installs.
-- Cursor: `prepare` runs `cursor-agent --version` on every launch: 2.6–7.3 s.
+- Cursor: `prepare` ran `cursor-agent --version` on every launch (2.6–7.3 s); since #102 once per binary (path, size,
+  mtime) per broker process.
