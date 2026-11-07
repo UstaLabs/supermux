@@ -62,6 +62,14 @@ describe("Kotlin rules", () => {
     expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
     expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])
   })
+
+  test("the webview library's OS seams are allowed under their own rule only", () => {
+    const loader = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WinNativeLoader.kt"
+    expect(kt(loader, 'val local = System.getenv("LOCALAPPDATA")')).toEqual([])
+    expect(ids(kt(loader, 'val os = System.getProperty("os.name")'))).toEqual(["os-check-kt"])
+    const beside = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WindowsWebEngine.kt"
+    expect(ids(kt(beside, 'val local = System.getenv("LOCALAPPDATA")'))).toEqual(["env-dirs-kt"])
+  })
 })
 
 describe("platform-ok markers", () => {

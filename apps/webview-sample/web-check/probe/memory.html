@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>probe: memory per demo iframe</title>
+<style>
+  html, body { margin: 0; background: #fff; }
+  #grid { display: grid; grid-template-columns: repeat(4, 320px); gap: 8px; padding: 8px; }
+  #grid iframe { width: 320px; height: 180px; border: 0; display: block; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+// N small agent demos, each in its own sandboxed srcdoc iframe, as the engine makes them: the perf lab's four kinds
+// (a counter, a chart, a sortable list, a CSS animation), with a script about the shim's kind of work.
+(function () {
+  var grid = document.getElementById('grid'), frames = [];
+  function body(i) {
+    switch (i % 4) {
+      case 0: return '<p>Click to count.</p><button onclick="this.textContent=+this.textContent+1">0</button>';
+      case 1: var bars = ''; for (var b = 0; b < 6; b++) { var h = 20 + (i * 13 + b * 29) % 80; bars += '<rect x="' + (b * 34) + '" y="' + (100 - h) + '" width="26" height="' + h + '" fill="#4f7cff"/>'; }
+              return '<svg width="210" height="100">' + bars + '</svg>';
+      case 2: var li = ''; for (var k = 1; k <= 5; k++) li += '<li>' + ((k * 37 + i) % 97) + '</li>';
+              return '<p>Click to sort.</p><ol id="l">' + li + '</ol><button onclick="var l=document.getElementById(\'l\');Array.from(l.children).sort(function(a,b){return a.textContent-b.textContent}).forEach(function(e){l.append(e)})">Sort</button>';
+      default: return '<div class="spin"></div><p>A CSS animation, running while the page is live.</p>';
+    }
+  }
+  function demo(i) {
+    return '<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:light dark;font:14px/1.4 system-ui,sans-serif}' +
+      'body{margin:0;padding:12px 14px}.spin{width:28px;height:28px;background:#4f7cff;animation:s 1.2s linear infinite}' +
+      '@keyframes s{to{transform:rotate(1turn)}}</style>' +
+      '<script>(function(){var n=0,o=console.log;console.log=function(){n++;return o.apply(console,arguments)};' +
+      'if(window.ResizeObserver)new ResizeObserver(function(){n++}).observe(document.documentElement);' +
+      'var c=new MessageChannel();c.port1.onmessage=function(){};parent.postMessage({probe:1},"*",[c.port2]);})();<\/script>' +
+      '</head><body><h3>Demo ' + (i + 1) + '</h3>' + body(i) + '</body></html>';
+  }
+  function make(i) {
+    var f = document.createElement('iframe');
+    f.setAttribute('sandbox', 'allow-scripts');
+    f.addEventListener('load', function () { f.__loaded = true; });
+    f.srcdoc = demo(i);
+    grid.appendChild(f);
+    return f;
+  }
+  window.probe = {
+    ready: true,
+    set: function (n) {
+      while (frames.length > n) frames.pop().remove();
+      while (frames.length < n) frames.push(make(frames.length));
+      return frames.length;
+    },
+    loaded: function () { var c = 0; for (var i = 0; i < frames.length; i++) if (frames[i].__loaded) c++; return c; }
+  };
+})();
+</script>
+</body>
+</html>

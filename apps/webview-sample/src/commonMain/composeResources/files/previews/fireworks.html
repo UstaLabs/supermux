@@ -1,0 +1,271 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Fireworks</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: linear-gradient(180deg, var(--sky1) 0%, var(--sky2) 72%, var(--sky3) 100%); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #fx { touch-action: manipulation; }
+  #city { pointer-events: none; }
+  .hint {
+    position: absolute; right: 10px; top: 9px; font-size: 11px; color: #fff; opacity: .55; pointer-events: none;
+    transition: opacity .6s ease;
+  }
+  .hint.gone { opacity: 0; }
+</style>
+</head>
+<body class="fixed nosel">
+<canvas id="sky"></canvas>
+<canvas id="fx"></canvas>
+<canvas id="city"></canvas>
+<div class="hint" id="hint">tap to launch</div>
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    night: {
+      sky: ['#05081c', '#141036', '#2a1445'], city: false,
+      palette: ['#ff4d6d', '#ffd166', '#06d6a0', '#4cc9f0', '#f72585', '#fff6d6'],
+    },
+    city: {
+      sky: ['#060a1e', '#1d1438', '#4a1f4f'], city: true,
+      palette: ['#ffb703', '#fb8500', '#ff006e', '#8ecae6', '#ffffff', '#c77dff'],
+    },
+  }, 'night');
+  var style = document.body.style;
+  style.setProperty('--sky1', P.sky[0]);
+  style.setProperty('--sky2', P.sky[1]);
+  style.setProperty('--sky3', P.sky[2]);
+
+  var sky = document.getElementById('sky'), fx = document.getElementById('fx'), city = document.getElementById('city');
+  var g = fx.getContext('2d');
+  var rand = Kit.rng(2026);
+  var W = 1, H = 1, ground = 1;
+  var MAX = 700;
+
+  // Particles in flat arrays: position, previous position, velocity, life left, life, colour, kind.
+  var px = new Float32Array(MAX), py = new Float32Array(MAX), qx = new Float32Array(MAX), qy = new Float32Array(MAX);
+  var vx = new Float32Array(MAX), vy = new Float32Array(MAX), left = new Float32Array(MAX), life = new Float32Array(MAX);
+  var hue = new Uint8Array(MAX), heavy = new Uint8Array(MAX);
+  var count = 0;
+  var rockets = [];
+  var flashes = [];
+
+  function drawSky() {
+    var f = Kit.fit(sky);
+    var c = sky.getContext('2d');
+    c.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    var r = Kit.rng(7);
+    for (var i = 0; i < Math.round(W * H / 900); i++) {
+      var s = r() < 0.12 ? 1.3 : 0.7;
+      c.globalAlpha = 0.25 + r() * 0.55;
+      c.fillStyle = r() < 0.2 ? '#ffe9c4' : '#dfe8ff';
+      c.fillRect(r() * W, r() * H * 0.8, s, s);
+    }
+    c.globalAlpha = 1;
+  }
+
+  // A skyline across the bottom, with lit windows, drawn once a resize.
+  function drawCity() {
+    var f = Kit.fit(city);
+    var c = city.getContext('2d');
+    c.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    if (!P.city) return;
+    var r = Kit.rng(11);
+    var x = -4, base = H;
+    var glow = c.createLinearGradient(0, H * 0.55, 0, H);
+    glow.addColorStop(0, 'rgba(255,120,80,0)');
+    glow.addColorStop(1, 'rgba(255,120,80,0.18)');
+    c.fillStyle = glow;
+    c.fillRect(0, H * 0.55, W, H * 0.45);
+    while (x < W + 4) {
+      var w = 16 + r() * 30, h = H * (0.12 + Math.pow(r(), 1.6) * 0.3);
+      c.fillStyle = r() < 0.5 ? '#070814' : '#0b0c1c';
+      c.fillRect(x, base - h, w, h);
+      if (r() < 0.25) c.fillRect(x + w / 2 - 0.75, base - h - 8 - r() * 8, 1.5, 16);
+      // Windows: a grid, about a third lit, warm.
+      for (var wy = base - h + 5; wy < base - 4; wy += 6) {
+        for (var wx = x + 3; wx < x + w - 4; wx += 5) {
+          if (r() < 0.33) {
+            c.fillStyle = r() < 0.8 ? 'rgba(255,214,130,0.85)' : 'rgba(170,220,255,0.8)';
+            c.fillRect(wx, wy, 2, 2.6);
+          }
+        }
+      }
+      x += w + (r() < 0.3 ? 2 : 0);
+    }
+  }
+
+  function setup() {
+    var f = Kit.fit(fx);
+    W = f.cw;
+    H = f.ch;
+    // Sparks that fall behind the skyline are hidden by it: they go once off the bottom.
+    ground = H;
+    g.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    drawSky();
+    drawCity();
+    // A size that changes just after the page opened (its first layout came at another size): the opening shells
+    // burst again, placed for this one.
+    if (opened && age < 1.5) {
+      count = 0;
+      rockets.length = 0;
+      flashes.length = 0;
+      opened = false;
+    }
+  }
+
+  function launch(tx, ty) {
+    var x = tx === undefined ? W * (0.15 + rand() * 0.7) : Kit.clamp(tx + (rand() - 0.5) * 30, 10, W - 10);
+    var top = ty === undefined ? H * (0.12 + rand() * 0.3) : Kit.clamp(ty, H * 0.06, H * 0.7);
+    var startY = H + 4;
+    // The speed that just reaches the top under gravity.
+    var rise = Math.sqrt(2 * 160 * (startY - top));
+    rockets.push({ x: x, y: startY, px: x, py: startY, vx: (rand() - 0.5) * 30, vy: -rise, colour: Math.floor(rand() * P.palette.length) });
+  }
+
+  function burst(x, y, colour) {
+    var kind = rand();
+    var n = Math.min(MAX - count, kind < 0.2 ? 60 : 70 + Math.floor(rand() * 50));
+    var second = rand() < 0.4 ? Math.floor(rand() * P.palette.length) : colour;
+    var speed = 80 + rand() * 70;
+    for (var k = 0; k < n; k++) {
+      var i = count++;
+      var a = rand() * Math.PI * 2;
+      // A ring burst throws every spark at one speed; a peony at many; a willow slowly, to droop long.
+      var s = kind < 0.2 ? speed : kind < 0.35 ? speed * 0.55 * (0.6 + rand() * 0.5) : speed * (0.25 + Math.sqrt(rand()) * 0.85);
+      px[i] = qx[i] = x;
+      py[i] = qy[i] = y;
+      vx[i] = Math.cos(a) * s;
+      vy[i] = Math.sin(a) * s;
+      life[i] = left[i] = kind >= 0.2 && kind < 0.35 ? 2.2 + rand() * 0.8 : 1.1 + rand() * 0.8;
+      hue[i] = k % 3 === 0 ? second : colour;
+      heavy[i] = kind >= 0.2 && kind < 0.35 ? 1 : 0;
+    }
+    flashes.push({ x: x, y: y, t: 0, colour: P.palette[colour] });
+  }
+
+  var hint = document.getElementById('hint');
+  fx.addEventListener('pointerdown', function (e) {
+    var rect = fx.getBoundingClientRect();
+    launch(e.clientX - rect.left, e.clientY - rect.top);
+    hint.classList.add('gone');
+  });
+
+  var nextLaunch = 0.2, opened = false, age = 0;
+  Kit.watch(document.body, setup);
+
+  Kit.loop(function (dt) {
+    age += dt;
+    // The sky is never empty when the preview shows: two shells are already in bloom. On the first frame, once the
+    // page has its size (a web view may lay a page out at another size first), run on by 0.4 s, trails and all.
+    if (!opened) {
+      opened = true;
+      burst(W * 0.3, H * 0.32, 0);
+      burst(W * 0.72, H * 0.24, 3);
+      for (var k = 0; k < 24; k++) frame(1 / 60);
+    }
+    frame(dt);
+  });
+
+  function frame(dt) {
+    nextLaunch -= dt;
+    if (nextLaunch <= 0) {
+      launch();
+      nextLaunch = 0.45 + rand() * 0.5;
+    }
+    // Trails: what was drawn fades a little every frame.
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = 'rgba(0,0,0,0.2)';
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'lighter';
+
+    // Flashes of light where shells burst.
+    for (var f = flashes.length - 1; f >= 0; f--) {
+      var fl = flashes[f];
+      fl.t += dt;
+      if (fl.t > 0.18) { flashes.splice(f, 1); continue; }
+      var rad = 26 + fl.t * 160;
+      var grad = g.createRadialGradient(fl.x, fl.y, 0, fl.x, fl.y, rad);
+      grad.addColorStop(0, 'rgba(255,255,255,' + (0.35 * (1 - fl.t / 0.18)) + ')');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grad;
+      g.fillRect(fl.x - rad, fl.y - rad, rad * 2, rad * 2);
+    }
+
+    // Rockets climb, slowing, and burst at the top of their climb.
+    g.lineCap = 'round';
+    g.lineWidth = 2;
+    g.strokeStyle = '#ffe8c2';
+    g.beginPath();
+    for (var r = rockets.length - 1; r >= 0; r--) {
+      var k = rockets[r];
+      k.px = k.x;
+      k.py = k.y;
+      k.vy += 160 * dt;
+      k.x += k.vx * dt;
+      k.y += k.vy * dt;
+      g.moveTo(k.px, k.py);
+      g.lineTo(k.x, k.y);
+      if (k.vy >= -20) {
+        rockets.splice(r, 1);
+        burst(k.x, k.y, k.colour);
+      }
+    }
+    g.stroke();
+
+    // Sparks: drag, gravity, and a flicker as they die. Drawn in a few strokes: by colour and brightness.
+    var drag = Math.exp(-1.6 * dt);
+    for (var i = 0; i < count; i++) {
+      qx[i] = px[i];
+      qy[i] = py[i];
+      vx[i] *= drag;
+      vy[i] = vy[i] * drag + (heavy[i] ? 55 : 95) * dt;
+      px[i] += vx[i] * dt;
+      py[i] += vy[i] * dt;
+      left[i] -= dt;
+      if (left[i] <= 0 || py[i] > ground + 20) {
+        // Swap with the last spark: the arrays stay packed.
+        count--;
+        px[i] = px[count]; py[i] = py[count]; qx[i] = qx[count]; qy[i] = qy[count];
+        vx[i] = vx[count]; vy[i] = vy[count]; left[i] = left[count]; life[i] = life[count];
+        hue[i] = hue[count]; heavy[i] = heavy[count];
+        i--;
+      }
+    }
+    g.lineWidth = 1.7;
+    for (var c = 0; c < P.palette.length; c++) {
+      for (var band = 0; band < 3; band++) {
+        var any = false;
+        g.beginPath();
+        for (var j = 0; j < count; j++) {
+          if (hue[j] !== c) continue;
+          var f2 = left[j] / life[j];
+          var b = f2 > 0.6 ? 2 : f2 > 0.25 ? 1 : 0;
+          if (b !== band) continue;
+          // The dying ones twinkle.
+          if (b === 0 && rand() < 0.35) continue;
+          g.moveTo(qx[j], qy[j]);
+          g.lineTo(px[j], py[j]);
+          any = true;
+        }
+        if (!any) continue;
+        g.strokeStyle = P.palette[c];
+        g.globalAlpha = band === 2 ? 1 : band === 1 ? 0.7 : 0.4;
+        g.stroke();
+      }
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+  }
+})();
+</script>
+</body>
+</html>

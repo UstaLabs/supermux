@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Loaders</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* The accent comes from the variant (the script sets --accent, --accent2 and --track for both themes). */
+  :root { --accent: #6d4aff; --accent2: #a993ff; --track: rgba(109, 74, 255, .16); --tile: var(--card); }
+  main { padding: 14px 14px 14px; }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+  .title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 7px; border-radius: 999px;
+    background: var(--chip); font-size: 11px; font-weight: 650; color: var(--fg); white-space: nowrap;
+  }
+  .chip i { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, var(--accent2), var(--accent)); }
+
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .tile {
+    position: relative; height: 76px; border-radius: 16px; border: 1px solid var(--line);
+    background: var(--tile);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+  }
+  /* Three columns: the bar takes the last row's two free cells. Four columns from 460 px: two even rows. */
+  .tile.wide { grid-column: span 2; }
+  @media (min-width: 460px) {
+    .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .tile.wide { grid-column: auto; }
+  }
+  .tile > span { font-size: 10.5px; font-weight: 600; color: var(--muted); letter-spacing: .01em; }
+  .stage { height: 36px; width: 100%; display: grid; place-items: center; }
+
+  /* Every loader moves on transform and opacity only. */
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 1. Ring: a comet arc with a round head over a faint track. */
+  .ring { position: relative; width: 30px; height: 30px; border-radius: 50%; box-shadow: inset 0 0 0 3.5px var(--track); }
+  .ring b {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0deg, transparent 130deg, var(--accent) 360deg);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    animation: spin .85s linear infinite; will-change: transform;
+  }
+  .ring b::after {
+    content: ''; position: absolute; top: 0; left: 50%; width: 3.5px; height: 3.5px; margin-left: -2.4px;
+    border-radius: 50%; background: var(--accent);
+  }
+
+  /* 2. Dots: three bouncing in turn. */
+  .dots { display: flex; gap: 5px; }
+  .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: bounce 1.05s cubic-bezier(.45, 0, .55, 1) infinite; will-change: transform; }
+  .dots i:nth-child(2) { animation-delay: .13s; }
+  .dots i:nth-child(3) { animation-delay: .26s; }
+  @keyframes bounce {
+    0%, 62%, 100% { transform: translateY(4px) scale(1, .9); opacity: .45; }
+    31% { transform: translateY(-7px) scale(.94, 1.06); opacity: 1; }
+  }
+
+  /* 3. Equalizer: tall rounded bars sliding up from a clipped baseline, so their caps stay round. */
+  .eq { display: flex; gap: 3px; height: 26px; overflow: hidden; border-radius: 0 0 2px 2px; }
+  .eq i { width: 4px; height: 26px; border-radius: 2px; background: linear-gradient(var(--accent2), var(--accent)); will-change: transform; animation: eq 1s ease-in-out infinite alternate; }
+  .eq i:nth-child(1) { animation-duration: .9s; animation-delay: -.25s; }
+  .eq i:nth-child(2) { animation-duration: 1.15s; animation-delay: -.7s; }
+  .eq i:nth-child(3) { animation-duration: .8s; animation-delay: -.4s; }
+  .eq i:nth-child(4) { animation-duration: 1.05s; animation-delay: -.1s; }
+  .eq i:nth-child(5) { animation-duration: .95s; animation-delay: -.55s; }
+  @keyframes eq { from { transform: translateY(68%); } to { transform: translateY(6%); } }
+
+  /* 4. Pulse: a breathing dot and two ripples. */
+  .pulse { position: relative; width: 34px; height: 34px; }
+  .pulse b { position: absolute; inset: 12px; border-radius: 50%; background: var(--accent); animation: breathe 1.8s ease-in-out infinite; }
+  .pulse i { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); opacity: 0; animation: ripple 1.8s cubic-bezier(.2, .6, .35, 1) infinite; will-change: transform, opacity; }
+  .pulse i:nth-of-type(2) { animation-delay: .9s; }
+  @keyframes ripple { 0% { transform: scale(.3); opacity: .9; } 100% { transform: scale(1); opacity: 0; } }
+  @keyframes breathe { 0%, 100% { transform: scale(.82); } 50% { transform: scale(1); } }
+
+  /* 5. Orbit: four dots chasing round a faint track, bunching and spreading on an eased turn. */
+  .orbit { position: relative; width: 32px; height: 32px; }
+  .orbit::before { content: ''; position: absolute; inset: 2.5px; border-radius: 50%; border: 1.5px solid var(--track); }
+  .orbit i { position: absolute; inset: 0; animation: spin 1.35s cubic-bezier(.55, .1, .45, .9) infinite; will-change: transform; }
+  .orbit i::before { content: ''; position: absolute; top: 0; left: 50%; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--accent); }
+  .orbit i:nth-child(2) { animation-delay: .07s; }
+  .orbit i:nth-child(2)::before { transform: scale(.82); opacity: .8; }
+  .orbit i:nth-child(3) { animation-delay: .14s; }
+  .orbit i:nth-child(3)::before { transform: scale(.66); opacity: .6; }
+  .orbit i:nth-child(4) { animation-delay: .21s; }
+  .orbit i:nth-child(4)::before { transform: scale(.5); opacity: .4; }
+
+  /* 6. Flip: a square turning over on one axis, then the other. */
+  .flip {
+    position: relative; width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    animation: flip 1.6s cubic-bezier(.65, 0, .35, 1) infinite; will-change: transform;
+  }
+  .flip::after { content: ''; position: absolute; left: 5px; top: 5px; width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
+  @keyframes flip {
+    0% { transform: perspective(90px) rotateX(0deg) rotateY(0deg); }
+    50% { transform: perspective(90px) rotateX(-180deg) rotateY(0deg); }
+    100% { transform: perspective(90px) rotateX(-180deg) rotateY(-180deg); }
+  }
+
+  /* 7. Dashed: an SVG ring of dashes and an inner ring of dots, turning opposite ways. */
+  .dash { position: relative; width: 34px; height: 34px; }
+  .dash svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; will-change: transform; }
+  .dash circle { fill: none; stroke: var(--accent); stroke-linecap: round; }
+  .dash .outer { animation: spin 6s linear infinite; }
+  .dash .outer circle { stroke-width: 3; stroke-dasharray: 4.6 5.45; }
+  .dash .inner { animation: spin 3s linear infinite reverse; }
+  .dash .inner circle { stroke-width: 3.2; stroke-dasharray: 0 7.07; opacity: .55; }
+
+  /* 8. Progress: an indeterminate bar. */
+  .bar { position: relative; width: 78%; max-width: 150px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .bar i {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 42%; border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    animation: sweep 1.5s cubic-bezier(.65, .05, .36, 1) infinite; will-change: transform;
+  }
+  @keyframes sweep { from { transform: translateX(-105%); } to { transform: translateX(245%); } }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <div class="head">
+    <div><div class="title">Loading states</div><div class="sub">Eight loaders · pure CSS</div></div>
+    <div class="chip"><i></i><span id="accent"></span></div>
+  </div>
+  <div class="grid">
+    <div class="tile"><div class="stage"><div class="ring"><b></b></div></div><span>Ring</span></div>
+    <div class="tile"><div class="stage"><div class="dots"><i></i><i></i><i></i></div></div><span>Dots</span></div>
+    <div class="tile"><div class="stage"><div class="eq"><i></i><i></i><i></i><i></i><i></i></div></div><span>Equalizer</span></div>
+    <div class="tile"><div class="stage"><div class="pulse"><i></i><i></i><b></b></div></div><span>Pulse</span></div>
+    <div class="tile"><div class="stage"><div class="orbit"><i></i><i></i><i></i><i></i></div></div><span>Orbit</span></div>
+    <div class="tile"><div class="stage"><div class="flip"></div></div><span>Flip</span></div>
+    <div class="tile"><div class="stage"><div class="dash">
+      <svg class="outer" viewBox="0 0 34 34"><circle cx="17" cy="17" r="14"/></svg>
+      <svg class="inner" viewBox="0 0 34 34"><circle cx="17" cy="17" r="7.5"/></svg>
+    </div></div><span>Dashed</span></div>
+    <div class="tile wide"><div class="stage"><div class="bar"><i></i></div></div><span>Indeterminate</span></div>
+  </div>
+</main>
+<script>
+(function () {
+  // Each accent in a light and a dark tone, the second colour of its gradients, and its track.
+  var P = Kit.pick({
+    violet: {
+      name: 'Violet',
+      light: { accent: '#6d4aff', accent2: '#a993ff', track: 'rgba(109, 74, 255, .16)', tile: '#f6f4ff' },
+      dark: { accent: '#9d87ff', accent2: '#cdbfff', track: 'rgba(157, 135, 255, .2)', tile: '#1f1d2e' }
+    },
+    coral: {
+      name: 'Coral',
+      light: { accent: '#f4553f', accent2: '#ff9a7a', track: 'rgba(244, 85, 63, .16)', tile: '#fff5f2' },
+      dark: { accent: '#ff7d68', accent2: '#ffb59f', track: 'rgba(255, 125, 104, .2)', tile: '#2a1f22' }
+    }
+  }, 'violet');
+
+  document.getElementById('accent').textContent = P.name;
+  var root = document.documentElement.style;
+  Kit.onTheme(function (dark) {
+    var t = dark ? P.dark : P.light;
+    root.setProperty('--accent', t.accent);
+    root.setProperty('--accent2', t.accent2);
+    root.setProperty('--track', t.track);
+    root.setProperty('--tile', t.tile);
+  });
+})();
+</script>
+</body>
+</html>
