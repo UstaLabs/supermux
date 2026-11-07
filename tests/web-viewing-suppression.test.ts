@@ -38,7 +38,7 @@ function fire(sessionId: string, isMuted: (id: string) => boolean) {
     sender, action, sessionName: sessionId, sessionId,
     isMuted,
     devices: () => [deviceName],
-    anyPresent: (s) => tracker.isAnyPresentFor(s),
+    presentOn: (s) => tracker.presentDevicesFor(s),
   })
 }
 
@@ -93,11 +93,12 @@ test("viewing(session=foo, visible=true) suppresses push for foo", async () => {
   ws.close()
 })
 
-test("on the list (session=null, visible) suppresses push for any session", async () => {
+// Card #86 part 2: the session list mutes nothing; only an open chat mutes its own push.
+test("on the list (session=null, visible) does NOT suppress push", async () => {
   const ws = await connect(token)
   await sendViewingFrame(ws, null, true)
   await fire("foo", () => false)
-  expect(calls.length).toBe(0)
+  expect(calls.length).toBe(1)
   ws.close()
 })
 

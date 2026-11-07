@@ -1,4 +1,5 @@
 import type { PlatformPushAdapter } from "../core/push/native-sender"
+import { failureReason } from "./reason"
 import { makeLogger } from "../shared/log"
 
 const log = makeLogger("relay/fcm")
@@ -29,9 +30,14 @@ export function createFcmAdapter(deps: FcmDeps): PlatformPushAdapter {
       // malformed token (our payload is a constant data-only message, so a 400 here
       // is the token, not the body). Both → drop. Everything else is transient.
       const gone = res.status === 404 || /UNREGISTERED|INVALID_ARGUMENT/.test(body)
-      return { ok: false, gone }
+      return { ok: false, gone, reason: failureReason("fcm", res.status, fcmStatus(body)) }
     },
   }
+}
+
+// FCM explains a refusal as {"error":{"status":"UNREGISTERED"}}.
+function fcmStatus(body: string): string | undefined {
+  try { return (JSON.parse(body) as { error?: { status?: string } }).error?.status } catch { return undefined }
 }
 
 // ---------------------------------------------------------------------------

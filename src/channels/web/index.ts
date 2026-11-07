@@ -61,6 +61,8 @@ import {
 } from "./terminal-protocol"
 import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
 import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
+import { auditPushTargets } from "../../core/push/audit"
+import { PushRegistrationWatch } from "../../core/push/registration-watch"
 import { paths } from "@supermux/platform"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
@@ -632,6 +634,7 @@ export class WebChannel implements Channel {
   private readonly fileStore?: import("../../core/files/store").FileStore
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
+  private readonly pushWatch?: PushRegistrationWatch
   private readonly vapidPublicKey?: string
   private readonly relayUrl?: string
   private readonly getHostInfo?: () => import("./host-route").HostInfo
@@ -671,6 +674,7 @@ export class WebChannel implements Channel {
     this.fileStore = opts.fileStore
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
+    if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
     this.vapidPublicKey = opts.vapidPublicKey
     this.relayUrl = opts.relayUrl
     this.getHostInfo = opts.getHostInfo
@@ -768,6 +772,7 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
+    auditPushTargets({ paired: new Set(this.store.list().map((d) => d.name)), deviceTokenStore: this.deviceTokenStore, pushStore: this.pushStore, log })
     this.server = Bun.serve<WSData>(this.buildServeOptions())
     this.heartbeatTimer = setInterval(() => this.pingAll(), HEARTBEAT_MS)
     if (this.opts.perf) {
@@ -1333,6 +1338,7 @@ export class WebChannel implements Channel {
 
   private onWsOpen(ws: import("bun").ServerWebSocket<WSData>): void {
     this.wsConnections.add({ ws, deviceName: ws.data.deviceName })
+    this.pushWatch?.connected(ws.data.deviceName, ws.data.surface)
   }
 
   // Lazily create the per-connection LSP bridge, stored on ws.data so its
@@ -2835,6 +2841,7 @@ export class WebChannel implements Channel {
       if ((platform !== "ios" && platform !== "android") || typeof rt !== "string" || typeof pubkey !== "string")
         return new Response("platform + routingToken + pubkey required", { status: 400 })
       this.deviceTokenStore.putNative(auth.device.name, platform, rt, pubkey)
+      this.pushWatch?.registered(auth.device.name, platform)
       return this.json({ ok: true })
     }
 
@@ -2937,10 +2944,14 @@ export class WebChannel implements Channel {
     // Paired-status probe for the PWA (200 when the cookie is valid, else 401/429).
     // Under throttling this must NOT claim `paired: false` — the device may well be paired
     // and simply throttled, and answering "unpaired" sends clients into a re-pair flow.
+    // `relayUrl` is the connectivity relay when one is on (the desktop pairs phones with it) and
+    // the push relay otherwise, which older phone apps read. `pushRelayUrl` is always the push
+    // relay: with the connectivity relay on, phones registering at `relayUrl` reached this broker
+    // and got a 404, so no phone could receive push (card #86).
     if (method === "GET" && path === "/me") {
       const a = this.requireAuth(req)
       const relayUrl = this.getRelayUrl?.() ?? this.relayUrl
-      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl }, 200)
+      if (a.ok) return this.json({ paired: true, device: a.device.name, relayUrl, pushRelayUrl: this.relayUrl }, 200)
       return this.json(a.throttled ? { error: "rate limited" } : { paired: false }, this.authFailureStatus(a))
     }
 
