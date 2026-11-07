@@ -190,6 +190,29 @@ class FileMediaStoreTest {
         assertEquals(listOf(dir.resolve("$id.mp4")), allFiles(), "neither the partial nor a part file may outlive the commit")
     }
 
+    @Test fun throughTheCacheAStoppedFileDownloadResumesOnDisk() = runTest {
+        // The store's I/O on the test scheduler, so every write has landed when the cache answers.
+        val onScheduler = FileMediaStore(root.toString(), fileUri = { "file://$it" }, io = UnconfinedTestDispatcher(testScheduler))
+        val cache = MediaCache(onScheduler, this, rangeBytes = 4)
+        val content = ByteArray(10) { it.toByte() }
+        val att = Attachment(file_id = id, name = "clip.mp4", mime = "video/mp4")
+        assertNull(cache.file("rec-1", att, { from, to, sink -> if (from == 0L) rangeServer(content)(from, to, sink) else null }))
+        val calls = mutableListOf<Pair<Long, Long>>()
+        val got = assertNotNull(cache.file("rec-1", att, rangeServer(content, calls)))
+        assertEquals(4L, calls.first().first, "the retry continued the kept part")
+        assertEquals(root.resolve("v1/rec-1/$id.mp4").toString(), got.path)
+        assertEquals(10L, got.size)
+        assertContentEquals(content, root.resolve("v1/rec-1/$id.mp4").readBytes())
+        assertEquals(listOf(root.resolve("v1/rec-1/$id.mp4")), allFiles(), "neither a partial nor a part file is left")
+    }
+
+    @Test fun onlyAStoredEntryHasASize() = runTest {
+        assertNotNull(store.openResumable(key)).apply { append(byteArrayOf(1, 2), 2); retain() }
+        assertNull(store.size(key), "a partial is not an entry")
+        assertTrue(store.write(key, ByteArray(7)))
+        assertEquals(7L, store.size(key))
+    }
+
     @Test fun aCommitThatCannotLandLeavesNothingBehind() = runTest {
         val w = assertNotNull(store.openResumable(key))
         w.append(byteArrayOf(1), 1)

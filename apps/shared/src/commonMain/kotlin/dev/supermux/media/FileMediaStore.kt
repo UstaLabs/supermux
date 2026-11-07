@@ -60,6 +60,10 @@ class FileMediaStore(
         if (isFile(p)) p.toString() else null
     }
 
+    override suspend fun size(key: MediaKey): Long? = withContext(io) {
+        fs.metadataOrNull(pathOf(key))?.takeIf { it.isRegularFile }?.size
+    }
+
     override suspend fun write(key: MediaKey, bytes: ByteArray): Boolean =
         writeStream(key) { append ->
             append(bytes, bytes.size)

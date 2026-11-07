@@ -1,9 +1,14 @@
 package dev.supermux.media
 
-/** An in-memory [MediaStore] that records every write and can be told to fail. */
+/**
+ * An in-memory [MediaStore] that records every write and can be told to fail. [resumable] false stands for a
+ * store whose entries are files but that cannot keep a partial: its [openResumable] answers null, as the
+ * interface's own default does.
+ */
 class FakeMediaStore(
     override val hasFiles: Boolean = true,
     override val persistent: Boolean = true,
+    private val resumable: Boolean = true,
 ) : MediaStore {
     val entries = LinkedHashMap<String, ByteArray>()
 
@@ -26,6 +31,8 @@ class FakeMediaStore(
     override suspend fun path(key: MediaKey): String? =
         if (hasFiles && entries.containsKey(key.relativePath)) "/cache/${key.relativePath}" else null
 
+    override suspend fun size(key: MediaKey): Long? = if (hasFiles) entries[key.relativePath]?.size?.toLong() else null
+
     override suspend fun write(key: MediaKey, bytes: ByteArray): Boolean =
         writeStream(key) { append ->
             append(bytes, bytes.size)
@@ -42,7 +49,7 @@ class FakeMediaStore(
     }
 
     override suspend fun openResumable(key: MediaKey): ResumableWrite? {
-        if (!hasFiles) return null
+        if (!hasFiles || !resumable) return null
         writes += key.relativePath
         return FakeResumableWrite(key.relativePath, partials.remove(key.relativePath) ?: ByteArray(0))
     }
@@ -85,11 +92,16 @@ class FakeMediaStore(
         entries.remove(key.relativePath)
     }
 
+    // Partials go too, as the real store's tree delete takes them with the entries.
     override suspend fun removeHost(host: String) {
         entries.keys.removeAll { it.startsWith("$host/") }
+        partials.keys.removeAll { it.startsWith("$host/") }
     }
 
-    override suspend fun clear() = entries.clear()
+    override suspend fun clear() {
+        entries.clear()
+        partials.clear()
+    }
 
     override suspend fun sizeBytes(): Long = entries.values.sumOf { it.size.toLong() }
 }

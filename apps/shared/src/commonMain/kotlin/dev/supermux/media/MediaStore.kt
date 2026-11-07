@@ -23,6 +23,9 @@ interface MediaStore {
     /** The stored entry's absolute path, or null when there is none or entries are not files. */
     suspend fun path(key: MediaKey): String? = null
 
+    /** How many bytes the stored entry holds, or null when there is none or entries are not files. */
+    suspend fun size(key: MediaKey): Long? = null
+
     suspend fun write(key: MediaKey, bytes: ByteArray): Boolean
 
     /**
