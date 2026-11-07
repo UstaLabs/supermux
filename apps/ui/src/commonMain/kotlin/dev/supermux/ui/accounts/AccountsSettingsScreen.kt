@@ -72,6 +72,7 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
@@ -195,7 +196,10 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
     val scope = rememberCoroutineScope()
     val accounts by actions.accounts.collectAsState(null)
     val autoSwitch by actions.autoSwitch.collectAsState(null)
-    var addFor by remember { mutableStateOf<String?>(null) }
+    // The open add sheet, kept for the page on display (#89): a rotation closed it in the middle
+    // of a sign-in that went on on the host. The sheet keeps its own state under its key.
+    val adding = rememberRetainedOnPage("accounts:adding") { AccountAdding() }
+    var addFor by adding::agent
     var removing by remember { mutableStateOf<AccountDto?>(null) }
     var autoSwitchError by remember { mutableStateOf<String?>(null) }
     var pendingAutoSwitch by remember { mutableStateOf<Boolean?>(null) }
@@ -276,6 +280,7 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
             actions = actions,
             existing = accountsFor(accounts.orEmpty(), agent),
             onDismiss = { addFor = null },
+            retainKey = "accounts:add:$agent",
         )
     }
     removing?.let { account ->
@@ -557,4 +562,9 @@ private fun RemoveAccountDialog(
             }
         },
     )
+}
+
+/** Which agent's add sheet is open, kept for the page on display (`rememberRetainedOnPage`, #89). */
+private class AccountAdding {
+    var agent by mutableStateOf<String?>(null)
 }

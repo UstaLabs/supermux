@@ -28,6 +28,8 @@ import dev.supermux.ui.chat.PlatformTestProviders
 import dev.supermux.ui.chat.testHostStore
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.settings.FleetSettingsExtra
+import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.workspace.singleViewLayout
 import dev.supermux.workspace.toDto
 import io.ktor.client.engine.mock.MockRequestHandler
@@ -67,7 +69,8 @@ internal class Recreation(private val test: ComposeUiTest) {
  * The shell as MainActivity holds it, in this recreation: its [ShellUiState] saveable (so the open
  * chat and the routes come back with the activity), started by [initial]; [fleet], [platform] and
  * [prefs] built by the caller, outside the content, as the view model holds them. [wrap] adds the
- * locals a test needs around the shell.
+ * locals a test needs around the shell. [settings] draws the fleet's real Settings pages, as
+ * MainActivity does (the shell alone draws an empty page for each).
  */
 internal fun Recreation.setShell(
     fleet: FleetStore,
@@ -75,13 +78,29 @@ internal fun Recreation.setShell(
     prefs: UiPrefs,
     widthClass: WindowWidthClass = WindowWidthClass.Compact,
     wrap: @Composable (content: @Composable () -> Unit) -> Unit = { it() },
+    settings: Boolean = false,
     initial: ShellUiState.() -> Unit = {},
 ) = setContent {
     PlatformTestProviders(platform, pointer = false, widthClass = widthClass, inputMode = InputMode.Touch, uiPrefs = prefs) {
         wrap {
             val ui = rememberSaveable(saver = ShellUiState.Saver) { ShellUiState().apply(initial) }
-            SupermuxApp(fleet = fleet, ui = ui)
+            ShellWithSettings(fleet, ui, settings)
         }
+    }
+}
+
+/** [SupermuxApp], with the fleet's Settings pages when [settings]. */
+@Composable
+internal fun ShellWithSettings(fleet: FleetStore, ui: ShellUiState, settings: Boolean) {
+    if (settings) {
+        SupermuxApp(
+            fleet = fleet,
+            ui = ui,
+            settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+            settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
+        )
+    } else {
+        SupermuxApp(fleet = fleet, ui = ui)
     }
 }
 
@@ -124,11 +143,12 @@ internal fun ComposeUiTest.swappableShell(
     platform: FakePlatform = FakePlatform(),
     prefs: UiPrefs = UiPrefs(FakeSettingsStore()),
     wrap: @Composable (content: @Composable () -> Unit) -> Unit = { it() },
+    settings: Boolean = false,
 ): MutableState<WindowWidthClass> {
     val width = mutableStateOf(WindowWidthClass.Compact)
     setContent {
         PlatformTestProviders(platform, pointer = false, widthClass = width.value, inputMode = InputMode.Touch, uiPrefs = prefs) {
-            wrap { SupermuxApp(fleet = fleet, ui = ui) }
+            wrap { ShellWithSettings(fleet, ui, settings) }
         }
     }
     return width

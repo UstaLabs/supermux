@@ -19,10 +19,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -39,6 +37,7 @@ import dev.supermux.fs.sameHostSegment
 import dev.supermux.fs.snapshotOrPrevious
 import dev.supermux.net.FsException
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
@@ -187,6 +186,7 @@ private fun InlineEditField(
             inFolder = edit.parent,
             placeholder = if (edit.folder) "Folder name" else "File name",
             typed = view.typedName { nameFieldValue("", edit.folder) },
+            op = view.fileOp(),
             onSubmit = { name -> createEntry(fileSystem, edit.parent, name, edit.folder) },
             onDone = { name, refocus ->
                 afterCreate(view, edit.parent, name, edit.folder, onOpenFile)
@@ -207,6 +207,7 @@ private fun InlineEditField(
                 inFolder = parentOf(old),
                 placeholder = null,
                 typed = view.typedName { nameFieldValue(oldName, folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name, refocus ->
                     afterRename(view, old, name, onEntryMoved)
@@ -351,6 +352,7 @@ fun FileTreeDialogs(
                 siblings = siblingNames(fileSystem, parent),
                 inFolder = parent,
                 typed = view.typedName { nameFieldValue("", dialog.folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> createEntry(fileSystem, parent, name, dialog.folder) },
                 onDone = { name ->
                     afterCreate(view, parent, name, dialog.folder, onOpenFile)
@@ -372,6 +374,7 @@ fun FileTreeDialogs(
                 siblings = siblingNames(fileSystem, parentOf(old) ?: "/"),
                 inFolder = parentOf(old),
                 typed = view.typedName { nameFieldValue(oldName, folder) },
+                op = view.fileOp(),
                 onSubmit = { name -> renameEntry(fileSystem, old, name) },
                 onDone = { name ->
                     afterRename(view, old, name, onEntryMoved)
@@ -406,6 +409,8 @@ private fun NameDialog(
     inFolder: String? = null,
     /** Where the name being typed is kept: the pane's, which outlives this composition (#89). */
     typed: TypedName? = null,
+    /** Where the op and its result are kept: the pane's, likewise. */
+    op: FileOp? = null,
     onSubmit: suspend (String) -> Result<Unit>,
     onDone: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -416,21 +421,32 @@ private fun NameDialog(
     val own = remember { TypedName(nameFieldValue(initial, folder)) }
     val kept = typed ?: own
     var field by kept::value
-    var serverError by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    // With the pane's [op], the create or rename runs on the fleet's scope: a rotation cancelled
+    // it with this dialog, so a file could be made or moved with nothing selecting it or moving
+    // the tabs open on it. Its result is applied by the dialog on screen when it lands.
+    val ownOp = remember { FileOp() }
+    val state = op ?: ownOp
+    var serverError by state::error
+    val busy by state::busy
+    val scope = if (op != null) rememberRetainedScope() else rememberCoroutineScope()
     val name = field.text
     val invalid = validateNewName(name, siblings, current, inFolder)
     val shown = serverError ?: invalid?.takeIf { it.isNotEmpty() }
     val submit = {
-        if (invalid == null && !busy) {
-            busy = true
+        if (invalid == null && !state.busy) {
+            state.busy = true
+            val submitted = name
             scope.launch {
-                val r = onSubmit(name)
-                busy = false
-                r.onSuccess { onDone(name) }.onFailure { serverError = fsOpErrorMessage(it) }
+                val r = onSubmit(submitted)
+                state.busy = false
+                state.result = FileOpResult(submitted, refocus = false, failure = r.exceptionOrNull())
             }
         }
+    }
+    LaunchedEffect(state, state.result) {
+        val r = state.result ?: return@LaunchedEffect
+        state.result = null
+        if (r.failure == null) onDone(r.name) else serverError = fsOpErrorMessage(r.failure)
     }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -480,12 +496,33 @@ private fun DeleteDialog(
 ) {
     val cs = MaterialTheme.colorScheme
     val path = dialog.path
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    // The delete runs on the fleet's scope and its result waits in the pane's op for the dialog
+    // on screen, as NameDialog's does: a rotation cancelled it with the dialog, after the host
+    // had deleted the file, and the tabs open on it never closed (#89).
+    val state = view.fileOp()
+    var error by state::error
+    val busy by state::busy
     // The trash is on another filesystem (409 EXDEV): the second step asks for a permanent delete.
     // Kept in the pane's edits, with the dialog: a rotation must not take the user back a step (#89).
     var permanent by view.edits::permanent
-    val scope = rememberCoroutineScope()
+    val scope = rememberRetainedScope()
+    LaunchedEffect(state, state.result) {
+        val r = state.result ?: return@LaunchedEffect
+        state.result = null
+        val failure = r.failure
+        if (failure == null) {
+            view.prune(path)
+            val sel = view.selected
+            if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
+            onEntryMoved(path, null)
+            onDismiss()
+        } else if (!permanent && fsOpErrorCode(failure) == "EXDEV") {
+            permanent = true
+            error = null
+        } else {
+            error = fsOpErrorMessage(failure)
+        }
+    }
     val what = if (dialog.folder) "This folder and everything in it" else "This file"
     AlertDialog(
         // Not while the delete is in flight — see NameDialog.
@@ -508,21 +545,12 @@ private fun DeleteDialog(
             TextButton(
                 enabled = !busy,
                 onClick = {
-                    busy = true
+                    state.busy = true
                     val asked = permanent
                     scope.launch {
                         val r = fileSystem.op(FsOpRequest(op = "delete", path = path, permanent = if (asked) true else null))
-                        busy = false
-                        r.onSuccess {
-                            view.prune(path)
-                            val sel = view.selected
-                            if (sel != null && isWithin(path, sel)) view.selected = parentOf(path)?.takeIf { it != view.rootPath }
-                            onEntryMoved(path, null)
-                            onDismiss()
-                        }.onFailure {
-                            if (!asked && fsOpErrorCode(it) == "EXDEV") { permanent = true; error = null }
-                            else error = fsOpErrorMessage(it)
-                        }
+                        state.busy = false
+                        state.result = FileOpResult(path, refocus = false, failure = r.exceptionOrNull())
                     }
                 },
                 modifier = Modifier.testTag(if (permanent) "tree_dialog_delete_permanently" else "tree_dialog_confirm"),

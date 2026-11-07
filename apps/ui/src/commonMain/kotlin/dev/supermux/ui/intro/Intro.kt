@@ -230,6 +230,9 @@ private fun darkPhases() = listOf(
  *
  * @param showCinematic test seam / entry-point override for the width-class decision above.
  * @param freezeAt frozen cinematic timeline for deterministic screenshots (`SM_INTRO_FREEZE`).
+ * @param onDeepLinkApplied [initialDeepLink] went to the pairing flow: the host must not hand the
+ *   same delivery over again, or an Android recreation re-validates it over a trust dialog the user
+ *   has open, or over a link they pasted since (#89).
  */
 @Composable
 fun OnboardingFlow(
@@ -239,6 +242,7 @@ fun OnboardingFlow(
     modifier: Modifier = Modifier,
     showCinematic: Boolean = LocalWindowWidthClass.current == WindowWidthClass.Expanded,
     freezeAt: Float? = null,
+    onDeepLinkApplied: (PairUrl) -> Unit = {},
 ) {
     val dark = isDarkScheme()
     val ink = if (dark) NightInk else Ink
@@ -274,6 +278,14 @@ fun OnboardingFlow(
     // "the intro played"; this is the same fact for a flow the user can page through.
     LaunchedEffect(page) {
         if (page >= connectPage) uiPrefs.putIntroSeen(INTRO_VERSION)
+    }
+
+    // A scan that decoded after an Android recreation killed the call awaiting it: the platform
+    // parks it, and it is validated here exactly as the scan button would have (#89). Here and
+    // not on the connect page, so it lands whichever page the recreated pager comes back on.
+    val platform = LocalPlatform.current
+    LaunchedEffect(platform, pairing) {
+        platform.pendingScans().collect { pairing.validate(it, fallbackBase = null) }
     }
 
     // Deep link arrival skips the cinematic too — the user has already decided.
@@ -313,6 +325,7 @@ fun OnboardingFlow(
                                 inkSoft = inkSoft,
                                 pairing = pairing,
                                 initialDeepLink = initialDeepLink,
+                                onDeepLinkApplied = onDeepLinkApplied,
                             )
                         }
                     }
@@ -764,6 +777,7 @@ private fun ConnectPage(
     inkSoft: Color,
     pairing: PairingState,
     initialDeepLink: PairUrl?,
+    onDeepLinkApplied: (PairUrl) -> Unit,
 ) {
     var appeared by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { appeared = true }
@@ -783,7 +797,10 @@ private fun ConnectPage(
     var showManual by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(initialDeepLink) {
-        if (initialDeepLink != null) pairing.validatePair(initialDeepLink)
+        if (initialDeepLink != null) {
+            pairing.validatePair(initialDeepLink)
+            onDeepLinkApplied(initialDeepLink)
+        }
     }
 
     val subA by animateFloatAsState(if (appeared) 1f else 0f, tween(400, delayMillis = 500), label = "connsub")
