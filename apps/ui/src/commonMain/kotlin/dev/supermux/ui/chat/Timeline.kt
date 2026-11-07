@@ -77,6 +77,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -95,6 +96,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -131,6 +133,13 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.work.handOverAsTapped
+import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
 import dev.supermux.ui.resolveBashParts
 import dev.supermux.ui.resolveEditParts
 import dev.supermux.ui.toolDiffDoc
@@ -2015,8 +2024,14 @@ internal object VideoControls {
  *  - Touch (Android): download and hand straight to the system chooser — a phone has no browsable
  *    file system to save into, and the platform gesture is "open with".
  *
- * A failed DOWNLOAD turns the second line into "Download failed — tap to retry"; a cancelled save
- * does not (cancel is not an error, and a red card on cancel would be worse than a silent one).
+ * A host's attachment downloads in the fleet's [DownloadCenter] (#95, [startDownload]), by its
+ * key: leaving the chat lets go of it and it carries on, waiting in the activity bar; the card
+ * draws the download whenever there is one — its ring on the badge while it runs, so coming back
+ * shows the same download. A preview's in-memory media has no key and keeps the bytes path.
+ *
+ * A failed DOWNLOAD (or one cancelled in the bar) turns the second line into "Download failed — tap
+ * to retry"; a cancelled save does not (cancel is not an error, and a red card on cancel would be
+ * worse than a silent one).
  */
 @Composable
 private fun AttachmentFileCard(
@@ -2029,8 +2044,15 @@ private fun AttachmentFileCard(
     val pointer = LocalPointerAvailable.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
+    val key = media.downloadKey(att)
+    val download by remember(downloads, key) { downloads.items.map { all -> all.firstOrNull { it.key == key } } }
+        .collectAsState(downloads.items.value.firstOrNull { it.key == key })
+    val running = download?.state as? DownloadState.Running
     var busy by remember(att.file_id) { mutableStateOf(false) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
+    // This card waits for its download: one tap, one hand-over.
+    var waiting by remember(att.file_id) { mutableStateOf(false) }
     val badge = remember(att.name, label) { fileBadgeLabel(att.name ?: label) }
     val family = remember(att.name, att.mime, label) { fileFamily(fileExtension(att.name ?: label), att.mime) }
     val meta = remember(att.name, att.mime, att.size, label) { fileMetaLine(att.name ?: label, att.mime, att.size) }
@@ -2039,7 +2061,19 @@ private fun AttachmentFileCard(
             .mediaColumnWidth()
             .clip(RoundedCornerShape(Radii.md))
             .background(cs.surfaceContainerHigh)
-            .clickable(enabled = !busy) {
+            .clickable(enabled = !busy && !waiting && running == null) {
+                if (key != null) {
+                    // The card's scope holds only the claim: leaving lets go, the download goes on.
+                    waiting = true
+                    scope.launch {
+                        try {
+                            startDownload(downloads, media, att, platform, pointer)
+                        } finally {
+                            waiting = false
+                        }
+                    }
+                    return@clickable
+                }
                 busy = true
                 failed = false
                 scope.launch {
@@ -2062,7 +2096,8 @@ private fun AttachmentFileCard(
             contentAlignment = Alignment.Center,
         ) {
             when {
-                busy -> CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                running != null -> DownloadRing(running)
+                busy -> CircularProgressIndicator(Modifier.size(18.dp).testTag("attachment_progress"), color = Color.White, strokeWidth = 2.dp)
                 badge != null -> Text(badge, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 else -> Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
@@ -2076,11 +2111,13 @@ private fun AttachmentFileCard(
                 // The extension stays in view: "very-long-report…-final.pdf".
                 overflow = TextOverflow.MiddleEllipsis,
             )
-            val second = if (failed) "Download failed — tap to retry" else meta
+            val state = download?.state
+            val retry = failed || state is DownloadState.Failed || state == DownloadState.Cancelled
+            val second = if (retry) "Download failed — tap to retry" else meta
             if (second.isNotEmpty()) {
                 Text(
                     text = second,
-                    color = if (failed) cs.error else cs.onSurfaceVariant,
+                    color = if (retry) cs.error else cs.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2096,8 +2133,72 @@ private fun AttachmentFileCard(
     }
 }
 
+/** The badge's ring while the file downloads: how far it got once the total is known, else turning. */
+@Composable
+private fun DownloadRing(state: DownloadState.Running) {
+    val modifier = Modifier.size(18.dp).testTag("attachment_progress")
+    val total = state.total?.takeIf { it > 0 }
+    if (total == null) {
+        CircularProgressIndicator(modifier, color = Color.White, strokeWidth = 2.dp)
+    } else {
+        val fraction = (state.received.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+        CircularProgressIndicator(
+            progress = { fraction },
+            modifier = modifier,
+            color = Color.White,
+            trackColor = Color.White.copy(alpha = FileCard.TrackAlpha),
+            strokeWidth = 2.dp,
+        )
+    }
+}
+
 private object FileCard {
     val BadgeSize = 40.dp
+
+    /** The ring's track on the badge's colour. */
+    const val TrackAlpha = 0.3f
+}
+
+/**
+ * Start (or join) [att]'s download in [downloads] and, while this caller is still here when it
+ * finishes, hand it over as a tap does (R1). Leaving releases the claim; the download carries on and
+ * waits in the bar. Null key (a preview's in-memory media): false — the caller keeps the bytes path.
+ *
+ * [onFailed] is the caller's word for a download that failed while it waited, where nothing else on
+ * its screen says so (the viewer's Save); the user's own Cancel is not a failure.
+ */
+internal suspend fun startDownload(
+    downloads: DownloadCenter,
+    media: AttachmentMedia,
+    att: Attachment,
+    platform: Platform,
+    pointer: Boolean,
+    onFailed: () -> Unit = {},
+): Boolean {
+    val key = media.downloadKey(att) ?: return false
+    val name = att.name ?: att.file_id
+    val claim = downloads.start(key, name, att.mime ?: "application/octet-stream", DownloadPurpose.File, AttachmentDownload(media, att))
+    try {
+        val file = claim.await()
+        val item = downloads.items.value.firstOrNull { it.key == key }
+        when {
+            file == null -> if (item?.state is DownloadState.Failed) onFailed()
+            item != null -> handOverAsTapped(platform, pointer, downloads, item)
+        }
+    } finally {
+        claim.release()
+    }
+    return true
+}
+
+/**
+ * [att] through its media, which can also stop it: the media cache runs the transfer on its own
+ * scope, so cancelling the job alone would leave it running.
+ */
+private class AttachmentDownload(private val media: AttachmentMedia, private val att: Attachment) : DownloadSource {
+    override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? = media.download(att, progress)
+
+    override fun cancel() = media.cancelDownload(att)
 }
 
 /**
