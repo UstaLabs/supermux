@@ -86,6 +86,8 @@ Live resume with a patch therefore requires `capabilities.configure`. Claude/ACP
 
 `core.close({ agents: "shutdown" | "detach" })` waits in-flight operations (including adopt writes), then remaining leftovers with that mode, then releases the store/lock. `{ agents: "detach" }` does not kill keeper-backed agents.
 
+A keeper outlives its host process: it is started detached (its own session on POSIX). Under a systemd service (the host's environment has `INVOCATION_ID`), it also starts in a scope of its own (`systemd-run --user --scope`): stopping or restarting the host's unit would otherwise kill it, since the default `KillMode=control-group` kills every process in the unit's cgroup. Where `systemd-run` is missing or cannot reach the user's service manager, keepers start as plain detached children.
+
 ## Events
 
 `core.subscribe` delivers live **microtask** notifications (`queueMicrotask`), not a durable log.

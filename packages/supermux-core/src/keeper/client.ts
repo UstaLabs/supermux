@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, type Stats } from 'node:fs'
 import { rm, unlink } from 'node:fs/promises'
@@ -141,6 +141,46 @@ function socketOf(dir: string, status: KeeperStatus | undefined): string {
 
 function keeperEntry(): SelfEntry {
   return selfEntry(import.meta.url, 'keeper', CORE_SUBCOMMANDS.keeper)
+}
+
+const SYSTEMD_SCOPE = ['--user', '--scope', '--quiet', '--collect', '--']
+
+/**
+ * @internal How a keeper is started: [scoped], through `systemd-run --user --scope`, in a scope of its own beside the
+ * service that runs this process. systemd-run execs the keeper in place, so the pid spawned is still the keeper's.
+ */
+export function keeperLaunch<E extends { command: string; args: string[] }>(entry: E, scoped: boolean): E {
+  return scoped ? { ...entry, command: 'systemd-run', args: [...SYSTEMD_SCOPE, entry.command, ...entry.args] } : entry
+}
+
+let scopeProbe: Promise<boolean> | undefined
+
+/**
+ * @internal Whether keepers start in a systemd scope of their own (#29). Under a systemd service (INVOCATION_ID: the
+ * broker's unit, so Linux), a keeper started as a plain child stays in the unit's cgroup, and a stop or restart of the
+ * unit (its default KillMode=control-group) kills every process there: the keepers, their agents and any turn in flight,
+ * whatever the broker asked for. tmux's server leaves that cgroup the same way. Asked once: where systemd-run is missing
+ * or cannot reach this user's service manager (a container, CI), keepers start as before.
+ */
+export function keepersScoped(env: NodeJS.ProcessEnv = process.env, probe: () => Promise<boolean> = probeSystemdScope): Promise<boolean> {
+  if (!env.INVOCATION_ID) return Promise.resolve(false)
+  return scopeProbe ??= probe()
+}
+
+/** @internal */
+export function resetKeepersScopedForTests(): void {
+  scopeProbe = undefined
+}
+
+/** True when `systemd-run --user --scope` runs a command here (an empty one, `true`) within 5 s. */
+function probeSystemdScope(): Promise<boolean> {
+  return new Promise(resolve => {
+    try {
+      execFile('systemd-run', [...SYSTEMD_SCOPE, 'true'], { ...proc.spawnDefaults(), timeout: 5_000 }, error => resolve(!error))
+    } catch {
+      resolve(false)
+    }
+  })
 }
 
 /** Owned by this user (anything is, where there are no uids). */
@@ -503,9 +543,9 @@ async function connectLocked(options: {
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
     sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
-    const entry = keeperEntry()
+    const entry = keeperLaunch(keeperEntry(), await keepersScoped())
     // Its stderr goes to a private file next to its status: a keeper that dies before its socket (an import that does
-    // not resolve, say) is otherwise silent, and its start could only say that it died.
+    // not resolve, say) is otherwise silent, and its start could only say that it died. So is systemd-run's, scoped.
     const errPath = join(dir, KEEPER_STDERR)
     writeKeeperFile(dir, errPath, '')
     const errFd = openSync(errPath, 'a')
