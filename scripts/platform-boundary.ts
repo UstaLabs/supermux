@@ -144,12 +144,9 @@ export const RULES: Rule[] = [
     id: "platform-seam-kt",
     lang: "kt",
     // Compose's own clipboard and link opener: AWT's on the desktop, an Intent on Android that throws when nothing
-    // takes the link. The libraries below :ui have no Platform and keep their own clipboard seams.
+    // takes the link. The libraries below :ui have no Platform: they use Compose's, which an app can provide.
     patterns: [/\bLocalClipboardManager\b/, /\bLocalUriHandler\b/],
-    allowed: [
-      "apps/terminal-compose/src/commonMain/kotlin/dev/supermux/terminal/compose/TerminalClipboard.kt",
-      "apps/editor-compose/src/commonMain/kotlin/dev/supermux/editor/compose/EditorClipboard.kt",
-    ],
+    allowed: ["apps/terminal-compose/", "apps/editor-compose/", "apps/webview-compose/"],
     use: "copy and open links through LocalPlatform.current (copyToClipboard, openUrl): one implementation per app, and neither throws",
   },
   {
