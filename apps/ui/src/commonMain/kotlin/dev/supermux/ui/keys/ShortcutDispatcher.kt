@@ -44,9 +44,10 @@ class ShortcutDispatcher(
     val tracker = KeyScopeTracker()
 
     /**
-     * The macOS menu bar's key equivalents. The native menu fires one even after Compose used the key (the JDK hands
-     * the key to Java first, then lets the menu act), so a menu item's action may be the echo of a key press the
-     * dispatcher already judged. [onWindowKey] notes the presses of these keys, and [invokeFromMenu] ignores the echo.
+     * A native menu bar's key equivalents. The menu fires one on its own: macOS's even after Compose used the key (the
+     * JDK hands the key to Java first, then lets the menu act), Swing's window menu whenever Compose left the key. So a
+     * menu item's action may be the echo of a key press the dispatcher already judged. [onWindowKey] notes the presses
+     * of these keys, and [invokeFromMenu] ignores the echo.
      */
     var nativeMenuChords: Set<KeyChord> = emptySet()
 

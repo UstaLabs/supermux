@@ -1048,11 +1048,11 @@ fun main() {
             )
             val nativeMenu = paired && linuxChrome == null && windowsChrome == null
             if (nativeMenu) DesktopMenuBar(mainMenu)
-            // macOS fires a menu key equivalent even when Compose already used the key (the JDK hands the key to
-            // Java first, then lets the menu act: AWTView.m). The dispatcher stays the one judge of a key: it notes
-            // the press (onWindowKey above), and the menu's echo of it is ignored (invokeFromMenu). A menu item
-            // clicked with the mouse runs normally.
-            SideEffect { shortcuts.nativeMenuChords = if (nativeMenu && isMacOs()) mainMenu.menuChords() else emptySet() }
+            // A native menu fires its own key equivalents: macOS even when Compose already used the key (the JDK
+            // hands the key to Java first, then lets the menu act: AWTView.m), Swing's window menu whenever Compose
+            // left it (a dialog in front). The dispatcher stays the one judge of a key: it notes the press
+            // (onWindowKey above), and the menu's echo of it is ignored (invokeFromMenu). A click runs normally.
+            SideEffect { shortcuts.nativeMenuChords = if (nativeMenu) mainMenu.menuChords() else emptySet() }
 
             // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             ProvideDesktopAdaptiveLocals {
