@@ -5,14 +5,15 @@ import { join } from "path"
 import { getMuxHome } from "../memory/init"
 import { agentMemoryPaths } from "../memory/agent-memory"
 
-// How each agent loads a plugin skill.
+// How each agent names and loads a plugin skill, as each showed them on a live install (#102, 2026-11-07): Claude and
+// Codex list `<plugin>:<name>`, the others the bare name; Codex reads the SKILL.md at the path it lists.
 const SKILL_LOADING: Partial<Record<AgentKind, string>> = {
-  [AgentKind.Claude]: "Load one with your Skill tool before following it.",
-  [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them.",
-  [AgentKind.Codex]: "You have no skill tool: read the skill's `SKILL.md` from the codex plugin cache and follow its steps.",
-  [AgentKind.Grok]: "Read the skill's `SKILL.md` from its plugin directory and follow its steps.",
-  [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name, or read its `SKILL.md` and follow its steps.",
-  [AgentKind.Cursor]: "Cursor lists them with its other skills: use one by its name, or read its `SKILL.md` and follow its steps.",
+  [AgentKind.Claude]: "They are named `<plugin>:<name>` (e.g. `mux:browser`, `superpowers:brainstorming`): load one with your Skill tool before following it.",
+  [AgentKind.OpenCode]: "OpenCode's native `skill` tool lists and loads them by name (e.g. `browser`).",
+  [AgentKind.Codex]: "Codex lists them as `<plugin>:<name>` (e.g. `mux:browser`) with the path of each `SKILL.md`. You have no skill tool: read that `SKILL.md` and follow its steps.",
+  [AgentKind.Grok]: "They are listed by name (e.g. `browser`): read the skill's `SKILL.md` from its plugin directory and follow its steps.",
+  [AgentKind.Antigravity]: "Antigravity loads plugin skills itself: use one by its name (e.g. `browser`), or read its `SKILL.md` and follow its steps.",
+  [AgentKind.Cursor]: "Cursor lists them by name (e.g. `browser`) with its other skills: use one, or read its `SKILL.md` and follow its steps.",
 }
 
 /** Who created this session (spec §3, §5): a session with delegate, or a council. */
@@ -73,9 +74,8 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
       "it under a `## <title> (YYYY-MM-DD)` heading in `~/.mux/domains/<topic>.md` (or " +
       "`domains/_inbox.md` if unsure) before you finish. Never edit `*.digest.md`.",
     ...(skills ? [
-      "- SKILLS: supermux installs skills as plugins, namespaced `<plugin>:<name>` (e.g. " +
-        `\`mux:browser\`, \`superpowers:brainstorming\`). ${skills} NEVER claim to have ` +
-        "applied a skill you have not actually loaded.",
+      "- SKILLS: supermux installs skills as plugins (e.g. `mux`, `superpowers`). " +
+        `${skills} NEVER claim to have applied a skill you have not actually loaded.`,
     ] : []),
     isAgent
       ? `- HOME: Your working directory is \`${opts.workdir}\`. Keep scratch files there; other projects are fine to work on when the user asks.`
