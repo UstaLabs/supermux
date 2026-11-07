@@ -140,7 +140,6 @@ import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
-import dev.supermux.workspace.normalizeLayout
 import dev.supermux.ui.panes.PaneStripEnd
 import androidx.compose.material.icons.outlined.Tab
 import dev.supermux.workspace.toDomainOrNull
@@ -335,18 +334,11 @@ fun WorkspacePanes(
             if (before.isEmpty()) {
                 layoutSync.edit(edit)
             } else {
-                val real = layoutSync.tree
-                val shown = withNewTabs(real, before)
-                val edited = normalizeLayout(edit(shown))
-                // A New tab dropped on a pane edge would be a pane of its own: that edit is not made.
-                if (edited == null || !newTabWouldMakeAPane(edited, shown)) {
-                    if (edited != null) {
-                        val realAfter = normalizeLayout(withoutNewTabs(edited, real)) ?: real
-                        for ((id, slot) in newTabSlotsAfter(edited, realAfter, before)) {
-                            if (newTabs.slots[id] != slot) newTabs.slots[id] = slot
-                        }
+                newTabEdit(layoutSync.tree, before, edit)?.let { routed ->
+                    for ((id, slot) in routed.slots) {
+                        if (newTabs.slots[id] != slot) newTabs.slots[id] = slot
                     }
-                    layoutSync.edit { tree -> withoutNewTabs(edit(withNewTabs(tree, before)), tree) }
+                    layoutSync.edit(routed.onReal)
                 }
             }
         },
