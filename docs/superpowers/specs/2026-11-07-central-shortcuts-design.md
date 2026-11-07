@@ -236,7 +236,7 @@ The shortcuts that exist today, plus Settings and the shortcuts screen. The spli
 | Find in chat | ⌘F | Ctrl+F | chat | works after a click in the transcript |
 | Settings | ⌘, | Ctrl+, | everywhere | new |
 | Keyboard shortcuts | ⌘/ | Ctrl+/ | everywhere (the editor keeps ⌘/) | new |
-| Split right · split down (#91) | ⌘\ · ⌘⌥\ | Ctrl+\ · Ctrl+Alt+\ | a pane is focused | new; ⌘⇧\ is the editor's go-to-bracket |
+| Split right · split down (#91) | ⌘\ · ⌘⌥\ | Ctrl+\ · Ctrl+Alt+\ | a workspace is open: a new rightmost column / bottom row | new; ⌘⇧\ is the editor's go-to-bracket |
 | Paste image | ⌘V | Ctrl+V | composer, clipboard holds an image | the global flag goes |
 | Send review comment | ⌘↩ | Ctrl+Enter | review field | strict |
 
