@@ -22,8 +22,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.NewViewKind
-import dev.supermux.workspace.NewViewPlacement
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import dev.supermux.ui.panes.PaneHost
@@ -56,63 +54,16 @@ class WorkspacePaneWiringTest {
             PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
                 onLayoutChange = {},
-                addSlot = { WorkspaceAddButton { _, _ -> } },
+                addSlot = { WorkspaceAddButton { } },
             ) { Text("body") }
         }
         onNodeWithTag("tab-add-view").assertIsDisplayed()
     }
+    // Ahmet (2026-11-07): "instead of [a drop-down], we should have an empty tab that has the options
+    // of what to show." The "+" reports its pane; WorkspacePanes opens a New tab there.
     @Test
-    fun clickingAddOpensAPopoverOfViewKinds() = runComposeUiTest {
-        setContent {
-            PaneHost(
-                layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
-                onLayoutChange = {},
-                addSlot = { WorkspaceAddButton { _, _ -> } },
-            ) { Text("body") }
-        }
-        onNodeWithTag("tab-add-view").performClick()
-        onNodeWithTag("tab-add-view-chat").assertIsDisplayed()
-        onNodeWithTag("tab-add-view-terminal").assertIsDisplayed()
-        onNodeWithTag("tab-add-view-editor").assertIsDisplayed()
-        // Diff is an `editor` view in diff mode, so its tag is its own — not the wire.
-        onNodeWithTag("tab-add-view-diff").assertIsDisplayed()
-        onNodeWithTag("tab-add-view-display").assertIsDisplayed()
-    }
-    // Ahmet: "add the diff as in the + section in workspace panes, it will by
-    // default open on a split".
-    @Test
-    fun pickingDiffAsksForASplitRatherThanATab() = runComposeUiTest {
-        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
-        setContent {
-            PaneHost(
-                layout = LayoutNode.Group("only", listOf("v1"), "v1"),
-                onLayoutChange = {},
-                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
-            ) { Text("body") }
-        }
-        onNodeWithTag("tab-add-view").performClick()
-        onNodeWithTag("tab-add-view-diff").performClick()
-        assertEquals(Triple("only", NewViewKind.DIFF, NewViewPlacement.SPLIT_RIGHT), got)
-    }
-    // Ahmet: "editor (explorer - lets rename it Files) should be by default opened
-    // in a split similar to how changes open".
-    @Test
-    fun pickingFilesAsksForASplitRatherThanATab() = runComposeUiTest {
-        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
-        setContent {
-            PaneHost(
-                layout = LayoutNode.Group("only", listOf("v1"), "v1"),
-                onLayoutChange = {},
-                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
-            ) { Text("body") }
-        }
-        onNodeWithTag("tab-add-view").performClick()
-        onNodeWithTag("tab-add-view-editor").performClick()
-        assertEquals(Triple("only", NewViewKind.EDITOR, NewViewPlacement.SPLIT_RIGHT), got)
-    }
-    @Test
-    fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
-        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
+    fun clickingAddReportsThePaneItWasClickedIn() = runComposeUiTest {
+        var got: String? = null
         setContent {
             PaneHost(
                 layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
@@ -120,30 +71,20 @@ class WorkspacePaneWiringTest {
                     LayoutNode.Group("right", listOf("v2"), "v2"),
                 )),
                 onLayoutChange = {},
-                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
+                addSlot = { g -> WorkspaceAddButton { got = g } },
             ) { Text("body") }
         }
-        // Two strips, two "+" — the SECOND one must report the right-hand group.
-        // One step only: pick kind → always HERE (no placement submenu).
         onAllNodesWithTag("tab-add-view")[1].performClick()
-        onNodeWithTag("tab-add-view-terminal").performClick()
-        assertEquals(Triple("right", NewViewKind.TERMINAL, NewViewPlacement.HERE), got)
+        assertEquals("right", got)
+        onNodeWithTag("tab-add-view-menu").assertDoesNotExist()
     }
+
     @Test
-    fun pickingAKindAlwaysLandsInThisPane() = runComposeUiTest {
-        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
-        setContent {
-            PaneHost(
-                layout = LayoutNode.Group("only", listOf("v1"), "v1"),
-                onLayoutChange = {},
-                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
-            ) { Text("body") }
-        }
-        onNodeWithTag("tab-add-view").performClick()
-        onNodeWithTag("tab-add-view-terminal").performClick()
-        // No second step; placement submenu is gone.
-        onNodeWithTag("tab-add-place-here").assertDoesNotExist()
-        onNodeWithTag("tab-add-place-split_right").assertDoesNotExist()
-        assertEquals(Triple("only", NewViewKind.TERMINAL, NewViewPlacement.HERE), got)
+    fun theSplitButtonsSayWhichWay() = runComposeUiTest {
+        val got = mutableListOf<String>()
+        setContent { WorkspaceSplitButtons { got += it } }
+        onNodeWithTag("tab-split-right").performClick()
+        onNodeWithTag("tab-split-down").performClick()
+        assertEquals(listOf("row", "column"), got)
     }
 }

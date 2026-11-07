@@ -604,18 +604,20 @@ class ConfigurationChangeViewTest {
         onNodeWithTag("tab-card-v1").assertIsDisplayed()
     }
 
-    @Test fun the_add_view_sheet_stays_open_through_a_recreation() = runComposeUiTest {
+    @Test fun the_new_tab_page_stays_open_through_a_recreation() = runComposeUiTest {
         val activity = phoneShell(testFleet(oneChatWorkspace())) { selectedId = "s1" }
         await("phone_tabs_button")
         onNodeWithTag("phone_tabs_button").performClick()
         await("phone_add_view")
         onNodeWithTag("phone_add_view").performClick()
-        await("tab-add-view-terminal")
+        await("new-tab-choice-terminal")
 
         activity.recreate()
 
-        await("tab-add-view-terminal")
-        onNodeWithTag("tab-add-view-display").assertExists()
+        await("new-tab-choice-terminal")
+        onNodeWithTag("new-tab-choice-display").assertExists()
+        // The phone offers no Chat here, as before (phoneAddKinds).
+        onNodeWithTag("new-tab-choice-chat").assertDoesNotExist()
     }
 
     // ── One level down: a terminal strip's selected tab ──────────────────────────────────────────
