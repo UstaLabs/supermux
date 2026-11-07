@@ -53,8 +53,8 @@
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/platform/DesktopPlatform.kt": 1,
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/WindowsWindowChrome.kt": 1,
     "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt": 1,
-    "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt": 3,
-    "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt": 4
+    "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt": 1,
+    "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt": 2
   },
   "links-perms": {
     "packages/supermux-core/examples/chat/server.ts": 1,

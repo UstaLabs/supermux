@@ -211,9 +211,14 @@ export function fromUtf16Base64(b64: string): string {
 // The raw value (DoNotExpandEnvironmentNames) so %USERPROFILE%-style entries stay variables, and
 // written back as REG_EXPAND_SZ. Environment.SetEnvironmentVariable would write REG_SZ and break
 // them. WM_SETTINGCHANGE "Environment" makes Explorer (new terminals) pick the change up.
+/** Where each scope keeps its `Path`: a key under HKEY_CURRENT_USER, and one under HKEY_LOCAL_MACHINE. */
+export const REGISTRY_PATH_KEYS = {
+  user: "Environment",
+  machine: "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+} as const
 const REGISTRY_ROOTS = {
-  user: "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
-  machine: "[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')",
+  user: `[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${REGISTRY_PATH_KEYS.user}')`,
+  machine: `[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('${REGISTRY_PATH_KEYS.machine}')`,
 } as const
 
 /** A PowerShell script printing the raw `Path` of [scope] as base64 UTF-16LE (nothing when unset). */

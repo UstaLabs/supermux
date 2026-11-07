@@ -10,7 +10,22 @@ import { fileURLToPath } from "node:url"
 
 setDefaultTimeout(60_000)
 const work = mkdtempSync(join(tmpdir(), "core-keeper-error-"))
-afterAll(() => rmSync(work, { recursive: true, force: true }))
+// Every process this test starts has exited by the time it ends (the keeper before its error is thrown, the host before
+// spawnSync returns), but Windows may still hold the freshly compiled broken.exe for a moment: an antivirus scan of a new
+// executable, say. The windows lane once failed here with EBUSY after the test itself passed. Retry with a growing pause;
+// a folder still held after ~11 s is a real leak, and that throws.
+afterAll(() => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(work, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt >= 10 || (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY")) throw error
+      Bun.sleepSync(200 * attempt)
+    }
+  }
+})
 
 test("a keeper that dies before its socket says why: the start's error quotes the keeper's stderr", () => {
   const binary = join(work, process.platform === "win32" ? "broken.exe" : "broken")

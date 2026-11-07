@@ -819,17 +819,18 @@ class FleetStore(
     }
 
     /**
-     * Record a snapshot the CALLER just obtained, against the host the call STARTED on — never
-     * whatever is active by the time it returns, or a switch mid-flight would file host A's
-     * numbers under host B.
+     * Record [app]'s held snapshot against the host the call STARTED on — never whatever is active
+     * by the time it returns, or a switch mid-flight would file host A's numbers under host B.
      *
      * The per-host collector in [open] already carries `usage_updated` frames here, but it resumes
-     * on whichever thread the HTTP call completed on, so a fetch publishes its own result too and
-     * `usage()` returning is the point at which [usageSnapshot] is up to date.
+     * on whichever thread the HTTP call completed on, so a fetch publishes too and `usage()`
+     * returning is the point at which [usageSnapshot] is up to date. It publishes what the host
+     * HOLDS, read under the lock, never the answer it got: a frame that overtook the answer (card
+     * #101) is newer, and the collector may already have filed it.
      */
-    private fun publishUsage(recordId: String?, usage: UsageResponse?) = publishing { pub ->
+    private fun publishUsage(recordId: String?, app: HostStore) = publishing { pub ->
         val target = recordId ?: return@publishing
-        usageByHost[target] = usage
+        usageByHost[target] = app.usageSnapshot.value
         stageUsage(pub)
     }
 
@@ -1617,20 +1618,23 @@ class FleetStore(
     suspend fun setOnboarded(value: Boolean): Boolean = activeApp()?.setOnboarded(value) == true
     suspend fun usage(): UsageResponse? {
         val target = synchronized(lock) { activeRecordId() }
-        return activeApp()?.usage()?.also { publishUsage(target, it) }
+        val app = activeApp() ?: return null
+        return app.usage()?.also { publishUsage(target, app) }
     }
     /** POST /usage/refresh on the active host — the snapshot comes back with `refreshing` set. */
     suspend fun refreshUsage(): UsageResponse? {
         val target = synchronized(lock) { activeRecordId() }
-        return activeApp()?.refreshUsage()?.also { publishUsage(target, it) }
+        val app = activeApp() ?: return null
+        return app.refreshUsage()?.also { publishUsage(target, app) }
     }
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
     suspend fun redeemClaudeReset(): ClaudeResetResult? = activeApp()?.redeemClaudeReset()
     /** Replace the active host's held snapshot (the Codex redeem updates one provider in place). */
     fun applyUsage(usage: UsageResponse) {
         val target = synchronized(lock) { activeRecordId() }
-        activeApp()?.applyUsage(usage)
-        publishUsage(target, usage)
+        val app = activeApp() ?: return
+        app.applyUsage(usage)
+        publishUsage(target, app)
     }
     /** Null = the load FAILED (or no active host); empty = a real, empty glossary (cluster E5). */
     suspend fun fetchGlossary(): List<String>? = activeApp()?.fetchGlossary()

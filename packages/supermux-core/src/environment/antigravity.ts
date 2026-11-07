@@ -93,10 +93,14 @@ export function assertShadowHome(shadowHome: string, userHome: string, platform:
   refuseRealLocation(realpathSync(shadowHome), shadowHome, userHome, platform)
 }
 
-/** The file-link call, a seam for tests (the package's files.linkFile). */
+/** The file-link and file-copy calls, seams for tests (the package's files.linkFile, node's copyFileSync). */
 export const antigravityLinks = {
   linkFile: (target: string, path: string, platform: NodeJS.Platform): void => files.linkFile(target, path, { platform }),
+  copyFile: (target: string, path: string): void => copyFileSync(target, path),
 }
+
+/** The files already said to be left out of a shadow home: once per process, not at every session start. */
+const leftOut = new Set<string>()
 
 /** Above this a file the host cannot link is left out rather than copied (it is not a config file). */
 const COPY_LIMIT = 1024 * 1024
@@ -105,7 +109,8 @@ const COPY_LIMIT = 1024 * 1024
  * Links [path] to [target]: a folder as a junction (any Windows user may make one), a file as a file link. Where this
  * host cannot link files (Windows without Developer Mode, #37) a small file is copied instead, so agy's shell keeps
  * .gitconfig, .npmrc and the like (they used to be dropped). The copy is made once: syncLinks leaves real entries
- * alone, so a later edit of the original reaches agy when the copy is removed.
+ * alone, so a later edit of the original reaches agy when the copy is removed. A file that can't be copied stays out,
+ * as a big one does: Windows keeps the signed-in user's ntuser.dat.LOG1 / LOG2 locked, and they sit in every HOME.
  */
 function linkOrCopy(target: string, path: string, platform: NodeJS.Platform): void {
   if (isDirSafe(target)) return files.linkDirectory(target, path)
@@ -113,7 +118,14 @@ function linkOrCopy(target: string, path: string, platform: NodeJS.Platform): vo
     antigravityLinks.linkFile(target, path, platform)
   } catch (err) {
     if (!(err instanceof Unsupported)) throw err
-    if ((lstatSafe(target)?.size ?? Infinity) <= COPY_LIMIT) copyFileSync(target, path)
+    if ((lstatSafe(target)?.size ?? Infinity) > COPY_LIMIT) return
+    try {
+      antigravityLinks.copyFile(target, path)
+    } catch (copyErr) {
+      if (leftOut.has(target)) return
+      leftOut.add(target)
+      console.warn(`[antigravity] left ${target} out of the shadow home: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`)
+    }
   }
 }
 

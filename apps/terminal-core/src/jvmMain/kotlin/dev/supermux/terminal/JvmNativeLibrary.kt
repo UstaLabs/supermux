@@ -64,27 +64,11 @@ internal class JvmNativeLoader(
     private val afterExtract: (File) -> Unit = {},
 ) {
     /** `<os>-<arch>` of the packaged library for this JVM. */
-    fun platformKey(): String {
-        val os = osName.lowercase()
-        val o = when {
-            os.startsWith("linux") -> "linux"
-            os.startsWith("mac") || os.startsWith("darwin") -> "macos"
-            os.startsWith("windows") -> "windows"
-            else -> null
-        }
-        val a = when (osArch.lowercase()) {
-            "amd64", "x86_64", "x64" -> "x64"
-            "aarch64", "arm64" -> "arm64"
-            else -> null
-        }
-        if (o == null || a == null) {
-            throw TerminalEngineUnavailableException(
-                "no supermux terminal engine for $osName/$osArch (supported: linux, macos, windows on x64/arm64)",
-                reason = Reason.UNSUPPORTED_PLATFORM,
-            )
-        }
-        return "$o-$a"
-    }
+    fun platformKey(): String =
+        nativeLibraryKey(osName, osArch) ?: throw TerminalEngineUnavailableException(
+            "no supermux terminal engine for $osName/$osArch (supported: linux, macos, windows on x64/arm64)",
+            reason = Reason.UNSUPPORTED_PLATFORM,
+        )
 
     /** Load and verify the library; returns the loaded file. */
     fun load(): File {
@@ -283,13 +267,7 @@ internal class JvmNativeLoader(
             val roots = mutableListOf<File>()
             System.getProperty("supermux.terminal.cacheDir")?.takeIf { it.isNotBlank() }?.let { roots += File(it) }
             val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
-            val os = System.getProperty("os.name").orEmpty().lowercase()
-            when {
-                os.startsWith("windows") -> System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { roots += File(it) }
-                os.startsWith("mac") -> home?.let { roots += File(it, "Library/Caches") }
-                else -> (System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) }
-                    ?: home?.let { File(it, ".cache") })?.let { roots += it }
-            }
+            nativeLibraryCacheRoot(System.getProperty("os.name").orEmpty(), System::getenv, home)?.let { roots += it }
             System.getProperty("java.io.tmpdir")?.takeIf { it.isNotBlank() }?.let { roots += File(it) }
             return roots
         }
@@ -336,3 +314,38 @@ internal object JvmNativeLibrary {
         }
     }
 }
+
+// native-library-key: begin
+// Word for word in terminal-core's JvmNativeLibrary.kt and editor-syntax's SesNativeLoader.kt: neither library is on
+// Compose (no Skiko hostOs) and neither depends on the other. tests/native-library-key.test.ts keeps the copies equal.
+
+/** `<os>-<arch>` of a desktop JVM as native/build.sh names its targets, or null for any other OS or architecture. */
+internal fun nativeLibraryKey(osName: String, osArch: String): String? {
+    val os = osName.lowercase()
+    val o = when {
+        os.startsWith("linux") -> "linux"
+        os.startsWith("mac") || os.startsWith("darwin") -> "macos"
+        os.startsWith("windows") -> "windows"
+        else -> return null
+    }
+    val a = when (osArch.lowercase()) {
+        "amd64", "x86_64", "x64" -> "x64"
+        "aarch64", "arm64" -> "arm64"
+        else -> return null
+    }
+    return "$o-$a"
+}
+
+/**
+ * The user's own cache folder, where an extracted library is kept: `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on
+ * macOS, else `$XDG_CACHE_HOME` (only when absolute, as the XDG spec says) or `~/.cache`. Null when none is known.
+ */
+internal fun nativeLibraryCacheRoot(osName: String, getenv: (String) -> String?, home: String?): File? {
+    val os = osName.lowercase()
+    return when {
+        os.startsWith("windows") -> getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { File(it) }
+        os.startsWith("mac") || os.startsWith("darwin") -> home?.let { File(it, "Library/Caches") }
+        else -> getenv("XDG_CACHE_HOME")?.let { File(it) }?.takeIf { it.isAbsolute } ?: home?.let { File(it, ".cache") }
+    }
+}
+// native-library-key: end

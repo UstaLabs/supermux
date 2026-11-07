@@ -106,10 +106,8 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -285,7 +283,6 @@ fun AgentErrorMessage(
 @Composable
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
     val platform = LocalPlatform.current
     val readAloud = remember(platform) { PlatformReadAloud(platform) }
     val scope = rememberCoroutineScope()
@@ -313,7 +310,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
         }
         IconButton(
             onClick = {
-                clipboard.setText(AnnotatedString(text))
+                platform.copyToClipboard(text)
                 copied = true
                 scope.launch {
                     delay(1500)

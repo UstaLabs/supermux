@@ -62,9 +62,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.supermux.state.FleetStore
@@ -1059,7 +1057,6 @@ private fun AwaitingUser(
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
     Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
         val url = login.url
         if (url != null) {
@@ -1077,7 +1074,7 @@ private fun AwaitingUser(
                     colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
                     modifier = Modifier.testTag("agent_login_open_url"),
                 ) { Text("Open sign-in page", color = cs.onPrimary) }
-                IconButton(onClick = { clipboard.setText(AnnotatedString(url)) }) {
+                IconButton(onClick = { platform.copyToClipboard(url) }) {
                     Icon(
                         Icons.Filled.ContentCopy,
                         contentDescription = "Copy",

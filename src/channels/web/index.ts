@@ -4982,14 +4982,30 @@ function projectErrorResponse(err: unknown): Response {
   return json({ error: err instanceof Error ? err.message : String(err) }, 400)
 }
 
+/**
+ * Whether a browser opening this type would run it as a page or a script: HTML, any XML (SVG included)
+ * and JavaScript. Matched on the essence, so case and parameters don't hide it.
+ */
+function isActiveMime(mime: string | undefined): boolean {
+  const essence = mime?.split(";")[0]!.trim().toLowerCase() ?? ""
+  return essence === "text/html" || essence === "text/xml" || essence === "application/xml" || essence.endsWith("+xml") ||
+    /(java|ecma)script|jscript|livescript/.test(essence)
+}
+
 async function serveFile(req: Request, meta: { path: string; mime?: string; name?: string; size: number }): Promise<Response> {
   const file = Bun.file(meta.path)
   const headers: Record<string, string> = {
     "content-type": meta.mime ?? "application/octet-stream",
     "cache-control": "private, max-age=31536000, immutable",
     "accept-ranges": "bytes",
+    // These bytes are served on the app's own origin: the browser may not guess another type, and
+    // anything opened as a page gets no script and no origin.
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox",
   }
-  if (meta.name) headers["content-disposition"] = `inline; filename="${meta.name.replace(/"/g, "")}"`
+  const filename = meta.name ? `; filename="${meta.name.replace(/"/g, "")}"` : ""
+  if (isActiveMime(meta.mime)) headers["content-disposition"] = `attachment${filename}`
+  else if (meta.name) headers["content-disposition"] = `inline${filename}`
 
   const rangeHeader = req.headers.get("range")
   if (rangeHeader) {

@@ -58,6 +58,20 @@ describe("Kotlin rules", () => {
     expect(kt("apps/desktop/src/main/kotlin/B.kt", 'val desktop = System.getenv("XDG_CURRENT_DESKTOP")')).toEqual([])
   })
 
+  // Platform.kt: a shared screen never names the machine's own clipboard or link opener. Compose's handlers
+  // differ per app (AWT on the desktop, an Intent on Android that throws when nothing takes the link);
+  // Platform's copyToClipboard and openUrl are each app's one implementation, and never throw.
+  test("a shared screen copies and opens links through its Platform", () => {
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val clipboard = LocalClipboardManager.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val uri = LocalUriHandler.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/android/src/main/kotlin/B.kt", "import androidx.compose.ui.platform.LocalUriHandler"))).toEqual(["platform-seam-kt"])
+    // The libraries below :ui have no Platform: they use Compose's own, which an app can provide (TerminalClipboard,
+    // EditorClipboard, the webview's link opener).
+    expect(kt("apps/terminal-compose/src/commonMain/kotlin/dev/supermux/terminal/compose/TerminalClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/editor-compose/src/commonMain/kotlin/dev/supermux/editor/compose/EditorClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/webview-compose/src/commonMain/kotlin/dev/supermux/webview/WebView.kt", "val uriHandler = LocalUriHandler.current")).toEqual([])
+  })
+
   test("HostPaths and the desktop's OS seams are allowed", () => {
     expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
     expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])

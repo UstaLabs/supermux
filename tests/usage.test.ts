@@ -14,6 +14,7 @@ import {
   redeemClaudeReset,
   claudeCliVersion,
 } from "../src/core/usage"
+import { fetchUsageForEnv } from "../src/core/usage/accounts"
 
 let tmpDir: string
 let originalFetch: typeof globalThis.fetch
@@ -188,8 +189,79 @@ test("fetchClaudeUsage hides per-model caps when neither limits[] nor legacy fie
 })
 
 test("fetchClaudeUsage returns null when credentials missing", async () => {
-  const result = await fetchClaudeUsage(join(tmpDir, "nonexistent.json"))
+  const result = await fetchClaudeUsage(join(tmpDir, "nonexistent.json"), async () => null)
   expect(result).toBeNull()
+})
+
+// #101: with Anthropic's tengu_windows_credman rollout on, Claude Code on Windows moves its login into Credential
+// Manager and deletes .credentials.json. The card said "credentials not found or token expired" for a signed-in Claude.
+const STORED_LOGIN = JSON.stringify({
+  claudeAiOauth: { accessToken: "stored-token", refreshToken: "r", expiresAt: Date.now() + 3600_000 },
+})
+
+function answerClaudeUsageFor(token: string): void {
+  globalThis.fetch = (async (_url: any, init: any) => {
+    expect(init?.headers.Authorization).toBe(`Bearer ${token}`)
+    return new Response(JSON.stringify({ five_hour: { utilization: 7 }, seven_day: { utilization: 3 } }))
+  }) as typeof fetch
+}
+
+test("fetchClaudeUsage reads the login Claude Code keeps in Windows Credential Manager when there is no credentials file", async () => {
+  answerClaudeUsageFor("stored-token")
+  const result = await fetchClaudeUsage(join(tmpDir, "nonexistent.json"), async () => STORED_LOGIN)
+  expect(result!.fiveHour.used).toBe(7)
+})
+
+test("an expired credentials file gives way to the stored login; a good one is used without asking the store", async () => {
+  const expired = join(tmpDir, "expired.json")
+  writeFileSync(expired, JSON.stringify({ claudeAiOauth: { accessToken: "old-token", expiresAt: Date.now() - 1000 } }))
+  answerClaudeUsageFor("stored-token")
+  expect((await fetchClaudeUsage(expired, async () => STORED_LOGIN))!.sevenDay.used).toBe(3)
+
+  answerClaudeUsageFor("tok")
+  const fresh = writeClaudeCreds()
+  const never = async (): Promise<string | null> => { throw new Error("the store must not be read") }
+  expect((await fetchClaudeUsage(fresh, never))!.fiveHour.used).toBe(7)
+})
+
+test("an expired stored login is no login", async () => {
+  globalThis.fetch = (async () => { throw new Error("should not be called") }) as unknown as typeof fetch
+  const expired = JSON.stringify({ claudeAiOauth: { accessToken: "old", expiresAt: Date.now() - 1000 } })
+  expect(await fetchClaudeUsage(join(tmpDir, "nonexistent.json"), async () => expired)).toBeNull()
+})
+
+test("a Credential Manager that cannot be read fails in plain words, not the OS's", async () => {
+  const failing = async (): Promise<string | null> => { throw new Error("A specified logon session does not exist. (1312)") }
+  await expect(fetchClaudeUsage(join(tmpDir, "nonexistent.json"), failing))
+    .rejects.toThrow("Couldn't read Claude's sign-in from Windows Credential Manager")
+})
+
+test("an added Claude account's usage reads the stored login of that account's config folder", async () => {
+  const dir = join(tmpDir, "claude-home")
+  mkdirSync(dir)
+  const asked: Array<string | undefined> = []
+  answerClaudeUsageFor("stored-token")
+  const usage = await fetchUsageForEnv(
+    "claude",
+    { env: { CLAUDE_CONFIG_DIR: dir } } as any,
+    {},
+    { claudeStoredLogin: async (configDir) => { asked.push(configDir); return STORED_LOGIN } },
+  ) as any
+  expect(usage.fiveHour.used).toBe(7)
+  expect(asked).toEqual([dir])
+})
+
+test("redeemClaudeReset spends a reset with the stored login when there is no credentials file", async () => {
+  const claudeJsonPath = join(tmpDir, "claude.json")
+  writeFileSync(claudeJsonPath, JSON.stringify({ oauthAccount: { organizationUuid: "org-1" } }))
+  globalThis.fetch = (async (_url: any, init: any) => {
+    expect(init?.headers.Authorization).toBe("Bearer stored-token")
+    return new Response(JSON.stringify({ result: "reset", resets_left: 0, cleared: [] }))
+  }) as typeof fetch
+  const r = await redeemClaudeReset("grant-1", {
+    credsPath: join(tmpDir, "nonexistent.json"), claudeJsonPath, requestId: "req-1", readStored: async () => STORED_LOGIN,
+  })
+  expect(r.result).toBe("reset")
 })
 
 test("fetchClaudeUsage returns null when token expired", async () => {
@@ -210,7 +282,7 @@ test("fetchClaudeUsage returns null when token expired", async () => {
     throw new Error("should not be called")
   }) as unknown as typeof fetch
 
-  const result = await fetchClaudeUsage(credsPath)
+  const result = await fetchClaudeUsage(credsPath, async () => null)
   expect(result).toBeNull()
 })
 
