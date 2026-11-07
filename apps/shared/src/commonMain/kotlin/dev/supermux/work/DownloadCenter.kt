@@ -5,6 +5,7 @@ import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -19,12 +20,25 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 
 /**
  * A finished download: a real file this app holds ([path]: desktop, Android, iOS), or — on the web, which has no
  * files — an opaque browser [handle] (a JS `Blob`, held by the browser, never in the Wasm heap).
  */
 data class DownloadedFile(val name: String, val mime: String, val size: Long, val path: String?, val handle: Any? = null)
+
+/**
+ * Whether this finished file is still there to hand over: the media store lives in OS-reclaimable cache folders,
+ * and Storage › Clear empties it. A browser [DownloadedFile.handle] (the web) cannot vanish under the app, and is
+ * answered without suspending, so a hand-over the user's gesture started still runs inside that gesture.
+ */
+suspend fun DownloadedFile.isAvailable(): Boolean {
+    val file = path ?: return handle != null
+    return withContext(Dispatchers.Default) { SystemFileSystem.exists(Path(file)) }
+}
 
 /** How one download is fetched. [cancel] stops a transfer that is shared with someone else (the media cache's). */
 interface DownloadSource {
