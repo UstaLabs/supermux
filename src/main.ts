@@ -232,6 +232,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { antigravityKeyringLogin } from "./core/agents/antigravity/keyring"
+import { claudeStoredLoginPresent } from "./core/agents/claude/stored-login"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
@@ -3564,10 +3565,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // codex/cursor API key short-circuits the login flow the same way a CLI
     // cred file does. Claude adds the darwin Keychain probe: `claude login`
     // can finish without ever writing the credential file this manager polls.
-    // Antigravity adds Windows' Credential Manager: agy keeps its login there
-    // and writes no token file at all.
+    // Claude and Antigravity add Windows' Credential Manager: agy keeps its login
+    // there and writes no token file at all, and Claude Code does too when
+    // Anthropic's tengu_windows_credman rollout is on (#101).
     hasCredential: (kind) =>
-      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated())
+      agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {

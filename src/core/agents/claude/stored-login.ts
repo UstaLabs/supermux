@@ -41,6 +41,25 @@ export async function readClaudeStoredLogin(configDir?: string, read?: SecretRea
   return Buffer.from(joined, "base64").toString("utf8")
 }
 
+/**
+ * Whether Claude Code keeps a login for [configDir] in the OS credential store: the whole entry, or a split one's
+ * manifest. Synchronous (CredReadW), for the status badge and a sign-in's success check; the secret is never read.
+ * EVERY error reads as no, as for agy's keyring login: off Windows, a runtime without Bun's ffi, a Windows error.
+ */
+export function claudeStoredLoginPresent(
+  configDir?: string,
+  windowsRead?: ((target: string) => boolean) | null,
+  platform?: NodeJS.Platform,
+): boolean {
+  const service = claudeStoredLoginService(configDir)
+  const options = { ...(platform !== undefined ? { platform } : {}), ...(windowsRead !== undefined ? { windowsRead } : {}) }
+  try {
+    return credentials.hasSecret(service, NAME, options) || credentials.hasSecret(service, `${NAME}#m`, options)
+  } catch {
+    return false
+  }
+}
+
 /** The manifest of a split login, as Claude Code itself accepts one; anything else means the login is stored whole. */
 function chunkManifest(text: string | null): { n: number; l: number } | null {
   if (!text) return null

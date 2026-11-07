@@ -7,6 +7,7 @@ import { realpathSync } from "fs"
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { claudeStoredLoginPresent } from "./claude/stored-login"
 import { antigravityKeyringLogin } from "./antigravity/keyring"
 import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 import { openCodeDataDir } from "./opencode/auth"
@@ -32,6 +33,8 @@ export interface DetectProbes {
   claudeAuthStatus?: AuthStatusRunner
   /** Injected keyring probe for agy's login; antigravity's module owns the default. */
   antigravityKeyring?: () => boolean
+  /** Injected Credential Manager probe for Claude Code's Windows login; claude's module owns the default. */
+  claudeStoredLogin?: () => boolean
 }
 
 export interface DetectPaths {
@@ -94,6 +97,7 @@ const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) =
     env: paths.env,
     fileExists: probes.fileExists,
     storedCredential: probes.hasCredential?.(AgentKind.Claude) ?? false,
+    storedLogin: probes.claudeStoredLogin ?? (() => claudeStoredLoginPresent(undefined, undefined, paths.platform)),
     runner: probes.claudeAuthStatus,
   }),
   codex: credFileOrStored(AgentKind.Codex),

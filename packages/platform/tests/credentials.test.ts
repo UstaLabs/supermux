@@ -56,6 +56,35 @@ test("readSecret: a store this layer does not read answers Unsupported, and a st
   await expect(credentials.readSecret("s", "n", { platform: "win32", get: failing })).rejects.toThrow("logon session")
 })
 
+// #101: the status badge and a sign-in's success check are synchronous, so they ask whether Bun.secrets' entry exists
+// through CredReadW, by the target Bun.secrets gives it on Windows: `service/name`.
+test("hasSecret asks Credential Manager for the target Bun.secrets writes: service/name", () => {
+  const asked: string[] = []
+  const windowsRead = (target: string) => { asked.push(target); return true }
+  expect(credentials.hasSecret("Claude Code-credentials", "claude-code-user", { platform: "win32", windowsRead })).toBe(true)
+  expect(asked).toEqual(["Claude Code-credentials/claude-code-user"])
+  expect(credentials.hasSecret("Claude Code-credentials", "claude-code-user", { platform: "win32", windowsRead: () => false })).toBe(false)
+})
+
+test("hasSecret: a store this layer cannot read answers Unsupported, never a silent no", () => {
+  for (const platform of ["linux", "darwin"] as const) {
+    expect(() => credentials.hasSecret("Claude Code-credentials", "claude-code-user", { platform })).toThrow(Unsupported)
+  }
+  expect(() => credentials.hasSecret("Claude Code-credentials", "claude-code-user", { platform: "win32", windowsRead: null })).toThrow(Unsupported)
+})
+
+test.skipIf(process.platform !== "win32")("Credential Manager: hasSecret sees what Bun.secrets stored only while it exists", async () => {
+  const name = randomUUID()
+  expect(credentials.hasSecret("supermux-test", name)).toBe(false)
+  await Bun.secrets.set({ service: "supermux-test", name, value: "s3cret" })
+  try {
+    expect(credentials.hasSecret("supermux-test", name)).toBe(true)
+  } finally {
+    await Bun.secrets.delete({ service: "supermux-test", name })
+  }
+  expect(credentials.hasSecret("supermux-test", name)).toBe(false)
+})
+
 test.skipIf(process.platform !== "win32")("Credential Manager: readSecret reads back what Bun.secrets stored, and null once it is gone", async () => {
   const name = randomUUID()
   expect(await credentials.readSecret("supermux-test", name)).toBeNull()
