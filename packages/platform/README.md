@@ -7,6 +7,8 @@ Linux, macOS and Windows. Anything the runtimes already do right is called direc
   (go-keyring's naming; Windows Credential Manager through Bun's ffi). Elsewhere, or without that ffi: `Unsupported`.
 - `credentials.readSecret(service, name)`: the secret another program stored with Bun.secrets (Windows: the generic
   credential `service/name`), or null. Elsewhere, or without Bun: `Unsupported`.
+- `credentials.hasSecret(service, name)`: whether that secret exists, synchronously (CredReadW of `service/name`).
+  Elsewhere, or without Bun's ffi: `Unsupported`.
 
 - `proc.isAlive(pid)`: whether a process exists. `EPERM` (someone else's process) counts as alive.
 

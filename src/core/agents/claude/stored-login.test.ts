@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { claudeStoredLoginService, readClaudeStoredLogin } from "./stored-login"
+import { claudeStoredLoginPresent, claudeStoredLoginService, readClaudeStoredLogin } from "./stored-login"
 
 // The layout below is Claude Code 2.1.311's own (read from its Windows build, #101): Bun.secrets with service
 // "Claude Code-credentials" (+ "-<8 hex of sha256(config dir)>" under CLAUDE_CONFIG_DIR) and name "claude-code-user";
@@ -69,6 +69,31 @@ test("a manifest Claude itself would not take is ignored: the login is read whol
 
 test("no login in the store is null", async () => {
   expect(await readClaudeStoredLogin(undefined, store({}).read)).toBeNull()
+})
+
+// The status badge and the sign-in's success check are synchronous: they only ask whether the login is there.
+test("a stored login is seen without reading it: the whole entry, or a split one's manifest", () => {
+  const asked: string[] = []
+  const has = (present: string[]) => (target: string) => { asked.push(target); return present.includes(target) }
+  expect(claudeStoredLoginPresent(undefined, has(["Claude Code-credentials/claude-code-user"]), "win32")).toBe(true)
+  expect(claudeStoredLoginPresent(undefined, has(["Claude Code-credentials/claude-code-user#m"]), "win32")).toBe(true)
+  expect(claudeStoredLoginPresent(
+    "C:\\Users\\Yasin\\.mux\\state\\accounts\\homes\\claude\\claude-1a2b3c4d",
+    has(["Claude Code-credentials-7fc565c6/claude-code-user"]),
+    "win32",
+  )).toBe(true)
+  asked.length = 0
+  expect(claudeStoredLoginPresent(undefined, has([]), "win32")).toBe(false)
+  expect(asked).toEqual(["Claude Code-credentials/claude-code-user", "Claude Code-credentials/claude-code-user#m"])
+})
+
+test("presence reads every failure as no, and only Windows' store is asked", () => {
+  expect(claudeStoredLoginPresent(undefined, () => { throw new Error("CredReadW failed with Windows error 1312") }, "win32")).toBe(false)
+  // A Windows runtime without Bun's ffi (Bun's Windows ARM64 build) cannot ask.
+  expect(claudeStoredLoginPresent(undefined, null, "win32")).toBe(false)
+  const never = () => { throw new Error("must not be asked") }
+  expect(claudeStoredLoginPresent(undefined, never, "linux")).toBe(false)
+  expect(claudeStoredLoginPresent(undefined, never, "darwin")).toBe(false)
 })
 
 test("off Windows (no store this layer reads) the answer is null, never an error", async () => {

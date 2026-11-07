@@ -56,6 +56,19 @@ function bunSecretsGet(): ((query: SecretQuery) => Promise<string | null>) | nul
   return typeof secrets?.get === "function" ? (query) => secrets.get!(query) : null
 }
 
+/**
+ * Whether the OS credential store holds the secret Bun.secrets stored for [service] and [name] (on Windows the generic
+ * credential `service/name`), asked through CredReadW so it answers synchronously; the secret is never read. Windows
+ * only for now: elsewhere, and on a Windows runtime without Bun's ffi, it throws [Unsupported].
+ */
+export function hasSecret(service: string, name: string, options: CredentialOptions = {}): boolean {
+  const platform = options.platform ?? process.platform
+  if (platform !== "win32") throw new Unsupported("credentials.hasSecret", `reading the credential store is not implemented on ${platform} yet`)
+  const read = options.windowsRead === undefined ? windowsReader() : options.windowsRead
+  if (!read) throw new Unsupported("credentials.hasSecret", "reading Windows Credential Manager needs Bun's ffi, which this runtime does not have")
+  return read(`${service}/${name}`)
+}
+
 const CRED_TYPE_GENERIC = 1
 const ERROR_NOT_FOUND = 1168
 
