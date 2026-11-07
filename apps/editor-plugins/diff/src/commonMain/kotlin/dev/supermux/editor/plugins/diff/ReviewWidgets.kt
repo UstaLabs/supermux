@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.editor.compose.WidgetRegistry
 import dev.supermux.editor.compose.WidgetScope
+import dev.supermux.editor.compose.isApplePlatform
 import dev.supermux.editor.core.WidgetKey
 
 /** The review threads' widget content: register it in the `Editor`'s registry (with [Diff.registerWidgets]). */
@@ -119,7 +120,8 @@ private fun ProseField(p: Palette, state: TextFieldState, placeholder: String, t
             fieldModifier.fillMaxWidth().testTag(tag).semantics { contentDescription = placeholder }.onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when {
-                    (e.key == Key.Enter || e.key == Key.NumPadEnter) && (e.isMetaPressed || e.isCtrlPressed) -> { onSend(); true }
+                    (e.key == Key.Enter || e.key == Key.NumPadEnter) &&
+                        (if (isApplePlatform) e.isMetaPressed && !e.isCtrlPressed else e.isCtrlPressed && !e.isMetaPressed) -> { onSend(); true }
                     e.key == Key.Escape -> { onEscape(); true }
                     else -> false
                 }
