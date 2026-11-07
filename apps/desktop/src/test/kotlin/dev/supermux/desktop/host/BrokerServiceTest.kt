@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -85,7 +86,7 @@ class BrokerServiceTest {
     @Test fun macInstallWritesPlistAndBootstraps() {
         assumePosixHost()
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost))
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, failing = setOf(printHost))
         val r = BrokerService.install(spec, env, me)
         assertTrue(r is BrokerService.Result.Installed)
         assertTrue(Files.exists(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
@@ -101,7 +102,7 @@ class BrokerServiceTest {
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val alive = OsEnv.RunResult(0, "state = running", "")
         val gone = OsEnv.RunResult(113, "", "Could not find service")
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, scripted = mapOf(printHost to listOf(alive, alive, alive, gone)))
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, scripted = mapOf(printHost to listOf(alive, alive, alive, gone)))
         assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         val bootout = env.ran.indexOf(listOf("launchctl", "bootout", "gui/501/dev.supermux.host"))
         val enable = env.ran.indexOf(listOf("launchctl", "enable", "gui/501/dev.supermux.host"))
@@ -111,7 +112,7 @@ class BrokerServiceTest {
     }
 
     @Test fun macRestartKickstarts() {
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), uid = 501)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = createTempDirectory(), uid = 501)
         val plist = env.home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, BrokerService.launchdPlist(spec))
         BrokerService.restart(env, me)
@@ -121,7 +122,7 @@ class BrokerServiceTest {
     @Test fun linuxInstallEnablesTheUserUnit() {
         assumePosixHost()
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, env, me)
         assertTrue(Files.exists(home.resolve(".config/systemd/user/supermux-host.service")))
         assertEquals("rw-------", mode(home.resolve(".config/systemd/user/supermux-host.service")), "the env may hold tokens")
@@ -239,7 +240,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, failing = setOf(printHost),
             scripted = mapOf(bs to List(10) { OsEnv.RunResult(5, "", " Bootstrap failed: 5 \n") }))
         val r = BrokerService.install(spec, env, me)
         val f = assertIs<BrokerService.Result.Failed>(r)
@@ -252,7 +253,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, failing = setOf(printHost),
             scripted = mapOf(bs to List(3) { OsEnv.RunResult(5, "", "Bootstrap failed: 5: Input/output error") }))
         assertTrue(assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me)).enabled)
         assertEquals(4, env.ran.count { it == bs })
@@ -263,7 +264,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist").toString()
         val bs = listOf("launchctl", "bootstrap", "gui/501", plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost),
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, failing = setOf(printHost),
             scripted = mapOf(bs to listOf(OsEnv.RunResult(5, "", "busy"))))
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         assertTrue(r.enabled)
@@ -271,7 +272,7 @@ class BrokerServiceTest {
     }
 
     @Test fun linuxInstallEnablesThenRestarts() {
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = createTempDirectory(), uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = createTempDirectory(), uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, env, me)
         val enable = env.ran.indexOf(listOf("systemctl", "--user", "enable", "--now", "supermux-host"))
         val restart = env.ran.indexOf(listOf("systemctl", "--user", "restart", "supermux-host"))
@@ -284,7 +285,7 @@ class BrokerServiceTest {
         assumePosixHost()
         val home = createTempDirectory()
         val config = home.resolve("cfg")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000",
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000",
             envVars = mapOf("XDG_CONFIG_HOME" to config.toString()))
         BrokerService.install(spec, env, me)
         assertTrue(Files.exists(config.resolve("systemd/user/supermux-host.service")))
@@ -297,7 +298,7 @@ class BrokerServiceTest {
         assumePosixHost()
         val home = createTempDirectory()
         val config = home.resolve("cfg")
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = null,
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = null,
             envVars = mapOf("XDG_CONFIG_HOME" to config.toString()))
         BrokerService.install(spec, env, me)
         val entry = config.resolve("autostart/supermux-host.desktop")
@@ -312,7 +313,7 @@ class BrokerServiceTest {
     @Test fun aRelativeXdgConfigHomeIsIgnored() {
         // The XDG spec: a relative value is invalid and must be ignored.
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, envVars = mapOf("XDG_CONFIG_HOME" to "cfg"))
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, envVars = mapOf("XDG_CONFIG_HOME" to "cfg"))
         assertEquals(home.resolve(".config/autostart/supermux-host.desktop"), BrokerService.xdgAutostartPath(env))
         assertEquals(home.resolve(".config/supermux/broker.env"), BrokerService.xdgEnvPath(env))
     }
@@ -320,7 +321,7 @@ class BrokerServiceTest {
     @Test fun linuxXdgFallbackIsNotEnabledAndRemoveCleansUp() {
         assumePosixHost()
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = null)
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = null)
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         assertFalse(r.enabled)
         val desktop = home.resolve(".config/autostart/supermux-host.desktop")
@@ -401,7 +402,7 @@ class BrokerServiceTest {
         failIf: (List<String>) -> Boolean = { false },
         registered: String? = null,
     ) = FakeOsEnv(
-        os = OsEnv.Os.WINDOWS, home = home,
+        os = DesktopOs.WINDOWS, home = home,
         captures = buildMap {
             procs?.let { put(listing, it) }
             registered?.let { put(queryXml, it) }
@@ -559,7 +560,7 @@ class BrokerServiceTest {
     @Test fun windowsDeclinedUacOnAFirstInstallIsAPlainFailure() {
         val q = listOf("schtasks", "/Query", "/TN", "Supermux Host")
         // Nothing is registered: every query says so.
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(), failing = setOf(q),
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = createTempDirectory(), failing = setOf(q),
             failIf = { it.firstOrNull()?.endsWith("powershell.exe") == true && it.last().contains("-Verb RunAs") })
         val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env, me))
         assertFalse(r.previousStillRunning)
@@ -577,7 +578,7 @@ class BrokerServiceTest {
 
     @Test fun windowsInstallWritesNothingWhenSchtasksCannotSayWhatIsRegistered() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
         val r = assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env, me))
         assertTrue("Supermux Host" in r.message, r.message)
         assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true }, "nothing registered: ${env.ran}")
@@ -590,7 +591,7 @@ class BrokerServiceTest {
         // into "no answer" in between must still write nothing. The third listing is the one install reads last.
         val home = createTempDirectory()
         val absent = OsEnv.RunResult(0, "", "")
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask),
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = home, failing = setOf(queryTask),
             scripted = mapOf(listTasks to listOf(absent, absent, OsEnv.RunResult(1, "", "failed"))))
         assertIs<BrokerService.Result.Failed>(BrokerService.install(winSpec, env, me))
         assertFalse(Files.exists(home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE)), "no env file written")
@@ -602,21 +603,21 @@ class BrokerServiceTest {
         val envFile = home.resolve("AppData/Local").resolve(BrokerService.WINDOWS_ENV_FILE)
         Files.createDirectories(envFile.parent)
         envFile.writeText("the task loop's env")
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = home, failing = setOf(queryTask, listTasks))
         assertIs<BrokerService.Result.Failed>(BrokerService.remove(env, me))
         assertTrue(Files.exists(envFile), "the task loop's env file stays")
         assertTrue(env.ran.none { it.firstOrNull()?.endsWith("powershell.exe") == true }, "nothing ended or deleted: ${env.ran}")
     }
 
     @Test fun aTaskTheListNamesIsRegisteredThoughItsOwnQueryFailed() {
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
             scripted = listing("\"\\Microsoft\\Other\",\"N/A\",\"Ready\"\r\n\"\\Supermux Host\",\"N/A\",\"Running\"\r\n"))
         assertTrue(BrokerService.isInstalled(env))
     }
 
     @Test fun aTaskTheListDoesNotNameIsNotRegistered() {
         // Not a longer name that starts with ours, nor our name in another folder: the task we register is at the root.
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = createTempDirectory(), failing = setOf(queryTask),
             scripted = listing("\"\\Supermux Host 2\",\"N/A\",\"Ready\"\r\n\"\\Folder\\Supermux Host\",\"N/A\",\"Ready\"\r\n"))
         assertFalse(BrokerService.isInstalled(env))
     }
@@ -631,7 +632,7 @@ class BrokerServiceTest {
     }
 
     @Test fun stopIsWindowsOnlyAndKillsByPid() {
-        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), uid = 501)
+        val mac = FakeOsEnv(os = DesktopOs.MACOS, home = createTempDirectory(), uid = 501)
         assertFalse(BrokerService.stop(mac))
         assertEquals(emptyList(), mac.ran)
         val win = winEnv()
@@ -764,7 +765,7 @@ class BrokerServiceTest {
 
     @Test fun windowsRemoveWhenNotInstalledDoesNotElevate() {
         val q = listOf("schtasks", "/Query", "/TN", "Supermux Host")
-        val env = FakeOsEnv(os = OsEnv.Os.WINDOWS, home = createTempDirectory(),
+        val env = FakeOsEnv(os = DesktopOs.WINDOWS, home = createTempDirectory(),
             scripted = mapOf(q to listOf(OsEnv.RunResult(1, "", "not found"))))
         val r = assertIs<BrokerService.Result.Removed>(BrokerService.remove(env, me))
         assertEquals(null, r.path)
@@ -796,24 +797,24 @@ class BrokerServiceTest {
 
     @Test fun appRunsAsServiceRecognisesTheJobOnEachOs() {
         val home = createTempDirectory()
-        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.MAC, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "dev.supermux.host"))))
-        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.MAC, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "application.dev.supermux.desktop.123"))))
-        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)))
-        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.LINUX, home = home, cgroup = "0::/user.slice/user-1000.slice/session-2.scope\n")))
-        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home, envVars = mapOf("SUPERMUX_KEEP_ALIVE" to "1"))))
-        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = OsEnv.Os.WINDOWS, home = home)))
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.MACOS, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "dev.supermux.host"))))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.MACOS, home = home, envVars = mapOf("XPC_SERVICE_NAME" to "application.dev.supermux.desktop.123"))))
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.LINUX, home = home, cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.LINUX, home = home, cgroup = "0::/user.slice/user-1000.slice/session-2.scope\n")))
+        assertTrue(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.WINDOWS, home = home, envVars = mapOf("SUPERMUX_KEEP_ALIVE" to "1"))))
+        assertFalse(BrokerService.appRunsAsService(FakeOsEnv(os = DesktopOs.WINDOWS, home = home)))
     }
 
     @Test fun legacyDefinitionsAreRecognisedAndAreNotOurs() {
         val home = createTempDirectory()
-        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val mac = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501)
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, LegacyKeepAlive.plist)
         assertTrue(BrokerService.isLegacyInstalled(mac)); assertFalse(BrokerService.isOursInstalled(mac, me))
         Files.writeString(plist, BrokerService.launchdPlist(spec))
         assertFalse(BrokerService.isLegacyInstalled(mac)); assertTrue(BrokerService.isOursInstalled(mac, me))
 
-        val linux = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000)
+        val linux = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000)
         val unit = home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent); Files.writeString(unit, LegacyKeepAlive.unit)
         assertTrue(BrokerService.isLegacyInstalled(linux)); assertFalse(BrokerService.isOursInstalled(linux, me))
@@ -832,7 +833,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, LegacyKeepAlive.plist)
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, envVars = LegacyKeepAlive.macJobEnv)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, envVars = LegacyKeepAlive.macJobEnv)
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         assertTrue(r.nextLogin && !r.enabled)
         assertTrue(BrokerService.MANAGED_MARKER in Files.readString(plist), "the new definition is in place for the next login")
@@ -849,7 +850,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val unit = home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent); Files.writeString(unit, LegacyKeepAlive.unit)
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000", cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000", cgroup = LegacyKeepAlive.LINUX_JOB_CGROUP)
         val r = assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         assertTrue(r.nextLogin)
         assertTrue(BrokerService.MANAGED_MARKER in Files.readString(unit))
@@ -867,7 +868,7 @@ class BrokerServiceTest {
         val home = createTempDirectory()
         val xdg = home.resolve(".config/autostart/supermux-host.desktop")
         Files.createDirectories(xdg.parent); Files.writeString(xdg, LegacyKeepAlive.xdg)
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         assertIs<BrokerService.Result.Installed>(BrokerService.install(spec, env, me))
         assertFalse(Files.exists(xdg), "it would open the app at every login")
     }
@@ -901,7 +902,7 @@ class BrokerServiceTest {
 
     @Test fun removeOnMacBootsOutAndDeletes() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501)
         BrokerService.install(spec, env, me)
         BrokerService.remove(env, me)
         assertFalse(Files.exists(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
@@ -916,13 +917,13 @@ class BrokerServiceTest {
     @Test fun everyInstalledDefinitionCarriesTheInstallersId() {
         assumePosixHost()
         val home = createTempDirectory()
-        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501, failing = setOf(printHost))
+        val mac = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501, failing = setOf(printHost))
         BrokerService.install(spec, mac, mine)
         assertTrue("<key>MUX_DESKTOP_INSTALL</key>\n    <string>${mine.id}</string>" in Files.readString(home.resolve("Library/LaunchAgents/dev.supermux.host.plist")))
-        val linux = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val linux = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, linux, mine)
         assertTrue("Environment=\"MUX_DESKTOP_INSTALL=${mine.id}\"" in Files.readString(home.resolve(".config/systemd/user/supermux-host.service")))
-        val xdg = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000)
+        val xdg = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000)
         BrokerService.install(spec, xdg, mine)
         assertTrue("export MUX_DESKTOP_INSTALL='${mine.id}'" in Files.readString(home.resolve(".config/supermux/broker.env")))
         val win = winEnv(home)
@@ -932,7 +933,7 @@ class BrokerServiceTest {
 
     @Test fun macAnotherCopysServiceIsNeverReplacedRemovedOrRestarted() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501)
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent)
         val text = BrokerService.launchdPlist(stamped(spec, theirs)).also { Files.writeString(plist, it) }
@@ -951,7 +952,7 @@ class BrokerServiceTest {
 
     @Test fun anUnstampedDefinitionIsOnlyTheOwnersWhoAdoptedIt() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501)
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, BrokerService.launchdPlist(spec))
         assertFalse(BrokerService.isOursInstalled(env, mine))
@@ -966,7 +967,7 @@ class BrokerServiceTest {
     @Test fun linuxRemoveTakesOursAndLeavesAnotherCopysAutostart() {
         assumePosixHost()
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         BrokerService.install(spec, env, mine)
         val entry = home.resolve(".config/autostart/supermux-host.desktop")
         val envFile = home.resolve(".config/supermux/broker.env")
@@ -980,7 +981,7 @@ class BrokerServiceTest {
 
     @Test fun linuxAnotherCopysUnitIsNeitherReplacedNorDisabled() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val unit = home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
         val text = BrokerService.systemdUnit(stamped(spec, theirs)).also { Files.writeString(unit, it) }
@@ -995,7 +996,7 @@ class BrokerServiceTest {
         // Both would start a broker for the same user at the next login.
         assumePosixHost()
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = home, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val entry = home.resolve(".config/autostart/supermux-host.desktop")
         val envFile = home.resolve(".config/supermux/broker.env")
         BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(stamped(spec, theirs)))
@@ -1011,14 +1012,14 @@ class BrokerServiceTest {
         val state = Path.of("C:\\Users\\a 50%\\.mux\\state")
         val legacy = BrokerService.Spec(state.resolve("desktop-assets/bin/supermux-broker"), emptyMap(), state.resolve("desktop-broker.log"))
         val unitHome = createTempDirectory()
-        val unitEnv = FakeOsEnv(os = OsEnv.Os.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val unitEnv = FakeOsEnv(os = DesktopOs.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val unit = unitHome.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
         Files.writeString(unit, BrokerService.systemdUnit(legacy))
         assertTrue(BrokerService.unstampedRuns(unitEnv, state), Files.readString(unit))
 
         val xdgHome = createTempDirectory()
-        val xdgEnv = FakeOsEnv(os = OsEnv.Os.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val xdgEnv = FakeOsEnv(os = DesktopOs.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val envFile = xdgHome.resolve(".config/supermux/broker.env")
         val entry = xdgHome.resolve(".config/autostart/supermux-host.desktop")
         BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(legacy))
@@ -1031,7 +1032,7 @@ class BrokerServiceTest {
         // Where its broker runs, as each format writes MUX_WEB_PORT. A definition of ours is not another copy's.
         fun on9899(s: BrokerService.Spec) = stamped(s, theirs).let { it.copy(env = it.env + ("MUX_WEB_PORT" to "9899")) }
         val macHome = createTempDirectory()
-        val mac = FakeOsEnv(os = OsEnv.Os.MAC, home = macHome, uid = 501)
+        val mac = FakeOsEnv(os = DesktopOs.MACOS, home = macHome, uid = 501)
         val plist = macHome.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent)
         Files.writeString(plist, BrokerService.launchdPlist(on9899(spec)))
@@ -1039,14 +1040,14 @@ class BrokerServiceTest {
         assertEquals(null, BrokerService.anotherCopysPort(mac, theirs))
 
         val unitHome = createTempDirectory()
-        val linux = FakeOsEnv(os = OsEnv.Os.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val linux = FakeOsEnv(os = DesktopOs.LINUX, home = unitHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val unit = unitHome.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
         Files.writeString(unit, BrokerService.systemdUnit(on9899(spec)))
         assertEquals(9899, BrokerService.anotherCopysPort(linux, mine))
 
         val xdgHome = createTempDirectory()
-        val xdg = FakeOsEnv(os = OsEnv.Os.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
+        val xdg = FakeOsEnv(os = DesktopOs.LINUX, home = xdgHome, uid = 1000, xdgRuntimeDir = "/run/user/1000")
         val envFile = xdgHome.resolve(".config/supermux/broker.env")
         BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(on9899(spec)))
         BrokerService.writePrivate(xdgHome.resolve(".config/autostart/supermux-host.desktop"), BrokerService.xdgAutostart(on9899(spec), envFile))
@@ -1074,7 +1075,7 @@ class BrokerServiceTest {
 
     @Test fun anUnstampedDefinitionRunsTheBrokerOfTheStateDirItNames() {
         val home = createTempDirectory()
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = home, uid = 501)
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = home, uid = 501)
         val plist = home.resolve("Library/LaunchAgents/dev.supermux.host.plist")
         Files.createDirectories(plist.parent); Files.writeString(plist, BrokerService.launchdPlist(spec))
         assertTrue(BrokerService.unstampedRuns(env, Path.of("/Users/a/.mux/state")))
@@ -1086,7 +1087,7 @@ class BrokerServiceTest {
 
 /** Records argv instead of running it. Shared by later tests. */
 class FakeOsEnv(
-    override val os: OsEnv.Os,
+    override val os: DesktopOs,
     override val home: Path,
     override val uid: Long? = null,
     override val xdgRuntimeDir: String? = null,

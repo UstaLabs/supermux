@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -15,7 +16,7 @@ class AppleInstallerTest {
     private val up = OsEnv.RunResult(0, "2042\n", "")
 
     @Test fun waitsForTheInstallerThenActivatesItOnce() = runBlocking {
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), scripted = mapOf(running to listOf(notYet, notYet, up)))
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = createTempDirectory(), scripted = mapOf(running to listOf(notYet, notYet, up)))
         val pauses = mutableListOf<Long>()
         assertTrue(AppleInstaller.bringToFront(env, pause = { pauses += it }))
         assertEquals(listOf(running, running, running, front), env.ran)
@@ -24,13 +25,13 @@ class AppleInstallerTest {
     }
 
     @Test fun neverOpensTheInstallerWhenItIsNotRunning() = runBlocking {
-        val env = FakeOsEnv(os = OsEnv.Os.MAC, home = createTempDirectory(), failing = setOf(running))
+        val env = FakeOsEnv(os = DesktopOs.MACOS, home = createTempDirectory(), failing = setOf(running))
         assertFalse(AppleInstaller.bringToFront(env, attempts = 4, pause = {}))
         assertEquals(List(4) { running }, env.ran, "`open -a` would LAUNCH it: only ever run once it is up")
     }
 
     @Test fun doesNothingOffAMac() = runBlocking {
-        val env = FakeOsEnv(os = OsEnv.Os.LINUX, home = createTempDirectory())
+        val env = FakeOsEnv(os = DesktopOs.LINUX, home = createTempDirectory())
         assertFalse(AppleInstaller.bringToFront(env, pause = {}))
         assertTrue(env.ran.isEmpty())
     }
