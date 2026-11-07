@@ -9,9 +9,9 @@ workdir: every generated file lives in the session's state.
 | Piece | File | What it does |
 |---|---|---|
 | Plugin trees | `~/.mux/plugins/<name>/` | `skills/<skill>/SKILL.md`, optional `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` manifests, `.mcp.json`, `.opencode/plugins/*.js`, `hooks/`, `commands/`, `agents/` |
-| Registry | `~/.mux/plugins.json`, `src/core/plugins/registry.ts` | `{ name, source, enabled, scopes: AgentKind[], perSessionOverrides: { <session name>: { enabled } } }`. A malformed file yields no plugins, never a failed spawn. |
+| Registry | `~/.mux/plugins.json`, `src/core/plugins/registry.ts` | `{ name, source, enabled, scopes: AgentKind[], perSessionOverrides: { <session id>: { enabled } } }`. A malformed file yields no plugins, never a failed spawn. |
 | Boot sync | `src/main.ts` (before `resumeAtBoot`), `src/core/plugins/mux-core.ts`, `src/core/plugins/index.ts` | Writes the first-party `mux-core` plugin (manifests and an empty `skills/`; no OpenCode JS plugin since #102), registers it for all six agents, then, once per registry (recorded in `migrations`), adds `opencode`, `grok` and `antigravity` to every enabled plugin those agents can read. |
-| Selection | `sessionPlugins(agent, sessionName)` in `src/core/plugins/index.ts` | Enabled, scoped to the agent, not switched off for the session's name, compatible (`isPluginCompatible`). Run in every agent's `prepare`, i.e. on every launch (create, resume, wake). |
+| Selection | `sessionPlugins(agent, sessionId)` in `src/core/plugins/index.ts` | Enabled, scoped to the agent, not switched off for the session (by its id), compatible (`isPluginCompatible`). Run in every agent's `prepare`, i.e. on every launch (create, resume, wake). |
 | Hand-off | `src/core/agents/<agent>/core-host.ts` | `context.plugins = sessionPlugins(...)`, policy `warn`: what an agent cannot load is dropped with `context.degraded`, never refused. |
 | Mapping | `packages/supermux-core/src/context/agents.ts`, `context/plugins.ts`, `environment/antigravity.ts` | Per-agent channel, below. Writes only into the core's per-session context folder (or Antigravity's shadow HOME). |
 | How to use a skill | `src/core/agents/agent-header.ts` `SKILL_LOADING` | The one per-agent line of the session instructions. |
@@ -19,7 +19,7 @@ workdir: every generated file lives in the session's state.
 
 ```mermaid
 flowchart LR
-  R[plugins.json] --> S[sessionPlugins: enabled, scope, override by NAME, compatible]
+  R[plugins.json] --> S[sessionPlugins: enabled, scope, override by session id, compatible]
   T[~/.mux/plugins/*] --> S
   S --> C[SessionContext.plugins]
   C --> CL[Claude: --plugin-dir folder of symlinks]
@@ -53,9 +53,10 @@ rest with `context.degraded`.
   are a one-time migration per agent kind, recorded in `plugins.json` as `migrations: ["scope:opencode", …]`. Before
   #102 they ran on every boot, so a plugin scoped to `["codex"]` came back as `["codex","opencode","grok","antigravity"]`
   after each restart.
-- **Overrides are keyed by the session's display name**, read at each launch. A session that renames itself (every
-  worker does on its first turn) loses its override at its next launch, and a later session given that name
-  inherits it.
+- Overrides are keyed by the session's id, read at each launch. Before #102 they were keyed by its display name: a
+  session that renamed itself (every worker does on its first turn) lost its override at its next launch, and a later
+  session given that name inherited it. Name-keyed overrides are re-keyed to the ids of the sessions with that name
+  once, at boot (`migrations: ["overrides:session-id"]`).
 
 ## Start cost (measured 2026-11-07, isolated broker, 2 rounds per config)
 

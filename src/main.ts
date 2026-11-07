@@ -92,7 +92,7 @@ import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
+import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes, migrateOverridesToSessionIds } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFailed, type UsageFetched } from "./core/usage/store"
@@ -1407,7 +1407,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
       workdir: s.workdir,
       repoRoot: s.repo_root ?? undefined,
       muted: !!s.mute,
-      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, sessionId: s.id, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -4688,6 +4688,10 @@ if (!IS_TEST_BROKER) {
     }
     if (ensureAntigravityPluginScopes()) {
       log.info("antigravity_plugin_scopes_synced")
+    }
+    // Overrides are keyed by session id since #102: re-key the ones written by name, once.
+    if (migrateOverridesToSessionIds([...registry.list(), ...registry.listArchived()].map((s) => ({ id: s.id, name: s.name })))) {
+      log.info("plugin_overrides_keyed_by_id")
     }
   } catch (err: any) {
     log.warn("mux_core_skill_sync_failed", { err: err?.message ?? String(err) })

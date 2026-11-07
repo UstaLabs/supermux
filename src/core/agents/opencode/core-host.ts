@@ -153,7 +153,7 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
         env: prepared.env,
         context: {
           instructions: sessionInstructions({ agent: "opencode", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
-          plugins: sessionPlugins("opencode", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          plugins: sessionPlugins("opencode", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("opencode", extra.sessionId, extra.sessionName)],
         },
       }
