@@ -307,6 +307,10 @@ class HostStore(
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
     /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
     @Volatile private var livePinned: List<String> = emptyList()
+    /** The optional frames the broker said it takes (its last snapshot's `accepts`): nothing until it says. */
+    @Volatile private var brokerAccepts: Set<String> = emptySet()
+    /** A broker answered "unknown frame type" on this store already: said once in the log, never to the user. */
+    @Volatile private var unknownFrameLogged = false
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
@@ -699,7 +703,8 @@ class HostStore(
                 noChangesRoute = false
                 lastSentViewing = null
                 sendViewingIfChanged()
-                // The broker keeps live pins per socket: a new socket is told again.
+                brokerAccepts = frame.accepts.toSet()
+                // The broker keeps live pins per socket: a new socket is told again (if it takes them at all).
                 if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
                 if (accountsWanted) refreshAccounts()
@@ -742,6 +747,11 @@ class HostStore(
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
+            // An older broker didn't know a frame this app sent: said once in the log (the reducer shows the user nothing).
+            is ServerFrame.Error -> if (frame.reason == UNKNOWN_FRAME_TYPE && !unknownFrameLogged) {
+                unknownFrameLogged = true
+                println("[HostStore] the broker answered \"$UNKNOWN_FRAME_TYPE\": it is older than this app; carrying on without it")
+            }
             else -> {}
         }
     }
@@ -866,6 +876,8 @@ class HostStore(
     }
 
     private fun sendLivePins() {
+        // An older broker answers `live` with "unknown frame type": it gets none, and the overlay shows stored replies.
+        if (LIVE_FRAME !in brokerAccepts) return
         val frame = ClientFrame.Live(livePinned)
         stateScope.launch { runApi("live pins") { sendFrame(frame) } }
     }
@@ -2890,6 +2902,9 @@ internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): S
     else sessions.firstOrNull { it.name == resp.name }?.id
 
 /** Card #54: trace events go to a tracing broker this often; per-type stats every Nth time. */
+/** Card #62: the `live` frame's name, as a broker lists it in its snapshot's `accepts`. */
+private const val LIVE_FRAME = "live"
+
 private const val PERF_SHIP_MS = 2_000L
 private const val PERF_STATS_EVERY = 15
 

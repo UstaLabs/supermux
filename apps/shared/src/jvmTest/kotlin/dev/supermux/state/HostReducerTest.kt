@@ -32,6 +32,14 @@ class HostReducerTest {
     private fun view(id: String, workspaceId: String) =
         ViewDto(id = id, workspaceId = workspaceId, kind = "editor")
 
+    // #62: an app newer than its broker may send a frame the broker doesn't know (`live`), and the broker answers
+    // "unknown frame type". The user can do nothing about it, so it is not shown; any other error still is.
+    @Test fun aBrokerNotKnowingAFrameIsNotShownToTheUser() {
+        val s = HostState()
+        assertSame(s, reduceHostFrame(s, ServerFrame.Error(reason = "unknown frame type")))
+        assertEquals("session busy", reduceHostFrame(s, ServerFrame.Error(reason = "session busy")).lastError)
+    }
+
     @Test fun frameThatChangesNothingReturnsSameInstance() {
         val s = HostState()
         // SessionRemoved for an unknown id changes nothing → same instance (cheap no-op for collectors)

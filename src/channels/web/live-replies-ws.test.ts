@@ -173,3 +173,12 @@ test("an app that never asked for live text gets none for a pinned chat", async 
   expect(live(old)).toEqual([])
   old.ws.close()
 })
+
+// An older broker answers a frame it doesn't know with an error, which an app would show: the snapshot says which
+// optional frames this broker takes, and an app sends `live` only to one that lists it.
+test("the snapshot says this broker takes the live frame", async () => {
+  const token = await boot()
+  const app = await connect(token, { streams: 1 })
+  expect((await app.snapshot).accepts).toEqual(["live"])
+  app.ws.close()
+})
