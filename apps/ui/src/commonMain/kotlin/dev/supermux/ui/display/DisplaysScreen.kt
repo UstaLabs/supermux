@@ -67,6 +67,7 @@ import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.Dialog
+import dev.supermux.ui.work.PhoneActivityBar
 import kotlinx.coroutines.launch
 
 /**
@@ -106,20 +107,23 @@ fun DisplaysScreen(
         Scaffold(
             modifier = modifier,
             topBar = {
-                TopAppBar(
-                    title = { Text("Displays", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("displays_back")) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface)
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = start, modifier = Modifier.testTag("displays_start")) {
-                            Icon(Icons.Filled.Add, contentDescription = "Start display", tint = cs.onSurface)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
+                Column {
+                    TopAppBar(
+                        title = { Text("Displays", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("displays_back")) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface)
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = start, modifier = Modifier.testTag("displays_start")) {
+                                Icon(Icons.Filled.Add, contentDescription = "Start display", tint = cs.onSurface)
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                    )
+                    PhoneActivityBar()
+                }
             },
             snackbarHost = { SnackbarHost(snackbar) },
             containerColor = cs.background,

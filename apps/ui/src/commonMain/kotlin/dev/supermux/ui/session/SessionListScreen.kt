@@ -160,6 +160,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.work.PhoneActivityBar
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.workspace.ProjectRef
@@ -1678,11 +1679,16 @@ fun SessionListScreen(
             )
         }
     }
-    // Index of the new-session card in the list (chrome paints the logo bar above it).
-    val newSessionIndex = if (chrome) 1 else 0
+    // Index of the new-session card in the list (chrome paints the logo bar and the activity bar above it).
+    val newSessionIndex = if (chrome) 2 else 0
     fun LazyListScope.content() {
         if (scrollingChrome) {
-            if (chrome) item(key = "chrome:logo") { logoBar() }
+            if (chrome) {
+                item(key = "chrome:logo") { logoBar() }
+                // Downloads (#95), directly under the phone's top bar, and scrolling with it as that bar does.
+                // Nothing while none is listed.
+                item(key = "chrome:activity") { PhoneActivityBar() }
+            }
             item(key = "chrome:new_session") { newSessionCard() }
             // Banners and "can't reach the host" come before the Agents, as on wide hosts.
             item(key = "chrome:above") { aboveList() }

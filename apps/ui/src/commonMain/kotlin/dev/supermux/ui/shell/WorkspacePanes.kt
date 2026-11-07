@@ -210,6 +210,13 @@ class WorkspacePanesBind(
      * disposed with the main window.
      */
     var holders by mutableIntStateOf(0)
+
+    /**
+     * The fleet's downloads (#95), lent to a window that is a composition of its own (desktop's `Window`, an
+     * Android activity, an iPad scene): it sits outside the shell's providers, and a download started there must
+     * outlive that window just the same.
+     */
+    var downloads by mutableStateOf<dev.supermux.work.DownloadCenter?>(null)
 }
 
 /**
@@ -773,6 +780,9 @@ fun PhoneWorkspacePanes(
                         file?.let { (id, path) -> PhoneFileActions(id, path, ws.documents, ws.previewModes) }
                         PhoneTabCountButton(tabsButton)
                     }
+                    // Downloads (#95), under this bar as under every phone top bar. A chat's header is its own,
+                    // and ChatPanel puts the bar under that.
+                    dev.supermux.ui.work.PhoneActivityBar()
                 }
             }
         }

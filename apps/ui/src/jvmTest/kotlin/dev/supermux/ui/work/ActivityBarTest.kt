@@ -3,6 +3,7 @@ package dev.supermux.ui.work
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -176,9 +177,12 @@ class ActivityBarTest {
 
     /** The buttons drawn in [key]'s row, in [buttonTags] order. */
     private fun ComposeUiTest.buttonsOf(key: String): List<String> = buttonTags.filter { tag ->
-        onAllNodes(hasTestTag(tag) and hasAnyAncestor(hasTestTag("activity_item") and hasContentDescription(key)))
+        onAllNodes(hasTestTag(tag) and hasAnyAncestor(hasTestTag("activity_item") and hasItemKey(key)))
             .fetchSemanticsNodes().isNotEmpty()
     }
+
+    /** The list row of download [key]: found by its own semantics property, which nothing reads aloud. */
+    private fun hasItemKey(key: String) = SemanticsMatcher.expectValue(ActivityItemKey, key)
 
     @Test fun eachItemOffersExactlyWhatItsStateAllows() = runDesktopComposeUiTest {
         list(everyState)
@@ -194,9 +198,18 @@ class ActivityBarTest {
     @Test fun aRunningItemShowsItsProgressAlongTheRow() = runDesktopComposeUiTest {
         list(listOf(running("r", "big-video.mp4", received = 42, total = 100)))
         onNode(
-            hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)) and hasAnyAncestor(hasContentDescription("r")),
+            hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)) and hasAnyAncestor(hasItemKey("r")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
+    }
+
+    // B2 put each row's key in its content description, which TalkBack and VoiceOver read aloud
+    // ("att:host/0123…"). A row is one stop that says what it shows; its buttons stay stops of their own.
+    @Test fun aRowReadsAsWhatItShowsNeverAsItsKey() = runDesktopComposeUiTest {
+        list(listOf(done("att:host/0123", "notes.pdf")))
+        onAllNodes(hasContentDescription("att:host", substring = true), useUnmergedTree = true).assertCountEquals(0)
+        onNode(hasItemKey("att:host/0123")).assertTextEquals("notes.pdf downloaded")
+        onNode(hasTestTag("activity_open") and hasAnyAncestor(hasItemKey("att:host/0123"))).assertTextEquals("Open")
     }
 
     @Test fun onlyTheHostsActionsAreOffered() = runDesktopComposeUiTest {
@@ -216,7 +229,7 @@ class ActivityBarTest {
             onInstall = { calls += "install:${it.key}" },
         )
         onNodeWithTag("activity_cancel").performClick()
-        onNode(hasTestTag("activity_retry") and hasAnyAncestor(hasContentDescription("c"))).performClick()
+        onNode(hasTestTag("activity_retry") and hasAnyAncestor(hasItemKey("c"))).performClick()
         onNodeWithTag("activity_open").performClick()
         onNodeWithTag("activity_save").performClick()
         onNodeWithTag("activity_share").performClick()

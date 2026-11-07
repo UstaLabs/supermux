@@ -6,6 +6,7 @@
 package dev.supermux.ui.shell.windows
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,6 +19,7 @@ import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.WorkspacePanes
 import dev.supermux.ui.shell.WorkspacePanesBind
+import dev.supermux.ui.work.LocalDownloads
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
@@ -60,6 +62,9 @@ fun ExtraWindowPanes(
     val hosted = ui.windows.layoutFor(hostId, ws.layoutSync.tree)
     val tabDragState = remember(hostId) { PaneDragController() }
     var closeCandidate by remember(hostId) { mutableStateOf<ViewDto?>(null) }
+    // This window may be a composition of its own, outside the shell's providers: the fleet's downloads come with
+    // the workspace (#95), so one started here outlives the window too.
+    CompositionLocalProvider(LocalDownloads provides (bind.downloads ?: LocalDownloads.current)) {
     WorkspacePanes(
         hostId = hostId,
         layout = hosted,
@@ -81,6 +86,7 @@ fun ExtraWindowPanes(
         onTearOutTab = onTearOutTab,
         stripChrome = stripChrome,
     )
+    }
 }
 
 /**

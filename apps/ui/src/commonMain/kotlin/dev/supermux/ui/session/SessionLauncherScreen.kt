@@ -167,6 +167,7 @@ import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.work.PhoneActivityBar
 import dev.supermux.workspace.LaunchLocation
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.launchLocation
@@ -1431,21 +1432,24 @@ fun SessionLauncherScreen(
     if (chrome) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("New session", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("launcher_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                    modifier = Modifier.testTag("launcher_top_bar"),
-                )
+                Column {
+                    TopAppBar(
+                        title = { Text("New session", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("launcher_back")) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                        modifier = Modifier.testTag("launcher_top_bar"),
+                    )
+                    PhoneActivityBar()
+                }
             },
             containerColor = cs.surfaceContainerHigh,
         ) { innerPadding ->

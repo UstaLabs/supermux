@@ -29,9 +29,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,10 +54,17 @@ import dev.supermux.work.DownloadState
  * running one, else the newest), counts the rest ("+N"), and offers ✕ to clear what has ended once nothing runs;
  * while something runs there is no ✕, only each item's Cancel in the list. A tap opens the list ([onOpen]).
  *
- * Pure: the caller passes the items, newest first as the center lists them, and the callbacks.
+ * Pure: the caller passes the items, newest first as the center lists them, and the callbacks. [containerColor] is
+ * the caller's too: under a phone's top bar the bar takes that bar's tone, in the sidebar's footer a sheet's.
  */
 @Composable
-fun ActivityBar(items: List<Download>, onOpen: () -> Unit, onClearFinished: () -> Unit, modifier: Modifier = Modifier) {
+fun ActivityBar(
+    items: List<Download>,
+    onOpen: () -> Unit,
+    onClearFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+) {
     if (items.isEmpty()) return
     val cs = MaterialTheme.colorScheme
     val pointer = LocalPointerAvailable.current
@@ -66,17 +75,14 @@ fun ActivityBar(items: List<Download>, onOpen: () -> Unit, onClearFinished: () -
             .testTag("activity_bar")
             .fillMaxWidth()
             .heightIn(min = if (pointer) ActivityBarTokens.HeightPointer else ActivityBarTokens.HeightTouch)
-            .background(cs.surfaceContainerHigh)
+            .background(containerColor)
             .clickable(onClickLabel = "Show downloads", role = Role.Button, onClick = onOpen)
             // The ✕ brings its own padding to the end.
             .padding(start = Space.md, end = if (clearable) Space.xs else Space.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
-        Box(Modifier.size(IconSize.lg), contentAlignment = Alignment.Center) {
-            val state = shown.state
-            if (state is DownloadState.Running) ProgressRing(state) else StateGlyph(state)
-        }
+        ActivityGlyph(shown.state)
         Text(
             activityLine(shown),
             color = cs.onSurface,
@@ -157,7 +163,8 @@ private fun ActivityRow(item: Download, buttons: @Composable RowScope.() -> Unit
     Column(
         Modifier
             .testTag("activity_item")
-            .semantics { contentDescription = item.key }
+            // One stop that reads what it shows ("notes.pdf downloaded"); its buttons stay stops of their own.
+            .semantics(mergeDescendants = true) { activityItemKey = item.key }
             .fillMaxWidth()
             .padding(start = Space.lg, end = Space.sm, top = Space.sm),
     ) {
@@ -189,6 +196,14 @@ private fun ActivityRow(item: Download, buttons: @Composable RowScope.() -> Unit
 @Composable
 private fun RowButton(label: String, tag: String, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.testTag(tag)) { Text(label) }
+}
+
+/** What the bar leads with, and the collapsed sidebar's rail shows: a ring while it runs, else its state's glyph. */
+@Composable
+internal fun ActivityGlyph(state: DownloadState) {
+    Box(Modifier.size(IconSize.lg), contentAlignment = Alignment.Center) {
+        if (state is DownloadState.Running) ProgressRing(state) else StateGlyph(state)
+    }
 }
 
 /** The bar's ring: determinate once the total is known, else turning. */
@@ -237,6 +252,13 @@ private val FileAction.label: String
         FileAction.Save -> "Save"
         FileAction.Share -> "Share"
     }
+
+/**
+ * Which download a list row is (its key), for tests and automation to find it by. A property of its own, not the
+ * content description: TalkBack and VoiceOver read that aloud, and "att:host/0123…" is no words.
+ */
+internal val ActivityItemKey = SemanticsPropertyKey<String>("ActivityItemKey")
+private var SemanticsPropertyReceiver.activityItemKey by ActivityItemKey
 
 private object ActivityBarTokens {
     /** On a phone the whole bar is one button: Material's touch target. */

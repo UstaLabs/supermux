@@ -103,6 +103,7 @@ import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.SwipeBackPages
 import dev.supermux.ui.widgets.rememberIosBackSwipe
+import dev.supermux.ui.work.PhoneActivityBar
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WorkspaceGroup
 import dev.supermux.workspace.groupArchivedWorkspaces
@@ -635,36 +636,39 @@ private fun ArchivedList(
     if (barOwned) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("Archived", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("archived_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = {
-                        if (filterReady) {
-                            Box {
-                                IconButton(
-                                    onClick = { onFilterOpenChange(true) },
-                                    modifier = Modifier.testTag("archived_filter"),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.FilterList,
-                                        contentDescription = "Filter by project",
-                                        tint = if (selectedProject != null) cs.primary else cs.onSurface,
-                                    )
-                                }
-                                filterMenu()
+                Column {
+                    TopAppBar(
+                        title = { Text("Archived", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("archived_back")) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
+                                )
                             }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
+                        },
+                        actions = {
+                            if (filterReady) {
+                                Box {
+                                    IconButton(
+                                        onClick = { onFilterOpenChange(true) },
+                                        modifier = Modifier.testTag("archived_filter"),
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.FilterList,
+                                            contentDescription = "Filter by project",
+                                            tint = if (selectedProject != null) cs.primary else cs.onSurface,
+                                        )
+                                    }
+                                    filterMenu()
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                    )
+                    PhoneActivityBar()
+                }
             },
             containerColor = cs.background,
         ) { padding -> body(Modifier.padding(padding)) }
@@ -841,25 +845,28 @@ internal fun ArchivedChatView(
         Scaffold(
             modifier = Modifier.testTag("archived_chat"),
             topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(name, color = cs.onSurface, fontSize = 16.sp, maxLines = 1)
-                            Text("archived", color = cs.onSurfaceVariant, fontSize = 11.sp)
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("archived_chat_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = { resumeButton() },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
+                Column {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(name, color = cs.onSurface, fontSize = 16.sp, maxLines = 1)
+                                Text("archived", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("archived_chat_back")) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
+                                )
+                            }
+                        },
+                        actions = { resumeButton() },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                    )
+                    PhoneActivityBar()
+                }
             },
             containerColor = cs.background,
         ) { padding -> body(Modifier.padding(padding)) }

@@ -103,6 +103,7 @@ import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.work.PhoneActivityBar
 import kotlin.math.roundToLong
 import kotlinx.coroutines.launch
 
@@ -199,20 +200,23 @@ fun AppUpdateScreen(
         Scaffold(
             modifier = modifier.testTag("app_update_overlay"),
             topBar = {
-                TopAppBar(
-                    title = { Text("Check for updates", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("app_update_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = { RecheckButton(refresh, enabled = !loading && !installing) },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
+                Column {
+                    TopAppBar(
+                        title = { Text("Check for updates", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("app_update_back")) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
+                                )
+                            }
+                        },
+                        actions = { RecheckButton(refresh, enabled = !loading && !installing) },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                    )
+                    PhoneActivityBar()
+                }
             },
             containerColor = cs.background,
         ) { padding ->

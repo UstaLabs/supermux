@@ -1075,6 +1075,9 @@ fun ChatPanel(
                 headerActions()
             }
             }
+            // Downloads (#95), under the header as under every phone top bar. It stays when the header slides away
+            // on a scroll, so what is downloading stays in view. A wide pane has it in the sidebar's footer instead.
+            dev.supermux.ui.work.PhoneActivityBar()
         }
         // "Not responding" dead banner (error-tinted strip).
         if (dead) {

@@ -83,6 +83,7 @@ import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.qrBitmap
 import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.submitOnEnter
+import dev.supermux.ui.work.PhoneActivityBar
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -161,24 +162,27 @@ fun DevicesSettingsScreen(
     if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("Devices", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("devices_settings_back"),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = cs.surfaceContainerHigh,
-                    ),
-                )
+                Column {
+                    TopAppBar(
+                        title = { Text("Devices", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier.testTag("devices_settings_back"),
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = cs.surfaceContainerHigh,
+                        ),
+                    )
+                    PhoneActivityBar()
+                }
             },
             floatingActionButton = {
                 FloatingActionButton(

@@ -88,6 +88,7 @@ import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.work.PhoneActivityBar
 import dev.supermux.util.shortMonthDayLabel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -951,34 +952,37 @@ fun UsageScreen(
     if (barOwned) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("Usage", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = {
-                        if (onRefresh != null) {
-                            IconButton(
-                                onClick = { if (!loading) scope.launch { onRefresh() } },
-                                enabled = !loading,
-                                modifier = Modifier.testTag("usage_refresh"),
-                            ) {
+                Column {
+                    TopAppBar(
+                        title = { Text("Usage", color = cs.onSurface) },
+                        navigationIcon = {
+                            IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
                                 Icon(
-                                    Icons.Filled.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = cs.onSurface,
                                 )
                             }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
+                        },
+                        actions = {
+                            if (onRefresh != null) {
+                                IconButton(
+                                    onClick = { if (!loading) scope.launch { onRefresh() } },
+                                    enabled = !loading,
+                                    modifier = Modifier.testTag("usage_refresh"),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Refresh,
+                                        contentDescription = "Refresh",
+                                        tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
+                                    )
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                    )
+                    PhoneActivityBar()
+                }
             },
             containerColor = cs.background,
             modifier = Modifier.testTag("usage_screen"),
