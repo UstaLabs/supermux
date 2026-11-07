@@ -46,6 +46,7 @@ fun resolveImageRedirectUrl(currentUrl: String, location: String): String {
     if (next.startsWith("//")) return currentUrl.substring(0, schemeEnd + 1) + next
     val pathStart = currentUrl.indexOf('/', schemeEnd + 3)
     val origin = if (pathStart < 0) currentUrl else currentUrl.substring(0, pathStart)
+    // platform-ok: a URL
     if (next.startsWith("/")) return origin + next
     val path = if (pathStart < 0) "/" else currentUrl.substring(pathStart).substringBefore('?').substringBefore('#')
     val dir = path.substringBeforeLast('/', "") + "/"

@@ -148,6 +148,7 @@ fun formatUpdateProgress(bytesReceived: Long, contentLength: Long?): String {
  * carries no recognisable extension.
  */
 fun installerKindFrom(downloadUrl: String?): String? {
+    // platform-ok: a download URL
     val path = downloadUrl?.substringBefore('?')?.substringBefore('#')?.substringAfterLast('/')
         ?: return null
     val ext = path.substringAfterLast('.', "").lowercase()

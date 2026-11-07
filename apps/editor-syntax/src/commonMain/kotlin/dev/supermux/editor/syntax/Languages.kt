@@ -17,6 +17,7 @@ class LanguageRegistry(private val queries: (language: String, kind: QueryKind) 
 
     /** The language of a file, from its name (a path's last segment is used); null = plain text. */
     fun forFile(name: String): String? {
+        // platform-ok: a file name from any host: both separators
         val base = name.substringAfterLast('/').substringAfterLast('\\')
         val lower = base.lowercase()
         SPECIAL_NAMES[lower]?.let { return it.ifEmpty { null } }

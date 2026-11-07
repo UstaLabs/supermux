@@ -1789,6 +1789,7 @@ class BrokerApi(
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
+        // platform-ok: a URL
         .trimEnd('/')
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
@@ -3638,6 +3639,7 @@ class BrokerApi(
      * Returns null only if the body lacks a usable routingToken (old relay).
      */
     suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String): String? {
+        // platform-ok: a URL
         val url = relayUrl.trimEnd('/') + "/register"
         val resp = postReturningJson<RegisterPushRelayBody, RegisterPushRelayResponse>(
             url,
