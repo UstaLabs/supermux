@@ -578,6 +578,24 @@ function ownSystemdUnit(): string | null {
   }
 }
 
+/** Set once this broker has scheduled its own restart (one of the restartVia* paths below said true). */
+let restartScheduled = false
+
+/**
+ * How this broker's graceful shutdown closes its agents. "detach" once it has scheduled its own restart (Restart
+ * broker, an update, `supermux connect --restart`): the keepers park, and the broker that comes back re-attaches them,
+ * so a turn in flight goes on. A keeper that no broker reaches shuts its agent down after its parked deadline. A plain
+ * stop is "shutdown".
+ */
+export function agentsCloseMode(): "shutdown" | "detach" {
+  return restartScheduled ? "detach" : "shutdown"
+}
+
+/** @internal */
+export function resetRestartScheduledForTests(): void {
+  restartScheduled = false
+}
+
 export function restartViaSystemd(opts: { unit?: string }): boolean {
   if (!process.env.INVOCATION_ID) return false
   const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? ownSystemdUnit() ?? "supermux"
@@ -596,6 +614,7 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
     },
   )
   proc.unref()
+  restartScheduled = true
   return true
 }
 
@@ -636,6 +655,7 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
     },
   )
   proc.unref()
+  restartScheduled = true
   return true
 }
 
@@ -697,6 +717,7 @@ export function restartViaWindowsTask(opts: {
   if (!(opts.underTask ?? underWindowsTask)) return false
   const schedule = opts.schedule ?? ((fn, ms) => setTimeout(fn, ms))
   schedule(() => windowsRestartExit(opts.hooks), opts.delayMs ?? 1_000)
+  restartScheduled = true
   return true
 }
 

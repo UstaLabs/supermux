@@ -22,6 +22,8 @@ import {
   restartViaLaunchd,
   restartViaSystemd,
   restartViaWindowsTask,
+  agentsCloseMode,
+  resetRestartScheduledForTests,
   captureWindowsTaskFlag,
   windowsRestartExit,
   type ExitHooks,
@@ -843,6 +845,27 @@ const _typecheck: UpdateApplyError | null = null
 void _typecheck
 
 // ── restartViaWindowsTask: the Scheduled Task loop respawns an exiting broker ─────
+
+// #29: a restart this broker scheduled must not take its agents down. Its graceful shutdown closes them with
+// "detach" (the keepers park, the next broker re-attaches them, a turn in flight goes on); a plain stop still shuts
+// them down. On Windows every "Restart broker" stopped them (the 2026-11-07 smoke).
+describe("agentsCloseMode", () => {
+  afterEach(() => resetRestartScheduledForTests())
+
+  test("a plain stop shuts the agents down", () => {
+    expect(agentsCloseMode()).toBe("shutdown")
+  })
+
+  test("after this broker scheduled its own restart, the agents are detached", () => {
+    expect(restartViaWindowsTask({ underTask: true, schedule: () => {} })).toBe(true)
+    expect(agentsCloseMode()).toBe("detach")
+  })
+
+  test("a restart that was not scheduled (no service to bring the broker back) leaves them shut down", () => {
+    expect(restartViaWindowsTask({ underTask: false, schedule: () => {} })).toBe(false)
+    expect(agentsCloseMode()).toBe("shutdown")
+  })
+})
 
 describe("restartViaWindowsTask", () => {
   test("false when this process isn't the broker under the task", () => {
