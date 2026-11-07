@@ -66,8 +66,8 @@ object BrokerVersion {
         var p: Process? = null
         var watchdog: Thread? = null
         return try {
-            p = ProcessBuilder(broker.toString(), "version")
-                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            p = dev.supermux.desktop.platform.OsCommand(listOf(broker.toString(), "version"))
+                .start(output = ProcessBuilder.Redirect.PIPE, errors = ProcessBuilder.Redirect.DISCARD)
             liveProbes += p
             // A child that hangs without closing stdout would block the read below forever:
             // kill it after 10 s so the read sees EOF.

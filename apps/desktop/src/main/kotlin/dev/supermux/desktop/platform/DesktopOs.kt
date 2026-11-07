@@ -32,21 +32,27 @@ enum class DesktopOs {
 }
 
 /**
- * A program to start: [argv] as separate arguments, [env] added to this process's environment. An
- * untrusted value rides in [env] (PowerShell reads it as `$env:NAME`) or as one whole argument,
- * never inside a script.
+ * A program to start, the desktop app's one way to start one (#29): [argv] as separate arguments, [env] added to this
+ * process's environment, or the child's whole environment when [replaceEnv], run in [workDir] when set. An untrusted
+ * value rides in [env] (PowerShell reads it as `$env:NAME`) or as one whole argument, never inside a script.
  */
-internal data class OsCommand(val argv: List<String>, val env: Map<String, String> = emptyMap()) {
+internal data class OsCommand(
+    val argv: List<String>,
+    val env: Map<String, String> = emptyMap(),
+    val replaceEnv: Boolean = false,
+    val workDir: java.nio.file.Path? = null,
+) {
     /**
-     * Start it, stdout and stderr to [output]. Stdin is closed at once: nothing is ever written to
-     * these children, so none may wait for input that will not come.
+     * Start it, stdout to [output] and stderr to [errors], or into [output] as well when null. Stdin is closed at once:
+     * nothing is ever written to these children, so none may wait for input that will not come.
      */
-    fun start(output: ProcessBuilder.Redirect = ProcessBuilder.Redirect.DISCARD): Process {
-        val process = ProcessBuilder(argv)
-            .redirectErrorStream(true)
-            .redirectOutput(output)
-            .apply { environment().putAll(env) }
-            .start()
+    fun start(output: ProcessBuilder.Redirect = ProcessBuilder.Redirect.DISCARD, errors: ProcessBuilder.Redirect? = null): Process {
+        val builder = ProcessBuilder(argv).redirectOutput(output)
+        if (errors == null) builder.redirectErrorStream(true) else builder.redirectError(errors)
+        workDir?.let { builder.directory(it.toFile()) }
+        if (replaceEnv) builder.environment().clear()
+        builder.environment().putAll(env)
+        val process = builder.start()
         process.outputStream.close()
         return process
     }

@@ -207,7 +207,7 @@ object HostBinaries {
     /** Best-effort [argv]: never throws, output discarded, killed after 10 s. */
     private fun runQuietly(argv: List<String>) {
         runCatching {
-            val p = ProcessBuilder(argv).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+            val p = dev.supermux.desktop.platform.OsCommand(argv).start()
             if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
         }
     }
