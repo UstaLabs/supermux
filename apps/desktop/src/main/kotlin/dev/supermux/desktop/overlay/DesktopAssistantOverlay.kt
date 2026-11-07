@@ -516,8 +516,9 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     // The combo talks from the moment it's down: nothing to tell apart from typing, so no wait.
     private fun comboDown() {
-        println("[OverlayKey] $comboLabel down")
+        // GNOME says Activated again for every key repeat while it's held: only the first one is news.
         if (ui.listening) return
+        println("[OverlayKey] $comboLabel down")
         comboFrom = System.currentTimeMillis()
         handle(listOf(CompanionGesture.Intent.ListenStart))
     }

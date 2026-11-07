@@ -3,6 +3,7 @@
 // asks the user once to confirm the shortcut, then reports its press (Activated) and release (Deactivated).
 package dev.supermux.desktop.overlay
 
+import dev.supermux.desktop.host.linux.DesktopNotification
 import dev.supermux.desktop.host.linux.SessionBus
 import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.Struct
@@ -38,6 +39,13 @@ interface PortalGlobalShortcuts : DBusInterface {
         DBusSignal(path, session, shortcutId, timestamp, options)
 }
 
+/** Where an app outside any sandbox tells the portal which it is: its launcher entry's id, no `.desktop`. */
+@JvmSuppressWildcards
+@DBusInterfaceName("org.freedesktop.host.portal.Registry")
+interface PortalRegistry : DBusInterface {
+    fun Register(appId: String, options: Map<String, Variant<*>>)
+}
+
 @JvmSuppressWildcards
 @DBusInterfaceName("org.freedesktop.portal.Request")
 interface PortalRequest : DBusInterface {
@@ -47,12 +55,14 @@ interface PortalRequest : DBusInterface {
 /**
  * The hold-to-talk key on Wayland. [register] asks the desktop for [KeyCombo] as a global shortcut (the desktop
  * asks the user once, so it can take a while) and returns what came of it; from then on [onPress] and
- * [onRelease] come on a bus thread. [env] gives the session bus.
+ * [onRelease] come on a bus thread. [env] gives the session bus; [appId] is the launcher entry the portal knows
+ * the app by.
  */
 internal class WaylandHotKey(
     private val onPress: () -> Unit,
     private val onRelease: () -> Unit,
     private val env: Map<String, String> = System.getenv(),
+    private val appId: String = DesktopNotification.DESKTOP_ENTRY,
 ) {
     enum class Outcome { BOUND, NO_PORTAL, DECLINED, FAILED }
 
@@ -64,6 +74,11 @@ internal class WaylandHotKey(
         val address = SessionBus.address(env) ?: return Outcome.NO_PORTAL
         val c = runCatching { DBusConnectionBuilder.forAddress(address).withShared(false).build() }.getOrNull() ?: return Outcome.NO_PORTAL
         conn = c
+        // A recent xdg-desktop-portal (1.21 checked) gives the key only to an app it can name ("An app id is
+        // required"). Started from the desktop's launcher, the app's systemd scope names it; from a terminal nothing
+        // does, so the app names its launcher entry, first on this connection. A portal without the registry, or
+        // without that entry installed (not the .deb), says no, and asking goes on.
+        runCatching { c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, PortalRegistry::class.java).Register(appId, emptyMap()) }
         // No GlobalShortcuts interface (GNOME before 48, older KDE): nothing to ask.
         val props = c.getRemoteObject(DESKTOP_NAME, DESKTOP_PATH, Properties::class.java)
         if (runCatching { props.Get<Any?>(IFACE, "version") }.isFailure) return Outcome.NO_PORTAL

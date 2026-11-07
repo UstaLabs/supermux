@@ -4,6 +4,7 @@ import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.connections.AbstractConnection
 import org.freedesktop.dbus.connections.impl.DBusConnection
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
+import org.freedesktop.dbus.exceptions.DBusExecutionException
 import org.freedesktop.dbus.interfaces.Properties
 import org.freedesktop.dbus.types.UInt32
 import org.freedesktop.dbus.types.UInt64
@@ -88,10 +89,17 @@ class WaylandHotKeyTest {
         assertEquals(WaylandHotKey.Outcome.DECLINED, WaylandHotKey({}, {}, env).register(ctrlAltSpace, "Hold to talk"))
     }
 
-    private fun withPortal(answer: Int, body: (FakePortal) -> Unit) {
+    // A recent xdg-desktop-portal (1.21) gives the key only to an app it can name. Started from the desktop's
+    // launcher, the app's systemd scope names it; from a terminal nothing does, unless the app names its launcher entry.
+    @Test fun theAppNamesItsLauncherEntrySoADesktopThatMustKnowWhoAsksBindsIt() = withPortal(answer = 0, namesApps = true) { portal ->
+        assertEquals(WaylandHotKey.Outcome.BOUND, WaylandHotKey({}, {}, env).register(ctrlAltSpace, "Hold to talk"))
+        assertEquals(listOf("supermux-supermux"), (portal as NamingPortal).registered.values.toList())
+    }
+
+    private fun withPortal(answer: Int, namesApps: Boolean = false, body: (FakePortal) -> Unit) {
         val conn = DBusConnectionBuilder.forAddress(env.getValue("DBUS_SESSION_BUS_ADDRESS")).withShared(false).build()
         try {
-            val portal = FakePortal(conn, answer)
+            val portal = if (namesApps) NamingPortal(conn, answer) else FakePortal(conn, answer)
             conn.exportObject(WaylandHotKey.DESKTOP_PATH, portal)
             conn.requestBusName(WaylandHotKey.DESKTOP_NAME)
             body(portal)
@@ -105,20 +113,27 @@ class WaylandHotKeyTest {
         while (!condition() && System.currentTimeMillis() < until) Thread.sleep(20)
     }
 
-    /** Answers like xdg-desktop-portal does (a Response on the request path), and fires the shortcut on demand. */
-    class FakePortal(private val conn: DBusConnection, private val bindAnswer: Int) : PortalGlobalShortcuts, Properties {
+    /**
+     * Answers like xdg-desktop-portal does (a Response on the request path), and fires the shortcut on demand. Like
+     * an older portal it has no app registry, and doesn't ask who an app is.
+     */
+    open class FakePortal(private val conn: DBusConnection, private val bindAnswer: Int) : PortalGlobalShortcuts, Properties {
         val asked = Collections.synchronizedList(mutableListOf<PortalShortcut>())
         @Volatile var session = ""
 
         override fun getObjectPath() = WaylandHotKey.DESKTOP_PATH
 
-        private fun sender() = AbstractConnection.getCallInfo().source.removePrefix(":").replace('.', '_')
+        protected fun sender() = AbstractConnection.getCallInfo().source.removePrefix(":").replace('.', '_')
+
+        /** Whether the caller may open a session at all. */
+        protected open fun admit() = Unit
 
         private fun answer(path: String, code: Int, results: Map<String, Variant<*>>) {
             thread { Thread.sleep(30); conn.sendMessage(PortalRequest.Response(path, UInt32(code.toLong()), results)) }
         }
 
         override fun CreateSession(options: Map<String, Variant<*>>): DBusPath {
+            admit()
             val s = sender()
             val path = "/org/freedesktop/portal/desktop/request/$s/${options["handle_token"]!!.value}"
             session = "/org/freedesktop/portal/desktop/session/$s/${options["session_handle_token"]!!.value}"
@@ -147,5 +162,21 @@ class WaylandHotKeyTest {
         override fun <A : Any?> Set(iface: String, prop: String, value: A) = Unit
 
         override fun GetAll(iface: String): Map<String, Variant<*>> = mapOf("version" to Variant(UInt32(1)))
+    }
+
+    /**
+     * A recent portal (1.21), to an app outside a sandbox: one it can't name from its systemd scope (started from a
+     * terminal) is told "An app id is required", unless it first registered its launcher entry.
+     */
+    class NamingPortal(conn: DBusConnection, bindAnswer: Int) : FakePortal(conn, bindAnswer), PortalRegistry {
+        val registered: MutableMap<String, String> = Collections.synchronizedMap(linkedMapOf())
+
+        override fun Register(appId: String, options: Map<String, Variant<*>>) {
+            registered[sender()] = appId
+        }
+
+        override fun admit() {
+            if (sender() !in registered) throw DBusExecutionException("An app id is required")
+        }
     }
 }
