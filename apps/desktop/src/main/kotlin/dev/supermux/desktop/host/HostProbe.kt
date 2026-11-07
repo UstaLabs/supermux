@@ -5,7 +5,6 @@ import dev.supermux.net.HostIdentity
 import dev.supermux.net.HostRequirements
 import dev.supermux.net.KeepAwakeState
 import kotlinx.serialization.json.Json
-import java.io.File
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
@@ -104,7 +103,8 @@ private fun canonical(p: String): String {
     val path = runCatching { Path.of(p) }.getOrNull() ?: return p
     val c = runCatching { path.toRealPath().toString() }.getOrNull()
         ?: runCatching { path.toAbsolutePath().normalize().toString() }.getOrDefault(p)
-    return if (File.separatorChar == '\\') c.lowercase() else c
+    // Windows' names ignore case, and a folder that does not exist yet keeps the spelling it was given.
+    return if (dev.supermux.desktop.platform.isWindowsOs()) c.lowercase() else c
 }
 
 private fun sameDir(a: String, b: String): Boolean = canonical(a) == canonical(b)

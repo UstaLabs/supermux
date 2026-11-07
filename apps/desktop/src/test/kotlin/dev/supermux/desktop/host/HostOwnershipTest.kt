@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -35,7 +36,7 @@ class HostOwnershipTest {
     @Test fun windowsConnectingElsewhereNeverEndsOrDeletesAnotherInstallsTask() = runTest {
         // #29 on the Windows VM: the test build's hosting was off; its wizard's "Connect to a
         // different broker instead" asked UAC to /End + /Delete the installed app's task.
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(hosting = false), captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(hosting = false), captures = noProcesses)
         val envFile = otherWindowsTask(h)
         h.sup.setHosting(false)
         assertEquals(0, h.env.ran.count(elevated), "no UAC prompt to end and delete the other copy's task: ${h.env.ran}")
@@ -45,7 +46,7 @@ class HostOwnershipTest {
     }
 
     @Test fun windowsTrayBackgroundOffNeverEndsOrDeletesAnotherInstallsTask() = runTest {
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
         val envFile = otherWindowsTask(h)
         h.probeFn = { h.desktop("h-other") } // the other copy's broker answers on 9898
         h.sup.ensure()
@@ -89,7 +90,7 @@ class HostOwnershipTest {
 
     @Test fun windowsConnectingElsewhereNeverEndsOrDeletesAnOlderInstallsTask() = runTest {
         // The VM's installed 0.17.3 predates install ids: its env file names no copy at all.
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(hosting = false), captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(hosting = false), captures = noProcesses)
         val unstamped = BrokerService.Spec(h.bins.brokerPath!!, emptyMap(), h.state.resolve("desktop-broker.log"))
         val envFile = BrokerService.windowsEnvPath(h.env).also { BrokerService.writePrivate(it, "\uFEFF" + BrokerService.windowsEnvFile(unstamped)) }
         h.sup.setHosting(false)
@@ -168,7 +169,7 @@ class HostOwnershipTest {
 
     @Test fun windowsAnotherCopysNewerBrokerIsUsedReadOnlyWithoutAQuestion() = runTest {
         // "Use this app's version" could only fail on Windows (no takeover there): don't ask.
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
         otherWindowsTask(h)
         h.probeFn = { h.desktop("h-other", build = "9.0.0 (new)") }
         val job = launch { h.sup.ensure() }
@@ -178,7 +179,7 @@ class HostOwnershipTest {
     }
 
     @Test fun linuxHostingOffNeverRemovesAnotherInstallsXdgAutostart() = runTest {
-        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), commands = emptySet())
+        val h = Harness(this, os = DesktopOs.LINUX, prefs = HostingPrefs(background = true), commands = emptySet())
         val entry = h.home.resolve(".config/autostart/supermux-host.desktop")
         val envFile = h.home.resolve(".config/supermux/broker.env")
         BrokerService.writePrivate(envFile, BrokerService.xdgEnvFile(otherSpec(h)))
@@ -212,7 +213,7 @@ class HostOwnershipTest {
     }
 
     @Test fun linuxLaunchWithBackgroundOffNeverRemovesAnotherInstallsUnit() = runTest {
-        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = false), xdg = "/run/user/501")
+        val h = Harness(this, os = DesktopOs.LINUX, prefs = HostingPrefs(background = false), xdg = "/run/user/501")
         val unit = h.home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
         val theirs = BrokerService.systemdUnit(otherSpec(h)).also { Files.writeString(unit, it) }
@@ -270,7 +271,7 @@ class HostOwnershipTest {
     }
 
     @Test fun linuxAdoptionStampsTheUnitInPlaceWithoutRestartingIt() = runTest {
-        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), xdg = "/run/user/501", ourId = null)
+        val h = Harness(this, os = DesktopOs.LINUX, prefs = HostingPrefs(background = true), xdg = "/run/user/501", ourId = null)
         h.earlierAppData()
         val unit = h.home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
@@ -289,7 +290,7 @@ class HostOwnershipTest {
         val spec = BrokerService.Spec(state.resolve("desktop-assets/bin/supermux-broker"), emptyMap(), state.resolve("desktop-broker.log"))
         // What 0.17.x registered: a task running this state dir's broker, its env without an install id.
         val h = Harness(
-            this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, home = home, state = state,
+            this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, home = home, state = state,
             captures = noProcesses + (listOf("schtasks", "/Query", "/TN", "Supermux Host", "/XML") to BrokerService.windowsTaskXml(spec, envFile)),
         )
         h.earlierAppData()
@@ -386,7 +387,7 @@ class HostOwnershipTest {
             BrokerService.Spec(state.resolve("desktop-assets/bin/supermux-broker"), emptyMap(), state.resolve("desktop-broker.log")), envFile,
         )
         val h = Harness(
-            this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, home = home, state = state,
+            this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, home = home, state = state,
             captures = noProcesses + (listOf("schtasks", "/Query", "/TN", "Supermux Host", "/XML") to registered),
         )
         h.earlierAppData()
@@ -403,7 +404,7 @@ class HostOwnershipTest {
     }
 
     @Test fun linuxAnUpdateKeepsUpdatingTheUnit() = runTest {
-        val h = Harness(this, os = OsEnv.Os.LINUX, prefs = HostingPrefs(background = true), xdg = "/run/user/501", ourId = null)
+        val h = Harness(this, os = DesktopOs.LINUX, prefs = HostingPrefs(background = true), xdg = "/run/user/501", ourId = null)
         h.earlierAppData()
         val unit = h.home.resolve(".config/systemd/user/supermux-host.service")
         Files.createDirectories(unit.parent)
@@ -436,7 +437,7 @@ class HostOwnershipTest {
         // 0.17.x installed the task at its first launch, and the app quit before its wizard paired
         // "This computer" (it does that by itself within seconds): no hosts.json. That is a second copy's
         // situation too, so not adopted: read-only, and the task and its broker stay up.
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), ourId = null, captures = noProcesses)
         val unstamped = BrokerService.Spec(h.bins.brokerPath!!, emptyMap(), h.state.resolve("desktop-broker.log"))
         val envFile = BrokerService.windowsEnvPath(h.env).also { BrokerService.writePrivate(it, "\uFEFF" + BrokerService.windowsEnvFile(unstamped)) }
         h.probeFn = { h.desktop(build = "1.4.0 (old)") }
@@ -488,7 +489,7 @@ class HostOwnershipTest {
     }
 
     @Test fun windowsAnotherCopysBrokerIsUsedReadOnlyWithoutAQuestion() = runTest {
-        val h = Harness(this, os = OsEnv.Os.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
+        val h = Harness(this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true), captures = noProcesses)
         otherWindowsTask(h)
         h.probeFn = { h.desktop("h-other", build = "1.4.0 (old)") }
         h.sup.ensure()

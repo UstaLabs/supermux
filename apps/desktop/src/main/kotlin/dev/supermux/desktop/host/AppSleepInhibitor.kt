@@ -15,12 +15,7 @@ import java.util.concurrent.TimeUnit
 class AppSleepInhibitor(
     private val which: (String) -> String?,
     private val appPid: Long = ProcessHandle.current().pid(),
-    private val spawn: (List<String>) -> Process = { argv ->
-        ProcessBuilder(argv)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-    },
+    private val spawn: (List<String>) -> Process = { argv -> dev.supermux.desktop.platform.OsCommand(argv).start() },
     /** How long a candidate must stay alive to count as holding (a refusal exits at once). */
     private val settleMs: Long = 1_500,
     private val log: (String) -> Unit = {},

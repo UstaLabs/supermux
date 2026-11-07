@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -11,7 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopHostPersistenceTest {
-    private class FakeKeepAliveEnv(override val os: OsEnv.Os) : OsEnv {
+    private class FakeKeepAliveEnv(override val os: DesktopOs) : OsEnv {
         override val home: Path = Path.of(".")
         override val localAppData: Path = home.resolve("AppData/Local")
         override val uid: Long? = null
@@ -33,7 +34,7 @@ class DesktopHostPersistenceTest {
     }
 
     @Test fun windowsUsesTheSameNativeHostOnboardingAsPosix() {
-        assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(OsEnv.Os.WINDOWS)))
+        assertTrue(DesktopHostBootstrap.isNativeHostPlatform(FakeKeepAliveEnv(DesktopOs.WINDOWS)))
     }
 
     @Test fun roundTripsMetadataAndTokensAcrossInstances() {

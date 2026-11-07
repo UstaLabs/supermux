@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -32,7 +33,7 @@ fun main(args: Array<String>) {
     val env = SystemOsEnv
     val plist = env.home.resolve("Library/LaunchAgents/${BrokerService.LAUNCHD_LABEL}.plist")
     val target = "gui/${env.uid}/${BrokerService.LAUNCHD_LABEL}"
-    check(env.os == OsEnv.Os.MAC) { "macOS only" }
+    check(env.os == DesktopOs.MACOS) { "macOS only" }
     check(!Files.exists(plist)) { "$plist exists: this Mac has a supermux background service; not running" }
     check(env.runResult(listOf("launchctl", "print", target)).exit != 0) { "$target is loaded; not running" }
     fun cleanUp() {
@@ -91,7 +92,7 @@ http.server.HTTPServer(("127.0.0.1", int(os.environ["MUX_WEB_PORT"])), H).serve_
     Files.writeString(oldPrefs, kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(HostingPrefs.serializer(), prefs))
     Files.writeString(appData.resolve(DesktopHostPersistence.META_FILE), "[]") // paired hosts (This computer unpaired since)
     val bins = HostBinaries.SidecarBinaries(broker, bin, null, null, null)
-    val spec = BrokerService.Spec(broker, brokerEnv(prefs, bins, emptyMap(), state, "mac-user", "/usr/bin:/bin", env.home.toString(), OsEnv.Os.MAC), state.resolve("desktop-broker.log"))
+    val spec = BrokerService.Spec(broker, brokerEnv(prefs, bins, emptyMap(), state, "mac-user", "/usr/bin:/bin", env.home.toString(), DesktopOs.MACOS), state.resolve("desktop-broker.log"))
     BrokerService.writePrivate(plist, BrokerService.launchdPlist(spec))
     env.runResult(listOf("launchctl", "enable", target))
     expect(BrokerService.bootstrapWithRetry("gui/${env.uid}", plist, env).exit == 0, "0.17.x: its job loads")

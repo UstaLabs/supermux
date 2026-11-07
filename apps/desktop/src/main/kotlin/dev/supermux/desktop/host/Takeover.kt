@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -61,10 +62,10 @@ object Takeover {
 
     /** The services to take over, as [me] sees them: never one of [me]'s own definitions. */
     fun findOldServices(env: OsEnv = SystemOsEnv, me: BrokerService.Owner): List<OldService> = when (env.os) {
-        OsEnv.Os.MAC -> MAC_LABELS.map { env.home.resolve("Library/LaunchAgents/$it.plist") }
+        DesktopOs.MACOS -> MAC_LABELS.map { env.home.resolve("Library/LaunchAgents/$it.plist") }
             .filter { Files.exists(it) && isOldPlist(read(it), me) }
             .map { OldService(Kind.LAUNCHD, it.fileName.toString().removeSuffix(".plist"), it.toString()) }
-        OsEnv.Os.LINUX -> LINUX_UNITS.map { BrokerService.xdgConfigHome(env).resolve("systemd/user/$it") }
+        DesktopOs.LINUX -> LINUX_UNITS.map { BrokerService.xdgConfigHome(env).resolve("systemd/user/$it") }
             .filter { Files.exists(it) && isOldUnit(read(it), me) }
             .map { OldService(Kind.SYSTEMD, it.fileName.toString(), it.toString()) }
         else -> emptyList()
