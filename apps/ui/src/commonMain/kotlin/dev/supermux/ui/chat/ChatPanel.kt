@@ -72,6 +72,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -138,7 +139,9 @@ import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.workingBaseLabel
 import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalShortcutDispatcher
 import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.matchesKey
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -976,12 +979,21 @@ fun ChatPanel(
     val dropState = remember(session.id) { ComposerDropState() }
 
     // ⌘F / Ctrl+F: this chat's find bar, also right after a click in the transcript (which leaves no focus).
-    RegisterCommand(AppCommands.FindInChat) { find.show(); true }
+    // Not while another panel is on top (Android's chat tabs keep it composed, hidden): the key is that panel's.
+    RegisterCommand(AppCommands.FindInChat, enabled = active) { find.show(); true }
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
+            // Hosts without a ShortcutRoot (the assistant overlay) keep the chat's own ⌘F.
+            .then(
+                if (LocalShortcutDispatcher.current == null) {
+                    Modifier.onPreviewKeyEvent { if (AppCommands.FindInChat.matchesKey(it)) { find.show(); true } else false }
+                } else {
+                    Modifier
+                },
+            )
             .externalFileDropTarget(
                 enabled = actions.upload != null,
                 onDragOver = { dropState.dragOver = it },

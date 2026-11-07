@@ -1,6 +1,10 @@
 package dev.supermux.ui.keys
 
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
 import dev.supermux.editor.compose.isApplePlatform
+import dev.supermux.editor.compose.keyChordOf
 import dev.supermux.editor.core.KeyChord
 
 /**
@@ -68,3 +72,10 @@ val DefaultKeymap = Keymap(
         bind("Mod-Alt-\\", AppCommands.SplitDown),
     ),
 )
+
+/**
+ * Whether [event] is a key-down of one of this command's keys on [os] (for a widget that runs a command itself,
+ * outside a [ShortcutRoot]).
+ */
+fun AppCommand.matchesKey(event: KeyEvent, os: KeyOs = currentKeyOs, keymap: Keymap = DefaultKeymap): Boolean =
+    event.type == KeyEventType.KeyDown && keyChordOf(event)?.let { it in keymap.chordsFor(this, os) } == true

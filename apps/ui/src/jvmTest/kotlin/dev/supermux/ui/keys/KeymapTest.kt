@@ -1,9 +1,13 @@
 package dev.supermux.ui.keys
 
+import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import dev.supermux.editor.core.KeyChord
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -56,4 +60,17 @@ class KeymapTest {
         assertEquals("/", keyNameOf(Key.Slash))
         assertNull(composeKeyOf("NoSuchKey"))
     }
+
+    @Test fun aCommandMatchesAKeyDownOfItsOwnChordOnThatOsOnly() {
+        // For a widget that runs a command itself, outside a ShortcutRoot (the assistant overlay's chat, #96).
+        val find = AppCommands.FindInChat
+        assertTrue(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, ctrl = true), KeyOs.Other))
+        assertFalse(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, meta = true), KeyOs.Other), "⌘ is not Ctrl off Apple")
+        assertTrue(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, meta = true), KeyOs.Apple))
+        assertFalse(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyUp, ctrl = true), KeyOs.Other), "a release runs nothing")
+    }
+
+    @OptIn(InternalComposeUiApi::class)
+    private fun keyEvent(key: Key, type: KeyEventType, ctrl: Boolean = false, meta: Boolean = false) =
+        KeyEvent(key = key, type = type, codePoint = 0, isCtrlPressed = ctrl, isMetaPressed = meta)
 }
