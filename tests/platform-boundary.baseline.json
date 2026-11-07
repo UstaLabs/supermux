@@ -239,9 +239,7 @@
   },
   "os-check-kt": {
     "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/DesktopHostBootstrap.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostBinaries.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1,
-    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt": 1
+    "apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt": 1
   },
   "path-shape": {
     "packages/supermux-core/examples/kanban/server.ts": 1,

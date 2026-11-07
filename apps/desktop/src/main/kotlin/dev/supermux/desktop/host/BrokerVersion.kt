@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -112,14 +113,14 @@ object BrokerVersion {
      */
     suspend fun defaultBundledBuild(stateDir: Path, budgetMs: Long = 15_000): String? = withContext(Dispatchers.IO) {
         val res = HostBinaries.resourcesDir() ?: return@withContext null
-        val os = HostBinaries.detectOs()
+        val os = DesktopOs.current
         val name = HostBinaries.fileName(HostBinaries.Binary.Broker, os)
         val src = res.resolve(name)
         if (!Files.exists(src)) return@withContext null
         withTimeoutOrNull(budgetMs) {
             debugReadDelayMs()?.let { kotlinx.coroutines.delay(it) }
             runInterruptible {
-                val exe = if (os == HostBinaries.Os.WINDOWS || Files.isExecutable(src)) src
+                val exe = if (os == DesktopOs.WINDOWS || Files.isExecutable(src)) src
                 else HostBinaries.materialize(src, stateDir.resolve("desktop-assets/probe"), name, executable = true)
                 BrokerVersion.readBundledBuild(exe, killAfterMs = (budgetMs - 5_000).coerceAtLeast(1_000))
             }

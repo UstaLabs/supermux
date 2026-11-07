@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.host.PairedHost
 import dev.supermux.net.KeepAwakePatch
 import dev.supermux.net.KeepAwakeState
@@ -60,7 +61,7 @@ class KeepAwakeControls(
     private val onBatteryNow: () -> Boolean? = { PowerFacts.detectOnBattery(os) },
     private val batteryPollMs: Long = 30_000,
     private val inhibitor: AppSleepInhibitor? =
-        if (os.os == OsEnv.Os.LINUX) AppSleepInhibitor(which = { HostBinaries.whichOnPath(it)?.toString() }, log = supervisor.log) else null,
+        if (os.os == DesktopOs.LINUX) AppSleepInhibitor(which = { HostBinaries.whichOnPath(it)?.toString() }, log = supervisor.log) else null,
     private val put: suspend (url: String, token: String, patch: KeepAwakePatch) -> KeepAwakeState? = ::putKeepAwake,
 ) {
     /** "This computer"'s paired records (for its token); set by the app once its store exists. */
@@ -86,7 +87,7 @@ class KeepAwakeControls(
     /** Why the last keep-awake change didn't reach the broker. */
     val writeError: StateFlow<String?> = _writeError.asStateFlow()
 
-    val isMac: Boolean get() = os.os == OsEnv.Os.MAC
+    val isMac: Boolean get() = os.os == DesktopOs.MACOS
 
     private val started = AtomicBoolean(false)
     @Volatile private var quitting = false

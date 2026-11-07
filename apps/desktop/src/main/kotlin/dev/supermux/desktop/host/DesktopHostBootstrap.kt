@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -32,7 +33,7 @@ object DesktopHostBootstrap {
 
     /** Every supported desktop OS hosts natively; unknown platforms fall back to client onboarding. */
     fun isNativeHostPlatform(env: OsEnv = SystemOsEnv): Boolean =
-        env.os == OsEnv.Os.MAC || env.os == OsEnv.Os.LINUX || env.os == OsEnv.Os.WINDOWS
+        env.os == DesktopOs.MACOS || env.os == DesktopOs.LINUX || env.os == DesktopOs.WINDOWS
 
     /**
      * Walk up from the working dir to find the dev repo root (the dir containing `src/main.ts`) so a

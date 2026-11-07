@@ -4,7 +4,7 @@
 // parses. Card #40 is why: read-aloud spliced agent text into a PowerShell script, and opening an
 // attachment handed its name to `cmd /c start`. Still to merge in step 9: `OsCommand.start` beside
 // `host/OsEnv` (the audit's one process runner), `which` beside `OsEnv.hasCommand`, and this enum
-// with `OsEnv.Os`, whose `OTHER` `LINUX` stands in for here.
+// with `DesktopOs`, whose `OTHER` `LINUX` stands in for here.
 package dev.supermux.desktop.platform
 
 import java.util.Locale
@@ -13,7 +13,7 @@ import java.util.Locale
  * Which OS the desktop app runs on. [LINUX] also stands for any other Unix: the freedesktop tools
  * are the only guess there, as they always were in the openers this replaces.
  */
-internal enum class DesktopOs {
+enum class DesktopOs {
     WINDOWS, MACOS, LINUX;
 
     companion object {

@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.nio.file.Path
 
 const val RELAY_DOMAIN = "relay.supermux.dev"
@@ -19,7 +20,7 @@ fun brokerEnv(
     hostName: String = DesktopHostBootstrap.defaultHostName(),
     existingPath: String? = System.getenv("PATH"),
     home: String = System.getProperty("user.home") ?: ".",
-    os: OsEnv.Os = SystemOsEnv.os,
+    os: DesktopOs = SystemOsEnv.os,
 ): Map<String, String> {
     val out = LinkedHashMap(carried)
     out["MUX_WEB_PORT"] = prefs.port.toString()
@@ -35,8 +36,8 @@ fun brokerEnv(
 }
 
 /** bin dir + existing PATH (or /usr/bin:/bin) + the agent CLI dirs `supermux setup` adds. */
-fun servicePath(binDir: Path?, existingPath: String?, home: String, os: OsEnv.Os): String {
-    val windows = os == OsEnv.Os.WINDOWS
+fun servicePath(binDir: Path?, existingPath: String?, home: String, os: DesktopOs): String {
+    val windows = os == DesktopOs.WINDOWS
     val sep = if (windows) ";" else ":"
     val parts = mutableListOf<String>()
     binDir?.let { parts += it.toString() }
