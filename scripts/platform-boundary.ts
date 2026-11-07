@@ -82,7 +82,7 @@ export const RULES: Rule[] = [
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
     allowed: ["packages/platform/", "src/core/process/launcher.ts"],
-    use: "start processes with spawnCommand (src/core/process/launcher.ts), or Bun.spawn with { ...proc.spawnDefaults() } spread first: without them the child gets the startup env and, on Windows, a console window",
+    use: "start processes through src/core/process/launcher.ts: spawnProcess / spawnProcessSync (Bun's options) or spawnCommand / spawnCommandSync (node's, with Windows .cmd/.ps1 shims). They apply proc.spawnDefaults; without them the child gets the startup env and, on Windows, a console window",
   },
   {
     id: "which-path",

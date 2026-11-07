@@ -36,6 +36,7 @@ import {
   type HelperCommandBody,
   type HelperEvent,
 } from "./protocol"
+import { spawnProcess } from "../../process/launcher"
 
 /** The helper ABI this build speaks. Must equal the helper's `--version-json`. */
 export const HELPER_ABI = HELPER_PROTOCOL_VERSION
@@ -296,18 +297,15 @@ export class ZmxHelper {
 
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe">
     try {
-      proc = Bun.spawn({
-        // Structured argv: no shell, no string interpolation, nothing a path
-        // with a space in it can re-parse.
-        cmd: [
+      // Structured argv: no shell, no string interpolation, nothing a path
+      // with a space in it can re-parse.
+      proc = spawnProcess(
+        [
           binaries.helper, "--zmx", binaries.zmx,
           ...(options.listChunkBytes ? [`--list-chunk-bytes=${options.listChunkBytes}`] : []),
         ],
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...options.env },
-      }) as Bun.Subprocess<"pipe", "pipe", "pipe">
+        { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...options.env } },
+      )
     } catch (error) {
       throw new WorkspaceTerminalError(
         "backend-unavailable",

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs"
 import { dirname } from "path"
 import { proc } from "@supermux/platform"
+import { spawnProcessSync } from "../process/launcher"
 
 /**
  * Whether [pid] is a live process: the platform's rule, where `EPERM` (someone else's live process, e.g. a broker in
@@ -22,7 +23,7 @@ const defaultProbeDeps: BrokerProbeDeps = {
   readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
   run: (cmd) => {
     try {
-      const r = Bun.spawnSync(cmd, { ...proc.spawnDefaults(), stdout: "pipe", stderr: "pipe" })
+      const r = spawnProcessSync(cmd, { stdout: "pipe", stderr: "pipe" })
       return r.exitCode === 0 ? r.stdout.toString() : null
     } catch {
       return null

@@ -55,6 +55,28 @@ export function spawnCommand(command: string, args: readonly string[], options: 
   })
 }
 
+/**
+ * Bun.spawn with this layer's defaults first (proc.spawnDefaults: the environment as it is now, where Bun's own default
+ * is the one this process started with, and no console window on Windows). Bun's options pass through and win,
+ * `terminal` included. [argv] runs as given: a command that may be a Windows .cmd/.ps1 shim goes through spawnCommand.
+ */
+export function spawnProcess<
+  const In extends Bun.SpawnOptions.Writable = "ignore",
+  const Out extends Bun.SpawnOptions.Readable = "pipe",
+  const Err extends Bun.SpawnOptions.Readable = "inherit",
+>(argv: string[], options?: Bun.SpawnOptions.SpawnOptions<In, Out, Err>): Bun.Subprocess<In, Out, Err> {
+  return Bun.spawn(argv, { ...proc.spawnDefaults(), ...options })
+}
+
+/** Bun.spawnSync with the same defaults as [spawnProcess]. */
+export function spawnProcessSync<
+  const In extends Bun.SpawnOptions.Writable = "ignore",
+  const Out extends Bun.SpawnOptions.Readable = "pipe",
+  const Err extends Bun.SpawnOptions.Readable = "pipe",
+>(argv: string[], options?: Bun.SpawnOptions.SpawnSyncOptions<In, Out, Err>): Bun.SyncSubprocess<Out, Err> {
+  return Bun.spawnSync(argv, { ...proc.spawnDefaults(), ...options })
+}
+
 /** Synchronous twin used by boot/plugin lifecycle paths that historically used
  * execFileSync. It shares the exact Windows wrappers and never enables a shell. */
 export function spawnCommandSync(
