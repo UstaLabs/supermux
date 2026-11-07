@@ -86,8 +86,10 @@ export function antigravitySkillsDirs(sessionName: string, opts?: SessionPlugins
 }
 
 /**
- * Add `scope` to any enabled plugin compatible with that CLI. Idempotent; returns true when
- * plugins.json was updated. Run at boot for registries written before the CLI was supported.
+ * Add `scope` to any enabled plugin compatible with that CLI, once per registry: a migration for registries
+ * written before the CLI was supported. It is recorded in plugins.json (`migrations`), so a later boot never
+ * adds the scope again over a plugin the user narrowed (#102: it used to run on every boot). Returns true when
+ * plugins.json was updated.
  */
 function ensurePluginScopes(scope: CliScope, opts?: { file?: string; pluginsDir?: string }): boolean {
   const file = opts?.file
@@ -98,15 +100,14 @@ function ensurePluginScopes(scope: CliScope, opts?: { file?: string; pluginsDir?
   } catch {
     return false
   }
-  let changed = false
+  const migration = `scope:${scope}`
+  if (reg.migrations?.includes(migration)) return false
   const plugins: Plugin[] = reg.plugins.map((p) => {
     if (!p.enabled || p.scopes.includes(scope)) return p
     if (!isPluginCompatible(scope, p)) return p
-    changed = true
     return { ...p, scopes: [...p.scopes, scope] as CliScope[] }
   })
-  if (!changed) return false
-  savePluginsRegistry({ ...reg, plugins }, { file, pluginsDir })
+  savePluginsRegistry({ ...reg, migrations: [...(reg.migrations ?? []), migration], plugins }, { file, pluginsDir })
   return true
 }
 

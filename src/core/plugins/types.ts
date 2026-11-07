@@ -44,6 +44,11 @@ export interface Plugin {
 
 export interface PluginsRegistry {
   version: number
+  /**
+   * The one-time boot migrations already applied to this registry (e.g. `scope:opencode`), so a later boot never
+   * re-applies one over the user's own edits. Names this broker does not know are kept as they are.
+   */
+  migrations?: string[]
   plugins: Plugin[]
 }
 
