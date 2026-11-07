@@ -34,9 +34,9 @@ export interface FirePushArgs {
   isInternal?: (id: string) => boolean
   /** All subscribed web device names — the fan-out target. */
   devices: () => string[]
-  /** The devices where the user is present for this session (that session's chat
-   * open, or the chat list); any one of them makes the push redundant everywhere. */
-  presentOn: (sessionId: string) => { device: string; onList: boolean }[]
+  /** The devices that have this session's chat open; any one of them makes the push
+   * redundant everywhere. The session list is not presence (card #86). */
+  presentOn: (sessionId: string) => string[]
   /** Optional native push sender (APNs/FCM relay). When provided together with
    * nativeDevices, the reply is also fanned out to registered native devices
    * after the same mute + presence suppression guards that govern web push. */
@@ -51,8 +51,8 @@ export interface FirePushArgs {
 
 // Web is one logical channel and the user is ONE person across their devices, so
 // a notification is a single global decision: skip it entirely if the session is
-// muted OR the user is already looking at it on any device (the session chat or
-// the chat list); otherwise push to ALL subscribed devices. Every decision is
+// muted OR the user has its chat open on any device; otherwise push to ALL
+// subscribed devices. Every decision is
 // logged as one `push_decision` line (card #86).
 export async function firePushForReply(args: FirePushArgs): Promise<void> {
   const { sender, action, sessionName, sessionId, isMuted, isInternal, devices, presentOn } = args

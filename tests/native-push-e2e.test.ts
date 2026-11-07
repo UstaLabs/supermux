@@ -47,7 +47,7 @@ async function run(opts: { isMuted: boolean; anyPresent: boolean }) {
     sessionName: "sess",
     sessionId: "sid-1",
     isMuted: () => opts.isMuted,
-    presentOn: () => (opts.anyPresent ? [{ device: "elsewhere", onList: true }] : []),
+    presentOn: () => (opts.anyPresent ? ["elsewhere"] : []),
     devices: () => [], // web side empty — isolate the native path
     nativeSender,
     nativeDevices,

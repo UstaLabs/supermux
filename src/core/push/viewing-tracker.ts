@@ -4,11 +4,6 @@ export interface ViewingState {
    * show two chats at once, so this is a set rather than a single id.
    */
   sessions: Set<string>
-  /**
-   * Foregrounded on the session list (session=null, visible=true). Suppresses
-   * push for every session but does not count as exact-viewing any of them.
-   */
-  onList: boolean
   /** Device is in the foreground at all (list or a chat). */
   visible: boolean
   updatedAt: number
@@ -26,7 +21,7 @@ export class ViewingTracker {
    * Apply one Viewing frame.
    *
    * - `session=null, visible=false` → clear (background / nothing open)
-   * - `session=null, visible=true`  → on the list (suppress all, exact none)
+   * - `session=null, visible=true`  → on the list (mutes no push: card #86)
    * - `session=S, visible=true`     → the device is viewing exactly S (REPLACE)
    * - `session=S, visible=false`    → REMOVE S from the set
    *
@@ -42,7 +37,6 @@ export class ViewingTracker {
     if (partial.session === null) {
       this.states.set(device, {
         sessions: new Set(),
-        onList: partial.visible,
         visible: partial.visible,
         updatedAt: now,
       })
@@ -61,7 +55,6 @@ export class ViewingTracker {
       // the viewing frame.
       this.states.set(device, {
         sessions: new Set([partial.session]),
-        onList: false,
         visible: true,
         updatedAt: now,
       })
@@ -72,7 +65,6 @@ export class ViewingTracker {
     sessions.delete(partial.session)
     this.states.set(device, {
       sessions,
-      onList: false,
       visible: sessions.size > 0,
       updatedAt: now,
     })
@@ -86,7 +78,6 @@ export class ViewingTracker {
     const uniq = [...new Set(sessions.filter((s) => typeof s === "string" && s.length > 0))]
     this.states.set(device, {
       sessions: new Set(uniq),
-      onList: visible && uniq.length === 0,
       visible,
       updatedAt: Date.now(),
     })
@@ -102,43 +93,36 @@ export class ViewingTracker {
   }
 
   /**
-   * True when this device's foreground screen makes a push for `sessionId`
-   * redundant: it's either viewing that session's chat OR sitting on the chat
-   * list/home (onList). Used to suppress notifications to a device the user is
-   * already looking at.
+   * True when this device has `sessionId`'s chat open and on screen, which makes
+   * a push for it redundant. Only that chat: sitting on the session list mutes
+   * nothing (card #86, Ahmet's rule).
    */
   isPresentFor(device: string, sessionId: string): boolean {
     const s = this.states.get(device)
     if (!s) return false
     if (Date.now() - s.updatedAt > this.ttlMs) return false
     if (!s.visible) return false
-    if (s.onList) return true
     return s.sessions.has(sessionId)
   }
 
   /**
-   * True when the (single) user is present for `sessionId` on ANY device. A push
-   * is a global decision: if you've got that session — or the chat list — open
-   * anywhere, no device should buzz.
+   * True when the (single) user has `sessionId`'s chat open on ANY device. A push
+   * is a global decision: if you are reading that chat anywhere, no device should
+   * buzz for it.
    */
   isAnyPresentFor(sessionId: string): boolean {
     return this.presentDevicesFor(sessionId).length > 0
   }
 
   /** The devices that make a push for `sessionId` redundant, for the push decision log. */
-  presentDevicesFor(sessionId: string): { device: string; onList: boolean }[] {
-    const out: { device: string; onList: boolean }[] = []
-    for (const [device, s] of this.states) {
-      if (this.isPresentFor(device, sessionId)) out.push({ device, onList: s.onList })
-    }
-    return out
+  presentDevicesFor(sessionId: string): string[] {
+    return [...this.states.keys()].filter((device) => this.isPresentFor(device, sessionId))
   }
 
   /**
    * True when some non-expired device is viewing EXACTLY this session and is
-   * visible. Stricter than `isPresentFor` / `isAnyPresentFor`: sitting on the
-   * chat list (`onList`) suppresses push but does NOT count here.
-   * Drives server-side read status — a chat is only "read" by being opened.
+   * visible. Drives server-side read status: a chat is only "read" by being
+   * opened.
    */
   isAnyExactViewing(sessionId: string): boolean {
     for (const s of this.states.values()) {

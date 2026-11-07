@@ -58,6 +58,8 @@ import dev.supermux.ui.chat.fetchImageBytesWithPolicy
 import dev.supermux.desktop.platform.installMacTrackpadMagnify
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.platform.isMacOs
+import dev.supermux.desktop.platform.ScreenWatch
+import dev.supermux.desktop.platform.screenProbe
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.BackgroundQuitNotice
 import dev.supermux.desktop.host.FleetFacts
@@ -516,6 +518,11 @@ fun main() {
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
         // Same, for the fleet: the tray reads this computer's session count and the remote host.
         var pairedFleet by remember { mutableStateOf<FleetStore?>(null) }
+
+        // Card #86 part 2: a locked screen or sleeping displays are nobody reading, focused window or not.
+        val screenWatch = remember { ScreenWatch(screenProbe()) }
+        LaunchedEffect(screenWatch) { screenWatch.run() }
+        val screenSeen by screenWatch.seen.collectAsState()
 
         // ── Hosting lifecycle (spec: HostSupervisor, Tray, D3) ──
         // The supervisor starts, updates or adopts the local broker on EVERY launch, paired or not.
@@ -1970,7 +1977,7 @@ fun main() {
                             fleet = fleet,
                             ui = ui,
                             notify = notificationController,
-                            appForeground = LocalWindowInfo.current.isWindowFocused,
+                            appForeground = LocalWindowInfo.current.isWindowFocused && screenSeen,
                             // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
                             // sessions. The one genuine per-host choice left in the shell.
                             sessionListMode = SessionListMode.Workspaces,

@@ -24,12 +24,12 @@ test("isViewing returns false when session differs", () => {
   expect(t.isViewing("web:iphone", "ana")).toBe(false)
 })
 
-test("session=null + visible means 'on the list' → present (suppresses)", () => {
-  // New presence semantics: a foregrounded device sitting on the chat list
-  // (session=null) is present for any session, so a push would be redundant.
+// Card #86 part 2, Ahmet's rule: only the chat a device has open mutes that
+// chat's push. The session list mutes nothing; sitting on it reads no chat.
+test("session=null + visible means 'on the list', which is presence for no chat", () => {
   const t = new ViewingTracker()
   t.update("iphone", { session: null, visible: true })
-  expect(t.isViewing("web:iphone", "ana")).toBe(true)
+  expect(t.isViewing("web:iphone", "ana")).toBe(false)
 })
 
 test("isViewing returns false when entry is older than ttlMs", async () => {
@@ -98,11 +98,11 @@ test("isPresentFor: viewing the target session suppresses", () => {
   expect(t.isPresentFor("iphone", "ana")).toBe(true)
 })
 
-test("isPresentFor: on the list (session=null, visible) suppresses any session", () => {
+test("isPresentFor: on the list (session=null, visible) mutes no session", () => {
   const t = new ViewingTracker()
   t.update("iphone", { session: null, visible: true })
-  expect(t.isPresentFor("iphone", "ana")).toBe(true)
-  expect(t.isPresentFor("iphone", "zoom")).toBe(true)
+  expect(t.isPresentFor("iphone", "ana")).toBe(false)
+  expect(t.isPresentFor("iphone", "zoom")).toBe(false)
 })
 
 test("isPresentFor: viewing a DIFFERENT session does NOT suppress", () => {
@@ -206,21 +206,18 @@ test("visible=false removes only that session", () => {
 })
 
 // Card #86: a skipped push must say which device made it redundant.
-test("presentDevicesFor names each present device and whether it sits on the list", () => {
+test("presentDevicesFor names the devices that have that chat open, and no device on the list", () => {
   const t = new ViewingTracker()
   t.update("macos-3", { session: null, visible: true })
   t.update("fold", { session: "ana", visible: true })
   t.update("ipad", { session: "other", visible: true })
   t.update("web", { session: "ana", visible: false })
-  expect(t.presentDevicesFor("ana")).toEqual([
-    { device: "macos-3", onList: true },
-    { device: "fold", onList: false },
-  ])
+  expect(t.presentDevicesFor("ana")).toEqual(["fold"])
 })
 
 test("presentDevicesFor leaves out expired entries", async () => {
   const t = new ViewingTracker({ ttlMs: 20 })
-  t.update("macos-3", { session: null, visible: true })
+  t.update("fold", { session: "ana", visible: true })
   await new Promise((r) => setTimeout(r, 40))
   expect(t.presentDevicesFor("ana")).toEqual([])
 })

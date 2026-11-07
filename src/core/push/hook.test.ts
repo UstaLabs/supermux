@@ -38,7 +38,7 @@ test("does NOT fire native when the session is muted", async () => {
 })
 
 test("does NOT fire native when the user is present on any device", async () => {
-  const { args, nativeCalls } = baseArgs({ presentOn: () => [{ device: "macos-3", onList: true }] })
+  const { args, nativeCalls } = baseArgs({ presentOn: () => ["macos-3"] })
   await firePushForReply(args as any)
   expect(nativeCalls).toEqual([])
 })
@@ -88,11 +88,11 @@ test("warns when there is nobody to push to", async () => {
 
 test("logs which device made the push redundant", async () => {
   const { log, lines } = recorder()
-  const { args, nativeCalls } = baseArgs({ presentOn: () => [{ device: "macos-3", onList: true }], log })
+  const { args, nativeCalls } = baseArgs({ presentOn: () => ["macos-3"], log })
   await firePushForReply(args as any)
   expect(nativeCalls).toEqual([])
   expect(lines).toEqual([
-    { level: "info", msg: "push_decision", extra: { session: "s", sessionId: "sid", outcome: "present", presentOn: [{ device: "macos-3", onList: true }] } },
+    { level: "info", msg: "push_decision", extra: { session: "s", sessionId: "sid", outcome: "present", presentOn: ["macos-3"] } },
   ])
 })
 
