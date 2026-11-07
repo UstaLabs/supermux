@@ -15,7 +15,7 @@ const log = makeLogger("usage")
 // ── Types ──
 
 // `resetsAt` is the provider's raw value and its unit differs per provider:
-// ISO strings (claude/grok), unix seconds (codex), unix-ms strings (cursor).
+// ISO strings (claude/grok/antigravity), unix seconds (codex), unix-ms strings (cursor).
 // `resetsAtIso` is the broker-normalized ISO timestamp — clients read it and
 // need no per-provider unit logic. Optional in the type only so old fixtures
 // still compile; every fetcher sets it.
@@ -160,12 +160,28 @@ export interface GrokUsage {
   creditsKnown?: boolean
 }
 
+/**
+ * One Antigravity limit as agy's `/usage` reports it: a model group's 5-hour or weekly window. `used` is what is gone
+ * (agy reports what is left); `label` is "<agy's group name> · 5-hour" or "· weekly"; `resetsAt` is agy's ISO string.
+ */
+export interface AntigravityUsageWindow extends UsageWindow {
+  id: string
+  label: string
+}
+
+/** Antigravity's limits per model group (Gemini; Claude and GPT; Gemini 4 Argon on a Pro plan). agy reports no plan. */
+export interface AntigravityUsage {
+  windows: AntigravityUsageWindow[]
+}
+
 export interface UsageResponse {
   claude: ClaudeUsage | null
   codex: CodexUsage | null
   cursor: CursorUsage | null
   opencode: OpenCodeUsage | null
   grok: GrokUsage | null
+  /** The usage store's (./antigravity); the /usage command (fetchAllUsage) leaves Antigravity out. */
+  antigravity?: AntigravityUsage | null
   errors: Record<string, string>
   /** The code of an error that has one (`account_expired`: the provider refused the login, sign in again). */
   errorCodes?: Record<string, string>
@@ -192,7 +208,7 @@ const TIMEOUT_MS = 10_000
 function isoFromMs(ms: number): string | null {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null
 }
-function isoFromIsoLike(value: unknown): string | null {
+export function isoFromIsoLike(value: unknown): string | null {
   if (typeof value !== "string" || value === "") return null
   return isoFromMs(new Date(value).getTime())
 }
