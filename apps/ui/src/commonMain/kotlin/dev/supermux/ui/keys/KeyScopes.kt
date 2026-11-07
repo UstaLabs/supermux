@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import dev.supermux.editor.core.KeyChord
+import dev.supermux.terminal.compose.terminalShortcutOf
 
 /** What a region of the UI is to the keyboard. [opaque] regions (a terminal, a remote display) take every key they can name. */
 enum class KeyContext(val opaque: Boolean = false) {
@@ -33,6 +35,7 @@ class KeyScope internal constructor(val context: KeyContext, val viewId: String?
 
     override val opaque: Boolean get() = context.opaque
     override fun handles(commandId: String): Boolean = commandId in handlers
+    override fun keeps(chord: KeyChord): Boolean = context == KeyContext.Terminal && terminalKeeps(chord)
 
     /** Runs [commandId]'s handler here; false when there is none, or it declined. */
     fun run(commandId: String): Boolean = handlers[commandId]?.invoke() == true
@@ -51,6 +54,10 @@ class KeyScope internal constructor(val context: KeyContext, val viewId: String?
         if (handlers[commandId] === handler) handlers.remove(commandId)
     }
 }
+
+/** The terminal's own keys (copy, paste, select all, find, zoom: terminal-compose's TerminalShortcuts), which the app never takes from it. */
+fun terminalKeeps(chord: KeyChord): Boolean =
+    composeKeyOf(chord.key)?.let { terminalShortcutOf(it, chord.ctrl, chord.shift, chord.alt, chord.meta, hasSelection = true) } != null
 
 /** One window's scopes: which hold the focus, and which a pointer went down in last. */
 class KeyScopeTracker {
@@ -107,7 +114,11 @@ fun rememberKeyScope(context: KeyContext, viewId: String? = null): KeyScope {
     return scope
 }
 
-/** Tracks whether [scope]'s region holds the focus, and makes it the scope pressed last when a pointer goes down in it. */
+/**
+ * Tracks whether [scope]'s region holds the focus, and makes it the scope pressed last when a pointer goes down in it.
+ * Put it on the region that contains the scope's child scopes; the tracker finds the deepest focused scope through
+ * these regions.
+ */
 fun Modifier.keyScope(scope: KeyScope): Modifier = this
     .onFocusChanged { scope.hasFocus = it.hasFocus }
     .pointerInput(scope) {

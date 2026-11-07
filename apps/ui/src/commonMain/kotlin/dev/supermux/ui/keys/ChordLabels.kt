@@ -47,6 +47,8 @@ private val NAMED_KEYS: Map<String, Key> = buildMap {
     put("[", Key.LeftBracket); put("]", Key.RightBracket); put("-", Key.Minus); put("=", Key.Equals)
     put(";", Key.Semicolon); put("'", Key.Apostrophe); put("`", Key.Grave)
     put("Enter", Key.Enter); put("Escape", Key.Escape); put("Tab", Key.Tab); put("Space", Key.Spacebar)
+    // The terminal's Ctrl+Plus and Shift/Ctrl+Insert ([terminalKeeps]).
+    put("+", Key.Plus); put("Insert", Key.Insert)
 }
 private val KEY_NAMES: Map<Key, String> = NAMED_KEYS.entries.associate { (name, key) -> key to name }
 

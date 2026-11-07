@@ -29,13 +29,13 @@ class KeymapTest {
     }
 
     @Test fun ctrlNIsNotAnAppKeyOnAMac() {
-        assertEquals(listOf("session.new"), DefaultKeymap.bindingsFor(KeyChord("n", meta = true), KeyOs.Apple).map { it.command })
+        assertEquals(listOf("session.new"), DefaultKeymap.bindingsFor(KeyChord("n", meta = true), KeyOs.Apple).map { it.commandId })
         assertTrue(DefaultKeymap.bindingsFor(KeyChord("n", ctrl = true), KeyOs.Apple).isEmpty())
     }
 
     @Test fun everyBindingNamesACatalogCommand() {
         val ids = AppCommands.all.map { it.id }.toSet()
-        assertTrue(DefaultKeymap.bindings.all { it.command in ids })
+        assertTrue(DefaultKeymap.bindings.all { it.commandId in ids })
     }
 
     @Test fun chordsAreDrawnTheWayEachOsWritesThem() {

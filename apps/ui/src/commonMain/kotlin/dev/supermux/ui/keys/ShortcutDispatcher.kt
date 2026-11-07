@@ -64,7 +64,7 @@ class ShortcutDispatcher(val os: KeyOs = currentKeyOs, val keymap: Keymap = Defa
     private fun run(chord: KeyChord, phase: KeyPhase, event: KeyEvent): Boolean {
         val stack = tracker.stack()
         val hit = resolveKey(chord, stack, phase, os, keymap) ?: return false
-        return stack[hit.scopeIndex].run(hit.binding.command) && take(event)
+        return stack[hit.scopeIndex].run(hit.binding.commandId) && take(event)
     }
 
     private fun take(event: KeyEvent): Boolean {
@@ -103,7 +103,8 @@ fun ShortcutRoot(dispatcher: ShortcutDispatcher, modifier: Modifier = Modifier, 
     LaunchedEffect(lost) {
         if (!lost) return@LaunchedEffect
         withFrameNanos { }
-        runCatching { focus.requestFocus() }
+        // Something may have taken the focus during that frame (an autofocused field): only an empty window is reclaimed.
+        if (lost) runCatching { focus.requestFocus() }
     }
     CompositionLocalProvider(
         LocalKeyScopeTracker provides dispatcher.tracker,

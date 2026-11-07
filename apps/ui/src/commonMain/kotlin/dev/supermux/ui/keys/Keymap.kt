@@ -13,15 +13,15 @@ enum class KeyOs { Apple, Other }
 val currentKeyOs: KeyOs get() = if (isApplePlatform) KeyOs.Apple else KeyOs.Other
 
 /**
- * One default key for [command]: [apple] and [other] are its chord under each convention, null where it has none.
+ * One default key for [commandId]: [apple] and [other] are its chord under each convention, null where it has none.
  *
  * [appFirst]: the app takes the key before a focused text box or editor sees it. Only for a key they would eat
- * (paste-image's ⌘V, split's Ctrl+\ off Apple, which text boxes use as "deselect").
- * [overOwner]: off Apple, the key also reaches the app while a terminal or remote display has the focus. On Apple
- * every ⌘ key does ([passesOwner]).
+ * (paste-image's ⌘V, and split right's Ctrl+\ off Apple, which text boxes use as "deselect").
+ * [overOwner], off Apple only: the key also reaches the app while a terminal or remote display has the focus. On
+ * Apple every ⌘ key does, and no other ([passesOwner]).
  */
 data class AppBinding(
-    val command: String,
+    val commandId: String,
     val apple: KeyChord?,
     val other: KeyChord?,
     val appFirst: Boolean = false,
@@ -31,18 +31,18 @@ data class AppBinding(
 }
 
 /** [keys] in the editor's grammar (`"Mod-Shift-n"`; Mod is ⌘ on Apple and Ctrl elsewhere); [mac] replaces it on Apple. */
-fun bind(keys: String, command: AppCommand, mac: String = keys, appFirst: Boolean = false, overOwner: Boolean = false) =
+internal fun bind(keys: String, command: AppCommand, mac: String = keys, appFirst: Boolean = false, overOwner: Boolean = false) =
     AppBinding(command.id, KeyChord.parse(mac, apple = true), KeyChord.parse(keys, apple = false), appFirst, overOwner)
 
 /** A key that exists only off Apple. */
-fun bindOther(keys: String, command: AppCommand, appFirst: Boolean = false, overOwner: Boolean = false) =
+internal fun bindOther(keys: String, command: AppCommand, appFirst: Boolean = false, overOwner: Boolean = false) =
     AppBinding(command.id, null, KeyChord.parse(keys, apple = false), appFirst, overOwner)
 
 class Keymap(val bindings: List<AppBinding>) {
     fun bindingsFor(chord: KeyChord, os: KeyOs): List<AppBinding> = bindings.filter { it.chord(os) == chord }
 
     fun chordsFor(command: AppCommand, os: KeyOs): List<KeyChord> =
-        bindings.filter { it.command == command.id }.mapNotNull { it.chord(os) }
+        bindings.filter { it.commandId == command.id }.mapNotNull { it.chord(os) }
 }
 
 /**
@@ -60,8 +60,11 @@ val DefaultKeymap = Keymap(
         bind("Mod-f", AppCommands.FindInChat),
         bind("Mod-,", AppCommands.OpenSettings, overOwner = true),
         bind("Mod-/", AppCommands.ShowShortcuts),
+        // The composer runs this key itself (Composer.kt); listed for the shortcuts screen and the conflict test.
+        // Never register it on a pane scope: appFirst would take ⌘V from every text box in that pane while the
+        // clipboard holds an image.
         bind("Mod-v", AppCommands.PasteImage, appFirst = true),
         bind("Mod-\\", AppCommands.SplitRight, appFirst = true),
-        bind("Mod-Alt-\\", AppCommands.SplitDown, appFirst = true),
+        bind("Mod-Alt-\\", AppCommands.SplitDown),
     ),
 )
