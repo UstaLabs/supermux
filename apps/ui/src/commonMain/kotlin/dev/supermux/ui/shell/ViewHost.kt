@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -746,8 +747,13 @@ private fun DiffPaneForWorkspace(
     val reviewSessionId = actions.resolvedSessionId(lspSessionId)
     val selectedWalkthroughId = actions.resolvedSessionId(walkthroughSessionId ?: lspSessionId)
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
-    // base it was looking at.
-    val diff = remember(workspaceId, viewId, base) { DiffState().apply { base?.let { diffBase = it } } }
+    // base it was looking at. A base picked in the menu is never written to the view, so it is
+    // kept here (per saved base) for a pane a rotation or a width change rebuilds (#89).
+    val picked = rememberRetained("diff:$workspaceId:$viewId:base:${base.orEmpty()}") { DiffBasePick() }
+    val diff = remember(workspaceId, viewId, base, picked) {
+        DiffState().apply { (picked.base ?: base)?.let { diffBase = it } }
+    }
+    LaunchedEffect(diff, picked) { snapshotFlow { diff.diffBase }.collect { picked.base = it } }
     // The holder is null where the host installed no walkthrough seam (the builder checks the cap).
     val walkthrough = selectedWalkthroughId?.let { actions.walkthroughState(it) }
     val reviewWalkthrough = reviewSessionId?.let { actions.walkthroughState(it) }
@@ -858,4 +864,9 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/** The diff base a pane's user picked from its menu, kept by the fleet (see `DiffPaneForWorkspace`). */
+private class DiffBasePick {
+    var base: String? = null
 }

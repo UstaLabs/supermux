@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -141,6 +142,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.retain.RetainedPage
+import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.NewProjectDialog
@@ -767,9 +769,20 @@ fun SupermuxApp(
             openSession = { sid -> ui.focusChatTab(sid) },
         )
     }
+    // Staged attachment chips and their uploads, for a host that keeps none of its own (#89):
+    // Android's is process-wide, but on iOS and desktop a width-class change rebuilt the composer
+    // somewhere else in the tree and dropped every chip with its upload. The fleet keeps this one,
+    // and the uploads run on the fleet's scope.
+    val attachmentStore = dev.supermux.ui.chat.LocalComposerAttachmentStore.current
+        ?: remember(fleet) {
+            fleet.retainedUi.getOrPut("composer.attachments") {
+                dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
+            }
+        }
     CompositionLocalProvider(
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
+        dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
     ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(
@@ -959,7 +972,7 @@ fun SupermuxApp(
                                     }
                                 },
                                 tabDragState = tabDragState,
-                                listState = listState ?: androidx.compose.foundation.lazy.rememberLazyListState(),
+                                listState = listState ?: rememberSessionListState(),
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -1218,11 +1231,15 @@ fun SupermuxApp(
                                 EscapeBox("displays_overlay", onEscape = { ui.goBack() }) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
-                                            DisplaysScreen(
-                                                actions = rememberDisplayActions(fleet),
-                                                onBack = { ui.goBack() },
-                                                standalone = true,
-                                            )
+                                            // A page opening, so the viewer it has open survives a
+                                            // rotation and the next visit starts with none (#89).
+                                            RetainedPage {
+                                                DisplaysScreen(
+                                                    actions = rememberDisplayActions(fleet),
+                                                    onBack = { ui.goBack() },
+                                                    standalone = true,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1562,7 +1579,7 @@ private fun ShellHome(
     // ── Compact: one full-bleed layer per surface. The workspace / chat layers stay composed
     //    (a WebView, a PTY and a transcript are expensive to rebuild) and the session list
     //    slides over them.
-    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState(0, 0) }
+    val listState = rememberSessionListState()
     val visitedSessions = rememberVisitedSessions(ui.selectedId, remember(sessions) { sessions.map { it.id }.toSet() })
     val workspaceBySession = remember(workspaces) {
         workspaces.flatMap { ws -> ws.views.mapNotNull { v -> v.chatSessionId()?.let { it to ws } } }.toMap()
@@ -1776,8 +1793,9 @@ private fun WorkspacePanel(
     unreadSessions: Set<String>,
     onTearOutTab: (String) -> Unit,
 ) {
-    // Set by PaneHost onCloseView; never ends work by itself.
-    var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+    // Set by PaneHost onCloseView; never ends work by itself. Kept with the workspace, which the
+    // phone layout shares, so the question outlives a rotation or a width change (#89).
+    val panesKept = rememberWorkspacePanesKept(current.id)
     val ws = rememberHostWorkspaceSession(
         current = current,
         wsApp = wsApp,
@@ -1922,8 +1940,8 @@ private fun WorkspacePanel(
             overlayScope = overlayScope,
             launcherPane = launcherPane,
             tabDragState = tabDragState,
-            closeCandidate = closeCandidate,
-            onCloseCandidate = { closeCandidate = it },
+            closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
+            onCloseCandidate = { panesKept.askToClose(it) },
             sessionNames = sessionNames,
             unreadSessions = unreadSessions,
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
@@ -2062,4 +2080,30 @@ internal fun gitBannerFor(
 private class ProjectDialogs {
     var settingsTarget by mutableStateOf<Pair<String, String>?>(null)
     var newProjectOpen by mutableStateOf(false)
+}
+
+/**
+ * The session list's state, built from the one scroll position both layouts share (#89). The
+ * Compact list and the wide sidebar each kept their own, so turning a phone or opening a Fold put
+ * the list back at the top. The fleet keeps the position as plain numbers; each list builds a
+ * state from them and writes its scrolling back.
+ */
+@Composable
+private fun rememberSessionListState(): LazyListState {
+    val place = rememberRetained("shell:sessionList.place") { SessionListPlace() }
+    val state = rememberLazyListState(place.index, place.offset)
+    LaunchedEffect(state, place) {
+        snapshotFlow { state.firstVisibleItemIndex to state.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                place.index = index
+                place.offset = offset
+            }
+    }
+    return state
+}
+
+/** Where the session list is scrolled to (see [rememberSessionListState]). */
+private class SessionListPlace {
+    var index = 0
+    var offset = 0
 }

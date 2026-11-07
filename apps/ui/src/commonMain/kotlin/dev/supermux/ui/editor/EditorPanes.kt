@@ -182,7 +182,11 @@ fun ExplorerPane(
                 view = view,
                 fileSystem = fileSystem,
                 revealActive = revealActive,
-                onRevealActiveChange = { on -> scope.launch { prefs.putFilesRevealActive(on) } },
+                onRevealActiveChange = { on ->
+                    // Turned on: reveal the active file now, even one this pane revealed before.
+                    if (on) view.edits.revealed = null
+                    scope.launch { prefs.putFilesRevealActive(on) }
+                },
                 // Creates at the tree's root; the tree below draws the dialog or the in-place row
                 // (it reads view.dialog / view.inlineEdit).
                 onNewEntry = if (fileSystem == null) null else { folder ->

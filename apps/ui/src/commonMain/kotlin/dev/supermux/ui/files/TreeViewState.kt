@@ -19,10 +19,15 @@ class TreeViewState(
 ) {
     /** The workspace workdir this state was created for; [rootPath] may move above it. */
     val workdir: String = rootPath
-    var rootPath by mutableStateOf(rootPath)
-    var expanded by mutableStateOf<Set<String>>(emptySet())
+    // Where the tree starts, what is open and selected, and the recents live in [edits] (#89).
+    var rootPath: String
+        get() = edits.rootPath ?: workdir
+        set(value) {
+            edits.rootPath = value
+        }
+    var expanded by edits::expanded
         private set
-    var selected by mutableStateOf<String?>(null)
+    var selected by edits::selected
     var query by edits::query
     /**
      * The row-action dialog this pane has open (New file / Rename / Delete), or null. Here rather
@@ -48,7 +53,8 @@ class TreeViewState(
             edits.typed = null
             edits.op = null
         }
-    val list = LazyListState()
+    /** Built where [edits] left the scroll; the tree writes its scrolling back (see `FileTreeView`). */
+    val list = LazyListState(edits.scrollIndex, edits.scrollOffset)
 
     /** The name being typed in the open [dialog] or [inlineEdit]: [initial] until something is. */
     fun typedName(initial: () -> TextFieldValue): TypedName =
@@ -86,16 +92,12 @@ class TreeViewState(
 
     // The last [RecentMax] files opened from this pane (workdir-relative, newest first): what the
     // "Go to file…" list shows before anything is typed.
-    private val recentDeque = ArrayDeque<String>()
-    var recent by mutableStateOf<List<String>>(emptyList())
+    var recent by edits::recent
         private set
 
     /** Record that [relativePath] was opened from this pane (moves it to the front). */
     fun noteOpened(relativePath: String) {
-        recentDeque.remove(relativePath)
-        recentDeque.addFirst(relativePath)
-        while (recentDeque.size > RecentMax) recentDeque.removeLast()
-        recent = recentDeque.toList()
+        recent = (listOf(relativePath) + recent.filterNot { it == relativePath }).take(RecentMax)
     }
 
     fun isExpanded(path: String) = path in expanded
@@ -121,9 +123,23 @@ const val RecentMax = 10
 /**
  * The part of a [TreeViewState] that must outlive its pane's composition: a rotation or a width
  * change rebuilt the Files pane with its open dialog or in-place field, the name typed in it and
- * the "Go to file…" query gone (#89). Plain values only; the scroll stays in [TreeViewState.list].
+ * the "Go to file…" query gone (#89), and with them where the tree started, its open folders, the
+ * selection, the recent files and the scroll. Plain values only: the scroll is two numbers, and
+ * each pane builds its own [TreeViewState.list] from them.
  */
 class TreeViewEdits {
+    /** Where the tree starts, once moved off the workdir. */
+    var rootPath by mutableStateOf<String?>(null)
+    var expanded by mutableStateOf<Set<String>>(emptySet())
+    var selected by mutableStateOf<String?>(null)
+    var recent by mutableStateOf<List<String>>(emptyList())
+    var scrollIndex = 0
+    var scrollOffset = 0
+    /**
+     * The active file this pane last revealed. A rebuilt pane does not reveal it again over the
+     * selection and scroll it kept; a newly active file is revealed as before.
+     */
+    var revealed: String? = null
     var query by mutableStateOf("")
     /** "Go to file…"'s last hits, shown again at once by a rebuilt pane (then searched afresh). */
     var results by mutableStateOf<List<GoToEntry>?>(null)

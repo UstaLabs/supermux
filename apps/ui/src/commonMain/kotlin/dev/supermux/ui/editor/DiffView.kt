@@ -183,10 +183,11 @@ fun DiffView(
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
     // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue). The
-    // open files go with the drafts: a composer kept open in a collapsed file would not show.
+    // open files go with the drafts: a composer kept open in a collapsed file would not show. The
+    // open repos and folders, and the base menu, are kept with them for a rebuilt pane (#89).
     var expandedFiles by review::expandedFiles
-    var expandedRepos by remember { mutableStateOf(setOf<String>()) }
-    var expandedFolders by remember { mutableStateOf(setOf<String>()) }
+    var expandedRepos by review::expandedRepos
+    var expandedFolders by review::expandedFolders
     val uiPrefs = LocalUiPrefs.current
     val treeView by uiPrefs.editorDiffTreeView.collectAsState(EDITOR_DIFF_TREE_VIEW_DEFAULT)
     val sideBySide by uiPrefs.editorDiffSideBySide.collectAsState(EDITOR_DIFF_SIDE_BY_SIDE_DEFAULT)
@@ -222,13 +223,18 @@ fun DiffView(
     var draft by review::draft
     var submitting by review::submitting
     var wrap by remember { mutableStateOf(true) }
-    var showBaseMenu by remember { mutableStateOf(false) }
+    var showBaseMenu by review::baseMenuOpen
 
     // Seed expansion to every repo, re-seeding when the repo set itself changes (parity with the
     // iOS seedRepos + onChange(of: repos.map(\.repo)) — DiffView.swift:61-69). [autoExpandAll] ALSO
     // seeds every file (see the KDoc above) — off by default, so normal behavior is unaffected.
+    // A rebuilt pane runs this again with the same inputs: that run keeps what the user opened. So
+    // does the empty diff it shows until its reload lands: there is nothing in it to open.
     val repoKey = repos.joinToString(" ") { r -> "${r.repo}:${r.files.joinToString { it.path }}" }
     LaunchedEffect(repoKey, autoExpandAll, treeView) {
+        val seed = "$repoKey|$autoExpandAll|$treeView"
+        if (repos.isEmpty() || review.seeded == seed) return@LaunchedEffect
+        review.seeded = seed
         expandedRepos = repos.map { it.repo }.toSet()
         if (autoExpandAll) {
             expandedFiles = repos.flatMap { r -> r.files.map { fileKey(r.repo, it.path) } }.toSet()
@@ -536,6 +542,11 @@ fun DiffView(
  */
 private class DiffReviewKept {
     var expandedFiles by mutableStateOf(setOf<String>())
+    var expandedRepos by mutableStateOf(setOf<String>())
+    var expandedFolders by mutableStateOf(setOf<String>())
+    var baseMenuOpen by mutableStateOf(false)
+    /** The inputs the open sets were last seeded from (see the seeding effect). */
+    var seeded: String? = null
     /** By `"repo path"`. */
     val native = HashMap<String, MapReviewDrafts>()
     var composerFor by mutableStateOf<String?>(null)

@@ -645,9 +645,19 @@ fun ChatPanel(
     // Who sent each one and when, for the viewer's line under its counter.
     val mediaEntries = remember(timelineItems) { timelineItems.mapNotNull { (it as? TimelineItem.Msg)?.entry }.associateBy { it.id } }
     val mediaAgentName = remember(session.agent) { dev.supermux.ui.accounts.agentDisplayName(session.agent) }
-    var viewerKey by remember(session.id) { mutableStateOf<String?>(null) }
-    val mediaOpener = remember(session.id) {
-        ChatMediaOpener { key -> latestMedia.any { it.key == key }.also { found -> if (found) viewerKey = key } }
+    // The open viewer and the item it shows, kept outside this composition: a rotation or a width
+    // change closed it (#89). Zoom and a clip's playback position still start afresh.
+    val viewer = rememberRetained("chat.viewer:${session.id}") { MediaViewerPlace() }
+    var viewerKey by viewer::open
+    val mediaOpener = remember(session.id, viewer) {
+        ChatMediaOpener { key ->
+            latestMedia.any { it.key == key }.also { found ->
+                if (found) {
+                    viewer.current = key
+                    viewer.open = key
+                }
+            }
+        }
     }
 
     // The live agent state is carried by the header status line when there IS a header, and by the
@@ -1279,12 +1289,16 @@ fun ChatPanel(
         viewerKey?.let { key ->
             ChatMediaViewer(
                 items = mediaItems,
-                startKey = key,
+                startKey = viewer.current ?: key,
                 resolve = { item -> chatMediaHandle(item, actions.media, markdownFiles, platform.files::probeMime) },
-                onDismiss = { viewerKey = null },
+                onDismiss = {
+                    viewerKey = null
+                    viewer.current = null
+                },
                 caption = { item ->
                     mediaEntries[item.entryId]?.let { mediaCaption(it, mediaAgentName, Clock.System.now().toEpochMilliseconds()) }
                 },
+                onCurrentChange = { viewer.current = it },
             )
         }
 
@@ -1580,6 +1594,14 @@ private class TranscriptPlace {
     /** Rows already shown; -1 before the first content, which jumps to the end. */
     var rows by mutableIntStateOf(-1)
     var autoFollow by mutableStateOf(true)
+}
+
+/** One session's open media viewer, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
+private class MediaViewerPlace {
+    /** The item the viewer was opened on; null when it is closed. */
+    var open by mutableStateOf<String?>(null)
+    /** The item on screen as the user pages, where a rebuilt viewer starts. Read once, so not observed. */
+    var current: String? = null
 }
 
 /** One session's open subagent cards and the replies seen, kept for a rebuilt [ChatPanel] (`rememberRetained`, #89). */
