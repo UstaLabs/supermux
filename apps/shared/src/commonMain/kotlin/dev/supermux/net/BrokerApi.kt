@@ -751,6 +751,20 @@ data class GrokUsage(
     val billingPeriodEnd: String? = null,
 )
 
+/** One Antigravity limit as agy reports it: a model group's 5-hour or weekly window. [resetsAt] is ISO-8601. */
+@Serializable
+data class AntigravityWindow(
+    val id: String = "",
+    /** "<agy's group name> · 5-hour" or "· weekly" ("Gemini Models · 5-hour"), made by the broker. */
+    val label: String = "",
+    val used: Double = 0.0,
+    val resetsAt: String? = null,
+)
+
+/** Antigravity's limits per model group. agy reports no plan. */
+@Serializable
+data class AntigravityUsage(val windows: List<AntigravityWindow> = emptyList())
+
 @Serializable
 data class UsageResponse(
     val claude: ClaudeUsage? = null,
@@ -758,6 +772,8 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
+    /** Absent on brokers older than #103. */
+    val antigravity: AntigravityUsage? = null,
     /** Per-provider failure text. Values are nullable: the broker records a null for a provider
      *  it could not reach without a message, and a null map VALUE is not something
      *  `coerceInputValues` can rescue (it only defaults properties). */
@@ -1773,6 +1789,7 @@ class BrokerApi(
     internal val httpBase: String = baseUrl
         .replaceFirst("ws://", "http://")
         .replaceFirst("wss://", "https://")
+        // platform-ok: a URL
         .trimEnd('/')
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
@@ -3622,6 +3639,7 @@ class BrokerApi(
      * Returns null only if the body lacks a usable routingToken (old relay).
      */
     suspend fun registerPushTokenWithRelay(relayUrl: String, platform: String, pushToken: String): String? {
+        // platform-ok: a URL
         val url = relayUrl.trimEnd('/') + "/register"
         val resp = postReturningJson<RegisterPushRelayBody, RegisterPushRelayResponse>(
             url,

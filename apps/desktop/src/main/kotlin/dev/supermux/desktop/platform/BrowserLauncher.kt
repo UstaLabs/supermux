@@ -1,5 +1,7 @@
 package dev.supermux.desktop.platform
 
+import dev.supermux.net.isOpenableLink
+import dev.supermux.net.linkScheme
 import java.awt.Desktop
 import java.net.URI
 import kotlin.concurrent.thread
@@ -22,6 +24,11 @@ import kotlin.concurrent.thread
 var openInBrowserOverride: ((String) -> Unit)? = null
 
 fun openInBrowser(url: String) {
+    // AWT and the OS openers would also run a `file:` program or a share's: only links that leave the app open.
+    if (!isOpenableLink(url)) {
+        println("[browser] not opening a ${linkScheme(url) ?: "relative"} link")
+        return
+    }
     val override = openInBrowserOverride
     if (override != null) {
         override(url)

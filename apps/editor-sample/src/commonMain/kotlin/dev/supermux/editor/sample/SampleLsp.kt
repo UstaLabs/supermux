@@ -53,6 +53,7 @@ class SampleLsp(val client: LspClient, private val uri: String, private val lang
         fun real(scope: CoroutineScope, file: String, text: String, languageId: String): SampleLsp? {
             val (transport, uri, close) = platformRealLsp(scope, file, text) ?: return null
             var self: SampleLsp? = null
+            // platform-ok: a URI
             val client = LspClient(transport, scope, LspClientConfig(rootUri = uri.substringBeforeLast('/'), onMessage = { _, m -> self?.lastMessage = m }))
             return SampleLsp(client, uri, languageId, close).also { self = it }
         }

@@ -47,6 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import dev.supermux.fs.fileNameOf
 
 // ── clipboard ────────────────────────────────────────────────────────────────
 
@@ -201,7 +202,7 @@ internal class AndroidFileAccess(
 
 /** Strip any directory part and refuse an empty name — attachment names are broker-supplied. */
 internal fun safeFileName(name: String): String =
-    name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+    fileNameOf(name).ifBlank { "file" }
 
 // ── mic ──────────────────────────────────────────────────────────────────────
 

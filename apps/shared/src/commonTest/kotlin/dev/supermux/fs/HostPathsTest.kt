@@ -149,4 +149,32 @@ class HostPathsTest {
         assertEquals("file:///w/a-b_c.d*e.kt", hostFileUri("/w/a-b_c.d*e.kt"))
         assertEquals("file:///C:/w/a.kt", hostFileUri("C:\\w\\a.kt"))
     }
+
+    // #29 step 11: the checks the apps wrote inline, in one place.
+    @Test fun anAbsoluteHostPathIsAPosixOneOrAWindowsOne() {
+        assertTrue(isAbsoluteHostPath("/home/me"))
+        assertTrue(isAbsoluteHostPath("C:\\Users\\me"))
+        assertTrue(isAbsoluteHostPath("c:/Users/me"))
+        assertTrue(isAbsoluteHostPath("\\\\server\\share\\x"))
+        assertFalse(isAbsoluteHostPath("src/a.kt"))
+        assertFalse(isAbsoluteHostPath("~/x"))
+    }
+
+    @Test fun aFileNameFromAnyHostLosesItsFolders() {
+        assertEquals("shot.png", fileNameOf("C:\\Users\\me\\shot.png"))
+        assertEquals("shot.png", fileNameOf("/home/me/shot.png"))
+        assertEquals("shot.png", fileNameOf("shots\\b/shot.png"))
+        assertEquals("shot.png", fileNameOf("shot.png"))
+    }
+
+    @Test fun aHostPathLosesItsTrailingSeparatorsButNotItsRoot() {
+        assertEquals("/a/b", trimHostPath("/a/b/"))
+        assertEquals("/", trimHostPath("/"))
+        assertEquals("/", trimHostPath("//"))
+        assertEquals("C:\\x", trimHostPath("C:\\x\\"))
+        assertEquals("C:\\", trimHostPath("C:\\"))
+        assertEquals("C:/", trimHostPath("C:/"))
+        // `C:` alone is the drive's current folder, not its root.
+        assertEquals("C:", trimHostPath("C:"))
+    }
 }

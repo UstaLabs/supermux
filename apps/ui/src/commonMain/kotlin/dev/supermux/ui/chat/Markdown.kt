@@ -98,6 +98,7 @@ import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.size.Scale
+import dev.supermux.net.isOpenableLink
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
@@ -1082,7 +1083,7 @@ internal fun MarkdownImageLinkLine(
     Text(
         text = buildAnnotatedString {
             append("🖼 ")
-            withLink(
+            if (!isOpenableLink(image.url)) append(label) else withLink(
                 LinkAnnotation.Url(
                     image.url,
                     TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),

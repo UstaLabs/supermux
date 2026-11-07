@@ -1,5 +1,7 @@
 package dev.supermux.ui
 
+import dev.supermux.net.isOpenableLink
+
 /**
  * Agents write markdown; a session-list row shows plain text. Mail and Messages both strip
  * formatting from their preview line, and without this the sidebar rows read as
@@ -60,7 +62,7 @@ fun messagePlainLinked(raw: String): PlainMessage {
     if (s.contains("](")) {
         s = LINK_RE.replace(s) { m ->
             val label = m.groupValues[1]
-            if (label.isBlank()) label else "$LINK_OPEN$label$LINK_CLOSE".also { urls += m.groupValues[2] }
+            if (label.isBlank() || !isOpenableLink(m.groupValues[2])) label else "$LINK_OPEN$label$LINK_CLOSE".also { urls += m.groupValues[2] }
         }
     }
     s = HEADING_QUOTE_RE.replace(s, "")
