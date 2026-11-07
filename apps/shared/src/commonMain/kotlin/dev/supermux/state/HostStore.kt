@@ -305,6 +305,8 @@ class HostStore(
     private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
     private var lastSentViewing: List<ClientFrame.Viewing>? = null
+    /** Card #62: chats whose live text this app wants without their being on screen ([pinLive]). */
+    @Volatile private var livePinned: List<String> = emptyList()
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
@@ -694,6 +696,8 @@ class HostStore(
                 noChangesRoute = false
                 lastSentViewing = null
                 sendViewingIfChanged()
+                // The broker keeps live pins per socket: a new socket is told again.
+                if (livePinned.isNotEmpty()) sendLivePins()
                 refreshAgentModels()
                 if (accountsWanted) refreshAccounts()
                 if (!frame.partialLogs.isNullOrEmpty() || !frame.partialExtras.isNullOrEmpty()) prefetchRecentLogs()
@@ -843,6 +847,24 @@ class HostStore(
                 runApi("viewing send") { sendFrame(frame) }
             }
         }
+    }
+
+    /**
+     * Card #62: ask for [sessionIds]' live text without claiming they are on screen. The assistant overlay floats an
+     * Agent's reply over other apps as it is written; unlike [updateViewing] this is presence for nothing, so nothing
+     * is read and pushes still go out. Replaces the last set, and is sent again on every reconnect. Only an app that
+     * asked for live replies (Settings) gets any; an older broker ignores it.
+     */
+    fun pinLive(sessionIds: Collection<String>) {
+        val next = sessionIds.distinct()
+        if (next == livePinned) return
+        livePinned = next
+        sendLivePins()
+    }
+
+    private fun sendLivePins() {
+        val frame = ClientFrame.Live(livePinned)
+        stateScope.launch { runApi("live pins") { sendFrame(frame) } }
     }
 
     /**
