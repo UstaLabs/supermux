@@ -63,7 +63,9 @@ class HostSupervisor(
     internal val baseEnv: () -> Map<String, String> = System::getenv,
     internal val repoDir: () -> Path? = { DesktopHostBootstrap.detectRepoDir() },
     internal val bunPath: () -> String = ::defaultBunPath,
-    internal val hostName: String = DesktopHostBootstrap.defaultHostName(),
+    /** This computer's name for the broker (`MUX_HOST_NAME`); null: [lookupHostName] answers it when a launch needs it. */
+    hostName: String? = null,
+    private val lookupHostName: () -> String = DesktopHostBootstrap::defaultHostName,
     /** Where a taken port moves to: the first free port of [MOVE_PORTS] (see [firstFreePort]). */
     private val freePort: () -> Int = { firstFreePort() },
     internal val now: () -> Long = System::currentTimeMillis,
@@ -105,6 +107,13 @@ class HostSupervisor(
     )
 
     internal enum class Mode { CHILD, SERVICE, READ_ONLY, ORPHAN }
+
+    /**
+     * This computer's name for the broker. Looked up when a launch first needs it (on [io]), never while the supervisor
+     * is built: the app builds it during composition, on the UI thread, and InetAddress.getLocalHost() can stall ~5 s on
+     * macOS (#29).
+     */
+    internal val brokerHostName: String by lazy { hostName ?: lookupHostName() }
 
     private val _gitAvailable = MutableStateFlow<Boolean?>(null)
     /** What the local broker's `/host` last said about git (legacy boolean; see [gitRequirement]). */

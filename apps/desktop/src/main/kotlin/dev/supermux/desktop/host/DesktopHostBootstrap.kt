@@ -322,11 +322,25 @@ object DesktopHostBootstrap {
 
     internal fun isReadOnly(s: HostingStatus): Boolean = s is HostingStatus.Running && s.readOnly
 
-    /** The machine's actual hostname; fleet clients must not see every host as "This". */
-    fun defaultHostName(): String {
-        val h = runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() }
-        return h ?: "Desktop host"
+    /**
+     * The hostname lookup, started once on a daemon thread ([prefetchHostName] at app start, else the first use):
+     * InetAddress.getLocalHost() resolves the name and can stall ~5 s on macOS, which must never be the UI thread's (#29).
+     */
+    private val hostNameLookup: Lazy<java.util.concurrent.CompletableFuture<String>> = lazy {
+        java.util.concurrent.CompletableFuture.supplyAsync(
+            { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Desktop host" },
+            { task -> Thread(task, "host-name").apply { isDaemon = true }.start() },
+        )
     }
+
+    /** Starts the hostname lookup off the UI thread: the app calls it first thing, so nothing later waits on it. */
+    fun prefetchHostName() {
+        hostNameLookup.value
+    }
+
+    /** The machine's actual hostname; fleet clients must not see every host as "This". "Desktop host" if it takes over 10 s. */
+    fun defaultHostName(): String =
+        runCatching { hostNameLookup.value.get(10, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() ?: "Desktop host"
 
     @kotlinx.serialization.Serializable
     private data class ClaimBody(val deviceName: String)

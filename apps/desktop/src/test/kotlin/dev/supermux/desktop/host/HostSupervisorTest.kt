@@ -57,6 +57,9 @@ internal class Harness(
     captures: Map<List<String>, String> = emptyMap(),
     envVars: Map<String, String> = emptyMap(),
     cgroup: String? = null,
+    /** This computer's name; null: [lookupHostName] answers it. */
+    hostName: String? = "testbox",
+    lookupHostName: () -> String = { "looked-up" },
     val repo: Path? = null,
     xdg: String? = null,
     val home: Path = createTempDirectory("sup-home"),
@@ -116,7 +119,8 @@ internal class Harness(
         baseEnv = { baseEnv },
         repoDir = { repo },
         bunPath = { "bun" },
-        hostName = "testbox",
+        hostName = hostName,
+        lookupHostName = lookupHostName,
         freePort = { 45678 },
         now = { ts.testScheduler.currentTime },
         io = StandardTestDispatcher(ts.testScheduler),
@@ -154,6 +158,18 @@ internal class Harness(
 class HostSupervisorTest {
     private fun res(name: String) = String(javaClass.getResourceAsStream("/takeover/$name")!!.readAllBytes(), Charsets.UTF_8)
     private val running = HostingStatus.Running(9898, readOnly = false)
+
+    // #29 step 9: the app builds its supervisor during composition, on the UI thread, and InetAddress.getLocalHost() can
+    // stall ~5 s on macOS. The name is looked up when a launch needs it, on the io dispatcher, and only once.
+    @Test fun theHostNameIsLookedUpWhenTheBrokerStartsNotWhenTheSupervisorIsBuilt() = runTest {
+        val lookups = mutableListOf<String>()
+        val h = Harness(this, hostName = null, lookupHostName = { lookups += "lookup"; "studio-mac" })
+        assertTrue(lookups.isEmpty(), "building the supervisor looked the name up")
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        assertEquals("studio-mac", h.launches.single().env["MUX_HOST_NAME"])
+        assertEquals(listOf("lookup"), lookups)
+    }
 
     // 1
     @Test fun childModeStartsTheBrokerAsAChildWithTheManagedEnv() = runTest {
