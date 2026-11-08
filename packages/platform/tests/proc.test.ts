@@ -122,6 +122,66 @@ test("killChildTree ends a running child's tree, and nothing once the child has 
   expect(started.map((call) => call[1])).toEqual([["/PID", "4324", "/T", "/F"]])
 })
 
+// #29 signals: feature code asked (SIGTERM), waited, then insisted (SIGKILL), each with its own timer. Windows has no
+// polite request (every kill is TerminateProcess) and a second kill there can only reach a pid that is not ours.
+test("stop on POSIX: SIGTERM to the tree now, SIGKILL after the grace while it still runs, nothing once it stopped", async () => {
+  const sent: [number, string][] = []
+  const kill = (pid: number, signal: NodeJS.Signals | 0) => { if (signal !== 0) sent.push([pid, signal]) }
+  const stubborn = { pid: 61, exitCode: null as number | null, signalCode: null }
+  proc.stop(stubborn, { graceMs: 20, platform: "linux", kill })
+  expect(sent).toEqual([[-61, "SIGTERM"]])
+  await Bun.sleep(60)
+  expect(sent).toEqual([[-61, "SIGTERM"], [-61, "SIGKILL"]])
+
+  sent.length = 0
+  const polite = { pid: 62, exitCode: null as number | null, signalCode: null }
+  proc.stop(polite, { graceMs: 20, platform: "linux", kill })
+  polite.exitCode = 0
+  await Bun.sleep(60)
+  expect(sent).toEqual([[-62, "SIGTERM"]])
+
+  sent.length = 0
+  proc.stop({ pid: 63, exitCode: 0, signalCode: null }, { graceMs: 20, platform: "linux", kill })
+  proc.stop({ pid: undefined, exitCode: null, signalCode: null }, { platform: "linux", kill })
+  await Bun.sleep(60)
+  expect(sent).toEqual([])
+})
+
+test("stop without a grace ends the target at once; alone, it signals the process and not its group", async () => {
+  const sent: [number, string][] = []
+  const kill = (pid: number, signal: NodeJS.Signals | 0) => { if (signal !== 0) sent.push([pid, signal]) }
+  proc.stop({ pid: 64, exitCode: null, signalCode: null }, { platform: "darwin", kill })
+  proc.stop({ pid: 65, exitCode: null, signalCode: null }, { graceMs: 20, alone: true, platform: "linux", kill })
+  await Bun.sleep(60)
+  expect(sent).toEqual([[-64, "SIGKILL"], [65, "SIGTERM"], [65, "SIGKILL"]])
+})
+
+test("stop of a pid asks whether it is alive, and a caller's own test of running wins", async () => {
+  const sent: [number, string][] = []
+  const living = new Set([66, 67])
+  const kill = (pid: number, signal: NodeJS.Signals | 0) => {
+    if (signal === 0) { if (!living.has(Math.abs(pid))) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }); return }
+    sent.push([pid, signal])
+  }
+  proc.stop(66, { graceMs: 20, alone: true, platform: "linux", kill })
+  living.delete(66)
+  proc.stop(68, { platform: "linux", kill })
+  // An exited child whose group still holds its pipes: the caller says it still runs.
+  proc.stop({ pid: 67, exitCode: 0, signalCode: null }, { graceMs: 20, running: () => true, platform: "linux", kill })
+  await Bun.sleep(60)
+  expect(sent).toEqual([[66, "SIGTERM"], [-67, "SIGTERM"], [-67, "SIGKILL"]])
+})
+
+test("stop on Windows ends the tree at once, with or without a grace, and never twice", async () => {
+  const started: unknown[][] = []
+  const spawn = (...args: unknown[]) => { started.push(args); return { on: () => undefined } }
+  proc.stop({ pid: 4401, exitCode: null, signalCode: null }, { graceMs: 20, platform: "win32", spawn })
+  proc.stop({ pid: 4402, exitCode: null, signalCode: null }, { alone: true, platform: "win32", spawn })
+  proc.stop({ pid: 4403, exitCode: 1, signalCode: null }, { platform: "win32", spawn })
+  await Bun.sleep(60)
+  expect(started.map((call) => call[1])).toEqual([["/PID", "4401", "/T", "/F"], ["/PID", "4402", "/T", "/F"]])
+})
+
 // Worktree hooks are POSIX scripts (.mux/worktree-setup.sh, .mux/verify.sh). The broker ran them with `bash` from PATH
 // (on Windows: missing, since Git's installer puts only Git\cmd there, or WSL's launcher, which runs them inside Linux)
 // and through cmd.exe.
