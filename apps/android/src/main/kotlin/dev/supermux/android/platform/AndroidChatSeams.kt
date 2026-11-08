@@ -283,7 +283,7 @@ internal fun stageNamed(file: DownloadedFile, attachments: File): File? {
         val staged = File(folder, safeFileName(file.name))
         if (staged.isFile && staged.length() == source.length()) return@runCatching staged
         check(folder.isDirectory || folder.mkdirs()) { "no folder to stage into" }
-        val part = File.createTempFile("staging-", ".part", folder)
+        val part = java.nio.file.Files.createTempFile(folder.toPath(), "staging-", ".part").toFile()
         try {
             source.inputStream().use { input ->
                 part.outputStream().use { output -> input.copyTo(output, COPY_BUFFER_BYTES) }

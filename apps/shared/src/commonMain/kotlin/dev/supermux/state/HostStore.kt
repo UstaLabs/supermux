@@ -336,7 +336,7 @@ class HostStore(
         val cache = deps.media
         val browser = deps.browserDownload
         if (cache == null && browser == null) return null
-        val name = path.substringAfterLast('/').substringAfterLast('\\')
+        val name = dev.supermux.fs.pathLeaf(path)
         val mime = mimeForFileName(name) ?: "application/octet-stream"
         val source = object : DownloadSource {
             override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
