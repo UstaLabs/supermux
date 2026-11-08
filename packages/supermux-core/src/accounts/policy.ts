@@ -81,3 +81,31 @@ export function pickAccount(
   }
   return best?.account ?? fallback
 }
+
+/** When full windows free up again: the latest reset among them. Undefined when none is full or one has no reset time. */
+export function freesAt(windows: readonly UsageWindow[], now = Date.now()): Date | undefined {
+  const full = windows.filter(window => effectiveUsed(window, now) >= 100)
+  if (!full.length || full.some(window => !window.resetsAt)) return undefined
+  return new Date(Math.max(...full.map(window => window.resetsAt!.getTime())))
+}
+
+/**
+ * When every candidate is full: the account that frees up first and when, i.e. the minimum over
+ * accounts of the latest reset among its full windows. Unavailable (refused or dead) accounts, the
+ * ones never switched to, accounts without full windows and full windows without a reset time are
+ * no candidates. Undefined when no reset time is known.
+ */
+export function earliestReset(
+  candidates: readonly Account[],
+  usage: (id: string) => readonly UsageWindow[] | undefined,
+  now = Date.now(),
+  unavailable: (id: string) => boolean = () => false,
+): { account: string; at: Date } | undefined {
+  let best: { account: string; at: Date } | undefined
+  for (const account of candidates) {
+    if (!switchable(account) || unavailable(account.id)) continue
+    const at = freesAt(usage(account.id) ?? [], now)
+    if (at && (!best || at < best.at)) best = { account: account.id, at }
+  }
+  return best
+}

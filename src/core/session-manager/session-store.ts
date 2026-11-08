@@ -265,10 +265,10 @@ export class SessionStore {
 
   /** The session's account id; null = back on the agent's system account. */
   setAccount(id: string, account: string | null): void {
-    const session = this.cache.get(id)
-    if (!session) return
+    // Archived rows are not cached, and resume on their account too (#106).
     this.db.run("UPDATE sessions SET account = ? WHERE id = ?", [account, id])
-    session.account = account ?? undefined
+    const session = this.cache.get(id)
+    if (session) session.account = account ?? undefined
   }
 
   setAgentSessionId(id: string, agentSessionId: string): void {
@@ -425,6 +425,12 @@ export class SessionStore {
 
   listSuspended(): Session[] {
     return [...this.cache.values()].filter(s => s.status === "suspended")
+  }
+
+  /** Every session on `account` (archived ones too: they resume on it), oldest first. */
+  onAccount(account: string): Array<{ id: string; agent: string; archived: boolean }> {
+    const rows = this.db.query("SELECT id, agent, status FROM sessions WHERE account = ? ORDER BY created_at, id").all(account) as Array<{ id: string; agent: string; status: string }>
+    return rows.map(r => ({ id: r.id, agent: r.agent, archived: r.status === "archived" }))
   }
 
   listArchived(): SessionRecord[] {

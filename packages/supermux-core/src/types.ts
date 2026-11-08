@@ -176,6 +176,12 @@ export type CoreEvent =
   | { type: "account.refreshed"; sessionId: string; account: string }
   /** A rate limit was hit, or the account was refused, and no other account of the agent is available. */
   | { type: "account.exhausted"; sessionId: string; agent: string; account: string; reason: "limit" | "unavailable" }
+  /**
+   * A turn (or background work) stopped on a usage limit and the session cannot carry on now: no other
+   * account is left, auto-switch is off, or its account is never switched (isolated). `account` frees up
+   * first, at `resetsAt` (absent: no reset time is known). `background`: the limit hit background work.
+   */
+  | { type: "account.waiting"; sessionId: string; agent: string; account: string; resetsAt?: Date; background: boolean }
   /** The agent's API refused `account` (401/403) on this session's turn; it is now marked unavailable. */
   | { type: "account.unavailable"; sessionId: string; agent: string; account: string; reason: string }
   /** A turn completed on an account marked unavailable: the mark is cleared. */
