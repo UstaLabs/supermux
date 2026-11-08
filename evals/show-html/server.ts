@@ -49,13 +49,15 @@ function readPage(args: Record<string, unknown>): { html: string } | { error: st
   return { html: readFileSync(path, "utf8") }
 }
 
-// A forced problem answers the first show_html only: preview_html's screenshots would contradict it.
-async function check(html: string, screenshots: boolean, tool: string): Promise<CheckResult & { forced: boolean }> {
+// A forced problem answers the first check, whichever tool asked. A forced preview carries no screenshots, which would
+// contradict it; the page that comes after is checked for real.
+async function check(html: string, screenshots: boolean): Promise<CheckResult & { forced: boolean }> {
   browser ??= launchBrowser()
   const result = await checkPage(html, await browser, { screenshots })
-  if (forced && !forcedUsed && result.checked && tool === "show_html") {
+  if (forced && !forcedUsed && result.checked) {
     forcedUsed = true
-    return { ...result, problems: [forcedProblem(forced)], forced: true }
+    const { screenshots: _drop, ...rest } = result
+    return { ...rest, problems: [forcedProblem(forced)], forced: true }
   }
   return { ...result, forced: false }
 }
@@ -98,7 +100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const pageFile = join("pages", `${n}-${name}.html`)
   writeFileSync(join(dir, pageFile), page.html)
 
-  const r = await check(page.html, name === "preview_html", name)
+  const r = await check(page.html, name === "preview_html")
   const shown = name === "show_html" && r.problems.length === 0
   const base = { seq: n, tool: name, title, page: pageFile, bytes: Buffer.byteLength(page.html), source: args.file ? "file" : "html",
     hash: createHash("sha1").update(page.html).digest("hex").slice(0, 12), height: args.height, checked: r.checked,

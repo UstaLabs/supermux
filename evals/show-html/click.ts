@@ -2,12 +2,13 @@
 // send with no real input in the card (page-api.ts); the host then accepts it only if the browser says the user just
 // activated the page and the card was the last thing the user touched. Real clicks come through the DevTools protocol.
 import type { Browser, Page } from "playwright"
+import { randomUUID } from "node:crypto"
 import { cardDocument } from "./check"
 
 export interface Delivery { card: string; text: string; ok: boolean; reason?: string }
 
 /** A host page with one or more cards; window.__deliveries lists every send and refusal, in order. */
-export function clickHost(cards: Record<string, string>): string {
+export function clickHost(cards: Record<string, { html: string; nonce: string }>): string {
   const frames = Object.keys(cards).map((id) => `<iframe id="${id}" sandbox="allow-scripts" title="${id}"></iframe>`).join("")
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 html{color-scheme:dark} html,body{margin:0;background:#16181a} iframe{display:block;border:0;width:100%;height:320px}
@@ -17,30 +18,36 @@ window.__forged = 0;
 let lastHostInput = 0;
 for (const t of ["pointerdown", "keydown"]) addEventListener(t, (e) => { if (e.isTrusted) lastHostInput = Date.now(); }, { capture: true });
 const cards = ${JSON.stringify(cards).replace(/</g, "\\u003c")};
-for (const [id, html] of Object.entries(cards)) {
-  const frame = document.getElementById(id);
-  frame.addEventListener("load", () => {
-    // The card's private channel: only the shim holds the other end, so a page can't post a send of its own.
-    const ch = new MessageChannel();
-    ch.port1.onmessage = (e) => {
-      const m = e.data;
-      if (!m || (m.sm !== "send" && m.sm !== "refused")) return;
-      if (m.sm === "refused") { window.__deliveries.push({ card: id, text: String(m.text), ok: false, reason: String(m.reason) }); return; }
-      const reason = lastHostInput > m.clickAt ? "the user touched the app since" : "";
-      window.__deliveries.push({ card: id, text: String(m.text).slice(0, 2000), ok: !reason, ...(reason ? { reason } : {}) });
-      ch.port1.postMessage({ sm: "sent", id: m.id, ok: !reason, reason });
-    };
-    frame.contentWindow.postMessage({ sm: "port" }, "*", [ch.port2]);
-  });
-  frame.src = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-}
-// A page posting to the app's window directly is not the shim: never a send.
-addEventListener("message", (e) => { if (e.data && e.data.sm === "send") window.__forged++; });
+const opened = new Set();
+addEventListener("message", (e) => {
+  const m = e.data;
+  if (m && m.sm === "send") { window.__forged++; return; }  // a page posting to the app itself is not the shim
+  if (!m || m.sm !== "hello" || !e.ports[0]) return;
+  // Only the document this host built, once: its shim knows the nonce, a document the page navigated to doesn't.
+  const id = Object.keys(cards).find((k) => cards[k].nonce === m.nonce && document.getElementById(k).contentWindow === e.source);
+  if (!id || opened.has(id)) return;
+  opened.add(id);
+  const port = e.ports[0];
+  port.onmessage = (ev) => {
+    const d = ev.data;
+    if (!d || (d.sm !== "send" && d.sm !== "refused")) return;
+    if (d.sm === "refused") { window.__deliveries.push({ card: id, text: String(d.text), ok: false, reason: String(d.reason) }); return; }
+    const age = Date.now() - Number(d.clickAt);
+    const reason = !(age >= 0 && age <= 1000) ? "no recent click" : lastHostInput > d.clickAt ? "the user touched the app since"
+      : !navigator.userActivation.isActive ? "no user activation" : "";
+    window.__deliveries.push({ card: id, text: String(d.text).slice(0, 2000), ok: !reason, ...(reason ? { reason } : {}) });
+    port.postMessage({ sm: "sent", id: d.id, ok: !reason, reason });
+  };
+});
+for (const [id, c] of Object.entries(cards)) document.getElementById(id).src = URL.createObjectURL(new Blob([c.html], { type: "text/html" }));
 </script></body></html>`
 }
 
 export async function openCards(browser: Browser, pages: Record<string, string>): Promise<Page> {
-  const cards = Object.fromEntries(Object.entries(pages).map(([id, html]) => [id, cardDocument(html)]))
+  const cards = Object.fromEntries(Object.entries(pages).map(([id, html]) => {
+    const nonce = randomUUID()
+    return [id, { html: cardDocument(html, "dark", nonce), nonce }]
+  }))
   const page = await browser.newPage({ viewport: { width: 720, height: 900 }, colorScheme: "dark" })
   await page.route("https://host.click.invalid/", (r) => r.fulfill({ contentType: "text/html", body: clickHost(cards) }))
   await page.goto("https://host.click.invalid/", { waitUntil: "domcontentloaded" })

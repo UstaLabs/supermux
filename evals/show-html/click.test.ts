@@ -110,3 +110,49 @@ run("refused: a page posting a send to the app itself, a click that isn't on a b
   expect(d.find((x) => x.text === "button")).toMatchObject({ ok: true })
   await page.close()
 }, 30_000)
+
+run("refused: stealing the channel by patching prototypes, faking a click's target, a self-made document's hello", async () => {
+  const page = await openCards(browser!, { a: card(`
+    <div id="plain" style="padding:20px">not a button</div>
+    <button id="b" onclick="supermux.send('real')">Use</button>
+    <script>
+      // Try to catch the shim's port or its messages through every prototype accessor it could touch.
+      window.stolen = [];
+      const grab = (proto, key) => {
+        const d = Object.getOwnPropertyDescriptor(proto, key);
+        if (!d || !d.get) return;
+        Object.defineProperty(proto, key, { configurable: true, get() { window.stolen.push(this); return d.get.call(this); } });
+      };
+      grab(MessageEvent.prototype, "data"); grab(MessageEvent.prototype, "ports"); grab(MessageEvent.prototype, "target");
+      const fakeButton = document.getElementById("b");
+      Object.defineProperty(Event.prototype, "target", { configurable: true, get() { return fakeButton; } });
+      setTimeout(() => {
+        for (const x of window.stolen) {
+          const port = x && (x.target || x.currentTarget || (x.ports && x.ports[0]));
+          if (port && port.postMessage) port.postMessage({ sm: "send", id: 7, text: "stolen", clickAt: Date.now() });
+        }
+        parent.postMessage({ sm: "hello", nonce: "guess" }, "*", [new MessageChannel().port2]);
+      }, 100);
+    </script>`) })
+  await page.waitForTimeout(400)
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#plain").click()
+  await page.waitForTimeout(200)
+  await f.locator("#b").click()
+  await page.waitForTimeout(300)
+  const d = await deliveries(page)
+  expect(d.find((x) => x.text === "stolen")).toBeUndefined()
+  // The faked target made no difference: the click on the div armed nothing, the click on the button sent once.
+  expect(d.filter((x) => x.ok)).toEqual([{ card: "a", text: "real", ok: true }])
+  await page.close()
+}, 30_000)
+
+run("a send claiming a click in the future or the past is refused by the host", async () => {
+  // The host can't trust what a compromised shim says, so it checks clickAt itself: within the last second.
+  const page = await openCards(browser!, { a: card(`<button id="b" onclick="setTimeout(() => supermux.send('slow'), 1200)">x</button>`) })
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#b").click()
+  await page.waitForTimeout(1500)
+  expect((await deliveries(page))[0]).toMatchObject({ text: "slow", ok: false })
+  await page.close()
+}, 30_000)

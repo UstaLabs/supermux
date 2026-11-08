@@ -64,6 +64,7 @@ async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: 
   const parsed = inv.parse(stdout)
   return {
     runId: o.runId, agent: o.agent, model: o.model, arm: o.arm, prompt: o.prompt.id, sample: o.sample, expect: o.prompt.expect,
+    ...(o.prompt.heldOut ? { heldOut: true } : {}),
     score: score(o.prompt, calls, shownPage, sendWorks, parsed.finalText), usage: parsed.usage, finalText: parsed.finalText.slice(0, 2000),
     refusedTools: parsed.refusedTools, exitCode, timedOut, ms: Date.now() - started,
     ...(exitCode !== 0 && !timedOut ? { error: stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400) } : {}),

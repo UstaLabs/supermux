@@ -9,7 +9,8 @@ const frac = (num: number, den: number) => (den ? `${num}/${den}` : "–")
 export function table(results: Result[]): string {
   const groups = new Map<string, Result[]>()
   for (const r of results) {
-    const key = `${r.agent} ${r.model}\t${r.arm}`
+    // Held-out prompts get rows of their own: the wordings were tuned without them.
+    const key = `${r.agent} ${r.model}\t${r.arm}${r.heldOut ? " · held out" : ""}`
     groups.set(key, [...(groups.get(key) ?? []), r])
   }
   const rows = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, rs]) => {
