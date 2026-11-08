@@ -1,5 +1,8 @@
 package dev.supermux.webview.engine
 
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -328,6 +331,21 @@ public interface WebEngine {
     public fun goForward()
     public fun reload()
     public fun stop()
+
+    /** Finds [query] in the page, the next match after the current one, or the previous one when [backwards]. Null when the engine can't. */
+    public suspend fun find(query: String, backwards: Boolean): FindResult? = null
+
+    /** Clears find's highlight and selection. */
+    public fun clearFind() {}
+
+    /** Sets the page's zoom, 1.0 being 100 %. False when the engine can't. */
+    public fun setZoom(factor: Float): Boolean = false
+
+    /** Puts [cookie] in the view's profile, done when this returns true. False when the engine can't. */
+    public suspend fun setCookie(cookie: WebCookie): Boolean = false
+
+    /** Opens the engine's inspector on this page, or says where the user can. */
+    public fun openInspector(): InspectorResult = InspectorResult.Unsupported
 
     /** Runs [script] in the page and returns its result JSON-encoded, or null. */
     public suspend fun evaluate(script: String): String?

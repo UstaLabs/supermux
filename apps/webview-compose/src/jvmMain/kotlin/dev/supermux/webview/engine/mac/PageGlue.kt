@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.mac
 
 import androidx.compose.ui.geometry.Rect
+import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.engine.EngineConfig
 import dev.supermux.webview.engine.webkit.WebKitScripts
@@ -29,6 +30,18 @@ internal interface PageGlue {
     fun goBack()
     fun goForward()
     fun stop()
+
+    /** Finds [query]; answered by a Result whose json is `true` or `false` (WebKit says only found or not). */
+    fun find(request: Long, query: String, backwards: Boolean)
+
+    /** Clears find's selection. */
+    fun clearFind()
+
+    /** The page's zoom, WebKit's `pageZoom`. */
+    fun setPageZoom(factor: Double)
+
+    /** Puts a cookie in the page's data store; answered by a Result, ok once it's stored. */
+    fun setCookie(request: Long, cookie: WebCookie)
 
     /** Runs [script] in the page's own world, or WebKit's default client world; a `RESULT` with its JSON. */
     fun evaluate(request: Long, script: String, pageWorld: Boolean)
@@ -138,6 +151,15 @@ internal class NativePageGlue(override val token: Long, handle: Long) : PageGlue
     override fun goBack() = live(Unit) { MacGlue.goBack(it) }
     override fun goForward() = live(Unit) { MacGlue.goForward(it) }
     override fun stop() = live(Unit) { MacGlue.stop(it) }
+    override fun find(request: Long, query: String, backwards: Boolean) = live(Unit) { MacGlue.find(it, request, query, backwards) }
+    override fun clearFind() = live(Unit) { MacGlue.clearFind(it) }
+    override fun setPageZoom(factor: Double) = live(Unit) { MacGlue.setPageZoom(it, factor) }
+    override fun setCookie(request: Long, cookie: WebCookie) = live(Unit) {
+        MacGlue.setCookie(
+            it, request, cookie.name, cookie.value, cookie.url, cookie.path, cookie.domain,
+            cookie.secure, cookie.httpOnly, cookie.sameSite, cookie.maxAgeSeconds ?: -1L,
+        )
+    }
     override fun evaluate(request: Long, script: String, pageWorld: Boolean) = live(Unit) { MacGlue.evaluate(it, request, script, pageWorld) }
     override fun deliver(body: String, json: String, target: String, eventName: String) =
         live(Unit) { MacGlue.deliver(it, body, json, target, eventName) }

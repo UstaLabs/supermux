@@ -1,5 +1,8 @@
 package dev.supermux.webview.testing
 
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -309,16 +312,58 @@ public class FakeWebEngine(
         allowed("stop")
     }
 
+    /** What [find] answers; null (the default) is an engine that can't. */
+    public var findAnswer: ((query: String, backwards: Boolean) -> FindResult?)? = null
+
+    /** What [openInspector] answers. */
+    public var inspectorAnswer: InspectorResult = InspectorResult.Opened
+
+    private val cookieJar = mutableListOf<WebCookie>()
+
+    /** Every cookie [setCookie] put in this engine's profile, in order. */
+    public val cookies: List<WebCookie> get() = cookieJar
+
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        record("find:$query:$backwards")
+        if (!allowed("find")) return null
+        return findAnswer?.invoke(query, backwards)
+    }
+
+    override fun clearFind() {
+        record("clearFind")
+        allowed("clearFind")
+    }
+
+    override fun setZoom(factor: Float): Boolean {
+        record("zoom:$factor")
+        return allowed("setZoom")
+    }
+
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        record("cookie:${cookie.name}")
+        if (!allowed("setCookie")) return false
+        cookieJar += cookie
+        return true
+    }
+
+    override fun openInspector(): InspectorResult {
+        record("inspector")
+        return if (allowed("openInspector")) inspectorAnswer else InspectorResult.Unsupported
+    }
+
     override fun reload() {
         record("reload")
         if (!allowed("reload")) return
         current?.let(::documentLoaded)
     }
 
+    /** What [evaluate] answers for a script: its JSON result, or null. */
+    public var evaluateAnswer: (String) -> String? = { null }
+
     override suspend fun evaluate(script: String): String? {
         record("eval:", script)
-        allowed("evaluate")
-        return null
+        if (!allowed("evaluate")) return null
+        return evaluateAnswer(script)
     }
 
     override fun postMessage(json: String, targetOrigin: String) {

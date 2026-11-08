@@ -357,6 +357,31 @@ Activation.OnInteraction                    // very long lists: a snapshot until
   hostBridge.onRestoreState(saved => { input.value = saved.draft; });
   ```
 
+## Find, zoom, cookies, the inspector and the page's icon
+
+What a browser view needs beyond navigation (#105's Browser tab), on the navigator. Each needs a live engine, and each
+says so when it can't (no engine, or an engine without it yet):
+
+```kotlin
+val hit: FindResult? = state.navigator.find("password")        // null: no live engine, or one that can't
+state.navigator.find("password", backwards = true)              // the previous match
+state.navigator.clearFind()
+state.navigator.setZoom(1.25f)                                  // 25–500 %; false when the engine can't
+state.navigator.setCookie(WebCookie(name = "cmux_preview", value = token, url = "https://host/p/", path = "/p/"))
+when (val i = state.navigator.openInspector()) { is InspectorResult.Elsewhere -> showHint(i.hint); else -> {} }
+val icon: String? = state.navigator.favicon()                   // <link rel="icon">, else /favicon.ico on the origin
+```
+
+- **`setCookie`** puts the cookie in the view's profile and returns once it's there: set it before loading the page
+  that needs it. An ephemeral profile's cookies go with it. `WebCookie.toString` leaves the value out (it's a credential).
+- **`favicon`** is the same on every engine: one script, read from the page.
+- **Per engine**, today:
+  - macOS: find says found or not (`count` is null: WebKit's `findString` answers only that), zoom is WebKit's
+    `pageZoom`, the cookie goes into the view's `WKHTTPCookieStore`, and the inspector is Safari's (`Elsewhere`: Safari ▸
+    Develop lists the page, which `WebSettings.inspectable` makes inspectable).
+  - Android, iOS, Windows, Linux, the web: not yet. `find` answers null, `setZoom` and `setCookie` false,
+    `openInspector` `Unsupported` (the engine API's defaults), until their own plans land.
+
 ## The bridge
 
 The page side is `window.hostBridge`, the same on every engine; the app side is `state.bridge`. Messages are JSON.

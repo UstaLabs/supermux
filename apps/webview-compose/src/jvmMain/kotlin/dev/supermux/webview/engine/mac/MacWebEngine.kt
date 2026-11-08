@@ -1,5 +1,8 @@
 package dev.supermux.webview.engine.mac
 
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -358,6 +361,33 @@ internal class MacWebEngine(
     override fun stop() {
         if (!released) glue.stop()
     }
+
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        if (released || query.isEmpty()) return null
+        val result = request { glue.find(it, query, backwards) } as? GlueEvent.Result ?: return null
+        return if (result.ok) FindResult(found = result.json == "true") else null
+    }
+
+    override fun clearFind() {
+        if (!released) glue.clearFind()
+    }
+
+    override fun setZoom(factor: Float): Boolean {
+        if (released) return false
+        glue.setPageZoom(factor.toDouble())
+        return true
+    }
+
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        if (released) return false
+        val result = request { glue.setCookie(it, cookie) } as? GlueEvent.Result ?: return false
+        return result.ok
+    }
+
+    /** WebKit opens its inspector only from Safari: the page is inspectable (its setting), and Develop lists it. */
+    override fun openInspector(): InspectorResult = InspectorResult.Elsewhere(
+        "Safari ▸ Develop ▸ this Mac ▸ the page (turn on Show features for web developers in Safari's Advanced settings)",
+    )
 
     override suspend fun evaluate(script: String): String? = if (released) null else evaluateIn(pageWorld = true, script = script)
 

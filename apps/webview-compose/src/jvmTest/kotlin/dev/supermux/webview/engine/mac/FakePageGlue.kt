@@ -1,6 +1,7 @@
 package dev.supermux.webview.engine.mac
 
 import androidx.compose.ui.geometry.Rect
+import dev.supermux.webview.WebCookie
 
 /**
  * A [PageGlue] that records every call as a line (`"loadHtml 3 https://c1.invalid/"`) and answers the two calls that
@@ -52,6 +53,22 @@ internal class FakePageGlue(override val token: Long = 1) : PageGlue {
 
     override fun stop() {
         calls += "stop"
+    }
+
+    override fun find(request: Long, query: String, backwards: Boolean) {
+        calls += "find $request $query $backwards"
+    }
+
+    override fun clearFind() {
+        calls += "clearFind"
+    }
+
+    override fun setPageZoom(factor: Double) {
+        calls += "setPageZoom $factor"
+    }
+
+    override fun setCookie(request: Long, cookie: WebCookie) {
+        calls += "setCookie $request ${cookie.name} ${cookie.path} ${cookie.domain} ${cookie.httpOnly}"
     }
 
     override fun evaluate(request: Long, script: String, pageWorld: Boolean) {
