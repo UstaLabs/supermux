@@ -231,12 +231,21 @@ describe("claude normalizer", () => {
     expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: notLoggedIn, errorType: "not_signed_in" }])
   })
 
-  test("result: any synthetic API error message is the turn's error only, not a reply too", () => {
-    const n = createClaudeNormalizer()
-    const out = [...n(syntheticError("rate_limit", "API Error: 529 Overloaded")), ...n(apiErrorResult("API Error: 529 Overloaded", 529))]
-    expect(out.filter(e => e.kind === "assistant-message")).toEqual([])
-    expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: "API Error: 529 Overloaded" }])
-  })
+  for (const [error, status, text] of [
+    ["rate_limit", 429, "You've hit your limit · resets 5pm"],
+    ["billing_error", 402, "Credit balance is too low"],
+    ["server_error", 529, "API Error: 529 Overloaded"],
+    ["server_error", 500, "API Error: 500 Internal server error"],
+    ["invalid_request", 400, "API Error: 400 prompt is too long"],
+    ["unknown", null, "API Error: Connection error."],
+  ] as const) {
+    test(`result: a synthetic ${error} (${status}) message is the turn's error only, not a reply too`, () => {
+      const n = createClaudeNormalizer()
+      const out = [...n(syntheticError(error, text)), ...n(apiErrorResult(text, status))]
+      expect(out.filter(e => e.kind === "assistant-message")).toEqual([])
+      expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: text }])
+    })
+  }
 
   test("result: a refused login (401) stays account_unavailable, so Core can switch the account", () => {
     const n = createClaudeNormalizer()
