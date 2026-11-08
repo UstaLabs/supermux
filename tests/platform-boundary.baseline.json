@@ -192,8 +192,6 @@
     "src/core/agents/install.ts": 1,
     "src/core/agents/opencode/spawn.ts": 1,
     "src/core/git/requirement.ts": 1,
-    "src/core/lsp/install.ts": 1,
-    "src/core/lsp/server.ts": 1,
     "src/core/power/keep-awake.ts": 1,
     "src/core/windows/user-install.ts": 1,
     "src/main.ts": 2
