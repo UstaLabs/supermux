@@ -8,6 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
+import { createHash } from "node:crypto"
 import type { Browser } from "playwright"
 import { checkPage, describeProblem, launchBrowser, PHONE, type CheckResult, type Problem } from "./check"
 import { toolsFor, type Arm } from "./arms"
@@ -27,7 +28,6 @@ export function forcedProblem(kind: Problem["kind"]): Problem {
     case "blank": return { kind: "blank" }
     case "overflow": return { kind: "overflow", width: 612, widest: "table" }
     case "script-error": return { kind: "script-error", message: "TypeError: Cannot read properties of undefined (reading 'map')" }
-    case "endless-height": return { kind: "endless-height" }
   }
 }
 
@@ -49,10 +49,11 @@ function readPage(args: Record<string, unknown>): { html: string } | { error: st
   return { html: readFileSync(path, "utf8") }
 }
 
-async function check(html: string, screenshots: boolean): Promise<CheckResult & { forced: boolean }> {
+// A forced problem answers the first show_html only: preview_html's screenshots would contradict it.
+async function check(html: string, screenshots: boolean, tool: string): Promise<CheckResult & { forced: boolean }> {
   browser ??= launchBrowser()
   const result = await checkPage(html, await browser, { screenshots })
-  if (forced && !forcedUsed && result.checked) {
+  if (forced && !forcedUsed && result.checked && tool === "show_html") {
     forcedUsed = true
     return { ...result, problems: [forcedProblem(forced)], forced: true }
   }
@@ -97,11 +98,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const pageFile = join("pages", `${n}-${name}.html`)
   writeFileSync(join(dir, pageFile), page.html)
 
-  const r = await check(page.html, name === "preview_html")
+  const r = await check(page.html, name === "preview_html", name)
   const shown = name === "show_html" && r.problems.length === 0
   const base = { seq: n, tool: name, title, page: pageFile, bytes: Buffer.byteLength(page.html), source: args.file ? "file" : "html",
-    height: args.height, checked: r.checked, forced: r.forced, problems: r.problems, notes: r.notes, heights: r.heights,
-    unpromptedSends: r.unpromptedSends, ms: Date.now() - started }
+    hash: createHash("sha1").update(page.html).digest("hex").slice(0, 12), height: args.height, checked: r.checked,
+    forced: r.forced, problems: r.problems, notes: r.notes, heights: r.heights, background: r.background,
+    endlessHeight: r.endlessHeight, unpromptedSends: r.unpromptedSends, ms: Date.now() - started }
 
   if (name === "preview_html") {
     record({ ...base, shown: false })

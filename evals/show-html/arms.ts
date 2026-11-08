@@ -7,12 +7,14 @@ export const ARMS: Arm[] = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 export interface ToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
 
-const PAGE_RULES_1 = "One self-contained document: inline CSS and JS; libraries from public CDNs are fine; no local files. " +
+const PAGE_RULES_1 = "One self-contained document: inline CSS and JS; libraries from public CDNs are fine; no local files, no storage. " +
   "Style with the theme variables (var(--sm-fg), --sm-muted-fg, --sm-card, --sm-border, --sm-primary, --sm-chart-1 to --sm-chart-5) " +
-  "and leave the page background transparent. Fluid width: it is about 390 px wide on a phone and 720 px on a desktop. No vh units."
+  "and leave the page background transparent. Fluid width: it is about 390 px wide on a phone and 720 px on a desktop. Fixed pixel " +
+  "heights for charts; no vh units. Example: <div style=\"height:14px;width:62%;background:var(--sm-chart-1)\"></div>"
 
 const PAGE_RULES_2 = `The page renders in a sandboxed frame inside the chat, on desktops and phones, in the user's light or dark theme.
-- One self-contained document: inline CSS and JS. Libraries from public CDNs load fine; local files and localhost don't.
+- One self-contained document: inline CSS and JS. Libraries from public CDNs load fine; local files, localhost and storage
+  (localStorage, cookies) don't.
 - Colours come from the theme variables on :root, so the page matches the app: --sm-fg, --sm-muted-fg, --sm-card,
   --sm-border, --sm-muted, --sm-primary, --sm-chart-1 … --sm-chart-5. Leave html and body without a background.
 - Width is fluid: about 390 px on a phone, 720 px on a desktop. Give charts a fixed pixel height. Don't use vh units or
@@ -20,11 +22,11 @@ const PAGE_RULES_2 = `The page renders in a sandboxed frame inside the chat, on 
 - Example:
   <style>.bar{height:14px;border-radius:4px;background:var(--sm-chart-1)}</style>
   <div class="bar" style="width:62%"></div>
-  <button onclick="supermux.send('Use option B')">Use B</button>`
+  <button onclick="supermux.send('Use B')">Use B</button>`
 
-const SEND_1 = "A button in the page can send the user's choice back to you with supermux.send(text); it works only on their click."
-const SEND_2 = "If the user should pick something, give the page a button that calls supermux.send(text): their click sends that text " +
-  "to you as their message. It only works from a real click."
+const SEND_1 = "A <button> in the page can send the user's choice back to you with supermux.send(text); only their click on a button sends."
+const SEND_2 = "A <button> that calls supermux.send(text) lets the user answer you: their click sends that text to you as their message. " +
+  "Only a real click on a button sends, so a choice needs a button, not a clickable div."
 
 const RESULT_A = "The result says whether the page was shown. If it lists problems, the page was not shown."
 const RESULT_B = "show_html checks the page again: if it lists problems, the page was not shown."
@@ -33,12 +35,13 @@ const html = { type: "string", description: "The page: a whole HTML document or 
 const file = { type: "string", description: "Or a path to an .html file." }
 
 function showHtml(variant: Variant, wording: Wording): ToolSpec {
-  const what = "Show the user a live HTML page as a card in the chat: charts, comparisons, small interactive tools, UI mockups."
+  const what = "Show the user a live HTML page as a card in the chat: a chart, a comparison, a small interactive tool, a mockup."
+  // Both wordings say the same things (when, when not, how, send, the result); 1 as terse rules, 2 with reasons and an example.
   const when = wording === "1"
-    ? "Use it when a visual or interactive result explains better than text. Not for plain answers, code changes, or an image to post (attach a PNG)."
-    : "Use it when seeing or trying something beats reading about it: numbers to compare, options to pick from, a value to tune, a " +
-      "layout to look at. Also without being asked, when the user pastes data and asks a question a chart answers. Don't use it for a " +
-      "plain answer, for code work that only mentions charts, or for an image they want to post (make a PNG and attach it)."
+    ? "Use it when a visual or interactive result explains better than text, asked for or not. Not for an answer that is a fact or a sentence, not for code work, not for an image to post (attach a PNG)."
+    : "Use it when the result is easier to see or try than to read, whether or not the user asked for a visual. A fact, a one-line answer " +
+      "or code work stays in plain text, because a card would only slow them down. An image they want to post is a PNG you attach, " +
+      "since a card can't leave the chat."
   const before = variant === "B" ? " Call preview_html first and fix what it reports." : ""
   return {
     name: "show_html",
@@ -77,23 +80,25 @@ export function toolsFor(arm: Arm): ToolSpec[] {
   return variant === "B" ? [PREVIEW, showHtml(variant, wording), ATTACH] : [showHtml(variant, wording), ATTACH]
 }
 
-/** The "Interactive HTML" section supermux would put in the environment prompt for this arm. */
+/** supermux's own "Diagrams" section (prompts/environment.md), which every agent already has. */
+const DIAGRAMS = "## Diagrams\n\nsupermux renders mermaid: put a diagram in a fenced code block tagged `mermaid` and the app draws it " +
+  "(flowcharts, sequence, class, state, ER, gantt, mindmaps and more). Use one when a picture explains a flow or structure better than prose.\n"
+
+/** The "Interactive HTML" section supermux would put in the environment prompt for this arm, after "Diagrams". */
 export function instructionsFor(arm: Arm): string {
   const [variant, wording] = [arm[0] as Variant, arm[1] as Wording]
   const check = variant === "C"
     ? "\n\nBefore you finish: read show_html's result. If it lists problems, the user saw nothing: fix the page and call show_html again."
     : variant === "B" ? "\n\nCheck a page with preview_html, fix what it reports, then show it with show_html." : ""
   const body = wording === "1"
-    ? "You can show the user a live HTML page in the chat with the show_html tool. Use it when a chart, a comparison, a small " +
-      "calculator or a mockup explains better than text, including when the user pastes numbers and asks a question a chart " +
-      "answers. Don't use it for plain answers, for code work, or for an image to post. Keep the page self-contained, use the " +
-      "theme variables with a transparent background, and keep it fluid down to phone width."
-    : "The show_html tool puts a live page in the chat as a card. Reach for it when seeing beats reading:\n" +
-      "- numbers someone wants to compare or understand (also when they paste data and ask a question a chart would answer);\n" +
-      "- options to pick from, values to tune, a layout or a flow to look at; a small tool they'll use once.\n" +
-      "Answer in plain text instead when the answer is a fact or a sentence, when they ask you to just tell them, or when the " +
-      "work is code. An image to post is a PNG you attach, not a card.\n" +
-      "Pages render on phones too: fluid width, the --sm-* theme variables, no page background. A button with " +
-      "supermux.send(text) lets them answer you with a click."
-  return `## Interactive HTML\n\n${body}${check}\n`
+    ? "The show_html tool shows the user a live HTML page as a card in the chat. Use it when a visual or interactive result " +
+      "explains better than text, asked for or not. Not for an answer that is a fact or a sentence, not for code work, not for an " +
+      "image to post. One self-contained page, the --sm-* theme variables, a transparent background, fluid down to phone width. " +
+      "A button with supermux.send(text) lets the user answer you."
+    : "The show_html tool puts a live page in the chat as a card. Reach for it when the result is easier to see or try than to read, " +
+      "whether or not the user asked for a visual. Keep plain text for a fact, a one-line answer or code work: a card there only " +
+      "slows them down. An image to post is a PNG you attach, because a card can't leave the chat.\n" +
+      "Cards render on phones too, so keep the page fluid, use the --sm-* theme variables and leave the background transparent. " +
+      "A button calling supermux.send(text) lets the user answer you with a click."
+  return `${DIAGRAMS}\n## Interactive HTML\n\n${body}${check}\n`
 }

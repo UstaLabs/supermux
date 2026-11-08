@@ -21,17 +21,20 @@ export function table(results: Result[]): string {
     const flagged = ok.filter((r) => r.score.repaired !== undefined)
     const shown = ok.filter((r) => r.score.usesTheme !== undefined)
     const sends = ok.filter((r) => r.score.sendWorks !== undefined)
+    const previewed = ok.filter((r) => r.score.shows > 0)
     const tokens = ok.reduce((n, r) => n + r.usage.inputTokens + r.usage.cachedTokens + r.usage.outputTokens, 0)
     const cost = ok.reduce((n, r) => n + (r.usage.costUsd ?? 0), 0)
     return `| ${model} | ${arm} | ${frac(cards.filter((r) => r.score.toolUse).length, cards.length)} | ` +
       `${frac(none.filter((r) => r.score.toolUse).length, none.length)} | ${pct(checked.filter((r) => r.score.firstClean).length, checked.length)} | ` +
       `${frac(flagged.filter((r) => r.score.repaired).length, flagged.length)} | ${pct(shown.filter((r) => r.score.usesTheme && r.score.transparent).length, shown.length)} | ` +
-      `${frac(sends.filter((r) => r.score.sendWorks).length, sends.length)} | ${ok.length ? Math.round(tokens / ok.length / 1000) : "–"}k | ` +
+      `${frac(sends.filter((r) => r.score.sendWorks).length, sends.length)} | ` +
+      `${arm!.startsWith("B") ? frac(previewed.filter((r) => r.score.previewedFirst).length, previewed.length) : "–"} | ` +
+      `${ok.length ? Math.round(tokens / ok.length / 1000) : "–"}k | ` +
       `$${cost.toFixed(2)} | ${rs.length - ok.length} |`
   })
   return [
-    "| model | arm | card when asked | no card when not | 1st page clean | repaired after a problem | theme + transparent | click sends | tokens/run | cost | failed runs |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
+    "| model | arm | card when asked | no card when not | 1st page clean | repaired after a problem | theme + transparent | click sends | previewed first | tokens/run | cost | failed runs |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows,
   ].join("\n")
 }

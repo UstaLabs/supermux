@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import type { Browser } from "playwright"
 import { findBrowser, launchBrowser } from "./check"
-import { clickRoundTrip, deliveries, openCards } from "./click"
+import { clickRoundTrip, deliveries, forged, openCards } from "./click"
 
 let browser: Browser | undefined
 beforeAll(async () => { browser = await launchBrowser() }, 30_000)
@@ -39,7 +39,7 @@ run("refused: on load, from a timer, from a script click, after the window, a se
   await page.waitForTimeout(1600)
   const d = await deliveries(page)
   const byText = (t: string) => d.filter((x) => x.text === t)
-  expect(byText("on load")).toEqual([{ card: "a", text: "on load", ok: false, reason: "no click" }])
+  expect(byText("on load")).toEqual([{ card: "a", text: "on load", ok: false, reason: "no click on a button" }])
   expect(byText("timer")[0]!.ok).toBe(false)
   expect(byText("real").every((x) => !x.ok)).toBe(true)
   expect(byText("real").length).toBe(2)
@@ -71,7 +71,7 @@ run("refused: the user typed in the app after touching the card", async () => {
   await page.locator("#composer").click()
   await page.waitForTimeout(600)
   const d = await deliveries(page)
-  expect(d).toEqual([{ card: "a", text: "later", ok: false, reason: "not the card the user touched" }])
+  expect(d).toEqual([{ card: "a", text: "later", ok: false, reason: "the user touched the app since" }])
   await page.close()
 }, 30_000)
 
@@ -83,3 +83,30 @@ run("the round trip on an agent's page: clicking its controls gets the choice ba
   expect(r.sent).toEqual(["Use palette A", "Use palette B"])
 }, 30_000)
 
+
+run("refused: a page posting a send to the app itself, a click that isn't on a button, a key that isn't a click", async () => {
+  const page = await openCards(browser!, { a: card(`
+    <div id="swatch" style="cursor:pointer;padding:20px" onclick="supermux.send('swatch')">a swatch</div>
+    <input id="field" value="x">
+    <button id="b" onclick="supermux.send('button')">Use</button>
+    <script>
+      document.getElementById("field").addEventListener("keydown", () => supermux.send("typed"));
+      parent.postMessage({ sm: "send", id: 99, text: "forged", clickAt: Date.now() }, "*");
+    </script>`) })
+  await page.waitForTimeout(300)
+  const f = page.frames().find((fr) => fr.url().startsWith("blob:"))!
+  await f.locator("#swatch").click()
+  await f.locator("#field").press("a")
+  await page.waitForTimeout(1100)
+  await f.locator("#b").focus()
+  await f.locator("#b").press("Enter")
+  await page.waitForTimeout(200)
+  const d = await deliveries(page)
+  expect(await forged(page)).toBe(1)
+  expect(d.find((x) => x.text === "forged")).toBeUndefined()
+  expect(d.find((x) => x.text === "swatch")).toMatchObject({ ok: false, reason: "no click on a button" })
+  expect(d.find((x) => x.text === "typed")!.ok).toBe(false)
+  // Enter on a focused button is a click the browser makes: accessible, and allowed.
+  expect(d.find((x) => x.text === "button")).toMatchObject({ ok: true })
+  await page.close()
+}, 30_000)

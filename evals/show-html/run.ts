@@ -36,7 +36,8 @@ async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: 
     mkdirSync(dirname(join(dir, path)), { recursive: true })
     writeFileSync(join(dir, path), body)
   }
-  const serverEnv: Record<string, string> = { EVAL_ARM: o.arm, EVAL_DIR: dir, ...(o.prompt.force ? { EVAL_FORCE_PROBLEM: o.prompt.force } : {}) }
+  const serverEnv: Record<string, string> = { EVAL_ARM: o.arm, EVAL_DIR: dir, SHOW_HTML_CHECK_CAP_MS: process.env.SHOW_HTML_CHECK_CAP_MS ?? "15000",
+    ...(o.prompt.force ? { EVAL_FORCE_PROBLEM: o.prompt.force } : {}) }
   const inv = invocation(o.agent, { dir, prompt: o.prompt.prompt, model: o.model, instructions: instructionsFor(o.arm), serverEnv, home: o.home })
   const started = Date.now()
   const child = Bun.spawn(inv.cmd, { cwd: dir, env: cleanEnv(inv.env), stdout: "pipe", stderr: "pipe", stdin: "ignore" })
@@ -63,7 +64,7 @@ async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: 
   const parsed = inv.parse(stdout)
   return {
     runId: o.runId, agent: o.agent, model: o.model, arm: o.arm, prompt: o.prompt.id, sample: o.sample, expect: o.prompt.expect,
-    score: score(o.prompt, calls, shownPage, sendWorks), usage: parsed.usage, finalText: parsed.finalText.slice(0, 2000),
+    score: score(o.prompt, calls, shownPage, sendWorks, parsed.finalText), usage: parsed.usage, finalText: parsed.finalText.slice(0, 2000),
     refusedTools: parsed.refusedTools, exitCode, timedOut, ms: Date.now() - started,
     ...(exitCode !== 0 && !timedOut ? { error: stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400) } : {}),
   }

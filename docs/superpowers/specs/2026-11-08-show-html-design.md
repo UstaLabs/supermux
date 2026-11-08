@@ -33,7 +33,7 @@ Variant **A** is the starting point:
 show_html({
   title: string,     // 1–80 characters, the card's title
   html?: string,     // a whole document or a fragment; exactly one of html / file
-  file?: string,     // a path to an .html file the broker can read (sessions run on the broker's host)
+  file?: string,     // a path to an .html file inside the session's working folder
   height?: number,   // px for the first paint when the check can't measure (80–2000, default 280)
 })
 ```
@@ -43,7 +43,15 @@ The result is text, one of:
 - `not shown — fix the page and call show_html again:`, followed by the problems
 - `shown without a check (no Chrome, Edge or Chromium on this machine)`
 
-Notes that don't stop the card follow the result line: resources that failed to load, and the first five `console.error` lines.
+Notes that don't stop the card follow the result line:
+- resources that failed to load;
+- local addresses the check refused;
+- the first five `console.error` lines;
+- a height that follows the frame (see the check);
+- `supermux.send` calls made with no click.
+
+- **`file` stays in the session's folder.** It must resolve, after symlinks, inside the session's working folder and never under `~/.mux`. Otherwise the broker would read files the agent itself may not read into a card with an open network.
+- **The tool carries `readOnlyHint: true`.** It changes no file, so plan modes (Claude's among them) don't refuse it.
 
 The other variants:
 - **B:** `preview_html({ html | file })` checks the page and returns the problems plus a phone and a desktop screenshot, to the agent only. `show_html` publishes, and still checks. This is T3 Code's `html_preview` + `html_render`.
@@ -60,18 +68,22 @@ One check serves the tool's result (every variant), the card's stored heights an
   - A fresh profile for each check under `~/.mux/cache/html-check/`.
   - The page is served by request interception on its own origin.
   - The theme and a stub `supermux` API are injected, as the app does.
-- **Network:** open, except loopback, LAN, link-local and the broker's own hosts.
-  - A local proxy refuses those (`--proxy-server`, `--proxy-bypass-list=<-loopback>`, WebRTC off).
+- **Network:** open, except loopback, LAN, link-local, CGNAT/Tailscale, NAT64/6to4 and the broker's own hosts.
+  - A local SOCKS5 proxy enforces it at the socket, with `--proxy-bypass-list=<-loopback>`, so loopback goes through it too.
+  - The proxy resolves the name itself and refuses it if any of its addresses is private. So `127.0.0.1.nip.io`, a bare LAN hostname or a rebinding name can't get through. It dials IPv4 first.
+  - WebRTC is limited to proxied UDP, which is none.
   - This way a page can't reach services on the host while it is checked. Pages on the user's device are not limited this way.
 - **Widths:** 390 × 844 (a phone) and 720 × 900 (the desktop chat column), dark theme.
-- **Settling:** the check waits for load, then 1 s with no network activity or 4 s, whichever comes first. The cap is 6 s, with at most 2 checks at once.
-- **Problems** (the card is not shown):
+- **Settling:** the check waits for load, then 1 s with no network activity or 4 s, whichever comes first, then for fonts and two frames.
+  - Reduced motion is on, so animated charts are drawn when measured.
+  - The cap is 6 s, with at most 2 checks at once. A check that runs out of time shows the page unchecked and says so.
+- **Problems** (the card is not shown), Ahmet's three:
   1. **Script error:** an uncaught exception or unhandled rejection before the page settles, or a script that failed to load. Message and line.
   2. **Blank:** nothing painted at phone width. Fewer than 40 pixels of the card's screenshot differ by more than 8 levels from its main colour. That also catches text drawn in the background's own colour.
   3. **Overflow at phone width:** the document is wider than 390 px. The result names the widest element.
-  4. **Endless height:** the root element's height follows the frame's: with the frame at 600 px and then at 1200 px, the root grows by 400 px or more (`vh` units, `height: 100%` on html/body). In a card it would grow without end. T3 Code rejects these too.
+- **A note, not a problem:** a page whose height follows its frame (`vh` units, `height: 100%`, a `100vh` child). With the frame at 600 px and then at 1200 px, its lowest element moves down by 400 px or more. The card's ~70 % cap and webview-compose's own loop detector already stop it from growing, so it doesn't block the card.
 - **Heights:** the heights at both widths are stored with the card, measured with the frame at 80 px so they are the content's own. The app sizes the frame from them until the live page reports its own.
-- The four problems stop the card by default (open decision 1).
+- The three problems stop the card by default (open decision 1).
 
 ## The page API
 
@@ -87,35 +99,42 @@ Nothing else crosses the bridge: no session, no tools, no files, no app state.
 ## Click-to-send: only a real click or tap in that card
 
 The rules, the same everywhere:
-- `send` is accepted only within about 1 s after a real pointer, touch or key event that the user made in that card's view.
-- One activation allows one send.
+- A send is armed only by a click that the engine itself made on a **button** in that card: `button`, `[role=button]`, `input[type=button|submit]`.
+  - That covers a tap, a mouse click, Enter or Space on a focused button, and a screen reader's activation.
+  - It doesn't cover a scroll, a drag, a key press elsewhere, or a page's own `el.click()` or `dispatchEvent`.
+- The send must come within 1 s of that click, and one click allows one send.
 - `text` is 1–2000 characters.
+- The send travels on **the card's private channel**: the library's bridge port, which the shim captures before any page script runs. A message the page posts on its own is never a send.
+- The host refuses a send if the user touched the app after that click.
 
 A refused call returns `{ ok: false, reason }` to the page and is logged. It is never sent silently. These are refused:
 - a call while the page loads;
-- a call from a timer or a promise with no gesture;
+- a call from a timer or a promise with no click;
 - a call after a script-made `el.click()` or `dispatchEvent`;
-- a call after the window;
+- a click that isn't on a button, or a key press;
+- a call after the 1 s window;
 - a call from a different card;
-- a second send from one click.
+- a second send from one click;
+- a send after the user touched the app;
+- a message the page posts straight to the app.
 
-**Web (iframe).** Both of these must hold:
-- the frame has transient user activation at call time (`navigator.userActivation.isActive`, read inside the frame by the library's shim);
-- the frame was the last thing the user interacted with (the host's own pointer and focus record).
+Focus is never trusted: a page can move focus itself, and a window that wasn't focused gets no blur on a real click.
 
-Focus alone isn't enough, because a page can refocus itself; T3's `McpAppFrame.tsx` says the same. The shim is the library's and is injected at document start. The host also checks that the message came from that card's frame and nonce.
+**Web (iframe).** The shim is part of the document the app builds, so it runs first. It does three things:
+- It captures `Reflect.apply`, `Element.prototype.closest`, `MessagePort.prototype.postMessage` and the `userActivation` getters.
+- It listens for trusted `click` events in the capture phase.
+- It takes the host's port from the first message, with `stopImmediatePropagation`, so no page listener ever sees it.
 
-**Native (WKWebView on macOS and iOS, Android WebView, WebView2, WPE).** The host records the real pointer, touch and key events delivered to that card's view; webview-compose already tells the user's gestures apart for navigations. The library adds:
-- a stamp of the view's last real input;
-- consuming it, so one gesture allows one send.
+The frame's transient user activation (`navigator.userActivation.isActive`) must hold at call time.
 
-The app accepts `send` within 1 s of that stamp. A page can't fake it, because the stamp lives in the host, not in the page's JavaScript.
+**Native** (WKWebView on macOS and iOS, Android WebView, WebView2, WPE):
+- The same shim runs through the library's document-start bridge. On Apple's engines it runs in its own `WKContentWorld`, out of the page's reach.
+- The host also records the real pointer, touch and key input delivered to that card's view. A send is accepted only within 1 s of that input, consumed by the send.
+- Open decision 4: a screen reader's activation (VoiceOver, TalkBack) reaches the page as a click but delivers no input to the view.
 
 **Built and tested for the web already,** in the eval harness:
 - the shim is `evals/show-html/page-api.ts` and the host is `click.ts`;
-- 5 tests in real Chrome cover each refused case and the happy path.
-
-The shim captures `Reflect.apply` and the `userActivation` getters before any page script runs, so the page can't swap them out.
+- 6 tests in real Chrome cover every refused case above and the happy path.
 
 **Tests for the build:**
 - On every platform, on the library's fake engine: each refused case and the happy path.
@@ -126,13 +145,19 @@ The shim captures `Reflect.apply` and the `userActivation` getters before any pa
 
 1. **Every page has its own opaque origin and is never same-origin with the app.**
    - Native: `https://c<hash>.invalid` in an ephemeral profile, which holds no supermux cookie.
-   - Web: a frame with only `sandbox="allow-scripts"`, loaded from a **`blob:` URL, not a srcdoc**. WebKit sends the app's `SameSite=Lax` cookie from a sandboxed srcdoc frame (measured 2026-11-08, card #104 `isolation-test/`). `blob:` and `data:` frames get it in no engine. The change is in webview-compose's web engine (`IframeWebEngine.kt:85`).
+   - Web: a frame with only `sandbox="allow-scripts"`, loaded from a **`blob:` URL, not a srcdoc**.
+     - WebKit sends the app's `SameSite=Lax` cookie from a sandboxed srcdoc frame (measured 2026-11-08, card #104 `isolation-test/`). `blob:` and `data:` frames get it in no engine.
+     - The change is in webview-compose's web engine (`IframeWebEngine.kt:85`).
+     - With it, the shim's link handling needs its own base: a `blob:` document has no useful `document.baseURI`, so `new URL(raw, baseURI)` throws on relative hrefs.
+     - The engine also revokes each blob URL when its document goes.
 2. **The broker refuses the page.** A request that carries the cookie is refused, before routing:
    - if it has `Origin: null`;
    - if it has `Sec-Fetch-Site: cross-site`, except a top-level GET navigation;
    - if it is a WebSocket to the app's own routes from any origin but the app's.
 
    This ships ahead of #104 as its own security car (`crossSiteRefusal`, `src/channels/web/cookies.ts`).
+
+   A proposed follow-up: refuse a cookie request to the app's own routes unless `Sec-Fetch-Site` is `same-origin` or `none`. That closes the same-site case, a proxied page on `<slug>.<base>` loading the app's GET routes with the `Domain` cookie. Responses can't be read there today, but GETs with side effects still run.
 3. **Re-check on real Safari** (Mac and iPhone) before ship. The GTK build we tested shares WebKit's cookie decision, but not Safari's network stack.
 4. **Never a page on the broker's origin.** `/files/` serves HTML as an attachment with `CSP: sandbox`, and the web app opens active types as downloads (both on dev). The app fetches the page as bytes.
 5. **The bridge carries only the page API above.** Every `message` listener in the web app gets audited: ChatGPT's October 2026 takeover came through a parent listener that accepted any origin.
@@ -204,7 +229,7 @@ Ahmet: *"maybe a single tool isn't enough."* The evals decide between A, B and C
   One prompt per run. A problem report is answered by the agent itself, which measures self-repair.
 - **Isolation:** the runs never touch the live broker or his sessions. Every folder is deleted after its run, and the check's proxy refuses local addresses.
 
-**The prompts** (18, fixed):
+**The prompts** (24, fixed; `prompts.ts` has the full text):
 
 | # | Prompt | Expected |
 |---|---|---|
@@ -216,8 +241,8 @@ Ahmet: *"maybe a single tool isn't enough."* The evals decide between A, B and C
 | 6 | Latency per release pasted, "which release regressed?" | a card (proactive) |
 | 7 | CI job times pasted, "what eats the time?" | a card (proactive) |
 | 8 | "Tune the retry backoff, I'll pick the values" | a card with sliders + send |
-| 9 | "A timeline of these events" | a card |
-| 10 | "Explain this regex visually" | a card |
+| 9 | "A timeline of these events" | a card, or a mermaid diagram |
+| 10 | "Explain this regex visually" | a card, or a mermaid diagram |
 | 11 | "What's the capital of Australia?" | no card |
 | 12 | "Just tell me, in one line, …" | no card |
 | 13 | "Refactor UsageChart.tsx so the hover logic is a hook" | no card (the word "chart") |
@@ -227,7 +252,19 @@ Ahmet: *"maybe a single tool isn't enough."* The evals decide between A, B and C
 | 17 | Prompt 2, but the stub answers the first call with an overflow at 390 px | a fixed re-call |
 | 18 | Prompt 3, but the stub answers the first call with a script error | a fixed re-call |
 
-Prompts 16–18 measure self-repair reliably: the stub forces one realistic problem report on the first call, whatever the page was. The re-call must change the page and pass the real check. Real problems on the other prompts count too.
+| 19 | A dark card from "earlier in this chat", then "make it light mode" | a card |
+| 20 | 120 days of daily active users, "what does the trend look like?" | a card |
+| 21 | A small table, "just give me the number" | no card |
+| 22 | Q3 sales by region, "anything stand out?" (held out) | a card |
+| 23 | "Sketch the layout of a kanban board" (held out) | a card |
+| 24 | "Rename cnt to count in counter.js" (held out) | no card |
+
+- **Prompts 16–18 measure self-repair reliably.**
+  - The stub forces one realistic problem report on the first `show_html`, whatever the page was. It never forces one on `preview_html`, whose screenshots would contradict it.
+  - The repair must be a different page (its hash is recorded), and it must pass the real check.
+  - Real problems on the other prompts count too.
+- **Held out:** prompts 22–24 were written after the wordings, in phrasing neither echoes, and are reported apart.
+- **Both wordings carry the same content:** when, when not, how, sending, the result. Wording 1 says it as terse rules; wording 2 adds reasons and an example. Both sit after supermux's own **Diagrams** section, so a mermaid answer competes as it does in the app.
 
 **Models:** each agent kind and a few models per kind, cheap first:
 - Claude: Haiku, Sonnet, Opus.
@@ -246,7 +283,9 @@ Prompts 16–18 measure self-repair reliably: the stub forces one realistic prob
 
 **Scores per model × arm:**
 - **Tool use:** a card when expected, none when not (precision and recall, the negatives counted apart).
-- **Page quality:** self-contained (no local paths), valid, uses the theme variables, no page background.
+  - A `preview_html` on a no-card prompt doesn't count against it, because the user sees nothing.
+  - B's habit of previewing first is reported apart.
+- **Page quality:** self-contained (no local paths or `url()`s), uses the theme variables, no page background. The background is measured by the check, not read from the CSS.
 - **Check result:** renders with no script error, isn't blank, fits at 390 px, no endless height.
 - **Self-repair:** after a problem report, it fixed the page and called again (and how many tries it took).
 - **Click round trip:** where the prompt asks for a choice, the page sends on the real click and is refused on every forged one.
@@ -296,3 +335,16 @@ TDD, cars to Muxie, real checks on his Mac, Fold and iPhone.
 1. A page with a problem: **not shown, the agent re-calls** · or shown with a warning.
 2. Keyboard on the web, while a page has focus: **the page becomes unfocusable while you type in the app** · or accept the residual (webview's pending choice).
 3. The check without a browser on the host: **shown, said in the result** · or offer to download a headless Chromium (~150 MB) once.
+4. **Screen readers and click-to-send on native platforms.**
+   - VoiceOver and TalkBack activate a button as a click inside the page, but deliver no input to the view. So the host's input stamp (your rule for native platforms) refuses their sends.
+   - **(a) accept the shim's trusted button click alone while the platform's screen reader is on.** The app asks the OS (`UIAccessibility.isVoiceOverRunning`, Android's `AccessibilityManager.isTouchExplorationEnabled`).
+   - (b) keep the host stamp strict: no click-to-send with a screen reader.
+
+## Eval runs: what works on this box (2026-11-08)
+
+- **Claude Code:** works. Haiku only, on account `claude-97aee119` (Tally: no Sonnet or Opus until the working sessions have room).
+- **OpenCode:** works. A free model (`opencode/deepseek-v4.1-flash-free`) answered both probes.
+- **Codex:** blocked. The box's only Codex login is at its usage limit until 17 Nov; skipped until Ahmet decides on an account.
+- **Antigravity:** blocked. Its MCP servers live only in the user-level `mcp_config.json`; there is no per-folder one. An eval server there would also show up in his other Antigravity sessions.
+- **Grok:** blocked. In print mode it doesn't load the project-scoped server in `./.grok/config.toml`. It then said "the charting tool is unavailable" and read the folder until the time cap.
+- **Cursor:** limited. The free plan allows only Grok 4.7, Grok 4.6 and Auto.

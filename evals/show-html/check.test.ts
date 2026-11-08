@@ -31,7 +31,7 @@ run("an uncaught exception is a script error", async () => {
 
 run("a script that can't load is a script error", async () => {
   // A local address: refused by the check's network rule, and unreachable from the user's phone anyway.
-  const r = await checkPage(`<p>hi</p><script src="http://127.0.0.1:9/lib.js"></script>`, browser)
+  const r = await checkPage(`<p>hi</p><script src="http://127.0.0.1:4000/lib.js"></script>`, browser)
   expect(r.problems.some((p) => p.kind === "script-error" && p.message.includes("failed to load"))).toBe(true)
 }, 30_000)
 
@@ -53,15 +53,30 @@ run("a page wider than a phone overflows, and the widest element is named", asyn
   expect(over && over.kind === "overflow" && over.widest).toContain("table")
 }, 30_000)
 
-run("a page that grows with its frame has an endless height", async () => {
+run("a page that grows with its frame is noted, not stopped: the card caps it", async () => {
   const r = await checkPage(`<div style="height:100vh;background:var(--sm-card)">full</div>`, browser)
-  expect(r.problems.map((p) => p.kind)).toContain("endless-height")
+  expect(r.problems).toEqual([])
+  expect(r.endlessHeight).toBe(true)
+  const positioned = await checkPage(`<p>x</p><div style="position:absolute;top:0;left:0;width:10px;height:100vh"></div>`, browser)
+  expect(positioned.endlessHeight).toBe(true)
+}, 30_000)
+
+run("a public name that resolves to a local address is refused at the socket", async () => {
+  // nip.io answers 127.0.0.1 for this name: Chrome sees a public host, only the proxy's own lookup sees the address.
+  const r = await checkPage(`<p>hi</p><img src="http://127.0.0.1.nip.io:4000/x.png" alt="">`, browser)
+  expect(r.problems).toEqual([])
+  expect(r.notes.join("\n")).toContain("refused a local address: 127.0.0.1.nip.io:4000")
+}, 30_000)
+
+run("a page that paints its own background says so", async () => {
+  expect((await checkPage(`<style>body{background:#000;color:#fff}</style><p>x</p>`, browser)).background).toBe("rgb(0, 0, 0)")
+  expect((await checkPage(clean, browser)).background).toBeUndefined()
 }, 30_000)
 
 run("a request to a local address is refused and only noted", async () => {
-  const r = await checkPage(`<p>hi</p><img src="http://127.0.0.1:9/x.png" alt="">`, browser)
+  const r = await checkPage(`<p>hi</p><img src="http://127.0.0.1:4000/x.png" alt="">`, browser)
   expect(r.problems).toEqual([])
-  expect(r.notes.join("\n")).toContain("127.0.0.1")
+  expect(r.notes.join("\n")).toContain("refused a local address: 127.0.0.1:4000")
 }, 30_000)
 
 run("a send with no click is recorded as unprompted", async () => {
@@ -85,6 +100,11 @@ test("private hosts", () => {
   for (const h of ["localhost", "a.localhost", "127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.5", "169.254.1.1",
     "100.100.1.1", "[::1]", "fd00::1", "fe80::1", "printer.local", "0.0.0.0"]) expect(isPrivateHost(h)).toBe(true)
   for (const h of ["cdn.jsdelivr.net", "8.8.8.8", "172.32.0.1", "100.128.0.1", "example.com"]) expect(isPrivateHost(h)).toBe(false)
+})
+
+test("a <header> is not a <head>", () => {
+  const doc = cardDocument("<!doctype html><html><body><header>top</header></body></html>")
+  expect(doc.indexOf("sm-api")).toBeLessThan(doc.indexOf("<body>"))
 })
 
 test("the page API goes first: a fragment is wrapped, a document gets it in its head", () => {
