@@ -76,6 +76,7 @@ import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.chat.localUtcOffsetMs
 import dev.supermux.net.OpenCodeGoMeter
 import dev.supermux.net.OpenCodePlan
 import dev.supermux.net.OpenCodeUsage
@@ -760,6 +761,14 @@ fun OpenCodeUsageCard(
         } else if (plan != null) {
             OpenCodePlanLine(plan, onSignIn)
         }
+        plan?.free?.let { free ->
+            val reset = freeResetLabel(free.resetsAtIso, now)
+            UsageFooterRow(
+                "Free models",
+                listOf(if (free.reached) "Limit reached" else "Daily limit", reset).filter { it.isNotEmpty() }.joinToString(" · "),
+                valueColor = if (free.reached) cs.error else null,
+            )
+        }
         if (plan == null) {
             UsageFooterRow("Input", tokens(opencode.inputTokens))
             UsageFooterRow("Output", tokens(opencode.outputTokens))
@@ -769,6 +778,26 @@ fun OpenCodeUsageCard(
             UsageFooterRow("Local spend", dollars(opencode.totalCostUsd))
         }
         UsageFooterRow("Activity", "${opencode.sessions} sessions · ${opencode.messages} messages")
+    }
+}
+
+/**
+ * When OpenCode's free allowance starts over, in the viewer's own clock: "resets 19:00" today, "resets tomorrow 03:00"
+ * on the next local day (00:00 UTC is 03:00 in Istanbul). "" when [iso] is unreadable.
+ */
+internal fun freeResetLabel(iso: String?, now: Long, offsetMs: Long? = null): String {
+    val at = iso?.let { parseIsoMillis(it) } ?: return ""
+    val offset = offsetMs ?: localUtcOffsetMs(at)
+    val day = 86_400_000L
+    val local = at + offset
+    val atDay = local.floorDiv(day)
+    val nowDay = (now + offset).floorDiv(day)
+    val minute = local.mod(day) / 60_000L
+    val hhmm = "${(minute / 60).toString().padStart(2, '0')}:${(minute % 60).toString().padStart(2, '0')}"
+    return when (atDay) {
+        nowDay -> "resets $hhmm"
+        nowDay + 1 -> "resets tomorrow $hhmm"
+        else -> formatResetIso(iso, now)
     }
 }
 

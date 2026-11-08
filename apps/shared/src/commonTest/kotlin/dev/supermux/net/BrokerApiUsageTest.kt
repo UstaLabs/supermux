@@ -92,9 +92,11 @@ class BrokerApiUsageTest {
         assertEquals("2026-12-01T00:00:00.000Z", plan.go?.monthly?.resetsAtIso)
         // An older broker sends no plan; "none" carries no meters.
         assertNull(api("""{"opencode": {"sessions": 1}}""").usage().opencode?.plan)
-        val none = api("""{"opencode": {"plan": {"status": "none", "go": null}}}""").usage().opencode?.plan
+        val none = api("""{"opencode": {"plan": {"status": "none", "go": null, "free": {"resetsAtIso": "2026-11-09T00:00:00.000Z", "reached": true}}}}""").usage().opencode?.plan
         assertEquals("none", none?.status)
         assertNull(none?.go)
+        assertEquals(true, none?.free?.reached)
+        assertEquals("2026-11-09T00:00:00.000Z", none?.free?.resetsAtIso)
     }
 
     @Test fun a_null_error_string_does_not_abort_the_decode() = runTest {

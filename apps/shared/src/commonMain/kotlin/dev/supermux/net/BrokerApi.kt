@@ -757,6 +757,19 @@ data class OpenCodePlan(
     val via: String? = null,
     val email: String? = null,
     val error: String? = null,
+    /** The free models' daily limit (broker ≥ #109); null from an older broker. */
+    val free: OpenCodeFreeTier? = null,
+)
+
+/**
+ * OpenCode's free models: a daily limit per network that OpenCode exposes nowhere, so no numbers — only when it
+ * resets and whether a session hit it ([reached]).
+ */
+@Serializable
+data class OpenCodeFreeTier(
+    val resetsAtIso: String? = null,
+    val reached: Boolean = false,
+    val reachedAtIso: String? = null,
 )
 
 /** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */

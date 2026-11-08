@@ -1,6 +1,8 @@
 package dev.supermux.ui.usage
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
@@ -30,6 +32,7 @@ import dev.supermux.net.CodexWindow
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokProductUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.net.OpenCodeFreeTier
 import dev.supermux.net.OpenCodeGoMeter
 import dev.supermux.net.OpenCodeGoUsage
 import dev.supermux.net.OpenCodePlan
@@ -286,6 +289,34 @@ class UsageScreenTest {
         onNodeWithText("OpenCode sign-in expired.").assertExists()
         onNodeWithTag("usage_sign_in_opencode").performClick()
         assertEquals(1, signIns)
+    }
+
+    @Test fun free_reset_reads_in_the_viewers_local_time() {
+        val now = 1_794_132_000_000L // 2026-11-08T10:00:00Z
+        val istanbul = 3 * 3_600_000L
+        // 00:00 UTC = 03:00 in Istanbul, the next calendar day there.
+        assertEquals("resets tomorrow 03:00", freeResetLabel("2026-11-09T00:00:00.000Z", now, istanbul))
+        assertEquals("resets tomorrow 00:00", freeResetLabel("2026-11-09T00:00:00.000Z", now + 13 * 3_600_000L, 0L))
+        assertEquals("resets 19:00", freeResetLabel("2026-11-09T00:00:00.000Z", now, -5 * 3_600_000L))
+        assertEquals("", freeResetLabel("nope", now, 0L))
+    }
+
+    @Test fun opencode_card_shows_the_free_models_line_and_when_its_limit_was_reached() = runComposeUiTest {
+        val free = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "signed_out", free = OpenCodeFreeTier("2026-11-09T00:00:00.000Z", reached = false)))
+        val hit = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "none", free = OpenCodeFreeTier("2026-11-09T00:00:00.000Z", reached = true)))
+        var usage by androidx.compose.runtime.mutableStateOf(free)
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = usage, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Free models").assertExists()
+        onNodeWithText("Daily limit", substring = true).assertExists()
+        onNodeWithText("%", substring = true).assertDoesNotExist()
+        usage = hit
+        waitForIdle()
+        onNodeWithText("Limit reached", substring = true).assertExists()
     }
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {
