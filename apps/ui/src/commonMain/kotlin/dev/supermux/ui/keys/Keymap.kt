@@ -70,6 +70,8 @@ val DefaultKeymap = Keymap(
         bind("Mod-v", AppCommands.PasteImage, appFirst = true),
         bind("Mod-\\", AppCommands.SplitRight, appFirst = true),
         bind("Mod-Alt-\\", AppCommands.SplitDown),
+        bind("Mod-w", AppCommands.CloseTab),
+        bindOther("Ctrl-Shift-w", AppCommands.CloseTab, overOwner = true),
     ),
 )
 

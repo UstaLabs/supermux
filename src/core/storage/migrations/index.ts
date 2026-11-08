@@ -52,6 +52,7 @@ import m044 from "./044_council_member_removed.sql" with { type: "text" }
 import m045 from "./045_attachment_media_meta.sql" with { type: "text" }
 import m046 from "./046_agent_commands.sql" with { type: "text" }
 import m047 from "./047_browser_view.sql" with { type: "text" }
+import m048 from "./048_new_tab_view.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -100,4 +101,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 45, name: "045_attachment_media_meta", sql: m045 },
   { version: 46, name: "046_agent_commands", sql: m046 },
   { version: 47, name: "047_browser_view", sql: m047 },
+  { version: 48, name: "048_new_tab_view", sql: m048 },
 ].sort((a, b) => a.version - b.version)

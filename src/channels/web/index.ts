@@ -17,6 +17,8 @@ import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOver
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
+
+const isEmptyObject = (v: unknown): boolean => typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -4430,12 +4432,14 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser", "new"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
       const browserError = kind === "browser" ? browserStateError(body.state) : undefined
       if (browserError) return this.json({ error: browserError }, 400)
+      // A New tab holds nothing: a pick replaces it with a real view.
+      if (kind === "new" && !isEmptyObject(body.state)) return this.json({ error: "a new tab's state is {}" }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)

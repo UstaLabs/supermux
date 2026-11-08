@@ -1835,6 +1835,15 @@ class HostStore(
      * Close a view. Used for a pending chat tab the user backed out of — it has no
      * session behind it, so nothing is ended; the broker just drops the view.
      */
+    /** A New tab (#91) in [groupId]: a view of kind "new", holding nothing, that asks what to show. */
+    fun addNewTab(workspaceId: String, groupId: String, onCreated: (String) -> Unit = {}) {
+        stateScope.launch {
+            runCatching { api.addView(workspaceId, AddViewBody(kind = "new", state = buildJsonObject { }, groupId = groupId)) }
+                .onSuccess { onCreated(it.id) }
+                .onFailure { println("[HostStore] addNewTab failed: $it") }
+        }
+    }
+
     fun closeWorkspaceView(workspaceId: String, viewId: String) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }
