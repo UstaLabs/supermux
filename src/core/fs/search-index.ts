@@ -45,7 +45,7 @@ function scoreHits(s: string, hits: number[], nameStart: number): number {
 /** fzf-style subsequence match on a relative path. Null when `q` is not a subsequence. */
 export function fuzzyMatch(q: string, s: string): { score: number; hits: number[] } | null {
   if (!q || !q.trim()) return null
-  const nameStart = s.lastIndexOf("/") + 1
+  const nameStart = s.lastIndexOf("/") + 1 // platform-ok: an index path, kept /-joined on every OS (walk converts with split(sep), git lists with /)
   // Cheap pre-check: the leftmost greedy alignment succeeds iff q is a subsequence of s at all.
   if (!greedy(q, s, 0)) return null
   const sl = s.toLowerCase()
@@ -94,14 +94,14 @@ export async function rankPaths(scope: string, rels: ReadonlyArray<{ rel: string
     top.splice(lo, 0, cand)
     if (top.length > k) top.pop()
   }
-  const offset = scope === "/" ? 1 : scope.length + 1
-  return top.map(({ rel, dir, score, hits }) => ({
-    path: scope === "/" ? `/${rel}` : `${scope}/${rel}`,
-    name: rel.slice(rel.lastIndexOf("/") + 1),
-    type: dir ? "dir" : "file",
-    score,
-    hits: hits.map((i) => i + offset),
-  }))
+  return top.map(({ rel, dir, score, hits }) => {
+    // A path of this host, its separator throughout (on Windows `${scope}/${rel}` mixed \\ and /). The rel part keeps
+    // its length, so the hits move by where it starts.
+    const path = join(scope, rel)
+    const at = path.length - rel.length
+    // platform-ok: an index path, kept /-joined on every OS (walk converts with split(sep), git lists with /)
+    return { path, name: rel.slice(rel.lastIndexOf("/") + 1), type: dir ? "dir" as const : "file" as const, score, hits: hits.map((i) => i + at) }
+  })
 }
 
 interface Built { scope: string; rels: Array<{ rel: string; dir: boolean }>; builtAt: number; lastUsed: number }
@@ -133,7 +133,7 @@ async function walk(scope: string): Promise<Array<{ rel: string; dir: boolean }>
 function withDirs(files: string[]): Array<{ rel: string; dir: boolean }> {
   const dirs = new Set<string>()
   for (const f of files) {
-    const parts = f.split("/")
+    const parts = f.split("/") // platform-ok: an index path, kept /-joined on every OS (walk converts with split(sep), git lists with /)
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"))
   }
   return [...[...dirs].map((rel) => ({ rel, dir: true })), ...files.map((rel) => ({ rel, dir: false }))].slice(0, MAX_PATHS)

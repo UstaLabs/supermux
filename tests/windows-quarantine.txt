@@ -74,7 +74,6 @@ src/core/fs/file-system-service.subs.test.ts | expected 1 got 2; first: "a folde
 src/core/fs/file-system-service.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "list returns a snapshot addressed by the path the caller use" | #29
 src/core/fs/paths.test.ts | expected "/a/c/d" got "D:\a\c\d"; first: "normalizeAbsPath resolves dot segments and strips the traili" | #29
 src/core/fs/repo-info.test.ts | expect(received).toEqual(expected); first: "reading git state never touches the git dir (no index.lock c" | #29
-src/core/fs/search-index.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "a repo scope searches tracked + untracked files, never ignor" | #29
 src/core/git/branches.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "repoToplevel: repo root for any path inside, null outside" | #29
 src/core/git/clone.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "projectDir composes host/owner/repo under the root" | #29
 src/core/git/clt-guard.test.ts | expected FHi\run\no-clt:/usr/bin:/bin:/usr/sbin:/sbin" got FHi\run\no-clt;/usr/bin:/bin:/usr/sbin:/sbin"; first: "darwin + Apple's stub + no CLT: shim written, PATH prepended" | #29
