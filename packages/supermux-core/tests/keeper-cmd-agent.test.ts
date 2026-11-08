@@ -3,7 +3,7 @@
 // through cmd.exe with every argument escaped. And it stops the agent with a tree kill, so the program behind cmd.exe
 // stops too. Windows only: no other OS has .cmd shims.
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,6 +90,48 @@ test.skipIf(process.platform !== 'win32')('an interrupt of a .cmd agent does not
     conn.signal('SIGINT')
     await until('the interrupted program behind cmd.exe to stop', () => !alive(agentPid))
     await conn.shutdown().catch(() => {})
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// grok's, opencode's and cursor's commands are bare names, and an npm install of one on Windows is <name>.cmd on PATH:
+// the keeper finds it on its agent's PATH and starts it through cmd.exe like a named shim. The shim is not in the
+// agent's folder, so only PATH can find it.
+test.skipIf(process.platform !== 'win32')('the keeper starts a .cmd agent named bare, as grok and opencode are, from its PATH', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keeper-cmd-bare-'))
+  try {
+    const bin = join(dir, 'bin')
+    const work = join(dir, 'work')
+    mkdirSync(bin)
+    mkdirSync(work)
+    writeFileSync(join(bin, 'bare-echo-agent.cmd'), `@"${process.execPath}" "${fixture}" %*\r\n`)
+    // The inherited env with [bin] first on PATH, whatever its key's letter case (Windows' is Path).
+    const env: Record<string, string> = {}
+    let path = ''
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined) continue
+      if (key.toLowerCase() === 'path') path = value
+      else env[key] = value
+    }
+    const pidFile = join(dir, 'agent.pid')
+    const conn = await connectKeeper({
+      stateDirectory: join(dir, 'state'),
+      sessionId: 'cmd-agent-bare',
+      spec: {
+        command: 'bare-echo-agent', args: [], cwd: work,
+        env: { ...env, PATH: `${bin};${path}`, PID_FILE: pidFile },
+        frameShape: 'jsonrpc', captureStderr: false,
+      },
+      limits: { maxFrameBytes: 4096, shutdownTimeoutMs: 2_000, parkedDeadlineMs: 5_000, journalMaxBytes: 64_000, connectTimeoutMs: 30_000 },
+      cursor: 0,
+    })
+    conn.write(JSON.stringify({ cmd: 'echo', n: 3 }))
+    expect(await nextFrame(conn)).toContain('"echoed":3')
+    await until('the agent to say where it runs', () => { try { return readFileSync(pidFile, 'utf8').length > 0 } catch { return false } })
+    const agentPid = Number(readFileSync(pidFile, 'utf8'))
+    await conn.shutdown()
+    await until('the program behind cmd.exe to stop', () => !alive(agentPid))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

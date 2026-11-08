@@ -88,6 +88,36 @@ describe("spawnCommand", () => {
       "-File", "C:\\Tools\\opencode.ps1", "serve", "value; Remove-Item C:\\\\*",
     ])
   })
+
+  // #29: grok, opencode and cursor register bare names. On Windows an npm install of one is <name>.cmd on PATH, which
+  // the runtime refuses to start (EINVAL) and only cmd.exe, every argument escaped, may run.
+  test("on Windows a bare name is found on its env's PATH first: an npm shim runs through cmd.exe, sync too", () => {
+    const calls: unknown[][] = []
+    const record = ((...args: unknown[]) => { calls.push(args); return { pid: 1, status: 0 } }) as never
+    const npm = "C:\\Users\\Ana\\AppData\\Roaming\\npm"
+    const env = { Path: `C:\\Windows\\System32;${npm}`, ComSpec: "C:\\Windows\\System32\\cmd.exe" }
+    const { fileExists } = windowsFs(`${npm}\\opencode.cmd`)
+    spawnCommand("opencode", ["acp", "--cwd", "C:\\work dir"], { platform: "win32", env, fileExists, spawn: record })
+    spawnCommandSync("opencode", ["--version"], { platform: "win32", env, fileExists, spawnSync: record })
+    expect(calls.map((call) => call.slice(0, 2))).toEqual([
+      ["C:\\Windows\\System32\\cmd.exe", ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(`${npm}\\opencode.cmd`, ["acp", "--cwd", "C:\\work dir"])]],
+      ["C:\\Windows\\System32\\cmd.exe", ["/d", "/v:off", "/s", "/c", windowsCmdCommandLine(`${npm}\\opencode.cmd`, ["--version"])]],
+    ])
+    expect(calls.map((call) => (call[2] as { windowsVerbatimArguments?: boolean }).windowsVerbatimArguments)).toEqual([true, true])
+  })
+
+  test("a bare name found as an .exe starts by its path; one found nowhere, and any name on another OS, as given", () => {
+    const calls: unknown[][] = []
+    const record = ((...args: unknown[]) => { calls.push(args); return { pid: 1 } }) as never
+    spawnCommand("git", ["status"], { platform: "win32", env: { PATH: "C:\\Git\\cmd" }, ...windowsFs("C:\\Git\\cmd\\git.exe"), spawn: record })
+    spawnCommand("grok", ["acp"], { platform: "win32", env: { PATH: "C:\\Git\\cmd" }, ...windowsFs(), spawn: record })
+    spawnCommand("opencode", ["acp"], { platform: "linux", env: { PATH: "/usr/bin" }, fileExists: () => true, spawn: record })
+    expect(calls.map((call) => call.slice(0, 2))).toEqual([
+      ["C:\\Git\\cmd\\git.exe", ["status"]],
+      ["grok", ["acp"]],
+      ["opencode", ["acp"]],
+    ])
+  })
 })
 
 describe("windowsCmdCommandLine hardening", () => {
