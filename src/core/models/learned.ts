@@ -49,13 +49,13 @@ export class LearnedModels {
  */
 export function followAdapterModels(o: {
   agent: AgentKind | undefined
-  adapter: { availableModels?: { value: string; name: string }[]; on(event: "models-update", listener: () => void): unknown }
+  adapter: { offeredModels?: { value: string; name: string }[]; on(event: "models-update", listener: () => void): unknown }
   learned: LearnedModels
   onLearned: (agent: AgentKind, models: ModelInfo[]) => void
 }): void {
   if (o.agent !== Agent.Cursor) return
   const learn = () => {
-    const entries = o.adapter.availableModels
+    const entries = o.adapter.offeredModels
     if (!entries?.length) return
     const models = cursorModelsFromAcp(entries)
     if (o.learned.learn(Agent.Cursor, models)) o.onLearned(Agent.Cursor, models)

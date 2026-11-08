@@ -42,12 +42,12 @@ test("an empty list is never learned (a start that offered no models keeps the l
 // adapter's current list is read at wiring as well as on every later models-update (as commands are).
 test("an adapter's model list is learned though it arrived before the wiring, and again whenever it changes", () => {
   const learned = new LearnedModels(join(tmp(), "learned-models"))
-  const adapter = Object.assign(new EventEmitter(), { availableModels: [{ value: "default[]", name: "Auto" }] })
+  const adapter = Object.assign(new EventEmitter(), { offeredModels: [{ value: "default[]", name: "Auto" }] })
   const seen: unknown[] = []
   followAdapterModels({ agent: AgentKind.Cursor, adapter, learned, onLearned: (_agent, models) => { seen.push(models) } })
   expect(seen).toEqual([[{ id: "auto", displayName: "Auto", agent: AgentKind.Cursor }]])
 
-  adapter.availableModels = [{ value: "default[]", name: "Auto" }, { value: "composer-2.5[fast=true]", name: "composer-2.5" }]
+  adapter.offeredModels = [{ value: "default[]", name: "Auto" }, { value: "composer-2.5[fast=true]", name: "composer-2.5" }]
   adapter.emit("models-update")
   adapter.emit("models-update")
   expect(seen).toEqual([
@@ -59,7 +59,7 @@ test("an adapter's model list is learned though it arrived before the wiring, an
 
 test("only Cursor's adapters are followed", () => {
   const learned = new LearnedModels(join(tmp(), "learned-models"))
-  const adapter = Object.assign(new EventEmitter(), { availableModels: [{ value: "provider/x", name: "x" }] })
+  const adapter = Object.assign(new EventEmitter(), { offeredModels: [{ value: "provider/x", name: "x" }] })
   const seen: unknown[] = []
   followAdapterModels({ agent: AgentKind.OpenCode, adapter, learned, onLearned: () => { seen.push(1) } })
   adapter.emit("models-update")

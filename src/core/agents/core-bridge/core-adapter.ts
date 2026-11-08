@@ -254,7 +254,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   /** The slash commands the agent last reported (ACP push, Claude's initialize reply); undefined until it reports. */
   availableCommands?: AgentCommandEntry[]
   /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
-  availableModels?: AgentModelEntry[]
+  offeredModels?: AgentModelEntry[]
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -353,7 +353,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         this.emit("commands-update", { kind: "commands-update" })
       },
       onModels: (models) => {
-        this.availableModels = models
+        this.offeredModels = models
         this.emit("models-update", { kind: "models-update" })
       },
       onUsage: (rateLimits) => {
