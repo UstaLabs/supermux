@@ -10,6 +10,7 @@ import { CoreAdapter, CLAUDE_CORE_PROFILE, type ConfigurationPatch } from "../co
 import { getClaudeCoreHost } from "./core-host-provider"
 import { claudeSessionHome, type ClaudeCoreHost, type ClaudePrepareExtra } from "./core-host"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
 
 function resolveHost(explicit?: ClaudeCoreHost): ClaudeCoreHost {
   return explicit ?? getClaudeCoreHost()
@@ -314,7 +315,7 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       agent_session_id: session.agent_session_id,
       permissionMode: session.permissionMode ?? undefined,
       pa: session.role === "personal_assistant",
-      account: session.account ?? undefined,
+      account: session.account ?? systemAccountId("claude"),
     },
   )
 }

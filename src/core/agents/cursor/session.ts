@@ -15,6 +15,7 @@ import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/cursor/session")
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
 
 /** Slash commands: the list Cursor pushed over ACP (available_commands_update), kept on its adapter. */
 export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
@@ -301,6 +302,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onCursorSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       cursorHost: ctx.cursorHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id, account: session.account ?? systemAccountId("cursor"), permissionMode: session.permissionMode ?? undefined },
   )
 }

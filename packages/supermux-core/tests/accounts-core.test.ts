@@ -775,3 +775,17 @@ test("an HTTP 402 at the end of a turn whose account was refused keeps the unava
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
     .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
 })
+
+test("a session whose account was removed reopens on the account it is moved to, the system login included (#106)", async () => {
+  const { core, agents } = await setup()
+  const cwd = await scratch()
+  await core.accounts.add({ id: "gone", agent: "claude", method: "token", secret: "t-gone" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd, account: "gone" })
+  await session.close({ mode: "shutdown" })
+  await core.accounts.remove("gone")
+  await expect(core.sessions.resume(id)).rejects.toMatchObject({ code: "unknown_account" })
+  const back = await core.sessions.resume(id, { account: "claude:system" })
+  expect(agents[0]!.contexts.at(-1)!.account).toBe("claude:system")
+  expect((await (await back.send({ content: text("hello"), whenBusy: "queue" })).completed).status).toBe("completed")
+})
