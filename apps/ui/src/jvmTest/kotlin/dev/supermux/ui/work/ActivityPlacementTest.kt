@@ -5,13 +5,21 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasProgressBarRangeInfo
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runDesktopComposeUiTest
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -29,6 +37,7 @@ import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.shell.ShellUiState
@@ -36,7 +45,6 @@ import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.testFleet
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
-import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.update.ClientUpdateStatus
 import dev.supermux.work.DownloadCenter
 import dev.supermux.work.DownloadPurpose
@@ -63,10 +71,11 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * Where the activity bar sits and what it is wired to (#95): directly under every phone top bar, in the wide
- * sidebar's footer above the update card, an icon on the collapsed sidebar's rail, the list it opens (a sheet on a
- * phone, a popover anchored to the bar on a wide host with a pointer), and the shell's notice for a download that
- * finished with nobody waiting. In the app theme: these assert layout.
+ * Where the downloads live and what they are wired to (#95, design A): one more icon in the sidebar's bottom bar —
+ * the same bar on a phone's Home and on a desktop — a ↓ in our own thin ring that fills while one runs, shown only
+ * while the center lists something; the same ring on the collapsed sidebar's rail; the list it opens (our sheet on
+ * a phone, a popover standing on the bar on a wide host with a pointer); nothing under a phone's top bars any more;
+ * and the shell's notice for a download that finished with nobody waiting. In the app theme: these assert layout.
  */
 @OptIn(ExperimentalTestApi::class)
 class ActivityPlacementTest {
@@ -129,6 +138,16 @@ class ActivityPlacementTest {
         }
     }
 
+    /** The sidebar's bottom bar on its own: the host switch's place, the downloads, theme / usage / devices / settings. */
+    @Composable
+    private fun Footer() = SessionListFooter(
+        appearance = AppearanceMode.LIGHT,
+        onToggleTheme = {},
+        onUsage = {},
+        onDevices = {},
+        onSettings = {},
+    )
+
     /** A sheet or a popover is up only once its animation has run. */
     private fun ComposeUiTest.waitFor(block: () -> Unit) =
         waitUntil(timeoutMillis = 5_000) {
@@ -152,20 +171,90 @@ class ActivityPlacementTest {
         }
     }
 
-    // ── under every phone top bar ──────────────────────────────────────────────────────────────
-
-    @Test fun onAPhoneTheBarSitsDirectlyUnderHomesTopBar() = runDesktopComposeUiTest {
-        val center = DownloadCenter(scope).apply { running() }
-        phone(center) { SessionListScreen(home = "/home/u", activeId = null, onOpen = {}, standalone = true) }
-        val topBar = onNodeWithTag("session_list_logo_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue(bar.top >= topBar.bottom, "the bar starts at ${bar.top}, above the top bar's bottom ${topBar.bottom}")
-        // Directly under it: before the list's own first row, the new-session card.
-        val card = onNodeWithTag("new_session_row").getUnclippedBoundsInRoot()
-        assertTrue(card.top >= bar.bottom, "the new-session card (${card.top}) starts above the bar's bottom ${bar.bottom}")
+    /** The ring sits in the bottom bar's row of icons, before the bar's own (theme first). */
+    private fun ComposeUiTest.assertTheRingIsInTheBottomBar() {
+        val row = onNodeWithTag("sidebar_footer").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val ring = onNodeWithTag(FOOTER_RING).assertIsDisplayed().getUnclippedBoundsInRoot()
+        val theme = onNodeWithTag("sidebar_footer_theme").getUnclippedBoundsInRoot()
+        assertTrue(
+            ring.top >= row.top && ring.bottom <= row.bottom && ring.left >= row.left && ring.right <= row.right,
+            "the ring ($ring) is outside the bottom bar's row ($row)",
+        )
+        assertTrue(ring.right <= theme.left, "the ring (${ring.right}) does not come before the bar's own icons (${theme.left})")
     }
 
-    @Test fun onAPhoneTheBarSitsUnderAChatsHeader() = runDesktopComposeUiTest {
+    // ── one more icon in the sidebar's bottom bar ──────────────────────────────────────────────
+
+    @Test fun onAPhoneTheRingIsAnIconInHomesBottomBar() = runDesktopComposeUiTest(width = 420, height = 860) {
+        val fleet = testFleet(testHostStore())
+        try {
+            fleet.downloads.running()
+            setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+                SupermuxTheme(appearance = AppearanceMode.LIGHT) { SupermuxApp(fleet = fleet, ui = ShellUiState()) }
+            }
+            waitForIdle()
+            assertTheRingIsInTheBottomBar()
+        } finally {
+            fleet.close()
+        }
+    }
+
+    @Test fun onAWideHostTheRingIsAnIconInTheSidebarsBottomBar() = runDesktopComposeUiTest(width = 1200, height = 900) {
+        val fleet = testFleet(testHostStore())
+        try {
+            fleet.downloads.running()
+            setPlatformContent(FakePlatform().apply { updates = FakeAppUpdater(release = RELEASE) }) {
+                SupermuxTheme(appearance = AppearanceMode.LIGHT) { SupermuxApp(fleet = fleet, ui = ShellUiState()) }
+            }
+            waitForIdle()
+            assertTheRingIsInTheBottomBar()
+            // In the bar, under the update card's place, not a strip of its own above it.
+            val card = onNodeWithTag("app_update_card").assertIsDisplayed().getUnclippedBoundsInRoot()
+            val ring = onNodeWithTag(FOOTER_RING).getUnclippedBoundsInRoot()
+            assertTrue(ring.top >= card.bottom, "the ring (${ring.top}) is above the update card's bottom (${card.bottom})")
+        } finally {
+            fleet.close()
+        }
+    }
+
+    @Test fun withNothingListedTheBarHasNoRing() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope)
+        wide(center) { Footer() }
+        onNodeWithTag("sidebar_footer").assertIsDisplayed()
+        onNodeWithTag(FOOTER_RING).assertDoesNotExist()
+        // It comes with the first download.
+        center.running()
+        waitForIdle()
+        onNodeWithTag(FOOTER_RING).assertIsDisplayed()
+    }
+
+    @Test fun aRunningDownloadFillsTheRing() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope).apply { running() }
+        wide(center) { Footer() }
+        onNode(hasTestTag(FOOTER_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f))).assertIsDisplayed()
+    }
+
+    @Test fun onceNothingRunsTheRingIsASteadyGlyph() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope).apply { finished("att:h/2", "notes.pdf") }
+        wide(center) { Footer() }
+        onNodeWithTag(FOOTER_RING).assertIsDisplayed()
+        onNode(hasTestTag(FOOTER_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f))).assertDoesNotExist()
+        onNode(hasTestTag(FOOTER_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertDoesNotExist()
+    }
+
+    // ── nothing under a phone's top bars any more ──────────────────────────────────────────────
+
+    // Ahmet's round 2: the downloads have one place, the sidebar's bottom bar. A chat, Settings and the pages are
+    // honest: the sidebar is not on screen there, so neither are the downloads.
+
+    @Test fun onAPhoneNothingSitsUnderHomesTopBar() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope).apply { running() }
+        phone(center) { SessionListScreen(home = "/home/u", activeId = null, onOpen = {}, standalone = true) }
+        onNodeWithTag("session_list_logo_bar").assertIsDisplayed()
+        onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun onAPhoneAChatShowsNoDownloads() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
         phone(center) {
             ChatPanel(
@@ -176,63 +265,70 @@ class ActivityPlacementTest {
                 onDraftChange = {},
             )
         }
-        val header = onNodeWithTag("chat_find_open").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue(bar.top >= header.bottom, "the bar starts at ${bar.top}, inside the chat header (${header.bottom})")
+        onNodeWithTag("chat_find_open").assertIsDisplayed()
+        onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
     }
 
-    @Test fun onAPhoneTheBarSitsUnderTheSettingsTopBar() = runDesktopComposeUiTest {
+    @Test fun onAPhoneSettingsShowsNoDownloads() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
         phone(center) { SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
-        val back = onNodeWithTag("settings_hub_back").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue(bar.top >= back.bottom, "the bar starts at ${bar.top}, inside the top bar (${back.bottom})")
-        // In the Scaffold's top bar slot, so the page starts below it rather than under it.
-        val firstRow = onNodeWithTag("settings_row_providers").getUnclippedBoundsInRoot()
-        assertTrue(firstRow.top >= bar.bottom, "the first row (${firstRow.top}) starts above the bar's bottom ${bar.bottom}")
-    }
-
-    @Test fun onAPhoneTheBarSitsUnderAPagesOwnTopBar() = runDesktopComposeUiTest {
-        val center = DownloadCenter(scope).apply { running() }
-        phone(center) { AppUpdateScreen(onBack = {}, standalone = true, updater = FakeAppUpdater()) }
-        val back = onNodeWithTag("app_update_back").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue(bar.top >= back.bottom, "the bar starts at ${bar.top}, inside the top bar (${back.bottom})")
-        val page = onNodeWithTag("app_update_screen").getUnclippedBoundsInRoot()
-        assertTrue(page.top >= bar.bottom, "the page (${page.top}) starts above the bar's bottom ${bar.bottom}")
-    }
-
-    @Test fun aWideHostHasNoPhoneBar() = runDesktopComposeUiTest {
-        val center = DownloadCenter(scope).apply { running() }
-        wide(center) { PhoneActivityBar() }
-        onNodeWithTag("activity_bar").assertDoesNotExist()
+        onNodeWithTag("settings_hub_back").assertIsDisplayed()
+        onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
     }
 
     // ── the list it opens ──────────────────────────────────────────────────────────────────────
 
     @Test fun onAPhoneATapOpensTheListInASheet() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
-        phone(center) { PhoneActivityBar() }
+        phone(center) { Footer() }
         onNodeWithTag("activity_list").assertDoesNotExist()
-        onNodeWithTag("activity_bar").performClick()
+        onNodeWithTag(FOOTER_RING).performClick()
         waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
         onNodeWithTag("activity_sheet").assertExists()
         onNodeWithTag("activity_popover").assertDoesNotExist()
     }
 
-    @Test fun onAWideHostWithAPointerATapOpensTheListAnchoredToTheBar() = runDesktopComposeUiTest {
+    @Test fun onAWideHostWithAPointerATapOpensThePopover() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
-        wide(center) { ActivityBarWithPanel() }
-        onNodeWithTag("activity_bar").performClick()
+        wide(center) { Footer() }
+        onNodeWithTag(FOOTER_RING).performClick()
         waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
         onNodeWithTag("activity_popover").assertExists()
         onNodeWithTag("activity_sheet").assertDoesNotExist()
     }
 
+    // The prototype's popover stands on the whole bottom bar — the update card's place included — along its start
+    // edge, 6 dp above it.
+    @Test fun thePopoverStandsOnTheWholeBarAlongItsStartEdge() {
+        val gap = 6
+        val inset = 6
+        val position = OnTheBar(gap = gap, inset = inset)
+        val bar = IntRect(left = 0, top = 600, right = 320, bottom = 900)
+        val window = IntSize(1200, 900)
+        val popover = IntSize(470, 260)
+        assertEquals(IntOffset(inset, 600 - 260 - gap), position.calculatePosition(bar, window, LayoutDirection.Ltr, popover))
+        // No room above: under the bar's top, clamped to the window.
+        val low = IntRect(left = 0, top = 100, right = 320, bottom = 300)
+        val placed = position.calculatePosition(low, window, LayoutDirection.Ltr, popover)
+        assertTrue(placed.y >= 0 && placed.y + popover.height <= window.height, "placed at $placed, outside the window")
+    }
+
+    // Beside the collapsed rail, the popover grows up from the ring's tile, just past the rail's edge.
+    @Test fun besideTheRailThePopoverGrowsUpFromTheTile() {
+        val position = BesideTheTile(gap = 6, drop = 4, margin = 8)
+        val tile = IntRect(left = 0, top = 700, right = 52, bottom = 734)
+        val window = IntSize(1200, 900)
+        val popover = IntSize(470, 260)
+        assertEquals(IntOffset(52 + 6, 734 + 4 - 260), position.calculatePosition(tile, window, LayoutDirection.Ltr, popover))
+        // Near the top of a short window it stays inside, a margin from the top.
+        val high = IntRect(left = 0, top = 20, right = 52, bottom = 54)
+        assertEquals(8, position.calculatePosition(high, window, LayoutDirection.Ltr, popover).y)
+    }
+
     @Test fun theListsCancelAndRetryReachTheDownload() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
-        phone(center) { PhoneActivityBar() }
-        onNodeWithTag("activity_bar").performClick()
+        phone(center) { Footer() }
+        onNodeWithTag(FOOTER_RING).performClick()
         waitFor { onNodeWithTag("activity_cancel").assertIsDisplayed() }
         onNodeWithTag("activity_cancel").performClick()
         waitForIdle()
@@ -246,8 +342,8 @@ class ActivityPlacementTest {
     @Test fun aFinishedFilesOpenIsHandedToTheHost() = runDesktopComposeUiTest {
         val platform = FakePlatform()
         val center = DownloadCenter(scope).apply { finished("att:h/2", "notes.pdf") }
-        phone(center, platform) { PhoneActivityBar() }
-        onNodeWithTag("activity_bar").performClick()
+        phone(center, platform) { Footer() }
+        onNodeWithTag(FOOTER_RING).performClick()
         waitFor { onNodeWithTag("activity_open").assertIsDisplayed() }
         onNodeWithTag("activity_open").performClick()
         settle { platform.files.openedFiles.isNotEmpty() }
@@ -261,46 +357,29 @@ class ActivityPlacementTest {
         val center = DownloadCenter(scope).apply {
             finished("app-update:1.2.0", "Supermux 1.2.0", DownloadPurpose.Installer, handle = installer)
         }
-        phone(center, platform) { PhoneActivityBar() }
-        onNodeWithTag("activity_bar").performClick()
+        phone(center, platform) { Footer() }
+        onNodeWithTag(FOOTER_RING).performClick()
         waitFor { onNodeWithTag("activity_install").assertIsDisplayed() }
         onNodeWithTag("activity_install").performClick()
         settle { updater.installed.isNotEmpty() }
         assertEquals(listOf(installer), updater.installed)
     }
 
-    @Test fun theBarsClearForgetsWhatHasEnded() = runDesktopComposeUiTest {
+    @Test fun theListsClearFinishedForgetsWhatHasEndedAndTheRingGoes() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { finished("att:h/2", "notes.pdf") }
-        phone(center) { PhoneActivityBar() }
-        onNodeWithTag("activity_bar_clear").performClick()
+        phone(center) { Footer() }
+        onNodeWithTag(FOOTER_RING).performClick()
+        waitFor { onNodeWithTag("activity_clear").assertIsDisplayed() }
+        onNodeWithTag("activity_clear").performClick()
         waitForIdle()
         assertEquals(emptyList(), center.items.value)
-        onNodeWithTag("activity_bar").assertDoesNotExist()
+        waitFor { onNodeWithTag("activity_list").assertDoesNotExist() }
+        onNodeWithTag(FOOTER_RING).assertDoesNotExist()
     }
 
-    // ── the wide sidebar ───────────────────────────────────────────────────────────────────────
+    // ── the collapsed sidebar ──────────────────────────────────────────────────────────────────
 
-    @Test fun onAWideHostTheBarSitsInTheSidebarFooterAboveTheUpdateCard() = runDesktopComposeUiTest(width = 1200, height = 900) {
-        val fleet = testFleet(testHostStore())
-        try {
-            fleet.downloads.running()
-            val platform = FakePlatform().apply { updates = FakeAppUpdater(release = RELEASE) }
-            setPlatformContent(platform) {
-                SupermuxTheme(appearance = AppearanceMode.LIGHT) { SupermuxApp(fleet = fleet, ui = ShellUiState()) }
-            }
-            waitForIdle()
-            val bar = onNodeWithTag("activity_bar").assertIsDisplayed().getUnclippedBoundsInRoot()
-            val card = onNodeWithTag("app_update_card").assertIsDisplayed().getUnclippedBoundsInRoot()
-            assertTrue(bar.bottom <= card.top, "the bar ends at ${bar.bottom}, below the update card's top ${card.top}")
-            // In the sidebar's footer, edge to edge with its sheet, not across the window.
-            val footer = onNodeWithTag("sidebar_footer").getUnclippedBoundsInRoot()
-            assertTrue(bar.left >= footer.left - 1.dp && bar.right <= footer.right + 1.dp, "the bar ($bar) is outside the footer ($footer)")
-        } finally {
-            fleet.close()
-        }
-    }
-
-    @Test fun theCollapsedSidebarsRailShowsAnIconThatOpensTheList() = runDesktopComposeUiTest(width = 1200, height = 900) {
+    @Test fun theCollapsedSidebarsRailShowsTheRingThatOpensTheList() = runDesktopComposeUiTest(width = 1200, height = 900) {
         val fleet = testFleet(testHostStore())
         try {
             setPlatformContent {
@@ -309,14 +388,16 @@ class ActivityPlacementTest {
                 }
             }
             waitForIdle()
-            // Nothing listed, no icon.
-            onNodeWithTag("activity_rail").assertDoesNotExist()
+            // Nothing listed, no ring.
+            onNodeWithTag(RAIL_RING).assertDoesNotExist()
             fleet.downloads.running()
             waitForIdle()
-            val icon = onNodeWithTag("activity_rail").assertIsDisplayed().getUnclippedBoundsInRoot()
-            val settings = onNodeWithTag("rail_settings").assertIsDisplayed().getUnclippedBoundsInRoot()
-            assertTrue(icon.bottom <= settings.top, "the icon ends at ${icon.bottom}, below the rail's settings (${settings.top})")
-            onNodeWithTag("activity_rail").performClick()
+            val ring = onNodeWithTag(RAIL_RING).assertIsDisplayed().getUnclippedBoundsInRoot()
+            onNode(hasTestTag(RAIL_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f))).assertExists()
+            // On the rail's own tone, just above its bottom sheet (the host and the settings), as in the prototype.
+            val sheet = onNodeWithTag("sidebar_rail_footer").assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue(ring.bottom <= sheet.top, "the ring ends at ${ring.bottom}, inside the rail's bottom sheet (${sheet.top})")
+            onNodeWithTag(RAIL_RING).performClick()
             waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
             onNodeWithTag("activity_popover").assertExists()
         } finally {
@@ -413,6 +494,12 @@ class ActivityPlacementTest {
     }
 
     private companion object {
+        /** The ring in the sidebar's bottom bar, next to the bar's own icons (`sidebar_footer_theme`, …). */
+        const val FOOTER_RING = "sidebar_footer_downloads"
+
+        /** The same ring on the collapsed sidebar's rail, next to `rail_settings`. */
+        const val RAIL_RING = "rail_downloads"
+
         val RELEASE = ClientUpdateStatus(
             currentVersion = "1.1.0",
             latestVersion = "1.2.0",

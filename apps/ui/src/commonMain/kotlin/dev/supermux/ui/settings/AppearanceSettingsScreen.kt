@@ -67,7 +67,6 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
-import dev.supermux.ui.work.PhoneActivityBar
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -96,27 +95,24 @@ fun AppearanceSettingsScreen(
     if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
-                Column {
-                    TopAppBar(
-                        title = { Text("Appearance", color = cs.onSurface) },
-                        navigationIcon = {
-                            IconButton(
-                                onClick = onBack,
-                                modifier = Modifier.testTag("appearance_settings_back"),
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back",
-                                    tint = cs.onSurface,
-                                )
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = cs.surfaceContainerHigh,
-                        ),
-                    )
-                    PhoneActivityBar()
-                }
+                TopAppBar(
+                    title = { Text("Appearance", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("appearance_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
             },
             containerColor = cs.background,
         ) { padding ->

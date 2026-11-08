@@ -18,6 +18,7 @@ import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
+import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.update.AppUpdateCard
@@ -120,10 +121,15 @@ class AppUpdateDownloadTest {
             }
         }
 
+    /** Home's bottom bar, where the downloads are (#95, design A): the ring opens their list. */
+    @Composable
+    private fun BottomBar() =
+        SessionListFooter(appearance = AppearanceMode.LIGHT, onToggleTheme = {}, onUsage = {}, onDevices = {}, onSettings = {})
+
     /** On [center]'s phone: the page's button pressed, the page left mid-download, then the download let finish. */
     private fun ComposeUiTest.startOnThePageThenLeave(updater: FakeAppUpdater, center: DownloadCenter): () -> Unit {
         var shown by mutableStateOf(true)
-        phone(center, platform(updater)) { if (shown) AppUpdateScreen() else PhoneActivityBar() }
+        phone(center, platform(updater)) { if (shown) AppUpdateScreen() else BottomBar() }
         onNodeWithTag("app_update_install").performClick()
         settle { center.items.value.isNotEmpty() }
         assertEquals(listOf("app-update:1.1.0"), center.items.value.map { it.key })
@@ -164,7 +170,7 @@ class AppUpdateDownloadTest {
         startOnThePageThenLeave(updater, center)
         assertIs<DownloadState.Done>(center.items.value.single().state)
 
-        onNodeWithTag("activity_bar").performClick()
+        onNodeWithTag("sidebar_footer_downloads").performClick()
         waitFor { onNodeWithTag("activity_install").assertIsDisplayed() }
         onNodeWithTag("activity_install").performClick()
         settle { updater.installed.isNotEmpty() }

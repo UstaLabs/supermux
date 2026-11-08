@@ -181,7 +181,6 @@ import dev.supermux.ui.widgets.iosSwipeUnderLayer
 import dev.supermux.ui.widgets.iosSwipedLayer
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.ui.widgets.rememberIosBackSwipe
-import dev.supermux.ui.work.ActivityBarWithPanel
 import dev.supermux.ui.work.ActivityRailIcon
 import dev.supermux.ui.work.LocalDownloads
 import dev.supermux.ui.workspace.WorkspaceSession
@@ -949,21 +948,6 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
-                                        // Downloads (#95), above the update card, as a sheet like the
-                                        // footer's own. Wide only: a phone has the bar under the list's
-                                        // top bar instead.
-                                        if (!compact) {
-                                            ActivityBarWithPanel(
-                                                modifier = Modifier
-                                                    .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
-                                                    .clip(RoundedCornerShape(10.dp)),
-                                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                            )
-                                        }
-                                        // The update card sits on the footer rail, not across the
-                                        // top of the app; it draws nothing until a newer release
-                                        // is found.
-                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
@@ -990,6 +974,10 @@ fun SupermuxApp(
                                                     onForgetHost = listActions.forgetHost,
                                                 )
                                             },
+                                            // The update card sits on the footer rail, not across the
+                                            // top of the app; it draws nothing until a newer release
+                                            // is found. The downloads' list (#95) stands on both.
+                                            card = { AppUpdateCard(onOpenPage = { ui.openAppUpdate() }) },
                                         )
                                     }
                                 },
@@ -1021,9 +1009,9 @@ fun SupermuxApp(
                             onNewSession = onNewSession,
                             onOpenSession = { sid -> ui.selectSession(sid) },
                             onShowSidebar = { ui.sidebarCollapsed = false },
+                            // Downloads (#95): the bottom bar's ring, on the rail's own tone above its sheet.
+                            aboveFooter = { ActivityRailIcon() },
                             footer = {
-                                // Downloads (#95): a ring while one runs, opening the same list.
-                                ActivityRailIcon()
                                 HostSwitcher(
                                     hosts = hostViews,
                                     sessions = sessions,

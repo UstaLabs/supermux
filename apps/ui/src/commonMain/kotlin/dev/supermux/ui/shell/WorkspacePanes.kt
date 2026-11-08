@@ -859,9 +859,6 @@ fun PhoneWorkspacePanes(
                         file?.let { (id, path) -> PhoneFileActions(id, path, ws.documents, ws.previewModes) }
                         PhoneTabCountButton(tabsButton)
                     }
-                    // Downloads (#95), under this bar as under every phone top bar. A chat's header is its own,
-                    // and ChatPanel puts the bar under that.
-                    dev.supermux.ui.work.PhoneActivityBar()
                 }
             }
         }

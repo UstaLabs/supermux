@@ -54,7 +54,6 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
-import dev.supermux.ui.work.PhoneActivityBar
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -156,23 +155,20 @@ fun AddHostScreen(
 
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = { Text("Add host", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("add_host_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
-                PhoneActivityBar()
-            }
+            TopAppBar(
+                title = { Text("Add host", color = cs.onSurface) },
+                navigationIcon = {
+                    IconButton(onClick = onBack, modifier = Modifier.testTag("add_host_back")) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = cs.onSurface,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+            )
         },
         containerColor = cs.surfaceContainerHigh,
     ) { padding ->

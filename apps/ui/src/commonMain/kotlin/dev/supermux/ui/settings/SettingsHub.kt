@@ -101,7 +101,6 @@ import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.SwipeBackPages
 import dev.supermux.ui.widgets.rememberIosBackSwipe
-import dev.supermux.ui.work.PhoneActivityBar
 
 /**
  * Rows the hub offers beyond [SettingsSection] — host-local pages that are not broker settings and
@@ -570,22 +569,19 @@ private fun SettingsIndex(
     val cs = MaterialTheme.colorScheme
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = { Text("Settings", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("settings_hub_back")) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
-                PhoneActivityBar()
-            }
+            TopAppBar(
+                title = { Text("Settings", color = cs.onSurface) },
+                navigationIcon = {
+                    IconButton(onClick = onBack, modifier = Modifier.testTag("settings_hub_back")) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = cs.onSurface,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+            )
         },
         containerColor = cs.background,
         modifier = Modifier.testTag("settings_index"),
@@ -635,31 +631,28 @@ private fun CompactDetail(
     val cs = MaterialTheme.colorScheme
     Scaffold(
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Text(
-                            title,
-                            color = cs.onSurface,
-                            modifier = Modifier.testTag("settings_detail_title"),
+            TopAppBar(
+                title = {
+                    Text(
+                        title,
+                        color = cs.onSurface,
+                        modifier = Modifier.testTag("settings_detail_title"),
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("settings_detail_back"),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = cs.onSurface,
                         )
-                    },
-                    navigationIcon = {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("settings_detail_back"),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-                )
-                PhoneActivityBar()
-            }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+            )
         },
         containerColor = cs.background,
     ) { padding ->
