@@ -849,7 +849,7 @@ export class Core {
         await this.ready()
         if (input.id !== undefined && await this.registry.get(input.id)) throw new CoreError("account_exists", `Account ${input.id} already exists`)
       },
-      promote: async (directory, identity, tokens) => {
+      promote: async (directory, identity, tokens, credential) => {
         this.assertOpen()
         const base = {
           agent: input.agent, identity,
@@ -857,9 +857,13 @@ export class Core {
           ...(input.label !== undefined ? { label: input.label } : {}),
           ...(input.isolated ? { isolated: true } : {}),
         }
-        return as === "token"
-          ? this.registry.add({ ...base, method: "token", secret: tokens! })
-          : this.registry.adoptHome({ ...base, method: "subscription" }, directory)
+        // Signing in again as an account's identity repairs that account (#106): same id, so its sessions keep it.
+        const account = as === "token"
+          ? await this.registry.add({ ...base, method: "token", secret: tokens! }, { repair: true })
+          : await this.registry.adoptHome({ ...base, method: "subscription" }, directory, { repair: { credential } })
+        // A fresh sign-in: whatever refused the old one no longer applies.
+        this.usage.clearUnavailable(account.id)
+        return account
       },
     })
     this.logins.add(handle)
