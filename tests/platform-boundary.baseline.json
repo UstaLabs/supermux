@@ -148,13 +148,6 @@
     "src/core/editor/workdir-diff.ts": 1,
     "src/core/forge/github.ts": 1,
     "src/core/forge/gitlab.ts": 1,
-    "src/core/fs/repo-info.ts": 3,
-    "src/core/fs/search-index.ts": 3,
-    "src/core/git/branches.ts": 2,
-    "src/core/git/mingit.ts": 1,
-    "src/core/git/pr.ts": 1,
-    "src/core/git/repo-info.ts": 1,
-    "src/core/git/requirement.ts": 1,
     "src/core/local-endpoint.ts": 1,
     "src/core/lsp/catalog.ts": 1,
     "src/core/lsp/detect.ts": 1,
@@ -166,9 +159,7 @@
     "src/core/telemetry/sanitize.ts": 1,
     "src/core/terminal/zmx/backend.ts": 2,
     "src/core/update/apply.ts": 1,
-    "src/core/windows/user-install.ts": 1,
-    "src/core/worktree/inventory.ts": 4,
-    "src/core/worktree/service.ts": 1
+    "src/core/windows/user-install.ts": 1
   },
   "signals": {
     "packages/supermux-core/src/accounts/login.ts": 1,

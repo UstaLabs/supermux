@@ -206,7 +206,7 @@ export class WorktreeService {
     want.set("root", () => watch(root, (slug) => { if (slug) void this.refreshSlug(slug) }))
     for (const w of this.entries.values()) {
       if (isOrphan(w)) continue
-      const slug = w.id.split("/")[0]!
+      const slug = w.id.split("/")[0]! // platform-ok: a worktree id ("<repo-slug>/<uuid>"), not a path
       want.set(`slug:${slug}`, () => watch(join(root, slug), (name) => { if (name) this.touch(`${slug}/${name}`) }))
       want.set(`wt:${w.id}`, () => watch(join(root, w.id), () => this.touch(w.id)))
     }
