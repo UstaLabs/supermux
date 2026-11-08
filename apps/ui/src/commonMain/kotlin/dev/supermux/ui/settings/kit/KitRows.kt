@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,13 +38,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.expand
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
+
+/** The focus ring's shape on a whole row. */
+private val RowRing = RoundedCornerShape(4.dp)
 
 /**
  * One setting. [stacked] puts the control under the label (option rows on phones); [indent] marks a sub-row
@@ -127,22 +138,25 @@ fun KitToggleRow(
     indent: Boolean = false,
     divider: Boolean = true,
 ) {
+    val src = remember { MutableInteractionSource() }
     KitRow(
         label = label,
-        modifier = modifier.toggleable(
-            value = checked,
-            interactionSource = remember { MutableInteractionSource() },
-            indication = null,
-            enabled = enabled,
-            role = Role.Switch,
-            onValueChange = onCheckedChange,
-        ),
+        modifier = modifier
+            .toggleable(
+                value = checked,
+                interactionSource = src,
+                indication = null,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+            )
+            .kitFocusRing(src, RowRing),
         description = description,
         badge = badge,
         indent = indent,
         dim = !enabled,
         divider = divider,
-    ) { KitToggle(checked, onCheckedChange = null, enabled = enabled) }
+    ) { KitToggleTrack(checked, enabled, Modifier.padding(vertical = 3.dp)) }
 }
 
 /** A row with a quiet option group: at its end when wide, under the label (and full width) on a phone. */
@@ -189,7 +203,9 @@ fun KitValueRow(
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val click = if (onClick != null) {
-        Modifier.clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onClick)
+        Modifier
+            .clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onClick)
+            .kitFocusRing(src, RowRing)
     } else {
         Modifier
     }
@@ -239,7 +255,7 @@ fun KitStepperRow(
     tag: String = "stepper",
     divider: Boolean = true,
 ) {
-    KitRow(label, modifier, description = description, divider = divider) { KitStepper(value, onChange, range, tag = tag) }
+    KitRow(label, modifier, description = description, divider = divider) { KitStepper(value, onChange, range, label = label, tag = tag) }
 }
 
 @Composable
@@ -252,22 +268,29 @@ fun KitSliderRow(
     valueText: String,
     modifier: Modifier = Modifier,
     description: String? = null,
+    enabled: Boolean = true,
     sliderTag: String? = null,
     onChangeFinished: () -> Unit = {},
     divider: Boolean = true,
 ) {
     val c = kitColors()
-    KitRow(label, modifier, description = description, divider = divider) {
+    KitRow(label, modifier, description = description, dim = !enabled, divider = divider) {
         Text(valueText, fontSize = kitMetrics().value, color = c.dim)
         KitSlider(
             value, onChange, range, step,
+            label = label,
+            valueText = valueText,
             modifier = if (sliderTag != null) Modifier.testTag(sliderTag) else Modifier,
+            enabled = enabled,
             onChangeFinished = onChangeFinished,
         )
     }
 }
 
-/** A small-caps head ("CODE INTELLIGENCE") with an optional note at its end ("on studio-mini"). */
+/**
+ * A small-caps head ("CODE INTELLIGENCE") with an optional note at its end ("on studio-mini"). A heading for
+ * screen readers, read in its own case rather than the capitals it is drawn in.
+ */
 @Composable
 fun KitSectionHead(
     text: String,
@@ -286,7 +309,10 @@ fun KitSectionHead(
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.63.sp,
             color = c.faint,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).semantics {
+                heading()
+                contentDescription = text
+            },
         )
         when {
             noteContent != null -> noteContent()
@@ -315,7 +341,7 @@ fun KitDotMark(dot: KitDot, modifier: Modifier = Modifier) {
     Box(modifier.size(6.dp).clip(CircleShape).background(tone))
 }
 
-/** "● Running · supermux 0.17.5" */
+/** "● Running · supermux 0.17.5"; announced politely when it changes. */
 @Composable
 fun KitStatusLine(text: String, modifier: Modifier = Modifier, dot: KitDot? = null) {
     val c = kitColors()
@@ -325,14 +351,18 @@ fun KitStatusLine(text: String, modifier: Modifier = Modifier, dot: KitDot? = nu
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (dot != null) KitDotMark(dot)
-        Text(text, fontSize = 12.5.sp, color = c.dim)
+        Text(text, fontSize = 12.5.sp, color = c.dim, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
     }
 }
 
-/** A row of ghost buttons under a section ("Recent events · What we send"). */
+/** A row of ghost buttons under a section ("Recent events · What we send"); it wraps on a narrow screen. */
 @Composable
 fun KitButtons(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
-    Row(modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    FlowRow(
+        modifier.padding(top = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) { content() }
 }
 
 /**
@@ -347,16 +377,34 @@ fun KitFold(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = kitColors()
+    val m = kitMetrics()
     val registry = LocalKitAnchors.current
     var open by rememberSaveable { mutableStateOf(false) }
     val target = registry?.target
     LaunchedEffect(target) { if (target != null && target in anchors) open = true }
     val turn by animateFloatAsState(if (open) 90f else 0f, tween(120), label = "kit-fold")
+    val src = remember { MutableInteractionSource() }
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button) { open = !open }
-                .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
+                .fillMaxWidth()
+                .heightIn(min = if (m.phone) 48.dp else 0.dp)
+                .clickable(interactionSource = src, indication = null, role = Role.Button) { open = !open }
+                .semantics {
+                    stateDescription = if (open) "Expanded" else "Collapsed"
+                    if (open) {
+                        collapse {
+                            open = false
+                            true
+                        }
+                    } else {
+                        expand {
+                            open = true
+                            true
+                        }
+                    }
+                }
+                .kitFocusRing(src, RowRing)
                 .then(if (tag != null) Modifier.testTag(tag) else Modifier)
                 .padding(top = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,

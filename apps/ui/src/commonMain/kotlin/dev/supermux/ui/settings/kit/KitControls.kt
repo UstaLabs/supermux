@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -21,11 +22,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -37,6 +40,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -53,15 +58,18 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalPointerAvailable
@@ -77,45 +85,64 @@ internal fun Modifier.kitTouchTarget(): Modifier =
     if (LocalPointerAvailable.current) this else this.minimumInteractiveComponentSize()
 
 /**
- * The toggle: a 30×18 track, a 14 dp knob, accent when on. With [onCheckedChange] it is its own switch (role,
- * state, click); without it, it only draws, because a [KitToggleRow] owns the switch for the whole row.
+ * The kit's keyboard-focus ring: a 1 dp accent outline while [interactionSource] is focused — the ghost button's and
+ * the rail row's outline, on every control. A mouse click does not focus a control (Compose 1.12), so only Tab and
+ * the arrow keys show it.
+ */
+@Composable
+fun Modifier.kitFocusRing(interactionSource: InteractionSource, shape: Shape): Modifier {
+    val focused by interactionSource.collectIsFocusedAsState()
+    val accent = kitColors().accent
+    return if (focused) this.border(1.dp, accent, shape) else this
+}
+
+/**
+ * The toggle: a 30×18 track, a 14 dp knob, accent when on. A switch of its own, named by [label] for screen
+ * readers; in a row, [KitToggleRow] owns the switch and draws only [KitToggleTrack].
  */
 @Composable
 fun KitToggle(
     checked: Boolean,
-    onCheckedChange: ((Boolean) -> Unit)?,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    label: String? = null,
 ) {
-    val c = kitColors()
-    val knobX by animateDpAsState(if (checked) 14.dp else 2.dp, tween(120), label = "kit-toggle-knob")
-    val track by animateColorAsState(if (checked) c.accent else c.line, tween(120), label = "kit-toggle-track")
-    val interactive = if (onCheckedChange != null) {
-        Modifier
+    val src = remember { MutableInteractionSource() }
+    Box(
+        modifier
             .toggleable(
                 value = checked,
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = src,
                 indication = null,
                 enabled = enabled,
                 role = Role.Switch,
                 onValueChange = onCheckedChange,
             )
-            .semantics { if (label != null) contentDescription = label }
+            .semantics { contentDescription = label }
             .kitTouchTarget()
-    } else {
-        Modifier
+            .padding(vertical = 1.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        // The ring sits 2 dp outside the track: on the track's own edge it would vanish into the accent when on.
+        Box(Modifier.kitFocusRing(src, RoundedCornerShape(11.dp)).padding(2.dp)) { KitToggleTrack(checked, enabled) }
     }
-    Box(modifier.then(interactive).padding(vertical = 3.dp), contentAlignment = Alignment.CenterStart) {
-        Box(
-            Modifier
-                .size(30.dp, 18.dp)
-                .alpha(if (enabled) 1f else 0.45f)
-                .clip(RoundedCornerShape(9.dp))
-                .background(track),
-        ) {
-            Box(Modifier.offset(x = knobX, y = 2.dp).size(14.dp).clip(CircleShape).background(c.knob))
-        }
+}
+
+/** The toggle's track and knob, drawn only: no role, no state, no click. */
+@Composable
+internal fun KitToggleTrack(checked: Boolean, enabled: Boolean, modifier: Modifier = Modifier) {
+    val c = kitColors()
+    val knobX by animateDpAsState(if (checked) 14.dp else 2.dp, tween(120), label = "kit-toggle-knob")
+    val track by animateColorAsState(if (checked) c.accent else c.line, tween(120), label = "kit-toggle-track")
+    Box(
+        modifier
+            .size(30.dp, 18.dp)
+            .alpha(if (enabled) 1f else 0.45f)
+            .clip(RoundedCornerShape(9.dp))
+            .background(track),
+    ) {
+        Box(Modifier.offset(x = knobX, y = 2.dp).size(14.dp).clip(CircleShape).background(c.knob))
     }
 }
 
@@ -132,7 +159,6 @@ fun <T> KitOptions(
     tag: ((T) -> String)? = null,
 ) {
     val c = kitColors()
-    val m = kitMetrics()
     Row(
         modifier
             .border(1.dp, c.line, RoundedCornerShape(7.dp))
@@ -141,37 +167,56 @@ fun <T> KitOptions(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         for (o in options) {
-            val on = o == selected
-            Box(
-                Modifier
-                    .then(if (fill) Modifier.weight(1f) else Modifier)
-                    .height(if (m.phone) 30.dp else 24.dp)
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(if (on) c.wash else Color.Transparent)
-                    .selectable(
-                        selected = on,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        enabled = enabled,
-                        role = Role.RadioButton,
-                        onClick = { if (!on) onSelect(o) },
-                    )
-                    .padding(horizontal = if (m.phone) 9.dp else 10.dp)
-                    .then(if (tag != null) Modifier.testTag(tag(o)) else Modifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    label(o),
-                    fontSize = m.control,
-                    color = when {
-                        !enabled -> c.faint
-                        on -> c.text
-                        else -> c.dim
-                    },
-                    maxLines = 1,
+            // Keyed, so a segment keeps its own state when the options change.
+            key(o) {
+                OptionSegment(
+                    text = label(o),
+                    on = o == selected,
+                    enabled = enabled,
+                    onClick = { if (o != selected) onSelect(o) },
+                    modifier = Modifier
+                        .then(if (fill) Modifier.weight(1f) else Modifier)
+                        .then(if (tag != null) Modifier.testTag(tag(o)) else Modifier),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun OptionSegment(text: String, on: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    val c = kitColors()
+    val m = kitMetrics()
+    // One per segment for its focus ring; the segment is keyed by its option, so this follows the option.
+    val src = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(5.dp)
+    Box(
+        modifier
+            .heightIn(min = if (m.phone) 30.dp else 24.dp)
+            .clip(shape)
+            .background(if (on) c.wash else Color.Transparent)
+            .selectable(
+                selected = on,
+                interactionSource = src,
+                indication = null,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .kitFocusRing(src, shape)
+            .padding(horizontal = if (m.phone) 9.dp else 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            fontSize = m.control,
+            color = when {
+                !enabled -> c.faint
+                on -> c.text
+                else -> c.dim
+            },
+            maxLines = 1,
+        )
     }
 }
 
@@ -200,7 +245,7 @@ fun KitGhostButton(
     Row(
         modifier
             .kitTouchTarget()
-            .height(m.controlHeight)
+            .heightIn(min = m.controlHeight)
             .clip(shape)
             .background(if (enabled && (hovered || pressed)) c.hover else Color.Transparent)
             .border(1.dp, if (focused) c.accent else c.line, shape)
@@ -223,15 +268,32 @@ fun KitTextAction(
     enabled: Boolean = true,
     leading: ImageVector? = null,
 ) {
+    TextActionBase(text, onClick, modifier, enabled, leading, touchTarget = true)
+}
+
+/**
+ * [KitTextAction] with the 48 dp touch target optional: inside a field it must not make the field taller, and
+ * Compose's own touch-target extension already widens a small target there.
+ */
+@Composable
+internal fun TextActionBase(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    leading: ImageVector? = null,
+    touchTarget: Boolean = true,
+) {
     val c = kitColors()
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
     val ink = if (enabled) c.accent else c.faint
     Row(
         modifier
-            .kitTouchTarget()
+            .then(if (touchTarget) Modifier.kitTouchTarget() else Modifier)
             .clickable(interactionSource = src, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-            .padding(vertical = 2.dp),
+            .kitFocusRing(src, RoundedCornerShape(4.dp))
+            .padding(horizontal = 2.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -245,21 +307,34 @@ fun KitTextAction(
     }
 }
 
-/** − value +, clamped to [range]. Tags: `<tag>_minus`, `<tag>_value`, `<tag>_plus`. */
+/**
+ * − value +, clamped to [range]. [label] is the row's label: the buttons are "Decrease ‹label›" and "Increase
+ * ‹label›", and the value is announced as it changes. Tags: `<tag>_minus`, `<tag>_value`, `<tag>_plus`.
+ */
 @Composable
-fun KitStepper(value: Int, onChange: (Int) -> Unit, range: IntRange, modifier: Modifier = Modifier, tag: String = "stepper") {
+fun KitStepper(
+    value: Int,
+    onChange: (Int) -> Unit,
+    range: IntRange,
+    label: String,
+    modifier: Modifier = Modifier,
+    tag: String = "stepper",
+) {
     val c = kitColors()
     val m = kitMetrics()
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        StepButton("−", "Smaller", value > range.first, { onChange((value - 1).coerceIn(range)) }, "${tag}_minus")
+        StepButton("−", "Decrease $label", value > range.first, { onChange((value - 1).coerceIn(range)) }, "${tag}_minus")
         Text(
             "$value",
             fontSize = m.value,
             color = c.text,
-            modifier = Modifier.widthIn(min = 26.dp).testTag("${tag}_value"),
+            modifier = Modifier
+                .widthIn(min = 26.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .testTag("${tag}_value"),
             textAlign = TextAlign.Center,
         )
-        StepButton("+", "Larger", value < range.last, { onChange((value + 1).coerceIn(range)) }, "${tag}_plus")
+        StepButton("+", "Increase $label", value < range.last, { onChange((value + 1).coerceIn(range)) }, "${tag}_plus")
     }
 }
 
@@ -269,13 +344,15 @@ private fun StepButton(glyph: String, description: String, enabled: Boolean, onC
     val m = kitMetrics()
     val src = remember { MutableInteractionSource() }
     val hovered by src.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(6.dp)
     Box(
         Modifier
             .kitTouchTarget()
             .size(if (m.phone) 32.dp else 24.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .clip(shape)
             .background(if (hovered && enabled) c.wash else Color.Transparent)
             .clickable(interactionSource = src, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .kitFocusRing(src, shape)
             .semantics { contentDescription = description }
             .testTag(tag),
         contentAlignment = Alignment.Center,
@@ -286,8 +363,9 @@ private fun StepButton(glyph: String, description: String, enabled: Boolean, onC
 
 /**
  * A hairline slider: a 2 dp track, the filled part in the accent, a 12 dp knob ringed in the accent. Tap or drag
- * on it, ←/→ when focused, or set it through accessibility. Values snap to [step]. [onChangeFinished] runs when a
- * drag ends, a tap lands or a key steps.
+ * on it, ←/→ (Home/End for the ends) when focused, or set it through accessibility, which reads [label] and
+ * [valueText]. Values snap to [step], and [onChange] runs only when the snapped value moves. [onChangeFinished]
+ * runs when a drag ends or is cancelled, a tap lands, or a key or accessibility moves the value.
  */
 @Composable
 fun KitSlider(
@@ -295,9 +373,13 @@ fun KitSlider(
     onChange: (Float) -> Unit,
     range: ClosedFloatingPointRange<Float>,
     step: Float,
+    label: String,
+    valueText: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onChangeFinished: () -> Unit = {},
 ) {
+    require(step > 0f) { "KitSlider's step must be positive, was $step" }
     val c = kitColors()
     val m = kitMetrics()
     val current by rememberUpdatedState(value)
@@ -309,45 +391,63 @@ fun KitSlider(
         val steps = ((v - range.start) / step).roundToInt()
         return (range.start + steps * step).coerceIn(range.start, range.endInclusive)
     }
-    fun at(x: Float): Float = snap(range.start + (x / width[0]).coerceIn(0f, 1f) * (range.endInclusive - range.start))
+    fun at(x: Float): Float = range.start + (x / width[0]).coerceIn(0f, 1f) * (range.endInclusive - range.start)
+    // Moves to target, snapped; says whether the value moved.
+    fun moveTo(target: Float): Boolean {
+        val next = snap(target)
+        if (next == current) return false
+        change(next)
+        return true
+    }
     val fraction = ((value - range.start) / (range.endInclusive - range.start)).coerceIn(0f, 1f)
     val src = remember { MutableInteractionSource() }
-    val focused by src.collectIsFocusedAsState()
     Box(
         modifier
             .width(if (m.phone) 120.dp else 150.dp)
             .height(18.dp)
-            .onSizeChanged { size: IntSize -> width[0] = size.width.coerceAtLeast(1) }
+            .onSizeChanged { size -> width[0] = size.width.coerceAtLeast(1) }
             .semantics {
                 // No role on purpose: Compose has no slider role; range info + setProgress is what screen readers use.
+                contentDescription = label
+                stateDescription = valueText
                 progressBarRangeInfo = ProgressBarRangeInfo(value, range, steps = ((range.endInclusive - range.start) / step).roundToInt() - 1)
-                setProgress { target ->
-                    change(snap(target))
-                    finished()
-                    true
+                if (enabled) {
+                    setProgress { target ->
+                        if (moveTo(target)) finished()
+                        true
+                    }
+                } else {
+                    disabled()
                 }
             }
-            .focusable(interactionSource = src)
+            .focusable(enabled = enabled, interactionSource = src)
+            .kitFocusRing(src, RoundedCornerShape(4.dp))
             .onKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
-                val d = when (e.key) {
-                    Key.DirectionRight, Key.DirectionUp -> step
-                    Key.DirectionLeft, Key.DirectionDown -> -step
+                if (!enabled || e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                val target = when (e.key) {
+                    Key.DirectionRight, Key.DirectionUp -> current + step
+                    Key.DirectionLeft, Key.DirectionDown -> current - step
+                    Key.MoveHome -> range.start
+                    Key.MoveEnd -> range.endInclusive
                     else -> return@onKeyEvent false
                 }
-                change(snap(current + d))
-                finished()
+                if (moveTo(target)) finished()
                 true
             }
-            .pointerInput(range, step) {
+            .pointerInput(range, step, enabled) {
+                if (!enabled) return@pointerInput
                 detectTapGestures { o ->
-                    change(at(o.x))
+                    moveTo(at(o.x))
                     finished()
                 }
             }
-            .pointerInput(range, step) {
-                detectHorizontalDragGestures(onDragEnd = { finished() }) { ch, _ -> change(at(ch.position.x)) }
-            },
+            .pointerInput(range, step, enabled) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(onDragEnd = { finished() }, onDragCancel = { finished() }) { ch, _ ->
+                    moveTo(at(ch.position.x))
+                }
+            }
+            .alpha(if (enabled) 1f else 0.45f),
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(c.line))
@@ -356,10 +456,14 @@ fun KitSlider(
             Box(
                 Modifier
                     .offset(x = 6.dp)
+                    // Unbounded: at the minimum the filled part is 0 wide and would squeeze the knob to nothing.
+                    // Aligned to its end and shifted by half, the knob is centred on the value at every value.
+                    .wrapContentWidth(Alignment.End, unbounded = true)
                     .size(12.dp)
                     .clip(CircleShape)
                     .background(c.knob)
-                    .border(if (focused) 2.dp else 1.5.dp, c.accent, CircleShape),
+                    .border(1.5.dp, c.accent, CircleShape)
+                    .testTag("kit_slider_knob"),
             )
         }
     }

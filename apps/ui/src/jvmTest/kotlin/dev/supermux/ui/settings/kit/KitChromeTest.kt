@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -25,7 +28,7 @@ class KitChromeTest {
     @Test fun the_top_bar_shows_its_title_and_goes_back() = runComposeUiTest {
         var back = 0
         setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) { KitTopBar("Voice", { back++ }) }
-        onNodeWithTag("settings_detail_title").assertExists()
+        onNodeWithTag("settings_detail_title").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
         onNodeWithText("Voice").assertExists()
         onNodeWithTag("settings_detail_back").performClick()
         assertEquals(1, back)
@@ -40,6 +43,22 @@ class KitChromeTest {
         }
         onNodeWithText("Add a Claude login").assertExists()
         onNodeWithText("Each login is its own account.").assertExists()
+    }
+
+    @Test fun a_sheet_runs_its_buttons() = runComposeUiTest {
+        var saved = 0
+        setPlatformContent {
+            KitSheet(
+                "Rename this login",
+                {},
+                buttons = {
+                    KitGhostButton("Cancel", {})
+                    KitGhostButton("Save", { saved++ }, Modifier.testTag("sheet_save"))
+                },
+            ) { KitTextField("Work", {}, label = "Name") }
+        }
+        onNodeWithTag("sheet_save").performClick()
+        assertEquals(1, saved)
     }
 
     @Test fun a_selected_rail_row_says_so() = runComposeUiTest {

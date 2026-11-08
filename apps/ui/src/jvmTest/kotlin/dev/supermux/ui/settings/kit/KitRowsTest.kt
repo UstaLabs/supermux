@@ -8,13 +8,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -33,6 +37,8 @@ class KitRowsTest {
             KitToggleRow("Wrap long lines", on, { on = it }, Modifier.testTag("wrap"), description = "Wrap instead of scrolling sideways.")
         }
         onNodeWithTag("wrap").assertIsOn().assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+        // The row is the switch; the track it draws is not a second one.
+        onAllNodes(isToggleable(), useUnmergedTree = true).assertCountEquals(1)
         onNodeWithText("Wrap long lines").performClick()
         onNodeWithTag("wrap").assertIsOff()
     }
@@ -75,9 +81,11 @@ class KitRowsTest {
         }
         onNodeWithText("Tidy-up model").assertDoesNotExist()
         onNodeWithTag("adv").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        onNodeWithTag("adv").assert(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand))
         onNodeWithTag("adv").performClick()
         onNodeWithText("Tidy-up model").assertExists()
         onNodeWithTag("adv").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        onNodeWithTag("adv").assert(SemanticsMatcher.keyIsDefined(SemanticsActions.Collapse))
     }
 
     @Test fun a_fold_opens_itself_when_search_targets_a_row_inside_it() = runComposeUiTest {
@@ -108,6 +116,8 @@ class KitRowsTest {
     @Test fun a_section_head_writes_its_text_in_capitals_and_its_note_as_is() = runComposeUiTest {
         setPlatformContent { KitSectionHead("Code intelligence", note = "on studio-mini") }
         onNodeWithText("CODE INTELLIGENCE").assertExists()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+            .assertContentDescriptionEquals("Code intelligence")
         onNodeWithText("on studio-mini").assertExists()
     }
 }

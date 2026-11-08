@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,7 +23,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,14 +66,20 @@ fun KitItem(
     val c = kitColors()
     val m = kitMetrics()
     val add = mark == KitMark.Add
+    val src = remember { MutableInteractionSource() }
     val click = if (onClick != null) {
-        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onClick)
+        Modifier
+            .clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onClick)
+            .kitFocusRing(src, RoundedCornerShape(4.dp))
     } else {
         Modifier
     }
     Column(modifier.fillMaxWidth().then(click)) {
         Row(
-            Modifier.fillMaxWidth().padding(start = if (indent) 38.dp else 0.dp, top = 10.dp, bottom = 10.dp),
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (m.phone) 48.dp else 0.dp)
+                .padding(start = if (indent) 38.dp else 0.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -93,11 +104,12 @@ fun KitItem(
     }
 }
 
+/** The mark is decoration: the title names the item, so screen readers skip the letters. */
 @Composable
 private fun KitMarkBox(mark: KitMark) {
     val c = kitColors()
     Box(
-        Modifier.size(26.dp).border(1.dp, c.line, RoundedCornerShape(7.dp)),
+        Modifier.size(26.dp).border(1.dp, c.line, RoundedCornerShape(7.dp)).clearAndSetSemantics {},
         contentAlignment = Alignment.Center,
     ) {
         when (mark) {
@@ -108,12 +120,18 @@ private fun KitMarkBox(mark: KitMark) {
     }
 }
 
-/** "● Ready", "Sign in again" (warning tone, no dot), "You". */
+/** "● Ready", "Sign in again" (warning tone, no dot), "You"; announced politely when it changes. */
 @Composable
 fun KitItemStatus(text: String, dot: KitDot? = null, warn: Boolean = false, modifier: Modifier = Modifier) {
     val c = kitColors()
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         if (dot != null && !warn) KitDotMark(dot)
-        Text(text, fontSize = kitMetrics().desc, color = if (warn) c.warn else c.dim, maxLines = 1)
+        Text(
+            text,
+            fontSize = kitMetrics().desc,
+            color = if (warn) c.warn else c.dim,
+            maxLines = 1,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
     }
 }
