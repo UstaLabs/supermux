@@ -1,6 +1,7 @@
 // Editor settings persisted in the `settings` table (broker-wide). The PWA
 // settings page edits these; LSP bridge respects per-server enable flags.
 
+import { basename } from "node:path"
 import { SERVERS, type LspInstallSpec, type LspServerSpec } from "../lsp/catalog"
 
 function isCatalogServerId(id: string): boolean {
@@ -67,7 +68,7 @@ export function customToServerSpec(id: string, def: CustomLspServerDef): LspServ
     id,
     label: parsed.label,
     runtime: "native",
-    bin: parsed.command.split("/").pop() ?? parsed.command,
+    bin: basename(parsed.command),
     command: parsed.command,
     args: parsed.args ?? [],
     extensions: parsed.extensions,

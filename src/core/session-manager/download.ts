@@ -44,7 +44,7 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
   // Telegram's file_path is server-controlled but should be a relative subpath.
   // Reject traversal attempts — defense in depth.
   const fp = meta.file_path
-  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) {
+  if (fp.startsWith("/") || fp.includes("..") || normalize(fp) !== fp.split("/").join(sep)) { // platform-ok: Telegram's file_path, a URL path (/ by definition)
     throw new Error(`invalid file_path from telegram: ${JSON.stringify(fp)}`)
   }
 

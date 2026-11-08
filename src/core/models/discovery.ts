@@ -190,7 +190,7 @@ export async function discoverOpenCodeModels(opts?: {
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const id = line.trim()
-      if (!id || !id.includes("/")) continue
+      if (!id || !id.includes("/")) continue // platform-ok: an opencode model id, "provider/model"
       models.push({ id, displayName: id, agent: Agent.OpenCode })
     }
     return models

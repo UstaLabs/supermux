@@ -26,7 +26,7 @@ async function call(c: ForgeCredential, path: string, init?: RequestInit): Promi
 
 function toRepo(c: ForgeCredential, j: any): RemoteRepo {
   const full = j.path_with_namespace as string
-  const slash = full.lastIndexOf("/")
+  const slash = full.lastIndexOf("/") // platform-ok: a GitLab "namespace/project" path, not a file path
   return {
     connectionId: c.id, kind: "gitlab", host: c.host,
     owner: full.slice(0, slash), name: j.path ?? full.slice(slash + 1), fullName: full,

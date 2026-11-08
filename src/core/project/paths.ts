@@ -1,3 +1,4 @@
+// platform-ok: normalizes a path by ITS spelling (a Windows or a POSIX path), on any host
 import { posix, win32 } from "path"
 import { paths } from "@supermux/platform"
 
@@ -19,7 +20,7 @@ export function normalizeLocationPath(path: string): string | undefined {
     const trimmed = n.length > win32.parse(n).root.length ? n.replace(/\\+$/, "") : n
     return trimmed.replace(/^[a-z]:/, (drive) => drive.toUpperCase())
   }
-  if (!path.startsWith("/")) return undefined
+  if (!path.startsWith("/")) return undefined // platform-ok: a POSIX path, by its own spelling (a Windows one was handled above)
   const n = posix.normalize(path)
   return n.length > 1 ? n.replace(/\/+$/, "") : n
 }
@@ -75,6 +76,6 @@ export function effectiveLocation(
 export function pathLabel(path: string, home: string): string {
   if (home && path === home) return "~"
   if (WINDOWS_ABSOLUTE.test(path)) return win32.basename(path) || path
-  const segments = path.split("/").filter(Boolean)
+  const segments = path.split("/").filter(Boolean) // platform-ok: a POSIX path, by its own spelling (a Windows one was handled above)
   return segments[segments.length - 1] ?? path
 }

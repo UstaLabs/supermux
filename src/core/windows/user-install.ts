@@ -7,6 +7,7 @@
 import { createHash } from "crypto"
 import { runCommand } from "../process/run"
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs"
+// platform-ok: builds the Windows install's paths, with win32 on any host so its tests run anywhere
 import { win32 as winPath } from "path"
 import { findEscape, isInUse } from "../agents/archive-guard"
 

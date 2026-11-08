@@ -89,7 +89,7 @@ export function stripUpstreamOrigin(loc: string, upstreamHost: string): string |
       if (loc.startsWith(origin)) {
         const rest = loc.slice(origin.length)
         if (rest === "") return "/"
-        if (/^[/?#]/.test(rest)) return rest.startsWith("/") ? rest : "/" + rest
+        if (/^[/?#]/.test(rest)) return rest.startsWith("/") ? rest : "/" + rest // platform-ok: a URL path, / by definition
       }
     }
   }
@@ -112,9 +112,9 @@ export function rewriteSubdomainLocation(loc: string, upstreamHost: string): str
  */
 export function rewriteLocation(loc: string, prefix: string, upstreamHost: string): string {
   const path = stripUpstreamOrigin(loc, upstreamHost) ?? loc
-  if (path.startsWith("/") && !path.startsWith("//")) {
+  if (path.startsWith("/") && !path.startsWith("//")) { // platform-ok: a URL path, / by definition
     // Idempotent: an already-prefixed path (e.g. a base-aware upstream) is left as-is.
-    if (path === prefix || path.startsWith(prefix + "/")) return path
+    if (path === prefix || path.startsWith(prefix + "/")) return path // platform-ok: a URL path, / by definition
     return prefix + path
   }
   return loc
@@ -130,8 +130,8 @@ export function rewriteSetCookiePath(setCookie: string, prefix: string): string 
     return setCookie.replace(/;(\s*)path=([^;]*)/i, (_m, sp: string, p: string) => {
       const orig = p.trim() || "/"
       // Idempotent: a cookie already scoped under the prefix is left as-is.
-      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}`
-      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}`
+      if (orig === prefix || orig.startsWith(prefix + "/")) return `;${sp}Path=${orig}` // platform-ok: a cookie's URL path, / by definition
+      const np = orig === "/" ? `${prefix}/` : `${prefix}${orig.startsWith("/") ? "" : "/"}${orig}` // platform-ok: a cookie's URL path, / by definition
       return `;${sp}Path=${np}`
     })
   }

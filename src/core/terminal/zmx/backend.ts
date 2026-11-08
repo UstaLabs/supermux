@@ -817,14 +817,14 @@ export class ZmxWorkspaceBackend implements WorkspaceTerminalBackend {
    */
   #shellArgv(shell: string): string[] {
     if (!shell) throw new WorkspaceTerminalError("backend-unavailable", "no shell configured for this workspace")
-    const path = shell.includes("/") ? shell : this.#probe.which(shell)
+    const path = shell.includes("/") ? shell : this.#probe.which(shell) // platform-ok: a POSIX shell (zmx is the POSIX terminal backend)
     if (!path) {
       throw new WorkspaceTerminalError("backend-unavailable", `shell ${shell} was not found on PATH`)
     }
     if (!this.#probe.isExecutableFile(path)) {
       throw new WorkspaceTerminalError("backend-unavailable", `shell ${path} is not an executable file`)
     }
-    return LOGIN_CAPABLE_SHELLS.has(path.slice(path.lastIndexOf("/") + 1)) ? [path, "-l"] : [path]
+    return LOGIN_CAPABLE_SHELLS.has(path.slice(path.lastIndexOf("/") + 1)) ? [path, "-l"] : [path] // platform-ok: a POSIX shell (zmx is the POSIX terminal backend)
   }
 }
 
