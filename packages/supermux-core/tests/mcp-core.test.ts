@@ -11,7 +11,7 @@ import type { DriverContextSupport, LaunchContext, ResolvedContext } from "../sr
 import { createCore, type Core } from "../src/core.js"
 import { mcpServer, tool, type ToolContext } from "../src/mcp/index.js"
 import type { AgentDriver, CoreEvent, DriverContext } from "../src/types.js"
-import { TEST_CLAUDE_PERMISSIONS, TEST_LIMITS } from "./helpers.js"
+import { TEST_CLAUDE_PERMISSIONS, TEST_LIMITS, FIXTURE_SETUP_MS } from "./helpers.js"
 import { BridgeClient, until } from "./mcp-helpers.js"
 
 setDefaultTimeout(30_000)
@@ -265,7 +265,7 @@ const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, im
 function claudeDriver(root: string, pidFile: string) {
   return claude({
     id: "claude", command: process.execPath, args: [fixture("claude-agent.mjs")], env: { PID_FILE: pidFile, FIXTURE_MCP: "1" }, inheritEnv: true, tools: [], permissionPrompts: "none",
-    permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false, setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 << 20, requestTimeoutMs: 3000,
+    permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false, setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 500, maxFrameBytes: 16 << 20, requestTimeoutMs: 3000,
     keeper: { stateDirectory: join(root, "keeper"), limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
   })
 }

@@ -303,3 +303,14 @@ test("flush stores the pending text under its stream and ends the rest", () => {
     { kind: "live-end", stream: thinking, final: false },
   ])
 })
+
+test("OpenCode waiting out its free limit: a recoverable error the user sees, and the host learns when it resets", () => {
+  const events: AgentEvent[] = []
+  const limits: string[] = []
+  const b = createNormalizedBridge({ agent: "opencode", emit: (e) => events.push(e), onOpenCodeFreeLimit: (at) => limits.push(at) })
+  b.handle(env({ kind: "warning", source: "opencode", code: "opencode_free_limit", resetsAt: "2026-11-09T00:00:00.000Z", message: "OpenCode's free models reached today's limit." }))
+  expect(limits).toEqual(["2026-11-09T00:00:00.000Z"])
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({ kind: "error", recoverable: true, errorType: "free_limit" })
+  expect((events[0] as { error: Error }).error.message).toContain("free models")
+})
