@@ -585,6 +585,45 @@ static CGImageRef WVLargestImage(NSImage *image) {
     if (!_released) [_webView stopLoading];
 }
 
+- (void)find:(NSString *)query backwards:(BOOL)backwards request:(jlong)request {
+    jlong token = _token;
+    if (_released || query.length == 0) {
+        WVPost(token, WVEventResult, 0, request, 0, 0, 0, nil, nil, nil, nil, nil);
+        return;
+    }
+    WKFindConfiguration *config = [[WKFindConfiguration alloc] init];
+    config.backwards = backwards;
+    config.caseSensitive = NO;
+    config.wraps = YES;
+    [_webView findString:query withConfiguration:config completionHandler:^(WKFindResult *result) {
+        WVPost(token, WVEventResult, 0, request, 1, 0, 0, result.matchFound ? @"true" : @"false", nil, nil, nil, nil);
+    }];
+}
+
+// WebKit's find selects the match: clearing it is clearing the selection.
+- (void)clearFind {
+    if (_released) return;
+    [_webView evaluateJavaScript:@"getSelection().removeAllRanges()" inFrame:nil
+                  inContentWorld:WKContentWorld.defaultClientWorld completionHandler:nil];
+}
+
+- (void)setPageZoom:(double)factor {
+    if (_released) return;
+    _webView.pageZoom = factor;
+}
+
+- (void)setCookie:(NSDictionary<NSHTTPCookiePropertyKey, id> *)properties request:(jlong)request {
+    jlong token = _token;
+    NSHTTPCookie *cookie = _released ? nil : [NSHTTPCookie cookieWithProperties:properties];
+    if (!cookie) {
+        WVPost(token, WVEventResult, 0, request, 0, 0, 0, nil, nil, nil, nil, nil);
+        return;
+    }
+    [_webView.configuration.websiteDataStore.httpCookieStore setCookie:cookie completionHandler:^{
+        WVPost(token, WVEventResult, 0, request, 1, 0, 0, @"true", nil, nil, nil, nil);
+    }];
+}
+
 - (void)evaluate:(NSString *)script request:(jlong)request pageWorld:(BOOL)pageWorld {
     jlong token = _token;
     if (_released || !script) {
@@ -887,6 +926,54 @@ JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_stop(JNIEnv 
     WVPage *page = WVPageOf(handle);
     WVOnMain(NO, ^{
         [page stop];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_find(
+    JNIEnv *env, jclass type, jlong handle, jlong request, jstring query, jboolean backwards) {
+    WVPage *page = WVPageOf(handle);
+    NSString *text = WVString(env, query);
+    WVOnMain(NO, ^{
+        [page find:text backwards:backwards request:request];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_clearFind(JNIEnv *env, jclass type, jlong handle) {
+    WVPage *page = WVPageOf(handle);
+    WVOnMain(NO, ^{
+        [page clearFind];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setPageZoom(JNIEnv *env, jclass type, jlong handle, jdouble factor) {
+    WVPage *page = WVPageOf(handle);
+    WVOnMain(NO, ^{
+        [page setPageZoom:factor];
+    });
+}
+
+JNIEXPORT void JNICALL Java_dev_supermux_webview_engine_mac_MacGlue_setCookie(
+    JNIEnv *env, jclass type, jlong handle, jlong request, jstring name, jstring value, jstring url, jstring path,
+    jstring domain, jboolean secure, jboolean httpOnly, jstring sameSite, jlong maxAge) {
+    WVPage *page = WVPageOf(handle);
+    NSMutableDictionary<NSHTTPCookiePropertyKey, id> *p = [NSMutableDictionary dictionary];
+    p[NSHTTPCookieName] = WVString(env, name);
+    p[NSHTTPCookieValue] = WVString(env, value);
+    p[NSHTTPCookiePath] = WVString(env, path);
+    NSString *cookieDomain = domain ? WVString(env, domain) : nil;
+    if (cookieDomain.length) p[NSHTTPCookieDomain] = cookieDomain;
+    else {
+        NSURL *origin = [NSURL URLWithString:WVString(env, url)];
+        if (origin) p[NSHTTPCookieOriginURL] = origin; // host-only: the URL's host
+    }
+    if (secure) p[NSHTTPCookieSecure] = @"TRUE";
+    if (httpOnly) p[@"HttpOnly"] = @"TRUE";
+    NSString *site = WVString(env, sameSite);
+    if ([site isEqualToString:@"Strict"]) p[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteStrict;
+    else if ([site isEqualToString:@"Lax"]) p[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteLax;
+    if (maxAge >= 0) p[NSHTTPCookieMaximumAge] = [NSString stringWithFormat:@"%lld", (long long)maxAge];
+    WVOnMain(NO, ^{
+        [page setCookie:p request:request];
     });
 }
 

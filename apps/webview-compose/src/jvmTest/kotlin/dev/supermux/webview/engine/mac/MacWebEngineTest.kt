@@ -1,5 +1,8 @@
 package dev.supermux.webview.engine.mac
 
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -1252,5 +1255,44 @@ class MacWebEngineTest {
         rig.engine.load(offline)
         rig.send(GlueEvent.Failed(1, null, "NSURLErrorDomain", -1003, "no such host"))
         assertEquals(listOf<String?>(offline.url), rig.events.filterIsInstance<EngineEvent.Error>().map { it.error.url })
+    }
+
+    @Test fun findAsksWebKitAndReadsFoundOrNot() = runTest {
+        val rig = Rig(this)
+        val found = async { rig.engine.find("password", backwards = false) }
+        rig.answer("find") { GlueEvent.Result(it, true, "true", null) }
+        assertEquals(FindResult(found = true), found.await())
+        val missing = async { rig.engine.find("nothing", backwards = true) }
+        rig.answer("find") { GlueEvent.Result(it, true, "false", null) }
+        assertEquals(FindResult(found = false), missing.await())
+        assertTrue(rig.glue.calls.any { it.startsWith("find ") && it.endsWith(" nothing true") }, "${rig.glue.calls}")
+        assertNull(rig.engine.find("", backwards = false))
+    }
+
+    @Test fun zoomCookieAndTheInspectorHint() = runTest {
+        val rig = Rig(this)
+        assertTrue(rig.engine.setZoom(1.5f))
+        assertEquals("setPageZoom 1.5", rig.glue.last("setPageZoom"))
+        rig.engine.clearFind()
+        assertTrue("clearFind" in rig.glue.calls)
+        val stored = async { rig.engine.setCookie(WebCookie(name = "cmux_preview", value = "t", url = "https://app.test/p/", path = "/p/")) }
+        rig.answer("setCookie") { GlueEvent.Result(it, true, "true", null) }
+        assertTrue(stored.await())
+        assertTrue(rig.glue.last("setCookie")!!.endsWith("cmux_preview /p/ null true"), rig.glue.last("setCookie"))
+        val refused = async { rig.engine.setCookie(WebCookie(name = "bad", value = "", url = "not a url")) }
+        rig.answer("setCookie") { GlueEvent.Result(it, false, null, null) }
+        assertFalse(refused.await())
+        val inspector = rig.engine.openInspector()
+        assertTrue(inspector is InspectorResult.Elsewhere && "Develop" in inspector.hint, "$inspector")
+    }
+
+    @Test fun afterReleaseTheBrowserOperationsReachNothing() = runTest {
+        val rig = Rig(this)
+        rig.engine.release()
+        runCurrent()
+        assertNull(rig.engine.find("x", backwards = false))
+        assertFalse(rig.engine.setZoom(2f))
+        assertFalse(rig.engine.setCookie(WebCookie(name = "a", value = "b", url = "https://app.test/")))
+        assertFalse(rig.glue.calls.any { it.startsWith("find") || it.startsWith("setPageZoom") || it.startsWith("setCookie") }, "${rig.glue.calls}")
     }
 }
