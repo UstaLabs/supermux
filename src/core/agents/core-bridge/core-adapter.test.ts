@@ -9,6 +9,7 @@ import { agentExitError } from "../../../../packages/supermux-core/src/keeper/ex
 import { agentDisplayName } from "../../../shared/agents"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
+import { createClaudeNormalizer } from "../../../../packages/supermux-core/src/claude/normalize.js"
 
 import { agentFailure, CoreAdapter, CORE_ADAPTER_PROFILES, missingConversation } from "./core-adapter"
 import { createGrokCoreHost } from "../grok/core-host"
@@ -28,9 +29,9 @@ const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude", "antigravity"] as c
 type QueueKind = typeof QUEUE_KINDS[number]
 type Kind = AgentKind
 
-function attachNormalizer(kind: Kind, runtime: AgentRuntime): AgentRuntime {
-  if (kind === "codex") {
-    const normalizer = createCodexNormalizer()
+function attachNormalizer(kind: Kind, runtime: AgentRuntime, claudeFrames = false): AgentRuntime {
+  if (kind === "codex" || claudeFrames) {
+    const normalizer = claudeFrames ? createClaudeNormalizer() : createCodexNormalizer()
     runtime.normalize = (update) => normalizer(update)
     runtime.flush = () => normalizer.flush()
     return runtime
@@ -56,7 +57,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean; onPrompt?: (text: string) => void } = {}) {
+function fakeAgentDriver(kind: Kind, options: { claudeFrames?: boolean; configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean; onPrompt?: (text: string) => void } = {}) {
   const opens: DriverContext[] = []
   const prompts: ContentBlock[][] = []
   const promptTexts: string[][] = []
@@ -146,7 +147,7 @@ function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: 
         },
       }
       lastRuntime = runtime
-      return attachNormalizer(kind, runtime)
+      return attachNormalizer(kind, runtime, options.claudeFrames)
     },
   }
 
@@ -2739,4 +2740,30 @@ test("codex: a recoverable error does not fail the turn nor hide a real failure 
     ["stream disconnected before completion", false],
   ])
   expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([undefined, "stream failed", "stream disconnected before completion"])
+})
+
+test("claude: a turn refused for no sign-in is told once, in supermux's words, pointing to Settings (#110)", async () => {
+  const fake = fakeAgentDriver("claude", { claudeFrames: true })
+  const { host, workdir } = await harness("claude", fake)
+  const adapter = makeAdapter("claude", host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const turn = adapter.send("hi")
+  await waitUntil(() => events.some((e) => e.kind === "turn-start"))
+  // Real claude 2.1.308 frames with no sign-in: a synthetic assistant message, then the error result.
+  const text = "Not logged in · Please run /login"
+  fake.emit({ protocol: "native", value: {
+    type: "assistant", parent_tool_use_id: null, error: "authentication_failed", is_api_error_message: true,
+    message: { id: "m1", model: "<synthetic>", role: "assistant", type: "message", content: [{ type: "text", text }] },
+  } })
+  fake.emit({ protocol: "native", value: { type: "result", subtype: "success", is_error: true, terminal_reason: "api_error", api_error_status: null, result: text, usage: {} } })
+  await flush()
+  fake.failPrompt(new Error(text))
+  await turn
+  await flush()
+  const said = "Claude isn't signed in — sign in from Settings ▸ Providers."
+  expect(events.filter((e) => e.kind === "assistant-message")).toEqual([])
+  expect(events.filter((e) => e.kind === "error").map((e) => e.error?.message)).toEqual([said])
+  expect(events.filter((e) => e.kind === "turn-complete").map((e) => e.error?.message)).toEqual([said])
 })

@@ -97,6 +97,10 @@ describe("prepareCodexEnvironment", () => {
     await expect(prepareCodexEnvironment(spec({
       credentials: { apiKey: null, canonicalHome },
     }))).rejects.toThrow(/Codex auth not found/)
+    // #110: tagged, so a host can say "not signed in" in its own words.
+    await expect(prepareCodexEnvironment(spec({
+      credentials: { apiKey: null, canonicalHome },
+    }))).rejects.toMatchObject({ code: "not_signed_in" })
   })
 
   test("heals a newer session copy into the canonical file before copying", async () => {

@@ -45,3 +45,10 @@ test("a failed wake with no usable reason still says it failed, and a long one i
   expect(long.length).toBeLessThan(400)
   expect(long.endsWith("…. Your next message tries again.")).toBe(true)
 })
+
+// #110: no sign-in at all (Core's not_signed_in, e.g. codex with no auth.json) is told in supermux's words, not "run codex login".
+test("an agent with no sign-in points to Settings ▸ Providers, for a wake and for a draft's start", () => {
+  const none = () => new CoreError("not_signed_in", "Codex auth not found at /h/.codex/auth.json and OPENAI_API_KEY is unset. Run `codex login` first.")
+  expect(wakeFailureNotice(AgentKind.Codex, new Error("open failed", { cause: none() }))).toBe("Codex isn't signed in — sign in from Settings ▸ Providers.")
+  expect(startFailureNotice("start", "x", none(), undefined, AgentKind.Codex)).toBe("Codex isn't signed in — sign in from Settings ▸ Providers.")
+})

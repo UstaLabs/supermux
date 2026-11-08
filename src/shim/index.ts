@@ -77,6 +77,19 @@ async function main() {
   mcp.setRequestHandler(CallToolRequestSchema, async (req) => callTool(req.params, shim, AGENT_KIND, RPC_ONLY, tools))
 
   await mcp.connect(new StdioServerTransport())
+
+  // The agent holds the other end of stdin, so once it ends the agent is gone. The SDK's transport does not watch for
+  // that, and the broker client reconnects forever: stop it and exit, or an agent killed without killing its MCP
+  // servers (OpenCode on SIGTERM) leaves this process running for good.
+  let leaving = false
+  const leave = () => {
+    if (leaving) return
+    leaving = true
+    log.info("stdin_ended_exiting")
+    void shim.close().finally(() => process.exit(0))
+  }
+  process.stdin.once("end", leave)
+  process.stdin.once("close", leave)
 }
 
 main().catch(err => {

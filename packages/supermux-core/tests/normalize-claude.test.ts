@@ -214,6 +214,55 @@ describe("claude normalizer", () => {
     expect(overloaded[1]).not.toHaveProperty("errorType")
   })
 
+  // Real claude 2.1.308 frames with no sign-in (#110): a synthetic assistant message, then an error result, same text.
+  const notLoggedIn = "Not logged in · Please run /login"
+  const syntheticError = (error: string, text: string) => native({
+    type: "assistant", parent_tool_use_id: null, error, is_api_error_message: true,
+    message: { id: "58134c7e", model: "<synthetic>", role: "assistant", type: "message", content: [{ type: "text", text }] },
+  })
+  const apiErrorResult = (text: string, api_error_status: number | null = null) => native({
+    type: "result", subtype: "success", is_error: true, terminal_reason: "api_error", api_error_status, result: text, usage: {},
+  })
+
+  test("result: a turn Claude refused for no sign-in is one not_signed_in error, never also a reply", () => {
+    const n = createClaudeNormalizer()
+    const out = [...n(syntheticError("authentication_failed", notLoggedIn)), ...n(apiErrorResult(notLoggedIn))]
+    expect(out.filter(e => e.kind === "assistant-message")).toEqual([])
+    expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: notLoggedIn, errorType: "not_signed_in" }])
+  })
+
+  for (const [error, status, text] of [
+    ["rate_limit", 429, "You've hit your limit · resets 5pm"],
+    ["billing_error", 402, "Credit balance is too low"],
+    ["server_error", 529, "API Error: 529 Overloaded"],
+    ["server_error", 500, "API Error: 500 Internal server error"],
+    ["invalid_request", 400, "API Error: 400 prompt is too long"],
+    ["unknown", null, "API Error: Connection error."],
+  ] as const) {
+    test(`result: a synthetic ${error} (${status}) message is the turn's error only, not a reply too`, () => {
+      const n = createClaudeNormalizer()
+      const out = [...n(syntheticError(error, text)), ...n(apiErrorResult(text, status))]
+      expect(out.filter(e => e.kind === "assistant-message")).toEqual([])
+      expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: text }])
+    })
+  }
+
+  test("result: a refused login (401) stays account_unavailable, so Core can switch the account", () => {
+    const n = createClaudeNormalizer()
+    const out = [...n(syntheticError("authentication_failed", "Invalid API key")), ...n(apiErrorResult("Invalid API key", 401))]
+    expect(out.filter(e => e.kind === "error")).toEqual([{ kind: "error", message: "Invalid API key", errorType: "account_unavailable" }])
+  })
+
+  test("a synthetic API error message whose turn did not fail is still shown", () => {
+    const n = createClaudeNormalizer()
+    const synthetic = n(syntheticError("server_error", "API Error: retrying"))
+    const ok = n(native({ type: "result", subtype: "success", is_error: false, result: "ok", usage: {} }))
+    expect([...synthetic, ...ok].filter(e => e.kind === "assistant-message").map(e => (e as { text: string }).text)).toEqual(["API Error: retrying"])
+    const lost = createClaudeNormalizer()
+    lost(syntheticError("server_error", "API Error: gone"))
+    expect(lost.flush().map(e => (e as { text?: string }).text)).toEqual(["API Error: gone"])
+  })
+
   test("control_request can_use_tool permission-request", () => {
     const n = createClaudeNormalizer()
     expect(n(native({

@@ -15,7 +15,8 @@ import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
+import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
+import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -1069,25 +1070,28 @@ export class WebChannel implements Channel {
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
     this.classifyPeer(req, server)
     const url = new URL(req.url)
-    if (this.opts.proxyBaseDomain) {
-      const host = req.headers.get("host") ?? ""
-      const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
-      if (sub) {
-        return this.handleProxyRoute(req, sub, server)
+    const sub = this.opts.proxyBaseDomain
+      ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
+      : undefined
+    // Path-based proxy (active only when no base domain is configured).
+    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Before any route, so a new route can't miss it (cookies.ts explains the rules).
+    const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+      return new Response("bad origin", { status: 403 })
+    }
+    if (sub) {
+      return this.handleProxyRoute(req, sub, server)
+    }
+    if (pm) {
+      if (pm.rest === null) {
+        // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+        return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
       }
-    } else if (this.opts.proxyLookup) {
-      // Path-based proxy (active only when no base domain is configured).
-      const pm = matchProxyPath(url.pathname)
-      if (pm) {
-        if (pm.rest === null) {
-          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
-          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
-        }
-        return this.handleProxyRoute(req, pm.slug, server, {
-          prefix: `/p/${pm.slug}`,
-          upstreamPath: pm.rest + url.search,
-        })
-      }
+      return this.handleProxyRoute(req, pm.slug, server, {
+        prefix: `/p/${pm.slug}`,
+        upstreamPath: pm.rest + url.search,
+      })
     }
     if (url.pathname === "/ws") {
       const authStart = performance.now()
@@ -4359,10 +4363,12 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const browserError = kind === "browser" ? browserStateError(body.state) : undefined
+      if (browserError) return this.json({ error: browserError }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4395,6 +4401,10 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.state !== undefined && this.opts.getWorkspaceView?.(viewId)?.kind === "browser") {
+        const browserError = browserStateError(body.state)
+        if (browserError) return this.json({ error: browserError }, 400)
+      }
       try {
         const view = this.opts.patchWorkspaceView(viewId, {
           title: body.title as string | undefined,

@@ -8,6 +8,9 @@ const MIN_HOURS = 1 / 60
  */
 export const ACCOUNT_UNAVAILABLE_ERROR = "account_unavailable"
 
+/** `error` body `errorType` for a turn the agent refused because it has no sign-in at all (no credential to refuse). */
+export const NOT_SIGNED_IN_ERROR = "not_signed_in"
+
 /** The window Core records as full on an account the agent's API refused for lack of credits (HTTP 402). */
 export const BALANCE_WINDOW = "balance"
 
