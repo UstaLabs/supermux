@@ -118,6 +118,16 @@ object DesktopUpdateSource {
         if (file.name.endsWith(".deb") && linuxRestarts(DesktopOs.current, app, File(PKEXEC).canExecute())) {
             return installLinuxDeb(file, app, ProcessHandle.current().pid(), run = { dev.supermux.desktop.host.SystemOsEnv.runResult(it, PASSWORD_PROMPT_MS).exit }, start = { it.start() })
         }
+        val bundle = macBundle(app)
+        if (file.name.endsWith(".dmg") && bundle != null && macRestarts(DesktopOs.current, app) { it.canWrite() }) {
+            val mount = java.nio.file.Files.createTempDirectory("supermux-update-mount").toFile()
+            return installMacDmg(
+                file, bundle, ProcessHandle.current().pid(), mount,
+                run = { dev.supermux.desktop.host.SystemOsEnv.runResult(it, COPY_MS).exit },
+                findApp = { m -> m.listFiles()?.firstOrNull { it.name.endsWith(".app") } },
+                start = { it.start() },
+            )
+        }
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
             Desktop.getDesktop().open(file)
             return false
@@ -170,10 +180,85 @@ object DesktopUpdateSource {
         return true
     }
 
+    // ── macOS (#113): "Restart to update" ──
+
+    private const val SWAP_BUNDLE = "SUPERMUX_UPDATE_BUNDLE"
+    private const val SWAP_NEW = "SUPERMUX_UPDATE_NEW"
+    private const val SWAP_OPEN = "SUPERMUX_UPDATE_OPEN"
+
+    /** How long mounting and copying the new app may take. */
+    private const val COPY_MS = 5 * 60_000L
+
+    /** The installed bundle (`…/Supermux Desktop.app`) jpackage's launcher [app] runs from; null outside an .app (a dev run). */
+    internal fun macBundle(app: String?): File? {
+        var f = app?.takeIf { it.isNotBlank() }?.let(::File) ?: return null
+        while (true) {
+            if (f.name.endsWith(".app")) return f
+            f = f.parentFile ?: return null
+        }
+    }
+
+    /** macOS restarts to update when the installed bundle's folder is [writable] without a password. */
+    internal fun macRestarts(os: DesktopOs, app: String?, writable: (File) -> Boolean): Boolean {
+        if (os != DesktopOs.MACOS) return false
+        val bundle = macBundle(app) ?: return false
+        return bundle.parentFile?.let(writable) == true
+    }
+
+    /** Where the new bundle waits, next to the installed one (same volume, so the swap is a rename). */
+    private fun macStaged(bundle: File) = File(bundle.parentFile, ".${bundle.name}.update")
+
+    /**
+     * The swap helper: waits (up to ~2 min) for the app to exit, moves the installed bundle aside, the new one into its
+     * place, removes the old one and opens the new one. If the new one can't take its place the old one goes back.
+     * Its paths come in the environment, never as code.
+     */
+    internal const val MAC_SWAP_SCRIPT =
+        "i=0; while kill -0 \"\$$UPDATE_RELAUNCH_PID\" 2>/dev/null && [ \$i -lt 600 ]; do sleep 0.2; i=\$((i+1)); done; " +
+            "old=\"\$$SWAP_BUNDLE.old\"; rm -rf \"\$old\"; " +
+            "if mv \"\$$SWAP_BUNDLE\" \"\$old\"; then " +
+            "if mv \"\$$SWAP_NEW\" \"\$$SWAP_BUNDLE\"; then rm -rf \"\$old\"; else mv \"\$old\" \"\$$SWAP_BUNDLE\"; fi; fi; " +
+            "\"\$$SWAP_OPEN\" \"\$$SWAP_BUNDLE\" >/dev/null 2>&1 < /dev/null &"
+
+    internal fun macSwapCommand(bundle: File, appPid: Long, opener: String = "/usr/bin/open"): OsCommand = OsCommand(
+        listOf("/bin/sh", "-c", MAC_SWAP_SCRIPT),
+        mapOf(
+            SWAP_BUNDLE to bundle.absolutePath, SWAP_NEW to macStaged(bundle).absolutePath,
+            SWAP_OPEN to opener, UPDATE_RELAUNCH_PID to appPid.toString(),
+        ),
+    )
+
+    /**
+     * While the app still runs: mount [dmg] at [mount], copy the app in it ([findApp]) next to [bundle], unmount, then
+     * start the swap helper: true, the app must now quit. Anything that fails throws, with the app left running and
+     * no copy left behind.
+     */
+    internal fun installMacDmg(
+        dmg: File, bundle: File, appPid: Long, mount: File,
+        run: (List<String>) -> Int, findApp: (File) -> File?, start: (OsCommand) -> Any,
+    ): Boolean {
+        val staged = macStaged(bundle)
+        run(listOf("/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.absolutePath, dmg.absolutePath))
+            .takeIf { it != 0 }?.let { throw IllegalStateException("The update couldn't be opened (hdiutil exit $it).") }
+        try {
+            val newApp = findApp(mount) ?: throw IllegalStateException("The update has no app in it.")
+            staged.deleteRecursively()
+            run(listOf("/usr/bin/ditto", newApp.absolutePath, staged.absolutePath)).takeIf { it != 0 }?.let {
+                staged.deleteRecursively()
+                throw IllegalStateException("The update couldn't be copied (ditto exit $it).")
+            }
+        } finally {
+            run(listOf("/usr/bin/hdiutil", "detach", mount.absolutePath, "-quiet"))
+        }
+        start(macSwapCommand(bundle, appPid))
+        return true
+    }
+
     /** Whether this app's installer restarts it by itself: the Windows MSI, or a packaged Linux app with pkexec. */
     fun restartsToUpdate(): Boolean = when (installerExtension()) {
         "msi" -> true
         "deb" -> linuxRestarts(DesktopOs.current, System.getProperty("jpackage.app-path"), File(PKEXEC).canExecute())
+        "dmg" -> macRestarts(DesktopOs.current, System.getProperty("jpackage.app-path")) { it.canWrite() }
         else -> false
     }
 
