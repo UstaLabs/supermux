@@ -1,14 +1,1 @@
-{
-  "env-dirs": {
-    "packages/supermux-core/src/accounts/adapters/cursor.ts": 1,
-    "packages/supermux-core/src/unix-socket.ts": 1,
-    "src/cli-setup.ts": 1,
-    "src/core/agent-api/adapters/cursor.ts": 2,
-    "src/core/agents/cursor/core-host.ts": 2,
-    "src/core/display/ports.ts": 1,
-    "src/core/runtime/session-backend.test-support.ts": 1,
-    "src/core/transcription/engines/cursor-stt.ts": 2,
-    "src/core/usage/index.ts": 2,
-    "src/main.ts": 4
-  }
-}
+{}
