@@ -12,19 +12,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -43,8 +46,15 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,15 +75,16 @@ fun KitSearchField(
     val m = kitMetrics()
     val shape = RoundedCornerShape(if (m.phone) 9.dp else 7.dp)
     val size = if (m.phone) 15.sp else 12.5.sp
+    val clearSrc = remember { MutableInteractionSource() }
     BasicTextField(
         value = query,
         onValueChange = onQueryChange,
         singleLine = true,
-        textStyle = TextStyle(color = c.text, fontSize = size),
+        textStyle = LocalTextStyle.current.merge(TextStyle(color = c.text, fontSize = size)),
         cursorBrush = SolidColor(c.accent),
         modifier = modifier
             .fillMaxWidth()
-            .height(if (m.phone) 36.dp else 30.dp)
+            .heightIn(min = if (m.phone) 36.dp else 30.dp)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { e ->
                 if (e.type == KeyEventType.KeyDown && e.key == Key.Escape && query.isNotEmpty()) {
@@ -86,7 +97,7 @@ fun KitSearchField(
             .testTag("settings_search"),
         decorationBox = { inner ->
             Row(
-                Modifier.fillMaxSize().clip(shape).background(c.wash).padding(horizontal = 10.dp),
+                Modifier.fillMaxWidth().clip(shape).background(c.wash).padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -96,17 +107,21 @@ fun KitSearchField(
                     inner()
                 }
                 when {
+                    // No 48 dp box here: the field would jump taller on a phone the moment a query appears.
+                    // Compose already widens a small touch target by itself.
                     query.isNotEmpty() -> Icon(
                         KitGlyphs.Close,
                         contentDescription = "Clear search",
                         tint = c.faint,
                         modifier = Modifier
+                            .clickable(interactionSource = clearSrc, indication = null, role = Role.Button) {
+                                onQueryChange("")
+                                // The button goes with the query; the field keeps the focus for the next search.
+                                focusRequester.requestFocus()
+                            }
+                            .kitFocusRing(clearSrc, CircleShape)
+                            .padding(2.dp)
                             .size(16.dp)
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                role = Role.Button,
-                            ) { onQueryChange("") }
                             .testTag("settings_search_clear"),
                     )
                     shortcut != null -> Text(shortcut, color = c.faint, fontSize = 11.sp)
@@ -118,7 +133,8 @@ fun KitSearchField(
 
 /**
  * A form field: an optional label above, the wash with a hairline (accent while focused, error tone with an
- * [error]), "Show"/"Hide" for a [secret], Enter (and the keyboard's Done) runs [onSubmit].
+ * [error]), "Show"/"Hide" for a [secret], Enter (and the keyboard's Done) runs [onSubmit]. The label and the error
+ * are the field's own name and error for screen readers; a secret gets the password keyboard while hidden.
  */
 @Composable
 fun KitTextField(
@@ -143,61 +159,134 @@ fun KitTextField(
     val focused by src.collectIsFocusedAsState()
     val shape = RoundedCornerShape(7.dp)
     val size = if (m.phone) 15.sp else 13.sp
+    val fieldFocus = remember { FocusRequester() }
+    val actionFocus = remember { FocusRequester() }
+    var actionFocused by remember { mutableStateOf(false) }
+    // Where focus goes back to once Show/Hide has rebuilt the field (below).
+    var refocus by remember { mutableStateOf(Refocus.Nowhere) }
+    // The caret and the keyboard's composing region live out here, outside that rebuild, so Show/Hide leaves the
+    // caret where it was. The same bookkeeping BasicTextField(String) keeps inside itself.
+    var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    val current = fieldValue.copy(text = value)
+    SideEffect {
+        if (current.selection != fieldValue.selection || current.composition != fieldValue.composition) {
+            fieldValue = current
+        }
+    }
+    var lastText by remember(value) { mutableStateOf(value) }
+    LaunchedEffect(shown) {
+        when (refocus) {
+            Refocus.Field -> fieldFocus.requestFocus()
+            Refocus.Action -> actionFocus.requestFocus()
+            Refocus.Nowhere -> Unit
+        }
+        refocus = Refocus.Nowhere
+    }
     Column(modifier.fillMaxWidth()) {
-        if (label != null) Text(label, fontSize = 12.sp, color = c.dim, modifier = Modifier.padding(bottom = 6.dp))
         // A new field on every Show/Hide: Compose 1.12's text field fixes its Password semantics when it is created
         // (CoreTextFieldSemanticsModifierNode.updateNodeSemantics never stores a changed isPassword), so the same
-        // field would go on telling screen readers it is a password after "Show". The cost: Show/Hide drops focus.
+        // field would go on telling screen readers it is a password after "Show". Focus is put back afterwards.
         key(shown) {
             BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
+                value = current,
+                onValueChange = { next ->
+                    fieldValue = next
+                    val changed = lastText != next.text
+                    lastText = next.text
+                    if (changed) onValueChange(next.text)
+                },
                 enabled = enabled,
                 singleLine = singleLine,
-                textStyle = TextStyle(
-                    color = if (enabled) c.text else c.faint,
-                    fontSize = size,
-                    fontFamily = if (mono) MonoFontFamily else null,
+                textStyle = LocalTextStyle.current.merge(
+                    TextStyle(
+                        color = if (enabled) c.text else c.faint,
+                        fontSize = size,
+                        fontFamily = if (mono) MonoFontFamily else null,
+                    ),
                 ),
                 cursorBrush = SolidColor(c.accent),
                 // The Password transformation itself, not a look-alike mask: it is also what keeps copy and cut off
                 // while the secret is hidden.
                 visualTransformation = if (secret && !shown) PasswordVisualTransformation() else VisualTransformation.None,
-                keyboardOptions = keyboardOptions,
+                keyboardOptions = keyboardFor(keyboardOptions, secret = secret, hidden = secret && !shown, submits = onSubmit != null),
                 keyboardActions = KeyboardActions(onDone = { onSubmit?.invoke() }),
                 interactionSource = src,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = if (m.phone) 40.dp else 32.dp)
+                    .focusRequester(fieldFocus)
                     .then(if (onSubmit != null) Modifier.submitOnEnter(enabled) { onSubmit() } else Modifier)
+                    .then(error?.let { message -> Modifier.semantics { this.error(message) } } ?: Modifier)
                     .then(if (fieldTag != null) Modifier.testTag(fieldTag) else Modifier),
                 decorationBox = { inner ->
-                    Row(
-                        Modifier
-                            .clip(shape)
-                            .background(c.wash)
-                            .border(
-                                1.dp,
-                                when {
-                                    error != null -> c.danger
-                                    focused -> c.accent
-                                    else -> c.line
-                                },
-                                shape,
-                            )
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                            if (value.isEmpty() && placeholder != null) Text(placeholder, color = c.faint, fontSize = size, maxLines = 1)
-                            inner()
+                    Column {
+                        // Inside the field, so the label stays its name for screen readers once it is filled, and a
+                        // tap on the label focuses it.
+                        if (label != null) Text(label, fontSize = 12.sp, color = c.dim, modifier = Modifier.padding(bottom = 6.dp))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = if (m.phone) 40.dp else 32.dp)
+                                .clip(shape)
+                                .background(c.wash)
+                                .border(
+                                    1.dp,
+                                    when {
+                                        error != null -> c.danger
+                                        focused -> c.accent
+                                        else -> c.line
+                                    },
+                                    shape,
+                                )
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                if (value.isEmpty() && placeholder != null) Text(placeholder, color = c.faint, fontSize = size, maxLines = 1)
+                                inner()
+                            }
+                            if (secret) {
+                                TextActionBase(
+                                    if (shown) "Hide" else "Show",
+                                    onClick = {
+                                        refocus = when {
+                                            focused -> Refocus.Field
+                                            actionFocused -> Refocus.Action
+                                            else -> Refocus.Nowhere
+                                        }
+                                        shown = !shown
+                                    },
+                                    modifier = Modifier.focusRequester(actionFocus).onFocusChanged { actionFocused = it.isFocused },
+                                    // In the field: a 48 dp target would make the field taller.
+                                    touchTarget = false,
+                                )
+                            }
                         }
-                        if (secret) KitTextAction(if (shown) "Hide" else "Show", { shown = !shown })
                     }
                 },
             )
         }
         if (error != null) Text(error, fontSize = 12.sp, color = c.danger, modifier = Modifier.padding(top = 4.dp))
     }
+}
+
+private enum class Refocus { Nowhere, Field, Action }
+
+/**
+ * The keyboard for a field: Done when it submits, unless [given] names an action; a secret never autocorrects or
+ * capitalises (a token is not a sentence, shown or not) and gets the password keyboard while [hidden].
+ */
+private fun keyboardFor(given: KeyboardOptions, secret: Boolean, hidden: Boolean, submits: Boolean): KeyboardOptions {
+    val submit = if (submits) KeyboardOptions(imeAction = ImeAction.Done) else KeyboardOptions.Default
+    val guard = if (secret) {
+        KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+            keyboardType = if (hidden) KeyboardType.Password else KeyboardType.Unspecified,
+        )
+    } else {
+        KeyboardOptions.Default
+    }
+    // merge: the argument's set values win.
+    return submit.merge(given).merge(guard)
 }

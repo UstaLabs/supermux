@@ -8,14 +8,18 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextInputSelection
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.text.TextRange
 import dev.supermux.ui.chat.setPlatformContent
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -42,6 +46,8 @@ class KitFieldsTest {
         setPlatformContent { KitSearchField(q, { q = it }) }
         onNodeWithTag("settings_search_clear").performClick()
         assertEquals("", q)
+        // The button went with the query; the field keeps the focus for the next search.
+        onNodeWithTag("settings_search").assertIsFocused()
     }
 
     @Test fun the_hint_and_the_shortcut_show_while_empty() = runComposeUiTest {
@@ -57,10 +63,27 @@ class KitFieldsTest {
         onNodeWithTag("key").assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Password))
     }
 
+    @Test fun showing_a_secret_keeps_the_fields_focus_and_caret() = runComposeUiTest {
+        var v by mutableStateOf("sk-123")
+        setPlatformContent { KitTextField(v, { v = it }, label = "API key", secret = true, fieldTag = "key") }
+        onNodeWithTag("key").requestFocus()
+        onNodeWithTag("key").performTextInputSelection(TextRange(3))
+        onNodeWithText("Show").performClick()
+        onNodeWithTag("key").assertIsFocused()
+        onNodeWithTag("key").performTextInput("x")
+        assertEquals("sk-x123", v)
+    }
+
     @Test fun a_field_shows_its_label_and_error() = runComposeUiTest {
         setPlatformContent { KitTextField("", {}, label = "Name", error = "A name is needed.") }
         onNodeWithText("Name").assertExists()
         onNodeWithText("A name is needed.").assertExists()
+    }
+
+    @Test fun a_filled_field_keeps_its_label_as_its_name_and_exposes_its_error() = runComposeUiTest {
+        setPlatformContent { KitTextField("studio-mini", {}, label = "Name", error = "That name is taken.", fieldTag = "f") }
+        onNodeWithTag("f").assert(hasText("Name"))
+        onNodeWithTag("f").assert(SemanticsMatcher.expectValue(SemanticsProperties.Error, "That name is taken."))
     }
 
     @Test fun enter_submits_a_field() = runComposeUiTest {
