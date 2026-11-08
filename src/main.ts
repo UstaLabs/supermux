@@ -184,8 +184,8 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
-import { cursorModelsFromAcp, discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
-import { LearnedModels } from "./core/models/learned"
+import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
+import { followAdapterModels, LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
 import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
@@ -2098,15 +2098,15 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
       })
     }
   })
-  adapter.on("models-update", () => {
-    // Cursor's own model list (#102): its ACP selects only these, so the picker offers exactly them from now on.
-    if (registry.get(sessionId)?.agent !== AgentKind.Cursor) return
-    const entries = (adapter as { availableModels?: { value: string; name: string }[] }).availableModels
-    if (!entries?.length) return
-    const models = cursorModelsFromAcp(entries)
-    if (!learnedModels.learn(AgentKind.Cursor, models)) return
-    modelCache.set(AgentKind.Cursor, models)
-    announceAgentModelsChanged([AgentKind.Cursor])
+  // Cursor's own model list (#102): its ACP selects only these, so the picker offers exactly them from now on.
+  followAdapterModels({
+    agent: registry.get(sessionId)?.agent,
+    adapter: adapter as unknown as Parameters<typeof followAdapterModels>[0]["adapter"],
+    learned: learnedModels,
+    onLearned: (agent, models) => {
+      modelCache.set(agent, models)
+      announceAgentModelsChanged([agent])
+    },
   })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name

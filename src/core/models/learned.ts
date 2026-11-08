@@ -3,7 +3,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs"
 import { join } from "path"
 import type { AgentKind } from "../agents/types"
-import type { ModelInfo } from "./discovery"
+import { AgentKind as Agent } from "../../shared/agents"
+import { cursorModelsFromAcp, type ModelInfo } from "./discovery"
 
 export class LearnedModels {
   private readonly cache = new Map<AgentKind, ModelInfo[] | undefined>()
@@ -39,4 +40,26 @@ export class LearnedModels {
     this.cache.set(agent, models)
     return true
   }
+}
+
+/**
+ * Makes the models a Cursor session's agent reports (#102) Cursor's catalog: the list its adapter already holds (a
+ * session opens, and reports, before the resume arms wire the adapter's events) and every later models-update.
+ * [onLearned] gets each list that changed what was learned.
+ */
+export function followAdapterModels(o: {
+  agent: AgentKind | undefined
+  adapter: { availableModels?: { value: string; name: string }[]; on(event: "models-update", listener: () => void): unknown }
+  learned: LearnedModels
+  onLearned: (agent: AgentKind, models: ModelInfo[]) => void
+}): void {
+  if (o.agent !== Agent.Cursor) return
+  const learn = () => {
+    const entries = o.adapter.availableModels
+    if (!entries?.length) return
+    const models = cursorModelsFromAcp(entries)
+    if (o.learned.learn(Agent.Cursor, models)) o.onLearned(Agent.Cursor, models)
+  }
+  o.adapter.on("models-update", learn)
+  learn()
 }
