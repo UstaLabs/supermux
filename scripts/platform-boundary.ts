@@ -78,7 +78,8 @@ export const RULES: Rule[] = [
     patterns: [
       /\bBun\.spawn(?:Sync)?\(/,
       /\bBun\.\$`/,
-      /from\s*["'](?:node:)?child_process["']/,
+      // Not a type-only import or export: a type starts no process.
+      /^(?!\s*(?:import|export)\s+type\b).*from\s*["'](?:node:)?child_process["']/,
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
     // src/core/git/exec.ts is the git family's async runner, every call there starting from proc.spawnDefaults. Its

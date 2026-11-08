@@ -18,7 +18,7 @@ import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import { agents } from "../agents/registry"
 import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
-import { execSync } from "child_process"
+import { gitSync } from "../git/exec-sync"
 import { scanRepos } from "../editor/repo-scanner"
 import { home } from "../../shared/home"
 import { AgentKind } from "../../shared/agents"
@@ -27,13 +27,9 @@ import type { Session } from "./types"
 export function captureBaseCommits(workdir: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const repo of scanRepos(workdir)) {
-    try {
-      out[repo.relPath] = execSync("git rev-parse HEAD", {
-        cwd: repo.absPath, encoding: "utf-8", timeout: 5000,
-      }).trim()
-    } catch {
-      // repo with no commits yet — skip; empty-tree base used at diff time
-    }
+    const head = gitSync(repo.absPath, ["rev-parse", "HEAD"], 5000)
+    // A repo with no commits yet is skipped: the empty tree is the base at diff time.
+    if (head.ok) out[repo.relPath] = head.out
   }
   return out
 }

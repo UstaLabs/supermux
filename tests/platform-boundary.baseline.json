@@ -190,18 +190,12 @@
     "src/core/agents/grok/runner.ts": 1,
     "src/core/agents/install-builtin-linux.ts": 1,
     "src/core/agents/install.ts": 1,
-    "src/core/agents/opencode/spawn-readiness.ts": 1,
     "src/core/agents/opencode/spawn.ts": 1,
-    "src/core/editor/changes.ts": 1,
     "src/core/git/requirement.ts": 1,
     "src/core/lsp/install.ts": 1,
     "src/core/lsp/server.ts": 1,
     "src/core/power/keep-awake.ts": 1,
-    "src/core/session-manager/pane-owner.ts": 1,
-    "src/core/session-manager/spawn-helper.ts": 1,
-    "src/core/terminal/agent-tmux.ts": 1,
     "src/core/windows/user-install.ts": 1,
-    "src/core/worktree/verify.ts": 1,
     "src/main.ts": 2
   }
 }
