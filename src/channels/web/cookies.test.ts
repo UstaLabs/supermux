@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { bearerToken, authToken, authedViaBearer, sameOriginOk } from "./cookies"
+import { bearerToken, authToken, authedViaBearer, crossSiteRefusal, sameOriginOk } from "./cookies"
 
 const reqWith = (headers: Record<string, string>) => new Request("https://x.test/ws", { headers })
 
@@ -55,4 +55,61 @@ test("sameOriginOk rejects when no public URL is configured or either URL is unp
   expect(sameOriginOk(reqWith({ origin: "https://x.test" }), undefined)).toBe(false)
   expect(sameOriginOk(reqWith({ origin: "not-a-url" }), "https://x.test")).toBe(false)
   expect(sameOriginOk(reqWith({ origin: "https://x.test" }), "not-a-url")).toBe(false)
+})
+
+// crossSiteRefusal is the one guard every request passes before it is routed (#104). A request that
+// carries the app's cookie is the browser acting for the user, so it must come from a page the app
+// trusts. WebKit sends the SameSite=Lax cookie even from a sandboxed srcdoc frame (measured
+// 2026-11-08), so SameSite alone can't be the line.
+const app = { appOrigins: ["https://app.test", "https://h-x.relay.test"], proxied: false }
+const cookie = { cookie: "cmux_token=cook" }
+const ws = { upgrade: "websocket" }
+const nav = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" }
+
+test("crossSiteRefusal leaves requests without the app's cookie alone", () => {
+  expect(crossSiteRefusal(reqWith({ origin: "null" }), app)).toBeUndefined()
+  expect(crossSiteRefusal(reqWith({ "sec-fetch-site": "cross-site" }), app)).toBeUndefined()
+  expect(crossSiteRefusal(reqWith({ ...ws, origin: "https://px.app.test" }), app)).toBeUndefined()
+  // Bearer clients (the native apps) carry no ambient credential to ride.
+  expect(crossSiteRefusal(reqWith({ authorization: "Bearer b", origin: "null", ...ws }), app)).toBeUndefined()
+})
+
+test("crossSiteRefusal refuses an opaque origin carrying the cookie", () => {
+  expect(crossSiteRefusal(reqWith({ ...cookie, origin: "null" }), app)).toBeDefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, origin: "null", ...ws }), app)).toBeDefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, origin: "null" }), { ...app, proxied: true })).toBeDefined()
+})
+
+test("crossSiteRefusal refuses a cross-site request except a top-level GET navigation", () => {
+  const xs = (h: Record<string, string>, method = "GET") =>
+    crossSiteRefusal(new Request("https://app.test/files/f1", { method, headers: { ...cookie, ...h } }), app)
+  expect(xs({ "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" })).toBeDefined()
+  expect(xs({ "sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image" })).toBeDefined()
+  expect(xs({ ...nav, "sec-fetch-dest": "iframe" })).toBeDefined()
+  expect(xs(nav, "POST")).toBeDefined()
+  // A link from somewhere else (mail, chat, another site) still opens the app.
+  expect(xs(nav)).toBeUndefined()
+  expect(xs(nav, "HEAD")).toBeUndefined()
+  expect(xs({ "sec-fetch-site": "same-site", "sec-fetch-mode": "cors" })).toBeUndefined()
+  expect(xs({ "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" })).toBeUndefined()
+  expect(xs({ "sec-fetch-site": "none", "sec-fetch-mode": "navigate" })).toBeUndefined()
+  expect(xs({})).toBeUndefined()
+})
+
+test("crossSiteRefusal lets the app's own WebSockets open only from the app's own origins", () => {
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://app.test" }), app)).toBeUndefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://h-x.relay.test" }), app)).toBeUndefined()
+  // A non-browser client sends no Origin and has no ambient cookie of its own to abuse.
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws }), app)).toBeUndefined()
+  // A proxied page on <slug>.<base> gets the Domain=.<base> cookie: it must not open the app's sockets.
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://px.app.test" }), app)).toBeDefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://evil.test" }), app)).toBeDefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "not-a-url" }), app)).toBeDefined()
+})
+
+test("crossSiteRefusal lets a proxied page open its own WebSockets", () => {
+  // A proxied app's socket comes from the proxied page's own origin, which is not the app's.
+  const proxied = { appOrigins: ["https://app.test"], proxied: true }
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://px.app.test" }), proxied)).toBeUndefined()
+  expect(crossSiteRefusal(reqWith({ ...cookie, ...ws, origin: "https://px.app.test", "sec-fetch-site": "cross-site" }), proxied)).toBeDefined()
 })

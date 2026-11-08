@@ -15,7 +15,7 @@ import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
+import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -1063,25 +1063,28 @@ export class WebChannel implements Channel {
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
     this.classifyPeer(req, server)
     const url = new URL(req.url)
-    if (this.opts.proxyBaseDomain) {
-      const host = req.headers.get("host") ?? ""
-      const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
-      if (sub) {
-        return this.handleProxyRoute(req, sub, server)
+    const sub = this.opts.proxyBaseDomain
+      ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
+      : undefined
+    // Path-based proxy (active only when no base domain is configured).
+    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Before any route, so a new route can't miss it (cookies.ts explains the rules).
+    const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+      return new Response("bad origin", { status: 403 })
+    }
+    if (sub) {
+      return this.handleProxyRoute(req, sub, server)
+    }
+    if (pm) {
+      if (pm.rest === null) {
+        // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+        return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
       }
-    } else if (this.opts.proxyLookup) {
-      // Path-based proxy (active only when no base domain is configured).
-      const pm = matchProxyPath(url.pathname)
-      if (pm) {
-        if (pm.rest === null) {
-          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
-          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
-        }
-        return this.handleProxyRoute(req, pm.slug, server, {
-          prefix: `/p/${pm.slug}`,
-          upstreamPath: pm.rest + url.search,
-        })
-      }
+      return this.handleProxyRoute(req, pm.slug, server, {
+        prefix: `/p/${pm.slug}`,
+        upstreamPath: pm.rest + url.search,
+      })
     }
     if (url.pathname === "/ws") {
       const authStart = performance.now()
