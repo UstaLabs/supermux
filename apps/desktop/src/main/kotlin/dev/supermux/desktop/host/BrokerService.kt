@@ -385,11 +385,15 @@ Terminal=false
      * Pure. [env] is the text that holds a definition's env (null: not on disk); [marked]: the app
      * wrote the definition ([MANAGED_MARKER]); [legacy]: it is 1.0.0's keep-alive.
      */
+    /** An env file that holds nothing: missing (null), empty, blank or zeros. */
+    private fun isBrokenEnv(env: String?): Boolean = env == null || env.all { it == '\u0000' || it.isWhitespace() }
+
     internal fun ownership(env: String?, marked: Boolean, legacy: Boolean, me: Owner): Ownership = when {
         legacy -> Ownership.LEGACY
-        // Our own definition's env file, written but lost (a power cut left it zeros or empty, #113): ours and broken,
-        // so the next install rewrites it. Never another copy's: that would leave the app no way to start.
-        marked && env != null && env.all { it == '\u0000' || it.isWhitespace() } -> Ownership.OURS
+        // Our task's env file gone, or written but lost (a power cut left it zeros or empty, #113): ours and broken, so
+        // the next install rewrites it. The file is per user, so nothing says another copy wrote it; taking it for
+        // another copy's would leave the app no way to start.
+        marked && isBrokenEnv(env) -> Ownership.OURS
         env != null && INSTALL_ENV in env -> if (me.id in env) Ownership.OURS else Ownership.OTHER
         marked && me.ownsUnstamped -> Ownership.OURS
         else -> Ownership.OTHER
@@ -409,7 +413,8 @@ Terminal=false
     private class Slot(
         val kind: Kind, val path: Path, val text: String, val envPath: Path, val env: String?, val marked: Boolean, val legacy: Boolean,
     ) {
-        val unstamped: Boolean get() = marked && !legacy && (env == null || INSTALL_ENV !in env)
+        /** Written before install ids: one to stamp. A broken env file is not ([isBrokenEnv]): the next install rewrites it. */
+        val unstamped: Boolean get() = marked && !legacy && !isBrokenEnv(env) && INSTALL_ENV !in env!!
 
         fun ownership(me: Owner): Ownership = BrokerService.ownership(env, marked, legacy, me)
     }

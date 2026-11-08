@@ -17,6 +17,11 @@ class BrokenEnvFileTest {
         }
     }
 
+    // The task is registered but its env file is gone: nothing says another copy wrote it (the file is per user).
+    @Test fun aMissingEnvFileOfOurTaskIsOursNotAnotherCopys() {
+        assertEquals(BrokerService.Ownership.OURS, BrokerService.ownership(null, marked = true, legacy = false, me = me))
+    }
+
     @Test fun aReadableEnvFileStillDecides() {
         val theirs = "\$env:MUX_WEB_PORT = '9898'\r\n\$env:MUX_DESKTOP_INSTALL = 'someone-else'\r\n"
         assertEquals(BrokerService.Ownership.OTHER, BrokerService.ownership(theirs, marked = true, legacy = false, me = me))
