@@ -4,7 +4,7 @@
 // main.ts wires the real hasBinary/existsSync probes. Credential paths mirror
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
 import { realpathSync } from "fs"
-import { join, win32 } from "path"
+import { paths as hostPaths } from "@supermux/platform"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
 import { claudeStoredLoginPresent } from "./claude/stored-login"
@@ -65,7 +65,7 @@ const BINARIES: Record<AgentKind, readonly string[]> = {
 /** Absolute path to the credential file the broker treats as "this CLI is logged in". */
 export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
   const platform = paths.platform ?? process.platform
-  const pathJoin = platform === "win32" ? win32.join : join
+  const pathJoin = hostPaths.flavor(platform).join
   switch (kind) {
     case "claude":
       return pathJoin(paths.home, ".claude", ".credentials.json")

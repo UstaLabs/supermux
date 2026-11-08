@@ -1,4 +1,5 @@
-import { join, delimiter, win32 } from "path"
+import { join, delimiter } from "path"
+import { paths } from "@supermux/platform"
 import { readdirSync } from "fs"
 import { expandWindowsVars, type RegistryScope } from "../git/requirement"
 
@@ -30,26 +31,28 @@ type Env = Record<string, string | undefined>
 // Prepending a not-yet-existing dir is harmless and intentional: PATH lookup is
 // dynamic, so the dir resolves as soon as the installer populates it.
 export function agentBinDirs(home: string, platform: NodeJS.Platform = process.platform, env: Env = process.env): string[] {
+  // The OS asked about, on any host: its separator in every dir.
+  const pathOf = paths.flavor(platform).join
   if (platform === "win32") {
-    const local = envValue(env, "LOCALAPPDATA") || win32.join(home, "AppData", "Local")
-    const roaming = envValue(env, "APPDATA") || win32.join(home, "AppData", "Roaming")
+    const local = envValue(env, "LOCALAPPDATA") || pathOf(home, "AppData", "Local")
+    const roaming = envValue(env, "APPDATA") || pathOf(home, "AppData", "Roaming")
     return [
-      win32.join(home, ".local", "bin"),
-      win32.join(local, "Programs", "OpenAI", "Codex", "bin"),
-      win32.join(local, "cursor-agent"),
-      win32.join(local, "Programs", "opencode"),
-      win32.join(home, ".grok", "bin"),
-      win32.join(local, "agy", "bin"),
-      win32.join(home, ".bun", "bin"),
-      win32.join(roaming, "npm"),
+      pathOf(home, ".local", "bin"),
+      pathOf(local, "Programs", "OpenAI", "Codex", "bin"),
+      pathOf(local, "cursor-agent"),
+      pathOf(local, "Programs", "opencode"),
+      pathOf(home, ".grok", "bin"),
+      pathOf(local, "agy", "bin"),
+      pathOf(home, ".bun", "bin"),
+      pathOf(roaming, "npm"),
     ]
   }
   return [
-    join(home, ".opencode", "bin"),
-    join(home, ".local", "bin"),
-    join(home, ".grok", "bin"),
-    join(home, ".bun", "bin"),
-    join(home, ".npm-global", "bin"),
+    pathOf(home, ".opencode", "bin"),
+    pathOf(home, ".local", "bin"),
+    pathOf(home, ".grok", "bin"),
+    pathOf(home, ".bun", "bin"),
+    pathOf(home, ".npm-global", "bin"),
   ]
 }
 

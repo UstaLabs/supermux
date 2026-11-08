@@ -76,6 +76,7 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
  */
 export function claudeReadRule(dir: string): string | undefined {
   const folder = dir.replace(/\/+$/, "")
+  // platform-ok: Claude's Read(//…) rule takes a POSIX absolute path; any other folder gets no rule (the host warns once)
   if (!folder.startsWith("/") || /[()*?[\]\\,\u0000-\u001f\u007f]/.test(folder)) return undefined
   return `Read(/${folder}/**)`
 }

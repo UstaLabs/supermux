@@ -1,3 +1,4 @@
+// platform-ok: rules for a POSIX shell's commands (Windows gets no shell-read rules), posix on any host
 import { posix } from "path"
 import type { AgentKind } from "../../shared/agents"
 import { isPlainShellWord } from "../../shared/shell-word"

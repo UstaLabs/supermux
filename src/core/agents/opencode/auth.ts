@@ -10,7 +10,7 @@
  * `authed` for the status badge only.
  */
 import { existsSync } from "fs"
-import { join, win32 } from "path"
+import { paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 
 export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
@@ -28,7 +28,7 @@ export function openCodeDataDir(opts: {
   platform?: NodeJS.Platform
 }): string {
   const env = opts.env ?? process.env
-  const pathJoin = (opts.platform ?? process.platform) === "win32" ? win32.join : join
+  const pathJoin = paths.flavor(opts.platform ?? process.platform).join
   return pathJoin(opts.xdgDataHome || env.XDG_DATA_HOME || pathJoin(opts.home, ".local", "share"), "opencode")
 }
 
@@ -52,8 +52,7 @@ export async function resolveOpenCodeAuth(opts: {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   const env = opts.env ?? process.env
   const dataDir = openCodeDataDir(opts)
-  const authPath = (opts.platform ?? process.platform) === "win32"
-    ? win32.join(dataDir, "auth.json") : join(dataDir, "auth.json")
+  const authPath = paths.flavor(opts.platform ?? process.platform).join(dataDir, "auth.json")
   const hasProviderKey = PROVIDER_KEY_ENV.some((k) => !!env[k])
   const mode = exists(authPath) ? "shared_auth" : hasProviderKey ? "provider_key" : "none"
   return { mode, env: {}, dataDir, authPath, authed: mode !== "none" }
