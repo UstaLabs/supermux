@@ -29,10 +29,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -40,11 +43,16 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The rows of one page that search can land on. [target] is the anchor the page was opened for (folds holding it
@@ -54,7 +62,9 @@ import kotlinx.coroutines.delay
 class KitAnchors(target: String? = null) {
     var target by mutableStateOf(target)
     var flashing by mutableStateOf<String?>(null)
-    internal val requesters = mutableMapOf<String, BringIntoViewRequester>()
+
+    /** Snapshot state, so a page can wait for a row that loads late. */
+    internal val requesters = mutableStateMapOf<String, BringIntoViewRequester>()
 }
 
 /** Null outside a [KitPage]: a row's anchor is then only a semantics tag. */
@@ -63,6 +73,12 @@ val LocalKitAnchors = staticCompositionLocalOf<KitAnchors?> { null }
 /** The anchor a row carries, for tests and for the search index check. */
 val KitAnchorKey = SemanticsPropertyKey<String>("KitAnchor")
 var SemanticsPropertyReceiver.kitAnchor by KitAnchorKey
+
+/** How long a page waits for the row it was opened for: a machine's rows arrive when it answers. */
+private const val ANCHOR_WAIT_MS = 3_000L
+
+/** How long a row found by search stays tinted. */
+private const val FLASH_MS = 1_500L
 
 /**
  * Marks a row search can land on: it registers for [KitPage]'s jump, carries [key] in semantics, and is tinted
@@ -94,7 +110,8 @@ fun Modifier.kitAnchor(key: String): Modifier {
 /**
  * One Settings page. Wide: an optional "‹ back" text action (sub-pages), the title, the [scope] line, the [lede],
  * then the rows, at most 660 dp wide. Phone: the title is the top bar's, so only scope, lede and rows. Opened for
- * an [anchor], it scrolls that row into view, flashes it and calls [onAnchorShown] once.
+ * an [anchor], it waits (up to 3 s) for that row to load, scrolls it into view, flashes it and calls
+ * [onAnchorShown] once — also when the row never came, then without a flash.
  */
 @Composable
 fun KitPage(
@@ -113,17 +130,26 @@ fun KitPage(
     val m = kitMetrics()
     val anchors = remember { KitAnchors() }
     val shown by rememberUpdatedState(onAnchorShown)
+    val pageScope = rememberCoroutineScope()
     LaunchedEffect(anchor) {
         anchors.target = anchor
         if (anchor == null) return@LaunchedEffect
-        // Two frames: the rows compose, and a fold that holds the anchor opens and lays out.
-        withFrameNanos { }
-        withFrameNanos { }
-        anchors.requesters[anchor]?.bringIntoView()
-        anchors.flashing = anchor
+        // A fold holding the row opens on `target`; rows that load late register when they arrive.
+        val row = withTimeoutOrNull(ANCHOR_WAIT_MS) {
+            snapshotFlow { anchors.requesters[anchor] }.filterNotNull().first()
+        }
+        if (row != null) {
+            withFrameNanos { } // the row is laid out
+            row.bringIntoView()
+            anchors.flashing = anchor
+            // The fade runs in the page's scope, not this effect's: the hub clears its anchor in onAnchorShown, which
+            // restarts this effect and would cancel the fade half way, leaving the row lit.
+            pageScope.launch {
+                delay(FLASH_MS)
+                if (anchors.flashing == anchor) anchors.flashing = null
+            }
+        }
         shown()
-        delay(1500)
-        anchors.flashing = null
     }
     CompositionLocalProvider(LocalKitAnchors provides anchors) {
         Column(
@@ -155,7 +181,7 @@ fun KitPage(
                         fontWeight = FontWeight.SemiBold,
                         letterSpacing = (-0.19).sp,
                         color = c.text,
-                        modifier = Modifier.testTag("settings_page_title"),
+                        modifier = Modifier.semantics { heading() }.testTag("settings_page_title"),
                     )
                 }
                 scope?.invoke()
