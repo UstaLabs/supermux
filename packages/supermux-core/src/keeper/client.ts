@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, type Stats } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, type Stats } from 'node:fs'
 import { rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
@@ -547,6 +547,9 @@ async function connectLocked(options: {
       throw new Error(`orphan agent pid ${status.agentPid}: keeper is dead but the app-server is still running`)
     }
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
+    // A missing working folder fails the agent's spawn with "ENOENT: posix_spawn '<program>'", which reads as a
+    // missing program: say what is missing.
+    if (!existsSync(options.spec.cwd)) throw new Error(`The session's folder ${options.spec.cwd} no longer exists`)
     sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
     const entry = keeperLaunch(keeperEntry(), await keepersScoped())
