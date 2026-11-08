@@ -34,6 +34,8 @@ export type ProxyEntry = {
 }
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+/** A digits-only slug means a PORT (/p/5173/ opens localhost:5173), so a named proxy may never be one. */
+const DIGITS_ONLY_RE = /^[0-9]+$/
 
 export class Registry {
   readonly sessions: SessionStore
@@ -354,8 +356,14 @@ export class Registry {
 
   addProxy(input: { domain: string; sessionId: string; port: number; isPublic?: boolean }): ProxyEntry {
     const { domain, sessionId, port } = input
-    if (!domain || domain.length > 63 || !DOMAIN_RE.test(domain)) {
+    // typeof first: the web route only casts the JSON body's domain, and a regex coerces (true reads as "true", but
+    // SQLite would store it as the name "1").
+    if (typeof domain !== "string" || !domain || domain.length > 63 || !DOMAIN_RE.test(domain)) {
       throw new Error(`invalid domain: ${domain}`)
+    }
+    // Every way of naming a proxy (expose_port, POST /proxies, /proxy) lands here, so the rule lives here.
+    if (DIGITS_ONLY_RE.test(domain)) {
+      throw new Error(`proxy names can't be only digits: /p/${domain}/ means a port`)
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`invalid port: ${port}`)

@@ -63,6 +63,18 @@ export function matchProxyPath(pathname: string): { slug: string; rest: string |
 }
 
 /**
+ * By-port previews: a digits-only slug is a PORT (`/p/5173/`, `5173.<base>`), never a name (Registry.addProxy refuses
+ * digits-only names). Returns undefined for a slug that is a name, null for a digits-only slug that is not a usable
+ * port (0, above 65535, a leading zero: one port gets one URL), else the port.
+ */
+export function portFromSlug(slug: string): number | null | undefined {
+  if (!/^[0-9]+$/.test(slug)) return undefined
+  if (!/^[1-9][0-9]{0,4}$/.test(slug)) return null
+  const port = Number(slug)
+  return port <= 65535 ? port : null
+}
+
+/**
  * Builds a proxy's public URL. Subdomain mode (unchanged) when a base domain is
  * set; path mode under the broker's own public URL otherwise.
  */

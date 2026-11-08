@@ -3226,6 +3226,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)
