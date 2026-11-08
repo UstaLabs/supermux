@@ -121,6 +121,8 @@ export const SUBAGENT_TURN_METHOD = "supermux/subagent-turn"
 export const SUBAGENT_SESSION_METHOD = "supermux/subagent-session"
 /** Driver-synthesized native frame: a warning the driver wants shown ({message}). */
 export const DRIVER_WARNING_METHOD = "supermux/warning"
+/** The OpenCode driver saw OpenCode waiting out its free-model limit: params `{ resetsAt: ISO }`. */
+export const OPENCODE_FREE_LIMIT_METHOD = "supermux/opencode-free-limit"
 
 type Scope = {
   subagentId?: string
@@ -831,6 +833,13 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
       sub.nativeId = nativeId
       remember(aliases, nativeId, sub.id)
       return progress(sub, undefined, undefined, { nativeId })
+    }
+    if (method === OPENCODE_FREE_LIMIT_METHOD) {
+      const resetsAt = str(rec(params)?.resetsAt)
+      return [{
+        kind: "warning", source: "opencode", code: "opencode_free_limit", ...(resetsAt ? { resetsAt } : {}),
+        message: `OpenCode's free models reached today's limit. OpenCode will retry when it resets${resetsAt ? ` (${resetsAt.slice(11, 16)} UTC)` : ""}; switch to another model or sign in to OpenCode Go to keep going now.`,
+      } as NormalizedBody]
     }
     if (method === DRIVER_WARNING_METHOD) {
       const message = str(rec(params)?.message)

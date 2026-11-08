@@ -176,3 +176,16 @@ test("a removed abort route turns Stop off at click time (with a reason, flags r
   await session.interrupt({ pending: "discard" })
   await receipt.completed
 })
+
+test("OpenCode waiting out its free limit (a retry with reason free_tier_limit) is said once, with when it resets", async () => {
+  const { session, events } = await setup(ALLOW)
+  const receipt = await session.send({ content: text("free"), whenBusy: "queue" })
+  await until(() => events.some(e => e.kind === "warning"))
+  await new Promise(r => setTimeout(r, 300))
+  const warnings = events.filter(e => e.kind === "warning")
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toMatchObject({ code: "opencode_free_limit", resetsAt: "2026-11-09T00:00:00.000Z", source: "opencode" })
+  expect((warnings[0] as { message: string }).message).toContain("free")
+  await session.interrupt({ pending: "discard" })
+  await receipt.completed
+})

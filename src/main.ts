@@ -191,6 +191,9 @@ import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.j
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
+import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
+import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
+import { openCodeDataDir } from "./core/agents/opencode/auth"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { resolveSessionFast, supportsFastMode } from "./core/models/fast-mode"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
@@ -3584,6 +3587,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     hasCredential: (kind) =>
       agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
+    // OpenCode's Console (Go) sign-in lives in opencode.db beside any API key in auth.json.
+    signInProbe: (kind) => kind === AgentKind.OpenCode
+      ? () => openCodeConsoleFingerprint(join(openCodeDataDir({ home: home() }), "opencode.db"))
+      : undefined,
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
@@ -3595,6 +3602,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   channels.web = webChannel as Channel
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
+  // A session hit OpenCode's free limit: the usage card says so now, not on its next 5-minute refresh.
+  onOpenCodeFreeLimit(() => { void getUsageStore().refresh(["opencode"], { force: true }) })
 }
 void getUsageStore().seedFromLocal()
 
