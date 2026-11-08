@@ -1,5 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
-import { join, posix, win32 } from "node:path"
+import { join } from "node:path"
+import { paths } from "@supermux/platform"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
 
@@ -20,7 +21,7 @@ function ensureHome(home: string): void {
  */
 export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = process.platform): string {
   const windows = platform === "win32"
-  const path = windows ? win32 : posix
+  const path = paths.flavor(platform)
   const folder = typeof dir === "string" ? dir.replace(windows ? /[\\/]+$/ : /\/+$/, "") : ""
   if (!folder || !path.isAbsolute(folder) || path.resolve(folder) !== folder || /[*?]/.test(folder) || (!windows && folder.includes("\\"))) {
     const got = typeof dir === "string" ? JSON.stringify(dir) : typeof dir
