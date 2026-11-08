@@ -153,7 +153,7 @@ suite("zmx workspace backend, against real processes", () => {
   async function attach(
     key: WorkspaceTerminalKey,
     id: string,
-    options: { on?: ZmxWorkspaceBackend } = {},
+    options: { on?: ZmxWorkspaceBackend; keepBytes?: boolean } = {},
   ): Promise<Recorder> {
     const manager = options.on ?? backend
     let release: (() => void) | null = null
@@ -185,7 +185,7 @@ suite("zmx workspace backend, against real processes", () => {
       if (event.type === "output") {
         self.outputBytes += event.bytes.length
         self.text = (self.text + decoder.decode(event.bytes, { stream: true })).slice(-200_000)
-        ;(inReplay ? self.replay : self.live).push(event.bytes)
+        if (options.keepBytes !== false) (inReplay ? self.replay : self.live).push(event.bytes)
         if (armed) {
           if (!held) held = new Promise<void>(resolve => { release = resolve })
           await held
@@ -604,6 +604,11 @@ suite("zmx workspace backend, against real processes", () => {
   /** 12 MiB, bounded by `count` — never an unbounded `yes`. */
   const FLOOD_BYTES = 12 * 1024 * 1024
   const FLOOD = `dd if=/dev/zero bs=1024 count=${FLOOD_BYTES / 1024} 2>/dev/null | tr '\\0' 'A' | fold -w 200`
+  /** Output until [stop] exists: only for a test that stops it once what it waits for has happened (a Ctrl-C can
+   *  land between two passes of the loop and be lost). In bursts of 256 KiB: a pty that is never drained keeps the
+   *  daemon from serving its clients, and a viewer attaching then gets nothing. */
+  const floodUntil = (stop: string) =>
+    `while [ ! -e '${stop}' ]; do head -c 262144 /dev/zero | tr '\\0' 'A' | fold -w 200; sleep 0.05; done`
 
   test("a viewer that stops reading is detached recoverably; the shell and the other viewer keep going", async () => {
     const key = await create("w:flood-0004", "main", 100, 30)
@@ -660,15 +665,35 @@ suite("zmx workspace backend, against real processes", () => {
     // daemon stages live output behind an open snapshot under a cap of its own.
     // A fresh target, so a snapshot over the 4 MiB serialization ceiling (a
     // different, UNRECOVERABLE detach) cannot be what fires instead.
+    //
+    // This flood does not end on its own: it runs until the stalled viewer has
+    // certainly been dropped. A flood of a fixed size is over in ~250 ms on a
+    // CI runner, sometimes before the viewer below is even attached; its
+    // restore then completes, nothing follows it, and no cap can ever fire.
     const second = await create(key.scope, "replay-victim", 100, 30)
-    const driver = await attach(second, "replay-driver")
+    // Its chunks are not kept: they would be every byte of a flood with no end.
+    const driver = await attach(second, "replay-driver", { keepBytes: false })
     await driver.viewer.focus(true, 100, 30)
     await driver.waitForEvent(event => event.type === "owner" && event.enabled)
-    expect(driver.viewer.write(bytes(`${FLOOD}; ${markerPrintf("FLOOD2-DONE")}\r`))).toBe(true)
+    const stopFlood = join(scratch, "stop-flood")
+    expect(driver.viewer.write(bytes(`${floodUntil(stopFlood)}\r`))).toBe(true)
     await waitFor(() => driver.outputBytes > 256 * 1024, 120_000, () => "the second flood never started")
     const c = await attach(second, "stalled-in-replay")
+    // Stopped once the broker has seen its restore begin, so it knows a
+    // restore was under way whatever happens next.
+    const isOwn = (kind: string) => (entry: string) => entry.startsWith(`${kind}(`) && !entry.startsWith(`${kind}(pre-`)
+    await waitFor(() => c.trace.some(isOwn("replay-start")), 60_000, () => `no restore began; trace=${JSON.stringify(c.trace)}`)
     process.kill(c.helper.pid, "SIGSTOP")
-    await driver.waitForText("FLOOD2-DONE", 240_000)
+    // The daemon drops a broker viewer once more than 1 MiB is queued for it,
+    // staged behind its restore or after it (BROKER_PENDING_MAX in the vendor
+    // patch). Every byte the driver gets from here on was queued for the
+    // stalled viewer too, so 8 MiB more is past that cap and any socket buffer
+    // in between, whenever the restore ended. The daemon's client count cannot
+    // say it sooner: a dropped viewer stays listed until it reads its detach.
+    const stoppedAt = driver.outputBytes
+    await waitFor(() => driver.outputBytes - stoppedAt > 8 * 1024 * 1024, 120_000,
+      () => `the flood stalled after the viewer stopped (${driver.outputBytes - stoppedAt} bytes)`)
+    writeFileSync(stopFlood, "")
     process.kill(c.helper.pid, "SIGCONT")
     const replayDetach = await c.waitForEvent(event => event.type === "failure", 120_000)
     expect(replayDetach).toMatchObject({ type: "failure", code: "backend-unavailable", recoverable: true })
@@ -683,10 +708,18 @@ suite("zmx workspace backend, against real processes", () => {
     // dropped with its restore still streaming is told so, which is the
     // difference between "the backend died" and "I was too slow to be given
     // my snapshot". See vendor/zmx/VERIFICATION.md §5.
+    //
+    // Whether the broker had seen the restore close before the viewer stopped
+    // is up to the scheduler (a small snapshot is queued whole at once; the
+    // helper may have forwarded its end already). After it, this is the live
+    // cap of the first half. The label itself is pinned without a scheduler
+    // in backend.test.ts ("restore was still streaming").
     const replayMessage = (replayDetach as { message: string }).message
-    expect(replayMessage).toMatch(/resync_required|daemon closed the connection/)
-    if (!replayMessage.includes("resync_required")) {
-      expect(replayMessage).toContain("restore was still streaming")
+    const restoreClosed = c.trace.some(isOwn("replay-end"))
+    const said = `${replayMessage}; trace=${JSON.stringify(c.trace)}`
+    expect(said).toMatch(/resync_required|daemon closed the connection/)
+    if (!restoreClosed && !replayMessage.includes("resync_required")) {
+      expect(said).toContain("restore was still streaming")
     }
     expect(c.events.some(event => event.type === "exit")).toBe(false)
     // The viewer it was staged for is gone; the target and its driver are not.
