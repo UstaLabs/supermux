@@ -3,12 +3,10 @@ package dev.supermux.desktop.platform
 import dev.supermux.ui.platform.FileAction
 import dev.supermux.work.DownloadedFile
 import java.io.File
-import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -127,19 +125,20 @@ class DesktopFileHandOverTest {
         assertEquals("the newer, longer bytes", second.readText())
     }
 
+    /**
+     * Open hands the viewer a COPY. A link would be the stored file itself: a viewer that saves in place would rewrite the
+     * media store's entry (the cache never revalidates a file id), and the link would keep the bytes alive after
+     * Storage > Clear.
+     */
     @Test
-    fun `a file that cannot be linked is copied instead`() {
-        // Another volume, a Windows without the right, a file system with no links: whatever the refusal.
-        for (refusal in listOf<Exception>(IOException("another volume"), UnsupportedOperationException("no links here"))) {
-            val download = stored("report.pdf", "payload")
-            var tried = 0
+    fun `the staged file is a separate copy, so editing it leaves the stored file unchanged`() {
+        val download = stored("report.pdf", "original bytes")
+        val staged = assertNotNull(stage(download))
 
-            val staged = assertNotNull(stageNamed(download) { _, _ -> tried++; throw refusal })
-            made += staged.parentFile
+        // In place, as a viewer that saves in place does.
+        staged.writeText("edited in the viewer")
 
-            assertEquals(1, tried, "linking comes first (${refusal.message})")
-            assertEquals("payload", staged.readText())
-            assertFalse(Files.isSameFile(staged.toPath(), File(download.path!!).toPath()), "a copy of the file, not the file")
-        }
+        assertEquals("original bytes", File(download.path!!).readText(), "the media store's file is not touched")
+        assertEquals("edited in the viewer", staged.readText())
     }
 }

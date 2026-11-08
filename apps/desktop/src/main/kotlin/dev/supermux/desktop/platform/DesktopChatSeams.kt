@@ -22,7 +22,6 @@ import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -184,18 +183,17 @@ internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching
  * The media store keeps the file under an id of its own, which would open as "3f9c4d….bin"; `<unique>`, a hash of where
  * the file is stored, keeps two different `report.pdf`s from overwriting each other.
  *
- * Nothing is read into memory. The file is hard-linked (no bytes at all) or, where the OS refuses that — another volume,
- * Windows without the right, a file system with no links — copied, which the OS streams. A file already staged at the
- * stored one's size is used as it is, so a second Open of a big file does not copy it again; another size means that
- * path was fetched again since, and the old one goes. Null: no file on disk to stage (a browser handle), or staging failed.
+ * What the handler gets is a COPY, never the stored file or a link to it: a viewer that saves in place would otherwise
+ * rewrite the media store's entry (the cache never revalidates a file id), and a link would keep the bytes alive after
+ * Storage › Clear. Nothing is read into memory: [Files.copy] streams the file, and the OS copies or clones it itself where
+ * it can (APFS). A file already staged at the stored one's size is used as it is, so a second Open of a big file does not
+ * copy it again; another size means that path was fetched again since, and the old one is replaced. Null: no file on disk
+ * to stage (a browser handle), or staging failed.
  *
  * `internal` because it is the half of [DesktopFileAccess.openFile] a test can run — actually opening would fork a real
- * viewer on the developer's desktop. [makeLink] is the link attempt, replaceable so that a test can refuse it.
+ * viewer on the developer's desktop.
  */
-internal fun stageNamed(
-    file: DownloadedFile,
-    makeLink: (link: Path, existing: Path) -> Unit = { link, existing -> Files.createLink(link, existing) },
-): File? {
+internal fun stageNamed(file: DownloadedFile): File? {
     val stored = file.path ?: return null
     return runCatching {
         val source = Paths.get(stored)
@@ -203,12 +201,7 @@ internal fun stageNamed(
         if (staged.isFile && staged.length() == Files.size(source)) return@runCatching staged
         val target = staged.toPath()
         Files.createDirectories(target.parent)
-        Files.deleteIfExists(target)
-        try {
-            makeLink(target, source)
-        } catch (_: Exception) {
-            Files.copy(source, target)
-        }
+        Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
         staged
     }.getOrNull()
 }
