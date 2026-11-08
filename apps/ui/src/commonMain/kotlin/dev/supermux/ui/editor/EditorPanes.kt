@@ -101,7 +101,9 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.files.TreeViewState
 import dev.supermux.ui.files.FileSearch
 import dev.supermux.ui.files.GoToEntry
-import dev.supermux.ui.files.goToFileShortcut
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalKeyScope
+import dev.supermux.ui.keys.RegisterCommand
 import androidx.compose.ui.focus.FocusRequester
 import dev.supermux.ui.files.editorAbsolutePath
 import dev.supermux.ui.files.editorPathFor
@@ -160,15 +162,17 @@ fun ExplorerPane(
     val hardwareKeyboard = LocalHardwareKeyboard.current
     val revealActive by prefs.filesRevealActive.collectAsState(FILES_REVEAL_ACTIVE_DEFAULT)
 
+    // ⌘P / Ctrl+P: from this pane, and from anywhere in the window while the pane is open.
+    val goToFile = { runCatching { searchFocus.requestFocus() }.isSuccess }
+    RegisterCommand(AppCommands.GoToFile, handler = goToFile)
+    RegisterCommand(AppCommands.GoToFile, scope = LocalKeyScope.current?.root, handler = goToFile)
     // The tag goes on an INNER node, never on the caller's modifier: two testTag calls on one
     // modifier chain keep the OUTER one, so a pane that tagged `modifier` would be invisible to
     // any caller that had already tagged it.
     Box(
         modifier
             .fillMaxSize()
-            .background(cs.surfaceContainerHigh)
-            // ⌘P / Ctrl+P while focus is anywhere in the pane (the tree, the header).
-            .goToFileShortcut { runCatching { searchFocus.requestFocus() } },
+            .background(cs.surfaceContainerHigh),
     ) {
         FileSearch(
             fileSystem = fileSystem,
