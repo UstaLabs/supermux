@@ -134,7 +134,8 @@ test("add validation: methods per agent, secrets, unknown agent", async () => {
   await expect(core.accounts.add({ agent: "claude", method: "subscription", secret: "k" })).rejects.toMatchObject({ code: "invalid_input" })
   await expect(core.accounts.add({ agent: "cursor", method: "token", secret: "k" })).rejects.toMatchObject({ code: "unsupported_operation" })
   await expect(core.accounts.add({ agent: "custom", method: "api_key", secret: "k" })).rejects.toMatchObject({ code: "unsupported_operation" })
-  await expect(core.accounts.add({ agent: "opencode", method: "api_key", secret: "k" })).rejects.toMatchObject({ code: "invalid_input" })
+  // No provider = an OpenCode key (Zen and Go); a malformed provider id is still refused.
+  await expect(core.accounts.add({ agent: "opencode", method: "api_key", secret: "k", provider: "a b" })).rejects.toMatchObject({ code: "invalid_input" })
   await expect(core.accounts.add({ id: "../x", agent: "claude", method: "api_key", secret: "k" })).rejects.toMatchObject({ code: "invalid_account_id" })
   const generated = await core.accounts.add({ agent: "claude", method: "api_key", secret: "k" })
   expect(generated.id).toMatch(/^claude-[0-9a-f]{8}$/)
