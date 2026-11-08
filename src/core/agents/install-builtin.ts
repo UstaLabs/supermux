@@ -10,6 +10,7 @@
 //
 // Both put their dir on the user PATH in the registry (de-duplicated), the way MinGit does; the
 // broker's own PATH already carries both dirs (bin-dirs.ts), so detection needs no restart.
+// platform-ok: builds the Windows install's paths, with win32 on any host so its tests run anywhere
 import { win32 as winPath } from "path"
 import { isInUse } from "./archive-guard"
 import {

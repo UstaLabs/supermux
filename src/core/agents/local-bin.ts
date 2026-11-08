@@ -2,7 +2,9 @@
 // two from the Linux builtin. Never clobbers what someone else put there: a regular file, or a
 // symlink that points outside what we own, stays and the install log says so.
 import { existsSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from "fs"
+// platform-ok: ~/.local/bin links exist on macOS and Linux only, posix on any host so the tests run anywhere
 import { posix } from "path"
+import { paths } from "@supermux/platform"
 
 export interface LocalBinLink {
   /** The name in ~/.local/bin. */
@@ -57,10 +59,10 @@ export function linkIntoLocalBin(home: string, link: LocalBinLink, fs: LinkFs): 
   if (what === "other") return `Not linking ${path}: a file someone else put there is in the way (${link.name} still runs in supermux).`
   if (what === "symlink") {
     const current = fs.readlink(path)
-    const resolved = current.startsWith("/") ? current : posix.join(dir, current)
+    const resolved = posix.isAbsolute(current) ? current : posix.join(dir, current)
     if (resolved === target) return null
     const owned = link.ownedUnder ? posix.join(home, link.ownedUnder) : posix.dirname(target)
-    const ours = resolved.startsWith(owned + "/") || !fs.exists(path)
+    const ours = paths.isStrictlyInside(resolved, owned, posix) || !fs.exists(path)
     if (!ours) return `Not linking ${path}: it already points to ${current} (${link.name} still runs in supermux).`
     fs.unlink(path)
   }

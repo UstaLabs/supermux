@@ -15,6 +15,7 @@
 // platform-ok: Linux only (the builtin agents' Linux install): tar, with a timeout; never runs on Windows
 import { execFile } from "child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
+// platform-ok: builds the Linux install's paths, with posix on any host so its tests run anywhere
 import { posix } from "path"
 import { sha256Hex } from "../windows/user-install"
 import { findEscape } from "./archive-guard"
