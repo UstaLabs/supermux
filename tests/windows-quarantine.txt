@@ -78,7 +78,6 @@ src/core/fs/search-index.test.ts | expects / where Windows writes \ (or back): a
 src/core/git/branches.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "repoToplevel: repo root for any path inside, null outside" | #29
 src/core/git/clone.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "projectDir composes host/owner/repo under the root" | #29
 src/core/git/clt-guard.test.ts | expected FHi\run\no-clt:/usr/bin:/bin:/usr/sbin:/sbin" got FHi\run\no-clt;/usr/bin:/bin:/usr/sbin:/sbin"; first: "darwin + Apple's stub + no CLT: shim written, PATH prepended" | #29
-src/core/git/exec.test.ts | times out on Windows; first: "runAsync kills the process at the timeout" | #29
 src/core/git/pr-gh.test.ts | expected "opened" got "gh_unavailable"; first: "openPullRequest returns opened + url when gh is available" | #29
 src/core/host-identity/keypair.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "key file is created 0600" | #29
 src/core/inbox/store.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "the inbox folder is private to the user (0700) and so is eac" | #29
