@@ -17,6 +17,7 @@
 // a hint on Linux.
 import { spawnCommand } from "../process/launcher"
 import { runCommand } from "../process/run"
+// platform-ok: builds the Windows install's paths, with win32 on any host so its tests run anywhere
 import { delimiter, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, applyCltGuard, noCltDir } from "./clt-guard"
 import { registry, Unsupported } from "@supermux/platform"
