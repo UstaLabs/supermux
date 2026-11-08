@@ -198,6 +198,15 @@ test('failed interrupt does not fabricate a cancelled completion', async () => {
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('an abort that lands while claude is still starting ends setup at once, not at the setup timeout', async () => {
+  const controller = new AbortController()
+  // Budgets no test outlives: only the abort can end this setup.
+  const pending = driver({MODE: 'setup-hang'}, {setupTimeoutMs: 600_000, requestTimeoutMs: 600_000}).open(ctx({signal: controller.signal}))
+  // open() is now inside its first await (starting claude): the abort lands before setup listens for one.
+  controller.abort()
+  await expect(pending).rejects.toThrow()
+})
+
 test('missing executable, setup timeout, request timeout, and stream failures reject', async () => {
   await expect(driver({}, {command: '/not-a-claude-executable'}).open(ctx())).rejects.toThrow()
   await expect(driver({MODE: 'setup-hang'}, {setupTimeoutMs: 30}).open(ctx())).rejects.toThrow()
