@@ -134,15 +134,16 @@ test("evicting an idle scope also forgets its invalidation epoch", async () => {
 
 /** The previous implementation: score everything, sort all hits, slice. */
 function rankAllThenSort(scope: string, rels: Array<{ rel: string; dir: boolean }>, q: string, limit: number) {
-  const offset = scope.length + 1
   const scored = []
   for (const { rel, dir } of rels) {
     const m = fuzzyMatch(q, rel)
     if (!m) continue
-    scored.push({ path: `${scope}/${rel}`, name: rel.slice(rel.lastIndexOf("/") + 1), type: dir ? "dir" : "file", score: m.score, hits: m.hits.map((i) => i + offset) })
+    // A hit's path is the host's (join: \ on Windows); the order is the index's own, by the /-joined rel.
+    const path = join(scope, rel)
+    scored.push({ rel, path, name: rel.slice(rel.lastIndexOf("/") + 1), type: dir ? "dir" : "file", score: m.score, hits: m.hits.map((i) => i + path.length - rel.length) })
   }
-  scored.sort((x, y) => y.score - x.score || x.path.length - y.path.length || (x.path < y.path ? -1 : 1))
-  return scored.slice(0, Math.max(1, Math.min(limit, 200)))
+  scored.sort((x, y) => y.score - x.score || x.rel.length - y.rel.length || (x.rel < y.rel ? -1 : 1))
+  return scored.slice(0, Math.max(1, Math.min(limit, 200))).map(({ rel: _, ...hit }) => hit)
 }
 
 test("rankPaths keeps a bounded top-K that equals the old score-all-then-sort result", async () => {
