@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { AgentEvent, BrokerRequest, RequestSubagent, ToolCallEvent } from "../types"
-import type { AgentCommandEntry, EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
+import type { AgentCommandEntry, AgentModelEntry, EventEnvelope, NormalizedBody } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { answerLabel, mapPermissionRequest, mapUserQuestion } from "./request-map"
 import {
   createCodexNativeItemState,
@@ -15,6 +15,8 @@ export type NormalizedBridgeOpts = {
   emit: (event: AgentEvent) => void
   onUsage?: (rateLimits: unknown) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
+  /** The models the agent offers (a session start's ACP options, #102). */
+  onModels?: (models: AgentModelEntry[]) => void
 }
 
 function rec(value: unknown): Record<string, unknown> | undefined {
@@ -139,6 +141,10 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
 
     if (kind === "commands-update") {
       opts.onCommands?.(event.commands)
+      return
+    }
+    if (kind === "models-update") {
+      opts.onModels?.(event.models)
       return
     }
     if (replay) return

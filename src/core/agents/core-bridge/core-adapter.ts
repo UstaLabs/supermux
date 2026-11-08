@@ -1,5 +1,6 @@
 import { EventEmitter } from "events"
 import type { AgentCommandEntry } from "../../slash-commands/types"
+import type { AgentModelEntry } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
 import { mapPendingRequest, toCoreAnswer } from "./request-map"
@@ -252,6 +253,8 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
   availableModels: { modelId: string }[] = []
   /** The slash commands the agent last reported (ACP push, Claude's initialize reply); undefined until it reports. */
   availableCommands?: AgentCommandEntry[]
+  /** The models the agent offered at its last start (ACP options; Cursor's model list, #102). */
+  availableModels?: AgentModelEntry[]
 
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
@@ -348,6 +351,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       onCommands: (commands) => {
         this.availableCommands = commands
         this.emit("commands-update", { kind: "commands-update" })
+      },
+      onModels: (models) => {
+        this.availableModels = models
+        this.emit("models-update", { kind: "models-update" })
       },
       onUsage: (rateLimits) => {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)

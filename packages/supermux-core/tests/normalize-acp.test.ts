@@ -78,6 +78,24 @@ describe("acp normalizer", () => {
     expect(n(acp("compaction_summary_chunk", { compactionId: "c", content: { type: "text", text: "ch" } }))[0]).toMatchObject({ kind: "compaction", status: "in_progress" })
   })
 
+  test("a session start's model options become one models-update: the agent's names and wire values (#102)", () => {
+    // The ACP driver forwards session/new's configOptions; a host learns the agent's own model list from them.
+    const n = createAcpNormalizer()
+    const model = { id: "model", type: "select", currentValue: "default[]", options: [
+      { value: "default[]", name: "Auto" },
+      { value: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "gpt-5.6-sol" },
+    ] }
+    const mode = { id: "mode", type: "select", options: [{ value: "agent", name: "Agent" }] }
+    const native = (configOptions: unknown[]): AgentUpdate => ({ protocol: "native", value: { method: "config_options", params: { configOptions } } })
+    expect(n(native([model, mode]))).toEqual([{ kind: "models-update", models: [
+      { value: "default[]", name: "Auto" },
+      { value: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "gpt-5.6-sol" },
+    ] }])
+    // The same list again says nothing, and neither does a start without a model select.
+    expect(n(native([model, mode]))).toEqual([])
+    expect(createAcpNormalizer()(native([mode]))).toEqual([])
+  })
+
   test("commands-update keeps _meta and the input hint", () => {
     // Grok marks skills with _meta.path → SKILL.md; the broker's filter needs it.
     const n = createAcpNormalizer()

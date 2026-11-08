@@ -146,6 +146,35 @@ test('sessionConfig model+mode is sent after session/new', async () => {
   } finally { await r.close({ mode: 'shutdown' }) }
 })
 
+// #102: supermux's Cursor picker listed `cursor-agent --list-models` ids (effort/fast variants such as
+// `gpt-5.6-sol-high`), while Cursor's ACP takes only its own listed values: 260 of 270 failed with "Invalid params".
+test("an old CLI model id resolves to its base model's option, so the session starts (#102)", async () => {
+  const { r, lines } = await traced({}, { model: 'composer-1-fast' })
+  try {
+    const sets = (await lines()).filter(l => l.setConfig) as Array<{ setConfig: { configId: string; value: string } }>
+    expect(sets.map(s => s.setConfig).filter(s => s.configId === 'model')).toEqual([{ configId: 'model', value: 'composer-1[fast=true]' }])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
+test("a model Cursor does not offer fails the start with Cursor's own model names, before Cursor is asked (#102)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cursor-'))
+  dirs.push(dir)
+  const trace = join(dir, 'trace')
+  await expect(driver({ TRACE: trace }, { model: 'gpt-9-nope' }).open(ctx())).rejects.toThrow(/gpt-9-nope.*Auto, composer-1/)
+  const rec = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => JSON.parse(l) as { setConfig?: { configId: string } })
+  expect(rec.some(l => l.setConfig?.configId === 'model')).toBe(false)
+})
+
+test("a session start hands the host Cursor's model options (#102)", async () => {
+  const updates: unknown[] = []
+  const { r } = await traced({}, {}, { onUpdate: (update) => { updates.push(update) } })
+  try {
+    const forwarded = updates.find(u => (u as { value?: { method?: string } }).value?.method === 'config_options') as { protocol: string; value: { params: { configOptions: Array<{ id: string; options?: unknown[] }> } } } | undefined
+    expect(forwarded?.protocol).toBe('native')
+    expect(forwarded?.value.params.configOptions.find(o => o.id === 'model')?.options).toEqual([{ value: 'default[]', name: 'Auto' }, { value: 'composer-1[fast=true]', name: 'composer-1' }])
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
+
 test('sessionConfig model+mode is sent after session/load', async () => {
   const { r, lines } = await traced({}, { model: 'composer-1', mode: 'ask', permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'ask' } }, { resumeId: 'old' })
   try {

@@ -184,7 +184,8 @@ import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import type { AgentAdapter, LiveDeltaEvent, LiveEndEvent, RequestOpenEvent, SubagentActivityEvent, SubagentEvent, SubagentSnapshotEvent, TaskEvent, TurnCompleteEvent, TurnFailedEvent } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
-import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
+import { cursorModelsFromAcp, discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels, discoverWithAccounts, type DiscoveryLaunch, type ModelInfo } from "./core/models/discovery"
+import { LearnedModels } from "./core/models/learned"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { grokHasScheduledTasks } from "./core/agents/grok/scheduled-tasks"
 import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.js"
@@ -986,6 +987,8 @@ function stopClaudeTailer(sessionUuid: string): void {
 }
 
 const modelCache = new ModelCache()
+/** Model lists an agent reported at a session start (#102: Cursor's ACP options), kept across restarts. */
+const learnedModels = new LearnedModels(join(STATE_DIR, "learned-models"))
 
 /**
  * The added (non-system) accounts of `agent` as launch envs for model discovery: ones the API has
@@ -1010,7 +1013,7 @@ function accountAware(agent: AgentKind, discover: (launch?: DiscoveryLaunch) => 
 const modelDiscoverers: ModelDiscoverers = {
   [AgentKind.Claude]: accountAware(AgentKind.Claude, (launch) => discoverClaudeModels({ launch })),
   [AgentKind.Codex]: accountAware(AgentKind.Codex, (launch) => discoverCodexModels({ launch })),
-  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch })),
+  [AgentKind.Cursor]: accountAware(AgentKind.Cursor, (launch) => discoverCursorModels({ launch, learned: () => learnedModels.get(AgentKind.Cursor) })),
   [AgentKind.OpenCode]: accountAware(AgentKind.OpenCode, (launch) => discoverOpenCodeModels({ launch })),
   [AgentKind.Grok]: accountAware(AgentKind.Grok, (launch) => discoverGrokModels({ launch })),
   [AgentKind.Antigravity]: accountAware(AgentKind.Antigravity, (launch) => discoverAntigravityModels({ launch })),
@@ -2094,6 +2097,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
         disable_notification: true,
       })
     }
+  })
+  adapter.on("models-update", () => {
+    // Cursor's own model list (#102): its ACP selects only these, so the picker offers exactly them from now on.
+    if (registry.get(sessionId)?.agent !== AgentKind.Cursor) return
+    const entries = (adapter as { availableModels?: { value: string; name: string }[] }).availableModels
+    if (!entries?.length) return
+    const models = cursorModelsFromAcp(entries)
+    if (!learnedModels.learn(AgentKind.Cursor, models)) return
+    modelCache.set(AgentKind.Cursor, models)
+    announceAgentModelsChanged([AgentKind.Cursor])
   })
   adapter.on("commands-update", () => {
     const name = registry.get(sessionId)?.name

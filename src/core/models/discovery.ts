@@ -152,10 +152,29 @@ export async function discoverCodexModels(opts?: {
   }
 }
 
+/**
+ * Cursor's own model list, from the ACP options a session start returns (#102): what `session/set_config_option`
+ * takes. Cursor's names, and its Auto keeps the id `auto` every client already stores.
+ */
+export function cursorModelsFromAcp(entries: { value: string; name: string }[]): ModelInfo[] {
+  return entries.map((entry) => ({
+    id: entry.name.toLowerCase() === "auto" ? "auto" : entry.name,
+    displayName: entry.name,
+    agent: Agent.Cursor,
+  }))
+}
+
+/**
+ * Cursor's models: the list its ACP gave at a session start (`learned`), else `cursor-agent --list-models` on a first
+ * run. The CLI list holds effort/fast variants (`gpt-5.6-sol-high`) Cursor's ACP cannot select (#102).
+ */
 export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
   launch?: DiscoveryLaunch
+  learned?: () => ModelInfo[] | undefined
 }): Promise<ModelInfo[]> {
+  const learned = opts?.learned?.()
+  if (learned?.length) return learned
   try {
     const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent"], ["--list-models"], 10_000, opts?.launch)
     const models: ModelInfo[] = []

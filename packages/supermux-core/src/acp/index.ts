@@ -158,6 +158,27 @@ function resolveConfigValue(configOptions: ConfigOption[], configId: string, val
 }
 
 /**
+ * Cursor's ACP `model` option takes only its listed values, one per base model (#102). An id from
+ * `cursor-agent --list-models` (`gpt-5.6-sol-high`, `claude-opus-5-thinking-high-fast`: the picker before #102, and
+ * what older sessions are pinned to) runs as its base model: the option whose name plus "-" starts it, the longest.
+ * Anything else is refused here, naming Cursor's models, instead of Cursor's bare "Invalid params".
+ */
+function resolveCursorModel(configOptions: ConfigOption[], value: string): string {
+  const option = configOptions.find(o => o.id === 'model')
+  if (!option?.options?.length) return value
+  const resolved = resolveConfigValue(configOptions, 'model', value)
+  if (option.options.some(o => o.value === resolved)) return resolved
+  const wanted = value.toLowerCase()
+  let base: { name: string; value: string } | undefined
+  for (const o of option.options) {
+    const name = typeof o.name === 'string' ? o.name.toLowerCase() : undefined
+    if (name && wanted.startsWith(`${name}-`) && (!base || name.length > base.name.length)) base = { name, value: o.value }
+  }
+  if (base) return base.value
+  throw new CoreError('invalid_input', `Cursor has no model "${value}". Its models: ${option.options.map(o => o.name ?? o.value).join(', ')}`)
+}
+
+/**
  * A `user_message_chunk` without the session-instructions block: a chunk that IS the block (an
  * embedded resource or text with its URI / wrapper) → undefined; Cursor's flattened text form →
  * the text with the block cut out (see `stripInstructionsEcho`).
@@ -187,6 +208,9 @@ export function acp(options: AcpOptions): AgentDriver {
   if (typeof options.inheritEnv !== 'boolean') throw new TypeError('ACP inheritEnv is required')
   if (!Array.isArray(options.mcpServers)) throw new TypeError('ACP mcpServers is required')
   const keeper = requireKeeper(options.keeper)
+  /** A session config value as this agent takes it: Cursor's model by its own rule (#102), the rest by value or name. */
+  const resolveSessionConfig = (configOptions: ConfigOption[], configId: string, value: string): string =>
+    options.vendor === 'cursor' && configId === 'model' ? resolveCursorModel(configOptions, value) : resolveConfigValue(configOptions, configId, value)
   const contextAdapter = options.contextAdapter ?? genericAcpContext(options.mcpServers)
   const setupTimeout = options.setupTimeoutMs
   const shutdownTimeout = options.shutdownTimeoutMs
@@ -1022,7 +1046,7 @@ export function acp(options: AcpOptions): AgentDriver {
         const metaCfg = io.welcome.meta.sessionConfig
         const applied: Record<string, unknown> = metaCfg && typeof metaCfg === 'object' && !Array.isArray(metaCfg) ? metaCfg as Record<string, unknown> : {}
         const rememberedOptions = Array.isArray(io.welcome.meta.configOptions) ? io.welcome.meta.configOptions as ConfigOption[] : []
-        const wanted = Object.fromEntries(Object.entries(options.sessionConfig ?? {}).map(([k, v]) => [k, resolveConfigValue(rememberedOptions, k, v)]))
+        const wanted = Object.fromEntries(Object.entries(options.sessionConfig ?? {}).map(([k, v]) => [k, resolveSessionConfig(rememberedOptions, k, v)]))
         const changed = Object.entries(wanted).filter(([k, v]) => applied[k] !== v)
         if (changed.length && (io.welcome.meta.liveActivity as unknown[] | undefined)?.length) {
           throw new CoreError('session_busy', 'Cannot change session config while the re-attached agent has live work')
@@ -1089,9 +1113,11 @@ export function acp(options: AcpOptions): AgentDriver {
       if (session.resumeId && configOptions.length === 0 && needsLists) {
         configOptions = readConfigOptions(await setup(connection.newSession(params)))
       }
+      // The agent's own option lists (its models), for the host: a picker that offers what it can run (#102).
+      if (session && !closed && configOptions.length) session.onUpdate({ protocol: 'native', value: { method: 'config_options', params: { configOptions } } })
       const appliedConfig: Record<string, string> = {}
       for (const [configId, value] of Object.entries(options.sessionConfig ?? {})) {
-        const resolved = resolveConfigValue(configOptions, configId, value)
+        const resolved = resolveSessionConfig(configOptions, configId, value)
         await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value: resolved }))
         appliedConfig[configId] = resolved
       }

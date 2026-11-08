@@ -192,6 +192,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   const vendor = options.vendor
   const toolNames = new Map<string, string>()
   let lastCommandsJson: string | undefined
+  let lastModelsJson: string | undefined
   let firstSession: string | undefined
   const scopes = new Map<string, Scope>()
   const subs = new Map<string, Sub>()
@@ -791,6 +792,20 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   }
 
   function mapNative(method: string, params: unknown): NormalizedBody[] {
+    if (method === "config_options") {
+      // The driver forwards a session start's configOptions (#102): the agent's own model list.
+      const options = Array.isArray(rec(params)?.configOptions) ? rec(params)!.configOptions as unknown[] : []
+      const select = options.map(rec).find(option => option?.id === "model" && Array.isArray(option.options))
+      const models = ((select?.options ?? []) as unknown[]).flatMap(entry => {
+        const value = str(rec(entry)?.value)
+        return value ? [{ value, name: str(rec(entry)?.name) ?? value }] : []
+      })
+      if (!models.length) return []
+      const encoded = JSON.stringify(models)
+      if (encoded === lastModelsJson) return []
+      lastModelsJson = encoded
+      return [{ kind: "models-update", models }]
+    }
     if (method === "stderr") {
       // OpenCode with --print-logs --log-level ERROR (verified 1.16.2): the provider failure
       // that the ACP turn hides is logged as
@@ -862,7 +877,7 @@ export function createAcpNormalizer(options: AcpNormalizerOptions = {}): AcpNorm
   // Real OpenCode (1.16) ends a turn as a normal completion when its provider rejects the
   // request: no message, no tool, no error frame, only a usage_update. A silent "completed"
   // is dishonest, so the turn's flush reports it as a warning when nothing else was produced.
-  const SILENT = new Set(["usage", "commands-update", "session-info", "mode-update"])
+  const SILENT = new Set(["usage", "commands-update", "models-update", "session-info", "mode-update"])
   let turnHadContent = false
   const normalize = ((update: AgentUpdate): NormalizedBody[] => {
     const parsed = unwrapGrok(update)
