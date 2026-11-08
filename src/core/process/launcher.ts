@@ -1,7 +1,3 @@
-import {
-  spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions,
-  type SpawnSyncOptions, type SpawnSyncReturns,
-} from "child_process"
 import { proc } from "@supermux/platform"
 
 export type CommandEnvironment = proc.CommandEnvironment
@@ -21,39 +17,16 @@ export function resolveCommand(
   return proc.resolve(names, env, { platform, fileExists: deps.fileExists })
 }
 
-export type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
-
-export interface SpawnCommandOptions extends SpawnOptions {
-  platform?: NodeJS.Platform
-  spawn?: SpawnLike
-  fileExists?: FileExists
-}
-
-export type SpawnSyncLike = (
-  command: string, args: readonly string[], options: SpawnSyncOptions,
-) => SpawnSyncReturns<Buffer>
-
-export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
-  platform?: NodeJS.Platform
-  spawnSync?: SpawnSyncLike
-  fileExists?: FileExists
-}
+export type SpawnLike = proc.SpawnLike
+export type SpawnCommandOptions = proc.SpawnCommandOptions
+export type SpawnSyncLike = proc.SpawnSyncLike
+export type SpawnCommandSyncOptions = proc.SpawnCommandSyncOptions
 
 /** The command line a .cmd/.bat shim runs with: @supermux/platform's one rule (BatBadBut-safe), shared with core's login. */
 export const windowsCmdCommandLine = proc.windowsCmdCommandLine
 
-/** Spawn an already-resolved command without ever passing user argv through a
- * general-purpose shell. Only Windows shim file formats receive fixed wrappers. */
-export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
-  const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
-  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped: proc.WindowsLaunch = platform === "win32" ? proc.windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
-  return spawn(wrapped.command, wrapped.args, {
-    ...proc.spawnDefaults(),
-    ...spawnOptions,
-    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  })
-}
+/** proc.spawnCommand: an already-resolved command, never through a general shell (Windows .cmd/.ps1 shims wrapped). */
+export const spawnCommand = proc.spawnCommand
 
 /**
  * Bun.spawn with this layer's defaults first (proc.spawnDefaults: the environment as it is now, where Bun's own default
@@ -77,17 +50,5 @@ export function spawnProcessSync<
   return Bun.spawnSync(argv, { ...proc.spawnDefaults(), ...options })
 }
 
-/** Synchronous twin used by boot/plugin lifecycle paths that historically used
- * execFileSync. It shares the exact Windows wrappers and never enables a shell. */
-export function spawnCommandSync(
-  command: string, args: readonly string[], options: SpawnCommandSyncOptions = {},
-): SpawnSyncReturns<Buffer> {
-  const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
-  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped: proc.WindowsLaunch = platform === "win32" ? proc.windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
-  return spawnSync(wrapped.command, wrapped.args, {
-    ...proc.spawnDefaults(),
-    ...spawnOptions,
-    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-  })
-}
+/** proc.spawnCommandSync: the synchronous twin, with the same Windows wrappers and never a shell. */
+export const spawnCommandSync = proc.spawnCommandSync

@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+import { proc } from '@supermux/platform'
 import { join } from 'node:path'
 import { writePrivateFile } from '../private-files.js'
 
@@ -60,11 +61,32 @@ export function pinCatalogToV1(raw: string): string | undefined {
   return inspected.kind === 'pin' ? inspected.catalog : undefined
 }
 
+const MAX_CATALOG_CHARS = 64 * 1024 * 1024
+
+/**
+ * `codex debug models`' stdout, or undefined when it fails, runs past [timeoutMs] or prints more than 64 MiB. Through
+ * @supermux/platform's spawnCommand: on Windows `codex` is often an npm shim (codex.cmd), which only it can start.
+ */
 function dumpCatalog(command: string, env: Record<string, string | undefined>, cwd: string, timeoutMs: number): Promise<string | undefined> {
   return new Promise(resolve => {
+    let child: ChildProcess
     try {
-      execFile(command, ['debug', 'models'], { env: env as NodeJS.ProcessEnv, cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => resolve(error ? undefined : stdout))
-    } catch { resolve(undefined) }
+      child = proc.spawnCommand(command, ['debug', 'models'], { env: env as NodeJS.ProcessEnv, cwd, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch { resolve(undefined); return }
+    let out = ''
+    let settled = false
+    const done = (result: string | undefined) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const stop = () => { if (child.pid) proc.killTree(child.pid); done(undefined) }
+    const timer = setTimeout(stop, timeoutMs)
+    child.stdout!.setEncoding('utf8')
+    child.stdout!.on('data', (chunk: string) => { out += chunk; if (out.length > MAX_CATALOG_CHARS) stop() })
+    child.on('error', () => done(undefined))
+    child.on('close', code => done(code === 0 ? out : undefined))
   })
 }
 

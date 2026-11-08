@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, type Stats } from 'node:fs'
 import { rm, unlink } from 'node:fs/promises'
@@ -175,11 +175,16 @@ export function resetKeepersScopedForTests(): void {
 /** True when `systemd-run --user --scope` runs a command here (an empty one, `true`) within 5 s. */
 function probeSystemdScope(): Promise<boolean> {
   return new Promise(resolve => {
+    let child: ChildProcess
     try {
-      execFile('systemd-run', [...SYSTEMD_SCOPE, 'true'], { ...proc.spawnDefaults(), timeout: 5_000 }, error => resolve(!error))
+      child = proc.spawnCommand('systemd-run', [...SYSTEMD_SCOPE, 'true'], { stdio: 'ignore' })
     } catch {
       resolve(false)
+      return
     }
+    const timer = setTimeout(() => { if (child.pid) proc.killTree(child.pid); resolve(false) }, 5_000)
+    child.on('error', () => { clearTimeout(timer); resolve(false) })
+    child.on('exit', code => { clearTimeout(timer); resolve(code === 0) })
   })
 }
 
@@ -323,10 +328,11 @@ async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeepe
     try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
     await waitPidDead(status.keeperPid, 2000)
   }
+  // The recorded agent pid is the root of the agent's tree: a .cmd agent's is cmd.exe's on Windows.
   if (alive(status.agentPid)) {
-    try { process.kill(status.agentPid, 'SIGTERM') } catch { /* */ }
+    proc.killTree(status.agentPid, { signal: 'SIGTERM' })
     await waitPidDead(status.agentPid, limits.shutdownTimeoutMs)
-    if (alive(status.agentPid)) { try { process.kill(status.agentPid, 'SIGKILL') } catch { /* */ } await waitPidDead(status.agentPid, 2000) }
+    if (alive(status.agentPid)) { proc.killTree(status.agentPid, { signal: 'SIGKILL' }); await waitPidDead(status.agentPid, 2000) }
   }
   if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error(`keeper ${status.keeperPid} or its agent ${status.agentPid} did not stop`)
 }
@@ -503,7 +509,7 @@ async function connectLocked(options: {
   const fingerprintPath = join(dir, 'fingerprint')
 
   let spawnedPid: number | undefined
-  let spawnedChild: ReturnType<typeof spawn> | undefined
+  let spawnedChild: ChildProcess | undefined
   let status = await readStatus(statusPath)
   // The socket of the keeper the status describes; one started below listens on newSocketPath(dir).
   // Only a trusted socket is ever connected to (it is sent the session's token).
@@ -550,9 +556,9 @@ async function connectLocked(options: {
     writeKeeperFile(dir, errPath, '')
     const errFd = openSync(errPath, 'a')
     const spawnStarted = performance.now()
-    let child: ReturnType<typeof spawn>
+    let child: ChildProcess
     try {
-      child = spawn(entry.command, entry.args, {
+      child = proc.spawnCommand(entry.command, entry.args, {
         detached: true,
         stdio: ['ignore', 'ignore', errFd],
         windowsHide: true,

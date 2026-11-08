@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { delimiter, join } from "path"
+import { proc } from "@supermux/platform"
 import { applyConfig, commandContext, resumeCodexSession, resume, spawn } from "./session"
 import type { ApplyConfigCtx } from "../session-types"
 import { createCodexCoreHost, type CodexCoreHost } from "./core-host"
@@ -258,6 +259,34 @@ describe("codex core spawn/resume dialect", () => {
     expect(args.join(" ")).not.toContain("model=")
     expect(args.join(" ")).not.toContain("model_reasoning_effort")
     expect(child.codexCalls[0]?.options.command).toBeTruthy()
+  })
+
+  test("the command is codex as found on the broker's PATH (an npm install's codex.cmd on Windows), not the bare name", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const bin = mkdtempSync(join(tmpdir(), "mux-codex-bin-"))
+    dirs.push(bin)
+    // Both shapes: an executable `codex` and npm's `codex.cmd`; the platform layer picks the one its OS starts.
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\n", { mode: 0o755 })
+    writeFileSync(join(bin, "codex.cmd"), "@echo off\r\n")
+    const expected = proc.resolve(["codex"], { PATH: bin })
+    expect(expected).not.toBeNull()
+    const child = fakeChildFactory({ nativeId: "n1" })
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const prevPath = process.env.PATH
+    process.env.PATH = `${bin}${delimiter}${prevPath ?? ""}`
+    try {
+      await spawn({ registry: registry(), bind: async () => {}, tmuxSession: "mux", codexHost: host }, {
+        workdir,
+        requestedName: "cx-path",
+        agent: AgentKind.Codex,
+      })
+    } finally {
+      process.env.PATH = prevPath
+    }
+    // The keeper's spawnCommand starts a .cmd through cmd.exe only when it is named: a bare `codex` it cannot wrap.
+    expect(child.codexCalls[0]?.options.command).toBe(expected!)
   })
 
   test("held first open: concurrent same-id resume rejects without closing first or opening second", async () => {

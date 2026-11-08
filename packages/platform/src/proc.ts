@@ -1,7 +1,10 @@
 // Processes. Only what the runtimes get wrong or leave out (platform-layer spec §3.3): Node and Bun signal a
 // process the same way everywhere, but say nothing about who owns it; Bun.which searches the PATH the process started
 // with, never .ps1, and Node has no which at all.
-import { spawn as nodeSpawn } from "node:child_process"
+import {
+  spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions,
+  type SpawnSyncReturns,
+} from "node:child_process"
 import { accessSync, constants, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
@@ -175,6 +178,54 @@ export function windowsLaunch(command: string, args: readonly string[], options:
  */
 export function spawnDefaults(): { env: Record<string, string | undefined>; windowsHide: boolean } {
   return { env: { ...process.env }, windowsHide: true }
+}
+
+/** node's spawn as [spawnCommand] takes it (a test passes its own). */
+export type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
+/** node's spawnSync as [spawnCommandSync] takes it. */
+export type SpawnSyncLike = (command: string, args: readonly string[], options: SpawnSyncOptions) => SpawnSyncReturns<Buffer>
+
+export interface SpawnCommandOptions extends SpawnOptions {
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** Starts the process; node's spawn by default. */
+  spawn?: SpawnLike
+  fileExists?: (path: string) => boolean
+}
+
+export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
+  platform?: NodeJS.Platform
+  spawnSync?: SpawnSyncLike
+  fileExists?: (path: string) => boolean
+}
+
+/**
+ * Starts the already-resolved [command] with node's spawn, never through a general shell. On Windows a .cmd/.bat shim
+ * goes through cmd.exe with every argument escaped and a .ps1 through PowerShell's -File ([windowsLaunch]); anything
+ * else starts as it is. Every start begins from [spawnDefaults] (the live env, no console window), which the caller's
+ * own options override. The broker's launcher and core's keeper both start their programs here.
+ */
+export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
+  const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
+  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
+  const wrapped: WindowsLaunch = platform === "win32" ? windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
+  return spawn(wrapped.command, wrapped.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
+
+/** The synchronous twin of [spawnCommand], with the same Windows wrappers and defaults. */
+export function spawnCommandSync(command: string, args: readonly string[], options: SpawnCommandSyncOptions = {}): SpawnSyncReturns<Buffer> {
+  const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
+  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
+  const wrapped: WindowsLaunch = platform === "win32" ? windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
+  return spawnSync(wrapped.command, wrapped.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
 }
 
 export interface KillTreeOptions {

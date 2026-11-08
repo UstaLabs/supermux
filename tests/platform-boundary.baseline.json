@@ -107,7 +107,6 @@
     "src/core/models/discovery.ts": 1,
     "src/core/plugins/lifecycle.ts": 1,
     "src/core/power/wake.ts": 1,
-    "src/core/process/launcher.ts": 2,
     "src/core/runtime/index.ts": 1,
     "src/core/session-manager/pane-owner.ts": 1,
     "src/core/session-manager/pid-file.ts": 1,
@@ -179,11 +178,5 @@
     "src/core/editor/changes.ts": 1,
     "src/core/git/exec.ts": 1,
     "src/core/terminal/zmx/backend.ts": 1
-  },
-  "spawn": {
-    "packages/supermux-core/src/accounts/login.ts": 1,
-    "packages/supermux-core/src/codex/catalog.ts": 1,
-    "packages/supermux-core/src/keeper/client.ts": 1,
-    "packages/supermux-core/src/keeper/keeper.ts": 1
   }
 }
