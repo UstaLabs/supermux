@@ -1411,6 +1411,12 @@ export class SessionManager {
     const effort = this.ports.resume.sessionEffort(session)
     const fast = this.ports.resume.sessionFast(session)
 
+    // A sleeping session has nothing to apply to: its next wake launches with the stored config (#106).
+    if (!this.runtimes.get(session.id)) {
+      this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: session.id, model: session.model, reasoningLevel: effort, fastMode: fast })
+      return { ok: true }
+    }
+
     if (session.agent === AgentKind.Claude) {
       const runtime = this.runtimes.get(session.id)
       const result = await agents.claude.applyConfig(
