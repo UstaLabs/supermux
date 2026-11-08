@@ -828,12 +828,27 @@ Terminal=false
         return gone && (pipe == null || awaitLockReleased(env, pipe) != false)
     }
 
+    /**
+     * Tells our running broker that its stop, coming next, is a restart (POST /internal/expect-restart with its per-boot
+     * token): its graceful shutdown then leaves the agents running, and the broker that comes back re-attaches them, so a
+     * turn in flight goes on (#29). The app restarts the broker itself (launchctl, systemctl, a child it stops and starts
+     * again), so the broker cannot tell that stop from a plain one. True when it took note (204); no token, an older
+     * broker or none: false, and it is stopped as before.
+     */
+    fun expectRestart(env: OsEnv, stateDir: Path, port: Int): Boolean {
+        val token = stopToken(stateDir) ?: return false
+        return env.postLocal("http://127.0.0.1:$port/internal/expect-restart", mapOf(STOP_TOKEN_HEADER to token)) == 204
+    }
+
     /** The stop request: true when the broker accepted it (202). No token (an older broker): false, nothing sent. */
     private fun requestStop(env: OsEnv, stateDir: Path, port: Int): Boolean {
-        val token = runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()
-        if (token.isNullOrEmpty()) return false
+        val token = stopToken(stateDir) ?: return false
         return env.postLocal("http://127.0.0.1:$port/internal/stop", mapOf(STOP_TOKEN_HEADER to token)) == 202
     }
+
+    /** The running broker's per-boot token for its local requests (stop-token in [stateDir]); null before it wrote one. */
+    private fun stopToken(stateDir: Path): String? =
+        runCatching { Files.readString(stateDir.resolve(STOP_TOKEN_FILE)).trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     /** The broker broker.pid names, if it runs as a broker (never an agent's `… shim` / `… credential`). */
     private fun pidFileBroker(stateDir: Path?, procs: List<WinProcess>): Long? {

@@ -1324,6 +1324,51 @@ class HostSupervisorTest {
         assertEquals(running, h.sup.status.value)
     }
 
+    // #29: a restart must not take the agents down. The broker leaves them running when it knows its stop is a restart,
+    // and only the app knows that here: it tells the broker first. A quit or a plain stop says nothing.
+    @Test fun restartInServiceModeTellsTheBrokerBeforeKickingTheService() = runTest {
+        val h = Harness(this, prefs = HostingPrefs(background = true))
+        Files.writeString(h.state.resolve("stop-token"), "tok")
+        h.probeFn = { if (h.bootstrapped()) h.desktop() else HostProbeResult.PortFree }
+        h.sup.ensure()
+        h.sup.restart()
+        val told = h.env.log.indexOf("POST http://127.0.0.1:9898/internal/expect-restart")
+        assertTrue(told in 0 until h.env.log.indexOf("launchctl kickstart -k gui/501/dev.supermux.host"), h.env.log.toString())
+    }
+
+    @Test fun restartInChildModeTellsTheBrokerBeforeStoppingIt() = runTest {
+        val h = Harness(this)
+        Files.writeString(h.state.resolve("stop-token"), "tok")
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        var destroyedWhenTold = -1
+        h.env.postAnswer = { destroyedWhenTold = h.children[0].destroyed; 204 }
+        h.sup.restart()
+        assertEquals(listOf("http://127.0.0.1:9898/internal/expect-restart"), h.env.posts)
+        assertEquals(0, destroyedWhenTold)
+        assertEquals(1, h.children[0].destroyed)
+    }
+
+    @Test fun aRelayChangeRelaunchesTheBrokerAsARestart() = runTest {
+        val h = Harness(this)
+        Files.writeString(h.state.resolve("stop-token"), "tok")
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.sup.setRelay(!h.saved.relay)
+        assertEquals(listOf("http://127.0.0.1:9898/internal/expect-restart"), h.env.posts)
+        assertEquals(2, h.launches.size)
+    }
+
+    @Test fun quittingStopsTheBrokerWithoutAnnouncingARestart() = runTest {
+        val h = Harness(this)
+        Files.writeString(h.state.resolve("stop-token"), "tok")
+        h.probeFn = h.healthyIfChild()
+        h.sup.ensure()
+        h.sup.quit()
+        assertEquals(1, h.children[0].destroyed)
+        assertTrue(h.env.posts.isEmpty())
+    }
+
     @Test fun restartInReadOnlyModeDoesNothing() = runTest {
         val h = Harness(this, prefs = HostingPrefs(leftAloneHostIds = setOf("h1")))
         h.probeFn = { h.outside("h1") }

@@ -1,7 +1,8 @@
 // Card #78 end to end: a real broker (throwaway state, MUX_TEST_BROKER=1, its own HOME) with real keepers and the
-// library's echo `claude`, restarted the two ways it happens on his box:
-// - SIGTERM (a restart, and as far as agents go a reboot: graceful shutdown stops every agent and its keeper);
-// - SIGKILL (a crash or OOM kill: keepers outlive the broker, so their agents still run at the next boot).
+// library's echo `claude`, restarted the ways it happens:
+// - SIGTERM (a plain stop, and as far as agents go a reboot: graceful shutdown stops every agent and its keeper);
+// - SIGKILL (a crash or OOM kill: keepers outlive the broker, so their agents still run at the next boot);
+// - a restart under systemd, as `supermux setup` installs the broker (#29): its agents run on.
 // After either, only the Agent and a worker whose agent still runs have keepers; the other workers are asleep
 // (suspended) and the first message to one wakes it and gets the answer.
 import { afterAll, expect, test } from "bun:test"
@@ -74,30 +75,70 @@ class Fixture {
     chmodSync(join(stub, "tmux"), 0o755)
   }
 
+  /**
+   * Nothing from the session that runs the test (MUX_*, CLAUDE*, provider keys), and a HOME of its own, so the broker
+   * can't write the real ~/.claude.json.
+   */
+  private brokerEnv(): Record<string, string> {
+    return {
+      PATH: `${join(this.dir, "stubbin")}:${process.env.PATH}`,
+      HOME: join(this.dir, "home"),
+      MUX_TEST_BROKER: "1",
+      MUX_HOME: this.dir,
+      MUX_STATE_DIR: this.state,
+      MUX_SOCKETS_DIR: join(this.state, "sockets"),
+      MUX_WEB_PORT: String(this.port),
+      MUX_WEB_PUBLIC_URL: this.base,
+      MUX_UPDATE_CHECK: "0",
+      MUX_CURATOR_ENABLED: "0",
+      DO_NOT_TRACK: "1",
+    }
+  }
+
   async start(): Promise<void> {
     const log = join(this.dir, `broker-${++this.boots}.log`)
-    // Nothing from the session that runs the test (MUX_*, CLAUDE*, provider keys), and a HOME of its own, so the
-    // broker can't write the real ~/.claude.json.
-    this.broker = Bun.spawn(["bun", "src/main.ts"], {
-      cwd: REPO,
-      stdout: Bun.file(log),
-      stderr: Bun.file(log),
-      env: {
-        PATH: `${join(this.dir, "stubbin")}:${process.env.PATH}`,
-        HOME: join(this.dir, "home"),
-        MUX_TEST_BROKER: "1",
-        MUX_HOME: this.dir,
-        MUX_STATE_DIR: this.state,
-        MUX_SOCKETS_DIR: join(this.state, "sockets"),
-        MUX_WEB_PORT: String(this.port),
-        MUX_WEB_PUBLIC_URL: this.base,
-        MUX_UPDATE_CHECK: "0",
-        MUX_CURATOR_ENABLED: "0",
-        DO_NOT_TRACK: "1",
-      },
-    })
-    // The web port opens after the boot resume.
+    this.broker = Bun.spawn(["bun", "src/main.ts"], { cwd: REPO, stdout: Bun.file(log), stderr: Bun.file(log), env: this.brokerEnv() })
+    await this.answers()
+  }
+
+  /** The web port opens after the boot resume. */
+  private async answers(): Promise<void> {
     await until("the broker to answer", async () => (await fetch(`${this.base}/me`).then((r) => r.status).catch(() => 0)) === 401 || undefined)
+  }
+
+  /** The transient systemd user service the broker runs as, once [startUnit] started it. */
+  private unit: string | undefined
+
+  /** The broker as a systemd user service, as `supermux setup` installs it: the default KillMode=control-group. */
+  async startUnit(): Promise<void> {
+    this.unit = `supermux-e2e-${this.port}`
+    const log = join(this.dir, "broker-unit.log")
+    const env = Object.entries(this.brokerEnv()).map(([k, v]) => `--setenv=${k}=${v}`)
+    const run = Bun.spawnSync(["systemd-run", "--user", "--quiet", "--collect", `--unit=${this.unit}`, `--working-directory=${REPO}`,
+      "-p", `StandardOutput=append:${log}`, "-p", `StandardError=append:${log}`, ...env, process.execPath, "src/main.ts"])
+    expect(run.exitCode, run.stderr.toString()).toBe(0)
+    await this.answers()
+  }
+
+  systemctl(verb: "restart" | "stop"): void {
+    expect(Bun.spawnSync(["systemctl", "--user", verb, this.unit!]).exitCode).toBe(0)
+  }
+
+  /** The unit's broker process; 0 when none runs. */
+  mainPid(): number {
+    return Number(Bun.spawnSync(["systemctl", "--user", "show", "-p", "MainPID", "--value", this.unit!]).stdout.toString().trim())
+  }
+
+  /** Waits for the broker after [before] (its process) to answer: a new process, with its web port open. */
+  async restarted(before: number): Promise<void> {
+    await until("a new broker process", () => { const now = this.mainPid(); return (now !== 0 && now !== before) || undefined })
+    await this.answers()
+  }
+
+  /** POST /internal/<what> with the per-boot token, as the desktop app and `supermux connect --restart` send it. */
+  async internal(what: "restart" | "expect-restart"): Promise<number> {
+    const token = readFileSync(join(this.state, "stop-token"), "utf8").trim()
+    return (await fetch(`${this.base}/internal/${what}`, { method: "POST", headers: { "x-supermux-stop-token": token } })).status
   }
 
   async stop(signal: "SIGTERM" | "SIGKILL"): Promise<void> {
@@ -117,6 +158,18 @@ class Fixture {
       if (dir?.startsWith(root)) live.set(dir.slice(root.length).replace(/\/$/, ""), Number(pid))
     }
     return live
+  }
+
+  /**
+   * The session's keeper process, from its status.json, while it runs. The broker's own unit runs its processes with
+   * this user's primary group, and Linux lets only a process with the same uid and gid read their /proc/<pid>/environ,
+   * which [keepers] reads: a test run from a shell with another group (`sg`) cannot.
+   */
+  keeperPid(id: string): number | undefined {
+    const file = join(this.state, "core", "claude", "keepers", id, "status.json")
+    if (!existsSync(file)) return undefined
+    const pid = (JSON.parse(readFileSync(file, "utf8")) as { keeperPid?: number }).keeperPid
+    return pidAlive(pid) ? pid : undefined
   }
 
   /** The session's agent process runs (its keeper's status.json). */
@@ -150,6 +203,15 @@ class Fixture {
 
   async dispose(): Promise<void> {
     if (this.broker) await this.stop("SIGTERM")
+    if (this.unit) Bun.spawnSync(["systemctl", "--user", "stop", this.unit])
+    // A unit's keepers (in scopes of their own) and their agents, by the pids their status records, for a test that
+    // failed before its plain stop.
+    for (const id of [AGENT, WORKER_A, WORKER_B]) {
+      const file = join(this.state, "core", "claude", "keepers", id, "status.json")
+      if (!existsSync(file)) continue
+      const status = JSON.parse(readFileSync(file, "utf8")) as { keeperPid?: number; agentPid?: number }
+      for (const pid of [status.keeperPid, status.agentPid]) if (pidAlive(pid)) { try { process.kill(pid!, "SIGKILL") } catch { /* gone */ } }
+    }
     // Whatever a crash left running in this fixture.
     for (const pid of this.keepers().values()) { try { process.kill(pid, "SIGKILL") } catch { /* gone */ } }
     if (process.env.MUX_TEST_KEEP_FIXTURE === "1") console.log("fixture kept:", this.dir)
@@ -215,4 +277,45 @@ test("after a crash a worker whose agent still runs is re-attached, not started 
   expect(f.keepers().has(WORKER_B)).toBe(false)
   expect(await f.converse(WORKER_A, "after the crash")).toContain("after the crash")
   expect(f.keepers().get(WORKER_A)).toBe(keeperBefore!)
+}, 240_000)
+
+/** This user's systemd answers `systemd-run --user` (a desktop, a server with lingering; not a container or CI). */
+const userSystemd = process.platform === "linux"
+  && Bun.spawnSync(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0
+
+// #29: a restart must not take the agents down. Under the unit `supermux setup` installs (KillMode=control-group), a
+// restart killed every keeper in the unit's cgroup, and the broker's own graceful shutdown stopped them as well: the
+// turn in flight was lost on every restart. Keepers now run in scopes of their own, and a restart the broker expects
+// (it scheduled it, or the desktop app said so first) leaves them to the broker that comes back.
+test.skipIf(!userSystemd)("under systemd a restart keeps the agents running; a plain stop still stops them", async () => {
+  const f = new Fixture()
+  await f.startUnit()
+  expect(await f.converse(WORKER_A, "before the restart")).toContain("before the restart")
+  const keeper = f.keeperPid(WORKER_A)
+  expect(keeper).toBeDefined()
+  const agentKeeper = f.keeperPid(AGENT)
+
+  // Restart broker, `supermux connect --restart`, `supermux update`: the broker restarts itself under its unit.
+  let before = f.mainPid()
+  expect(await f.internal("restart")).toBe(202)
+  await f.restarted(before)
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+  expect(f.agentRuns(WORKER_A)).toBe(true)
+  expect((await f.sessions()).get(WORKER_A)?.status).toBe("active")
+  expect(await f.converse(WORKER_A, "after the restart")).toContain("after the restart")
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+
+  // The desktop app's Restart: it says so first, then restarts the unit itself.
+  before = f.mainPid()
+  expect(await f.internal("expect-restart")).toBe(204)
+  f.systemctl("restart")
+  await f.restarted(before)
+  expect(f.keeperPid(WORKER_A)).toBe(keeper!)
+  expect(await f.converse(WORKER_A, "after the app's restart")).toContain("after the app's restart")
+
+  // A plain stop (`systemctl --user stop`, an uninstall): the agents stop with the broker.
+  f.systemctl("stop")
+  await until("every keeper to exit", () => (f.keeperPid(WORKER_A) === undefined && f.keeperPid(AGENT) === undefined) || undefined, 20_000)
+  expect(agentKeeper === undefined || !f.agentRuns(AGENT)).toBe(true)
+  expect(f.agentRuns(WORKER_A)).toBe(false)
 }, 240_000)

@@ -451,7 +451,10 @@ class HostSupervisor(
                     retries.reset()
                     _status.value = HostingStatus.Starting
                     val me = me()
-                    withContext(io) { BrokerService.restart(osEnv, me) }
+                    withContext(io) {
+                        expectRestartLocked(p.port)
+                        BrokerService.restart(osEnv, me)
+                    }
                     afterLaunch(p, awaitHealthy(p.port, null, timing.healthTimeoutMs))
                     false
                 }
@@ -893,11 +896,20 @@ class HostSupervisor(
         }
     }
 
+    /**
+     * A restart, never a plain stop (quit, hosting off): the broker on [port] is told first, so it leaves its agents
+     * running for the broker that comes next (#29).
+     */
+    private fun expectRestartLocked(port: Int) {
+        if (BrokerService.expectRestart(osEnv, stateDir, port)) log("restart: the broker keeps its agents running for the next one")
+    }
+
     /** Restart in the current mode with a freshly built env (relay change, tray restart in child mode). */
     private suspend fun relaunchLocked(p: HostingPrefs) {
         stopWatch()
         retries.reset()
         _status.value = HostingStatus.Starting
+        withContext(io) { expectRestartLocked(p.port) }
         val stopped = mode == Mode.SERVICE && osEnv.os == DesktopOs.WINDOWS
         if (stopped && !stopWindowsServiceLocked(p.port)) return keepServiceAfterFailedStop(p)
         val bins = binaries()
