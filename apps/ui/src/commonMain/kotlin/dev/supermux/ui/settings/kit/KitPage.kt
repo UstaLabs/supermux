@@ -51,8 +51,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The rows of one page that search can land on. [target] is the anchor the page was opened for (folds holding it
@@ -134,12 +135,21 @@ fun KitPage(
     LaunchedEffect(anchor) {
         anchors.target = anchor
         if (anchor == null) return@LaunchedEffect
-        // A fold holding the row opens on `target`; rows that load late register when they arrive.
-        val row = withTimeoutOrNull(ANCHOR_WAIT_MS) {
-            snapshotFlow { anchors.requesters[anchor] }.filterNotNull().first()
-        }
+        // A fold holding the row opens on `target`; rows that load late register when they arrive. The wait is a
+        // delay, not withTimeoutOrNull: Compose's desktop dispatcher times delays on its frame clock but timeouts
+        // on the wall clock.
+        val row = merge(
+            snapshotFlow { anchors.requesters[anchor] }.filterNotNull(),
+            flow<BringIntoViewRequester?> {
+                delay(ANCHOR_WAIT_MS)
+                emit(null)
+            },
+        ).first()
         if (row != null) {
-            withFrameNanos { } // the row is laid out
+            // Two frames, so the row is laid out: on a page that has just opened, the first frame comes before the
+            // first layout.
+            withFrameNanos { }
+            withFrameNanos { }
             row.bringIntoView()
             anchors.flashing = anchor
             // The fade runs in the page's scope, not this effect's: the hub clears its anchor in onAnchorShown, which

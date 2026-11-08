@@ -86,9 +86,9 @@ internal fun Modifier.kitTouchTarget(): Modifier =
     if (LocalPointerAvailable.current) this else this.minimumInteractiveComponentSize()
 
 /**
- * The kit's keyboard-focus ring: a 1 dp accent outline while [interactionSource] is focused — the ghost button's and
- * the rail row's outline, on every control. A mouse click does not focus a control (Compose 1.12), so only Tab and
- * the arrow keys show it.
+ * The kit's focus ring: a 1 dp accent outline while [interactionSource] is focused — the ghost button's and the
+ * rail row's outline, on every control. Tab and the arrow keys move it; on the desktop a click focuses a control
+ * too (Compose's request-focus-on-click), so the ring also follows the pointer there, as those two always have.
  */
 @Composable
 fun Modifier.kitFocusRing(interactionSource: InteractionSource, shape: Shape): Modifier {

@@ -32,6 +32,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -160,10 +161,10 @@ fun KitTextField(
     val shape = RoundedCornerShape(7.dp)
     val size = if (m.phone) 15.sp else 13.sp
     val fieldFocus = remember { FocusRequester() }
-    val actionFocus = remember { FocusRequester() }
     var actionFocused by remember { mutableStateOf(false) }
-    // Where focus goes back to once Show/Hide has rebuilt the field (below).
-    var refocus by remember { mutableStateOf(Refocus.Nowhere) }
+    // Show/Hide rebuilds the field (below). If the field had focus, or the action had it (a click focuses it on the
+    // desktop), the new field gets it back.
+    var refocus by remember { mutableStateOf(false) }
     // The caret and the keyboard's composing region live out here, outside that rebuild, so Show/Hide leaves the
     // caret where it was. The same bookkeeping BasicTextField(String) keeps inside itself.
     var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
@@ -175,12 +176,11 @@ fun KitTextField(
     }
     var lastText by remember(value) { mutableStateOf(value) }
     LaunchedEffect(shown) {
-        when (refocus) {
-            Refocus.Field -> fieldFocus.requestFocus()
-            Refocus.Action -> actionFocus.requestFocus()
-            Refocus.Nowhere -> Unit
-        }
-        refocus = Refocus.Nowhere
+        if (!refocus) return@LaunchedEffect
+        refocus = false
+        // A frame later: the old field's removal clears focus as the rebuild is applied.
+        withFrameNanos { }
+        fieldFocus.requestFocus()
     }
     Column(modifier.fillMaxWidth()) {
         // A new field on every Show/Hide: Compose 1.12's text field fixes its Password semantics when it is created
@@ -249,14 +249,10 @@ fun KitTextField(
                                 TextActionBase(
                                     if (shown) "Hide" else "Show",
                                     onClick = {
-                                        refocus = when {
-                                            focused -> Refocus.Field
-                                            actionFocused -> Refocus.Action
-                                            else -> Refocus.Nowhere
-                                        }
+                                        refocus = focused || actionFocused
                                         shown = !shown
                                     },
-                                    modifier = Modifier.focusRequester(actionFocus).onFocusChanged { actionFocused = it.isFocused },
+                                    modifier = Modifier.onFocusChanged { actionFocused = it.isFocused },
                                     // In the field: a 48 dp target would make the field taller.
                                     touchTarget = false,
                                 )
@@ -269,8 +265,6 @@ fun KitTextField(
         if (error != null) Text(error, fontSize = 12.sp, color = c.danger, modifier = Modifier.padding(top = 4.dp))
     }
 }
-
-private enum class Refocus { Nowhere, Field, Action }
 
 /**
  * The keyboard for a field: Done when it submits, unless [given] names an action; a secret never autocorrects or
