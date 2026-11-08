@@ -67,7 +67,20 @@ test("cursor, grok, opencode", async () => {
     active: { anthropic: "oc1" },
     anthropic: { type: "api", key: "sk-a" },
   })
-  expect(() => opencodeAdapter.validate!({ agent: "opencode", method: "api_key", secret: "k" })).toThrow("provider")
+  // No provider = an OpenCode Console key (opencode.ai/auth), which serves both Zen and Go.
+  expect(() => opencodeAdapter.validate!({ agent: "opencode", method: "api_key", secret: "k" })).not.toThrow()
+  expect(() => opencodeAdapter.validate!({ agent: "opencode", method: "api_key", secret: "k", provider: "a b" })).toThrow("provider")
+  const zen = await run(opencodeAdapter, acct("opencode", "api_key", { id: "oc2" }), "oc_sk")
+  expect(JSON.parse(zen.env.OPENCODE_AUTH_CONTENT!)).toEqual({
+    version: 2,
+    accounts: {
+      "oc2:opencode": { id: "oc2:opencode", serviceID: "opencode", description: "supermux", credential: { type: "api", key: "oc_sk" } },
+      "oc2:opencode-go": { id: "oc2:opencode-go", serviceID: "opencode-go", description: "supermux", credential: { type: "api", key: "oc_sk" } },
+    },
+    active: { opencode: "oc2:opencode", "opencode-go": "oc2:opencode-go" },
+    opencode: { type: "api", key: "oc_sk" },
+    "opencode-go": { type: "api", key: "oc_sk" },
+  })
   await expect(run(opencodeAdapter, acct("opencode", "subscription"))).rejects.toMatchObject({ code: "unsupported_operation" })
 })
 

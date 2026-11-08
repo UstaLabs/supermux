@@ -1,4 +1,5 @@
 import { EventEmitter } from "events"
+import { recordOpenCodeFreeLimit } from "../../usage/opencode-free"
 import type { AgentCommandEntry } from "../../slash-commands/types"
 import type { AgentModelEntry } from "../../../../packages/supermux-core/src/events/normalized.js"
 import { readFile } from "node:fs/promises"
@@ -8,6 +9,8 @@ import { inboundAttachments, isImageAttachment } from "../attachment-meta"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { makeLogger } from "../../../shared/log"
 import { agentDisplayName } from "../../../shared/agents"
+import { NOT_SIGNED_IN_ERROR } from "../../../../packages/supermux-core/src/accounts/policy.js"
+import { AgentNotSignedInError } from "../detect"
 import { exitCodeText } from "../../../../packages/supermux-core/src/keeper/exit.js"
 import type { KeeperExitStatus } from "../../../../packages/supermux-core/src/keeper/client.js"
 import type { CodexUsage } from "../../usage/index"
@@ -345,8 +348,9 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
           }
           return
         }
-        this.noteTurnFailure(event.error)
-        this.surfaceFailure(event.error, { completeTurn: false })
+        const error = event.errorType === NOT_SIGNED_IN_ERROR ? new AgentNotSignedInError(this.kind, { cause: event.error }) : event.error
+        this.noteTurnFailure(error)
+        this.surfaceFailure(error, { completeTurn: false })
       },
       onCommands: (commands) => {
         this.availableCommands = commands
@@ -360,6 +364,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
       },
+      onOpenCodeFreeLimit: (resetsAt) => recordOpenCodeFreeLimit(resetsAt),
     })
   }
 

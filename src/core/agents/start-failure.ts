@@ -4,11 +4,13 @@
 // in the broker log.
 import { SIGN_IN_EXPIRED } from "../accounts/broker-accounts"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
-import { AgentNotInstalledError } from "./detect"
+import { NOT_SIGNED_IN_ERROR } from "../../../packages/supermux-core/src/accounts/policy.js"
+import { AgentNotInstalledError, AgentNotSignedInError } from "./detect"
 
 /** `generic`: the channel's own words for any other failure (default "Failed to start/resume session …"). */
-export function startFailureNotice(what: "start" | "resume", name: string, error: unknown, generic?: string): string {
+export function startFailureNotice(what: "start" | "resume", name: string, error: unknown, generic?: string, agent?: AgentKind): string {
   if (error instanceof AgentNotInstalledError) return error.message
+  if (agent && withCode(error, NOT_SIGNED_IN_ERROR)) return new AgentNotSignedInError(agent).message
   const refused = signInRefusal(error)
   if (refused) return `Couldn't ${what} "${name}": ${refused.message}`
   return generic ?? (what === "start" ? `Failed to start session "${name}".` : `Failed to resume session "${name}".`)
@@ -21,6 +23,7 @@ export function startFailureNotice(what: "start" | "resume", name: string, error
  */
 export function wakeFailureNotice(agent: AgentKind, error: unknown): string {
   if (error instanceof AgentNotInstalledError) return error.message
+  if (withCode(error, NOT_SIGNED_IN_ERROR)) return new AgentNotSignedInError(agent).message
   const raw = signInRefusal(error)?.message ?? (error instanceof Error ? error.message : error === undefined ? "" : String(error))
   let reason = raw.split("\n")[0]!.trim().replace(/\.+$/, "")
   if (reason.length > 300) reason = `${reason.slice(0, 300)}…`
@@ -29,10 +32,15 @@ export function wakeFailureNotice(agent: AgentKind, error: unknown): string {
 
 /** The refused-login error in `error` or its causes (the host wraps a failed cleanup around it). */
 function signInRefusal(error: unknown): Error | undefined {
+  return withCode(error, SIGN_IN_EXPIRED)
+}
+
+/** The error with `code` in `error` or its causes. */
+function withCode(error: unknown, code: string): Error | undefined {
   const seen = new Set<unknown>()
   for (let e = error; e instanceof Error && !seen.has(e); e = e.cause) {
     seen.add(e)
-    if ((e as { code?: unknown }).code === SIGN_IN_EXPIRED) return e
+    if ((e as { code?: unknown }).code === code) return e
   }
   return undefined
 }

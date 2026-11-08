@@ -1,6 +1,8 @@
 package dev.supermux.ui.usage
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
@@ -30,6 +32,11 @@ import dev.supermux.net.CodexWindow
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokProductUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.net.OpenCodeFreeTier
+import dev.supermux.net.OpenCodeGoMeter
+import dev.supermux.net.OpenCodeGoUsage
+import dev.supermux.net.OpenCodePlan
+import dev.supermux.net.OpenCodeUsage
 import dev.supermux.net.UsageResponse
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -223,6 +230,93 @@ class UsageScreenTest {
         }
         waitForIdle()
         onNodeWithText("GrokBuild").assertDoesNotExist()
+    }
+
+    @Test fun opencode_card_leads_with_the_go_windows_and_keeps_local_spend_secondary() = runComposeUiTest {
+        val now = 1_794_132_000_000L // 2026-11-08T10:00:00Z
+        val opencode = OpenCodeUsage(
+            sessions = 4, messages = 9, totalCostUsd = 86.22,
+            plan = OpenCodePlan(
+                status = "active", via = "console", email = "me@x.io",
+                go = OpenCodeGoUsage(
+                    rolling = OpenCodeGoMeter(3.0, false, "2026-11-08T12:00:00.000Z"),
+                    weekly = OpenCodeGoMeter(100.0, true, "2026-11-09T10:00:00.000Z"),
+                    monthly = OpenCodeGoMeter(41.5, false, "2026-12-01T00:00:00.000Z"),
+                ),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null, now = now)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("OpenCode Go · me@x.io").assertExists()
+        onNodeWithText("5 hours").assertExists()
+        onNodeWithText("Weekly").assertExists()
+        onNodeWithText("Monthly").assertExists()
+        onNodeWithText("3% used").assertExists()
+        onNodeWithText("42% used").assertExists()
+        onNodeWithText("Limit reached", substring = true).assertExists()
+        onNodeWithText("Local spend").assertExists()
+        onNodeWithText("$86.22").assertExists()
+        // Spend is no longer the card's headline badge.
+        onAllNodesWithText("$86.22").assertCountEquals(1)
+    }
+
+    @Test fun opencode_card_says_plainly_when_there_is_no_go_plan() = runComposeUiTest {
+        val opencode = OpenCodeUsage(sessions = 4, totalCostUsd = 1.5, plan = OpenCodePlan(status = "none", via = "api_key"))
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("No OpenCode Go plan.").assertExists()
+        onNodeWithText("5 hours").assertDoesNotExist()
+        onNodeWithText("Local spend").assertExists()
+    }
+
+    @Test fun opencode_card_offers_sign_in_when_signed_out_or_expired() = runComposeUiTest {
+        var signIns = 0
+        val opencode = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "expired", via = "console", email = "me@x.io"))
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null, onSignIn = { signIns++ })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("OpenCode sign-in expired.").assertExists()
+        onNodeWithTag("usage_sign_in_opencode").performClick()
+        assertEquals(1, signIns)
+    }
+
+    @Test fun free_reset_reads_in_the_viewers_local_time() {
+        val now = 1_794_132_000_000L // 2026-11-08T10:00:00Z
+        val istanbul = 3 * 3_600_000L
+        // 00:00 UTC = 03:00 in Istanbul, the next calendar day there.
+        assertEquals("resets tomorrow 03:00", freeResetLabel("2026-11-09T00:00:00.000Z", now, istanbul))
+        assertEquals("resets tomorrow 00:00", freeResetLabel("2026-11-09T00:00:00.000Z", now + 13 * 3_600_000L, 0L))
+        assertEquals("resets 19:00", freeResetLabel("2026-11-09T00:00:00.000Z", now, -5 * 3_600_000L))
+        assertEquals("", freeResetLabel("nope", now, 0L))
+    }
+
+    @Test fun opencode_card_shows_the_free_models_line_and_when_its_limit_was_reached() = runComposeUiTest {
+        val free = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "signed_out", free = OpenCodeFreeTier("2026-11-09T00:00:00.000Z", reached = false)))
+        val hit = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "none", free = OpenCodeFreeTier("2026-11-09T00:00:00.000Z", reached = true)))
+        var usage by androidx.compose.runtime.mutableStateOf(free)
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = usage, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Free models").assertExists()
+        onNodeWithText("Daily limit", substring = true).assertExists()
+        onNodeWithText("%", substring = true).assertDoesNotExist()
+        usage = hit
+        waitForIdle()
+        onNodeWithText("Limit reached", substring = true).assertExists()
     }
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {

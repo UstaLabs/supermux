@@ -12,7 +12,7 @@ import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import type { ContextDrop, LaunchContext } from "../src/context/types.js"
 import type { AgentDriver, AgentUpdate, AuthProfile, DriverContext } from "../src/types.js"
-import { TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS } from "./helpers.js"
+import { TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -20,7 +20,7 @@ afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { re
 function scratch(): string { const dir = mkdtempSync(join(tmpdir(), "context-drivers-")); dirs.push(dir); return dir }
 const keeper = () => ({ stateDirectory: scratch(), limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } })
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url))
-const FIXED = { setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024 }
+const FIXED = { setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024 }
 const ACP = { ...FIXED, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, inheritEnv: true }
 
 function opencodeShim(): string {

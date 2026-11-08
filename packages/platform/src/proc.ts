@@ -199,16 +199,26 @@ export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
   fileExists?: (path: string) => boolean
 }
 
+// What starts [command] with [args]. On Windows a bare name is first found on [env]'s PATH ([resolve]): the runtime's own
+// search knows no .cmd or .ps1 (an npm install of opencode is opencode.cmd) and looks in the current folder first. Then
+// it is wrapped by its kind ([windowsLaunch]). A name found nowhere, and any command elsewhere, as given.
+function launchPlan(command: string, args: readonly string[], platform: NodeJS.Platform, env: CommandEnvironment, fileExists?: (path: string) => boolean): WindowsLaunch {
+  if (platform !== "win32") return { command, args: [...args] }
+  const files = fileExists ? { fileExists } : {}
+  const named = isExplicitPath(command, platform) ? command : resolve([command], env, { platform, ...files }) ?? command
+  return windowsLaunch(named, args, { env, ...files })
+}
+
 /**
- * Starts the already-resolved [command] with node's spawn, never through a general shell. On Windows a .cmd/.bat shim
- * goes through cmd.exe with every argument escaped and a .ps1 through PowerShell's -File ([windowsLaunch]); anything
- * else starts as it is. Every start begins from [spawnDefaults] (the live env, no console window), which the caller's
- * own options override. The broker's launcher and core's keeper both start their programs here.
+ * Starts [command] with node's spawn, never through a general shell. On Windows a bare name is first found on the env's
+ * PATH, then a .cmd/.bat shim goes through cmd.exe with every argument escaped and a .ps1 through PowerShell's -File
+ * ([windowsLaunch]); anything else starts as it is. Every start begins from [spawnDefaults] (the live env, no console
+ * window), which the caller's own options override. The broker's launcher and core's keeper both start their programs
+ * here.
  */
 export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
   const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
-  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped: WindowsLaunch = platform === "win32" ? windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
+  const wrapped = launchPlan(command, args, platform, (spawnOptions.env ?? process.env) as CommandEnvironment, fileExists)
   return spawn(wrapped.command, wrapped.args, {
     ...spawnDefaults(),
     ...spawnOptions,
@@ -219,8 +229,7 @@ export function spawnCommand(command: string, args: readonly string[], options: 
 /** The synchronous twin of [spawnCommand], with the same Windows wrappers and defaults. */
 export function spawnCommandSync(command: string, args: readonly string[], options: SpawnCommandSyncOptions = {}): SpawnSyncReturns<Buffer> {
   const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
-  const env = (spawnOptions.env ?? process.env) as CommandEnvironment
-  const wrapped: WindowsLaunch = platform === "win32" ? windowsLaunch(command, args, { env, ...(fileExists ? { fileExists } : {}) }) : { command, args: [...args] }
+  const wrapped = launchPlan(command, args, platform, (spawnOptions.env ?? process.env) as CommandEnvironment, fileExists)
   return spawnSync(wrapped.command, wrapped.args, {
     ...spawnDefaults(),
     ...spawnOptions,

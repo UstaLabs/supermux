@@ -165,6 +165,15 @@ export class AgentNotInstalledError extends Error {
   }
 }
 
+/** The agent refused a turn because it has no sign-in at all (#110): told in supermux's words, not the CLI's "/login". */
+export class AgentNotSignedInError extends Error {
+  readonly code = "agent_not_signed_in"
+  constructor(readonly agent: AgentKind, options?: { cause?: unknown }) {
+    super(`${agentDisplayName(agent)} isn't signed in — sign in from Settings ▸ Providers.`, options)
+    this.name = "AgentNotSignedInError"
+  }
+}
+
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
   return ALL_KINDS.map((k) => detectAgent(k, probes, paths))
 }

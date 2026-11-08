@@ -10,7 +10,7 @@ import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent, PermissionsSpec } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const agentScript = join(dirname(fileURLToPath(import.meta.url)), "fixtures/opencode-server-agent.mjs")
@@ -32,7 +32,7 @@ async function setup(permissions: AcpPolicy, env: Record<string, string> = {}) {
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" ${JSON.stringify(agentScript)} "$@"\n`, { mode: 0o755 })
   const driver = opencode({
     id: "agent", command: shim, inheritEnv: true, mcpServers: [], env: { FAKE_TRACE: trace, ...env },
-    permissions, setupTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    permissions, setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 2000, openCodePollIntervalMs: 40,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
   })
@@ -173,6 +173,19 @@ test("a removed abort route turns Stop off at click time (with a reason, flags r
   await expect(session.stopSubagent("call_task")).rejects.toMatchObject({ code: "subagent_unavailable" })
   // One abort attempt only; the poll stopped too.
   expect((await replies()).filter(r => r.http?.endsWith("/abort"))).toHaveLength(1)
+  await session.interrupt({ pending: "discard" })
+  await receipt.completed
+})
+
+test("OpenCode waiting out its free limit (a retry with reason free_tier_limit) is said once, with when it resets", async () => {
+  const { session, events } = await setup(ALLOW)
+  const receipt = await session.send({ content: text("free"), whenBusy: "queue" })
+  await until(() => events.some(e => e.kind === "warning"))
+  await new Promise(r => setTimeout(r, 300))
+  const warnings = events.filter(e => e.kind === "warning")
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toMatchObject({ code: "opencode_free_limit", resetsAt: "2026-11-09T00:00:00.000Z", source: "opencode" })
+  expect((warnings[0] as { message: string }).message).toContain("free")
   await session.interrupt({ pending: "discard" })
   await receipt.completed
 })

@@ -15,7 +15,8 @@ import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
+import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
+import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -1069,25 +1070,28 @@ export class WebChannel implements Channel {
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
     this.classifyPeer(req, server)
     const url = new URL(req.url)
-    if (this.opts.proxyBaseDomain) {
-      const host = req.headers.get("host") ?? ""
-      const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
-      if (sub) {
-        return this.handleProxyRoute(req, sub, server)
+    const sub = this.opts.proxyBaseDomain
+      ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
+      : undefined
+    // Path-based proxy (active only when no base domain is configured).
+    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Before any route, so a new route can't miss it (cookies.ts explains the rules).
+    const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+      return new Response("bad origin", { status: 403 })
+    }
+    if (sub) {
+      return this.handleProxyRoute(req, sub, server)
+    }
+    if (pm) {
+      if (pm.rest === null) {
+        // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+        return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
       }
-    } else if (this.opts.proxyLookup) {
-      // Path-based proxy (active only when no base domain is configured).
-      const pm = matchProxyPath(url.pathname)
-      if (pm) {
-        if (pm.rest === null) {
-          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
-          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
-        }
-        return this.handleProxyRoute(req, pm.slug, server, {
-          prefix: `/p/${pm.slug}`,
-          upstreamPath: pm.rest + url.search,
-        })
-      }
+      return this.handleProxyRoute(req, pm.slug, server, {
+        prefix: `/p/${pm.slug}`,
+        upstreamPath: pm.rest + url.search,
+      })
     }
     if (url.pathname === "/ws") {
       const authStart = performance.now()
@@ -2479,7 +2483,8 @@ export class WebChannel implements Channel {
       // (subdomain mode), so a paired device already sends it here. A static
       // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
-      if (!token || !this.opts.proxyAuth?.(token)) {
+      const preview = previewCookieToken(req)
+      if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
           `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
@@ -2505,7 +2510,7 @@ export class WebChannel implements Channel {
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream, pathOpts)
+    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -4359,10 +4364,12 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const browserError = kind === "browser" ? browserStateError(body.state) : undefined
+      if (browserError) return this.json({ error: browserError }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4395,6 +4402,10 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.state !== undefined && this.opts.getWorkspaceView?.(viewId)?.kind === "browser") {
+        const browserError = browserStateError(body.state)
+        if (browserError) return this.json({ error: browserError }, 400)
+      }
       try {
         const view = this.opts.patchWorkspaceView(viewId, {
           title: body.title as string | undefined,
@@ -4644,6 +4655,13 @@ export class WebChannel implements Channel {
       const pairBase = this.getRelayUrl?.() ?? this.opts.publicUrl
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
+    }
+    if (method === "POST" && path === "/devices/preview-token") {
+      // Native apps only: the web app never shows private previews, and a token in page JavaScript is one to lose.
+      if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
+      const token = this.store.mintPreview(bearerToken(req))
+      if (!token) return this.json({ error: "unknown device" }, 401)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))
