@@ -4930,6 +4930,12 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
   }
 }
 
+// The graceful shutdown's listeners, before the channels start: Telegram's long poll below never returns until
+// shutdown, and listeners registered after it were never registered at all (#29). A broker with Telegram on then
+// died at every SIGTERM without its graceful shutdown, and stopped or restarted alike.
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT",  () => gracefulShutdown("SIGINT"))
+
 // Telegram long-polling (grammy bot.start()) does not resolve until shutdown, so it
 // MUST be the last awaited call at boot — anything awaited after it never runs.
 // WhatsApp's start() is quick (bind webhook + one status probe), so start it BEFORE
@@ -5011,5 +5017,3 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("db_close_failed", { err: err?.message ?? String(err) }) }
   process.exit(0)
 }
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
-process.on("SIGINT",  () => gracefulShutdown("SIGINT"))
