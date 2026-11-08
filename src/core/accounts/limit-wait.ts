@@ -47,8 +47,8 @@ export class LimitWaits {
 
   constructor(private readonly deps: LimitWaitDeps) {}
 
-  /** Reads the saved waits and arms them. Waits already due are spread out from now. */
-  load(): void {
+  /** Reads the saved waits and arms them. Waits already due are spread out from now. Returns how many of each. */
+  load(): { armed: number; due: number } {
     const saved = readJsonOr<{ version?: unknown; waits?: unknown }>(this.deps.file, {})
     const list = saved?.version === 1 && Array.isArray(saved.waits) ? saved.waits.filter(isWait) : []
     const now = this.deps.now()
@@ -60,6 +60,7 @@ export class LimitWaits {
     due.sort((a, b) => Date.parse(a.resumeAt) - Date.parse(b.resumeAt))
     for (const wait of due) this.put({ ...wait, resumeAt: new Date(this.spaced(wait.account, now, wait.sessionId)).toISOString() })
     if (due.length) this.save()
+    return { armed: list.length - due.length, due: due.length }
   }
 
   /** Makes (or replaces) the session's wait. Undefined when auto-resume is off. */
