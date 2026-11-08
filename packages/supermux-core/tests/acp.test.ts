@@ -136,6 +136,16 @@ test('failed setup and cancelled setup both reap their child',async()=>{
  setTimeout(()=>controller.abort(),1500);await expect(pending).rejects.toThrow();
  const lastPid=Number(await readFile(pidFile,'utf8'));expect(()=>process.kill(lastPid,0)).toThrow();await rm(dir,{recursive:true});
 })
+test('an abort that lands while the agent is still starting ends setup at once, not at the setup timeout',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid');
+ const controller=new AbortController();
+ // A budget no test outlives: only the abort can end this setup.
+ const pending=driver({FIXTURE_MODE:'hang',PID_FILE:pidFile},{setupTimeoutMs:600_000}).open(context({signal:controller.signal}));
+ // open() is now inside its first await (starting the agent): the abort lands before setup listens for one.
+ controller.abort();
+ await expect(pending).rejects.toThrow();
+ await rm(dir,{recursive:true});
+})
 test('prompt errors propagate and allowed permission response reaches agent',async()=>{
  const r=await driver().open(context({requestPermission:async req=>{expect(req.coreSessionId).toBe('core-1');return {outcome:{outcome:'selected',optionId:'allow'}}}}));
  try {

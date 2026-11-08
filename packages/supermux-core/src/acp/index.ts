@@ -804,7 +804,8 @@ export function acp(options: AcpOptions): AgentDriver {
       scheduleCancelRetry(epoch, Date.now() + cancelRetryTimeout)
     }
     let abortSetup!: () => void
-    const aborted = new Promise<never>((_, reject) => { abortSetup = () => reject(abortError()); context.signal.addEventListener('abort', abortSetup, { once: true }) })
+    // An abort that came while the agent was starting has already fired: no listener would ever hear it.
+    const aborted = new Promise<never>((_, reject) => { abortSetup = () => reject(abortError()); context.signal.addEventListener('abort', abortSetup, { once: true }); if (context.signal.aborted) abortSetup() })
     let timer: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CoreError('setup_timeout', 'ACP setup timed out')), setupTimeout) })
     const setup = <T>(promise: Promise<T>) => Promise.race([ioWait(promise), aborted, timeout])
