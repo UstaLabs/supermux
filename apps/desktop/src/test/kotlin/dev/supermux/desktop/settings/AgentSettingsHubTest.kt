@@ -201,10 +201,11 @@ class AgentSettingsHubTest {
         ui.openSettings()
         assertFalse(ui.usageOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Providers, ui.settingsSection)
+        // #97: plain Settings has no section (General on a wide window).
+        assertEquals(null, ui.settingsSection)
     }
 
-    @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
+    @Test fun rail_switches_to_coding_without_nested_back() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = HostStore(
             baseUrl = "ws://test:9898",
@@ -237,9 +238,9 @@ class AgentSettingsHubTest {
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_section_editorlsp").performClick()
+        onNodeWithTag("settings_section_coding").performClick()
         waitForIdle()
-        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("lsp_settings_screen").assertIsDisplayed()

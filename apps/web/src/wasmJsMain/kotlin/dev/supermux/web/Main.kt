@@ -338,7 +338,7 @@ fun main() {
                             appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
                         },
                         settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                        settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                        settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
                     )
                     // An OVERLAY at the top, not a row above the shell: the strip must not reflow
                     // the app (see [WebPushBanner]). It draws nothing at all unless this browser

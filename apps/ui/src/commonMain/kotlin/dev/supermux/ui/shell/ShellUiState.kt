@@ -215,21 +215,23 @@ class ShellUiState {
     }
     /** The Usage card is showing (an anchored popover on a wide host). */
     val usageOpen: Boolean get() = currentRoute is Route.Usage
+    /** Settings is on Coding — where File ▸ "Coding…" (once "Editor / LSP…") lands (#97). */
     val lspSettingsOpen: Boolean
-        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.EditorLsp
+        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.Coding
 
     /**
-     * Settings rail section. When Settings is on the stack, reads/writes that route's section;
-     * when closed, remembers the last section for the next open (and for tests).
+     * The page Settings shows (null = just Settings). When Settings is on the stack, reads/writes that route's
+     * section — writing it is a rail click: a new page, no sub-page or anchor; when closed, remembers the last
+     * section for the next open (and for tests).
      */
-    var settingsSection: SettingsSection
+    var settingsSection: SettingsSection?
         get() = (currentRoute as? Route.Settings)?.section ?: lastSettingsSection
         set(value) {
             lastSettingsSection = value
             val i = backStack.indexOfLast { it is Route.Settings }
             if (i >= 0) backStack[i] = Route.Settings(value)
         }
-    private var lastSettingsSection by mutableStateOf(SettingsSection.Providers)
+    private var lastSettingsSection by mutableStateOf<SettingsSection?>(null)
 
     /**
      * Push [route]. [Route.Home] clears everything above it; any other route REPLACES whatever is
@@ -296,9 +298,15 @@ class ShellUiState {
         if (usageOpen) goBack()
     }
 
-    fun openSettings(section: SettingsSection = SettingsSection.Providers) =
-        navigate(Route.Settings(section))
-    fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
+    /**
+     * Open Settings: no [section] is "just Settings" (the phone's index, General on a wide window); [sub] a
+     * second-level page of the section, [anchor] a row on it to land on (#97).
+     */
+    fun openSettings(section: SettingsSection? = null, sub: String? = null, anchor: String? = null) =
+        navigate(Route.Settings(section, sub, anchor))
+
+    /** File ▸ "Coding…" and every "language servers" link: Coding, at its code-intelligence row. */
+    fun openLspSettings() = openSettings(SettingsSection.Coding, anchor = "code-intelligence")
     fun openAppUpdate() = navigate(Route.AppUpdate)
 
     /**
@@ -397,7 +405,9 @@ class ShellUiState {
         val SIDEBAR_MIN = 220.dp
         val SIDEBAR_MAX = 560.dp
 
-        private val routeJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
+        // coerceInputValues: a section name an older build saved ("Curator") decodes as null — plain Settings —
+        // instead of failing the whole saved back stack (#97).
+        private val routeJson = Json { ignoreUnknownKeys = true; explicitNulls = false; coerceInputValues = true }
 
         /**
          * Android's holder: the shell survives a rotation AND process death.

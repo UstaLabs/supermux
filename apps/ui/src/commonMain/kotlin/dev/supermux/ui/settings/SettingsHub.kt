@@ -35,18 +35,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -108,8 +102,7 @@ import dev.supermux.ui.widgets.rememberIosBackSwipe
  * `LocalPlatform.current.caps`, so a machine that cannot do the thing never shows the row.
  */
 enum class SettingsExtra(val label: String, val desc: String) {
-    /** Run and supervise the broker on this computer. Gated on `Caps.localBroker`. */
-    Hosting("Hosting", "Run agents on this computer and keep them running"),
+    // Hosting is the Machine page's "This computer" screen since #97 (`MachineSub.COMPUTER`).
 
     /** Theme / Material You / text scale. Gated on `Caps.appearanceControls`. */
     Appearance("Appearance", "Theme, Material You, and text size"),
@@ -131,16 +124,23 @@ enum class SettingsExtra(val label: String, val desc: String) {
  * @property topBarShown true when the hub already painted a `TopAppBar` for this detail — a slot
  *   that could carry its own `Scaffold`/`TopAppBar` (every settings screen can, because Android's
  *   standalone routes still need one) must only draw it when this is false.
- * @property onOpenSection move the hub to another section, as a rail click or an index tap would
- *   (Accounts' "Sign in again" opens Providers). Honors the dirty guard.
+ * @property onOpen move the hub to another place: a page (as a rail click or an index tap would), a sub-page
+ *   of a page (a provider, the glossary, a machine screen) or a row on one. A sub-page of the page on display
+ *   swaps in place and keeps what the page retains. Honors the dirty guard.
+ * @property onAnchorShown the page has scrolled to and flashed the place's anchor: the hub forgets it, so a
+ *   recreation or a Compact↔wide swap does not land on it again.
  */
 @Immutable
 class SettingsSlotScope internal constructor(
     val onClose: () -> Unit,
     val onDirtyChange: (Boolean) -> Unit,
     val topBarShown: Boolean,
-    val onOpenSection: (SettingsSection) -> Unit = {},
-)
+    val onOpen: (SettingsPlace) -> Unit = {},
+    val onAnchorShown: () -> Unit = {},
+) {
+    /** Move the hub to [section]'s page (Accounts' "Sign in again" opens Providers). */
+    fun onOpenSection(section: SettingsSection) = onOpen(SettingsPlace(section))
+}
 
 /** Which detail the hub is showing. */
 private sealed interface Target {
@@ -160,20 +160,31 @@ private fun targetOf(key: String): Target? = when {
     else -> null
 }
 
-/** [section] as a destination: anything but `Route.Settings`'s default, which means "just Settings". */
-private fun deliberate(section: SettingsSection): Target? =
-    section.takeIf { it != SettingsSection.Providers }?.let(Target::Sec)
+/** [section] as a destination: any section; null is `Route.Settings`'s "just Settings" (#97). */
+private fun deliberate(section: SettingsSection?): Target? = section?.let(Target::Sec)
+
+/** The page a wide hub shows for "just Settings". */
+private val WIDE_DEFAULT = SettingsSection.General
+
+/** A route's place as one key: a new section, sub-page or anchor is a new landing; the same one coming back is not. */
+private fun routeKey(section: SettingsSection?, sub: String?, anchor: String?): String =
+    "${section?.name ?: ""}|${sub ?: ""}|${anchor ?: ""}"
 
 /**
  * Where the hub is, saved with its nav entry (#89): the phone's pushed page, the wide hub's extra
- * page, the section it last landed on, the layout it was last drawn in, and the opening of the page
- * on display that the sections keep their forms under ([LocalRetainedPage]).
+ * page, the sub-page and pending anchor on it (#97), the route it last landed on, the layout it was
+ * last drawn in, and the opening of the page on display that the sections keep their forms under
+ * ([LocalRetainedPage]).
  */
-private class HubPlace(opened: Target?, landedFor: SettingsSection, drawnCompact: Boolean) {
+private class HubPlace(opened: Target?, landedFor: String, drawnCompact: Boolean) {
     /** The page the user opened: the phone's pushed page (null = the index), or the wide rail's last pick. */
     var opened by mutableStateOf(opened)
     var extra by mutableStateOf<SettingsExtra?>(null)
-    /** A recreation or a width change brings this section back; only another one is a new landing. */
+    /** The second-level page on the page on display (null = the page itself). */
+    var sub by mutableStateOf<String?>(null)
+    /** A row to scroll to and flash, until the page reports it shown. */
+    var anchor by mutableStateOf<String?>(null)
+    /** A recreation or a width change brings this route back ([routeKey]); only another one is a new landing. */
     var landedFor by mutableStateOf(landedFor)
     /** Differs from the window's width class while the Compact↔wide swap is being applied. */
     var drawnCompact by mutableStateOf(drawnCompact)
@@ -185,13 +196,21 @@ private class HubPlace(opened: Target?, landedFor: SettingsSection, drawnCompact
     }
 
     companion object {
+        // Nulls are saved as "". A section or extra name an older build saved restores as nothing (`targetOf`).
         val Saver: Saver<HubPlace, Any> = listSaver(
-            save = { listOf(it.opened?.key() ?: "", it.extra?.name ?: "", it.landedFor.name, it.drawnCompact, it.opening) },
+            save = {
+                listOf(
+                    it.opened?.key() ?: "", it.extra?.name ?: "", it.landedFor, it.drawnCompact, it.opening,
+                    it.sub ?: "", it.anchor ?: "",
+                )
+            },
             restore = { parts ->
-                val landed = SettingsSection.entries.firstOrNull { it.name == parts[2] } ?: SettingsSection.Providers
-                HubPlace(targetOf(parts[0] as String), landed, parts[3] as Boolean).apply {
+                HubPlace(targetOf(parts[0] as String), parts[2] as String, parts[3] as Boolean).apply {
                     extra = SettingsExtra.entries.firstOrNull { it.name == parts[1] }
                     opening = parts[4] as String
+                    // A save from before #97 has neither: the page itself.
+                    sub = (parts.getOrNull(5) as? String)?.takeIf { it.isNotEmpty() }
+                    anchor = (parts.getOrNull(6) as? String)?.takeIf { it.isNotEmpty() }
                 }
             },
         )
@@ -203,8 +222,8 @@ private class HubPlace(opened: Target?, landedFor: SettingsSection, drawnCompact
  *
  * `LocalWindowWidthClass == Compact` renders Android's index + push; anything wider renders
  * desktop's rail + detail. [section] is the rail selection (desktop reads and writes it through
- * `Route.Settings.section`); under Compact it is only the section a row-tap reports back, because
- * a compact hub always opens on the index.
+ * `Route.Settings.section`); null is "just Settings" — the index on a phone, General on a wide
+ * window. Any section, [sub] or [anchor] is a deliberate destination and lands there (#97).
  *
  * @param onBack close the hub entirely (the host pops its route).
  * @param onRegisterCloseHandler the host's Escape / system-back path — the hub keeps a closure here
@@ -212,27 +231,36 @@ private class HubPlace(opened: Target?, landedFor: SettingsSection, drawnCompact
  * @param hostKey the active host id. The compact push stack is scoped to it: switching hosts
  *   returns to the index rather than leaving a stale detail of the previous host on screen.
  * @param extraContent renders a [SettingsExtra] page. Only reached for extras the caps allow.
- * @param content renders one section — each host's `*SettingsSections.kt` wiring.
+ * @param sub a second-level page of [section] to land on (a provider, the glossary, a machine screen).
+ * @param anchor a row of the landed page to scroll to and flash once.
+ * @param content renders one place — each host's `*SettingsSections.kt` wiring.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsHub(
-    section: SettingsSection,
+    section: SettingsSection?,
     onSectionChange: (SettingsSection) -> Unit,
     onBack: () -> Unit,
+    sub: String? = null,
+    anchor: String? = null,
     onRegisterCloseHandler: ((() -> Unit) -> Unit)? = null,
     hostKey: String? = null,
     extraContent: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
-    content: @Composable (SettingsSection, SettingsSlotScope) -> Unit,
+    content: @Composable (SettingsPlace, SettingsSlotScope) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val caps = LocalPlatform.current.caps
     val hasMediaCache = LocalPlatform.current.mediaCache != null
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    // A route's sub-page or anchor only means something with a section.
+    val routeSub = sub.takeIf { section != null }
+    val routeAnchor = anchor.takeIf { section != null }
+    val routeKey = routeKey(section, routeSub, routeAnchor)
+    /** Privacy & labs is just "Privacy" where there are no labs. */
+    val labs = caps.assistantOverlay
     val extras = remember(caps, hasMediaCache) {
         SettingsExtra.entries.filter {
             when (it) {
-                SettingsExtra.Hosting -> caps.localBroker
                 SettingsExtra.Appearance -> caps.appearanceControls
                 SettingsExtra.AppUpdate -> caps.appUpdate
                 SettingsExtra.Storage -> hasMediaCache
@@ -245,9 +273,9 @@ fun SettingsHub(
     /** When non-null, discard-confirm runs this instead of closing the hub. */
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
     /**
-     * The compact hub's landing target: [SettingsSection.Providers] is `Route.Settings`'s default and
-     * means "just Settings", so it lands on the index; anything else is a DELIBERATE destination
-     * (`openLspSettings`, a `settings/lsp` deep link) and lands there.
+     * The compact hub's landing target: no section is `Route.Settings`'s default and means "just
+     * Settings", so it lands on the index; any section is a DELIBERATE destination
+     * (`openLspSettings`, a `settings/coding` deep link) and lands there.
      *
      * Before this, `opened` always started at null, so a phone deep link showed the index while
      * `ShellUiState.lspSettingsOpen` reported the section open — the state lied. It is safe to seed
@@ -263,10 +291,16 @@ fun SettingsHub(
     // instead of the page the phone had open. A new opening of Settings is a new entry, so it
     // still starts at the landing.
     val place = rememberSaveable(hostKey, saver = HubPlace.Saver) {
-        HubPlace(opened = landing(), landedFor = section, drawnCompact = compact)
+        HubPlace(opened = landing(), landedFor = routeKey, drawnCompact = compact).apply {
+            // The route's sub-page and anchor land with its page, on either layout.
+            this.sub = routeSub
+            this.anchor = routeAnchor
+        }
     }
     var opened by place::opened
     var extraSelected by place::extra
+    /** The section the wide hub shows when no rail pick or extra overrides it. */
+    val wideSection = section ?: WIDE_DEFAULT
 
     // The swap: until the effect below applies it, each layout already draws the page the other
     // one had on display, so the page (and the forms kept for it) stays the same across it.
@@ -280,7 +314,7 @@ fun SettingsHub(
     val phonePage: Target? = if (swapping) narrowed() else opened
     val widePage: Target = opened?.takeIf { swapping }
         ?: extraSelected?.let(Target::Ext)
-        ?: Target.Sec(section)
+        ?: Target.Sec(wideSection)
     // What a section keeps on its page (rememberRetainedOnPage) belongs to this opening of it.
     val pageKey = (if (compact) phonePage else widePage)?.let { "${place.opening}:${it.key()}" }
 
@@ -296,11 +330,24 @@ fun SettingsHub(
 
     fun tryClose() = guard { onBack() }
 
-    /** Back from wherever we are: index → close the hub, detail → index (Compact only). */
+    /** Forgets the sub-page and the anchor: the page itself is what shows next. */
+    fun toPage() {
+        place.sub = null
+        place.anchor = null
+    }
+
+    /**
+     * Back from wherever we are: a sub-page → its page; a page → the index (Compact) or close the hub;
+     * the index → close the hub.
+     */
     fun leave() {
-        if (compact && opened != null) {
+        if (place.sub != null) {
+            // The page's forms belong to the page, so going back to it is not a new opening.
+            guard { toPage() }
+        } else if (compact && opened != null) {
             guard {
                 opened = null
+                toPage()
                 place.reopen()
             }
         } else {
@@ -308,7 +355,11 @@ fun SettingsHub(
         }
     }
 
-    fun open(target: Target) {
+    /**
+     * Shows [target] with [sub] and [anchor] on it. A sub-page or anchor on the page already on display swaps in
+     * place: what that page retains belongs to the page, not to its sub-page (#97).
+     */
+    fun open(target: Target, sub: String? = null, anchor: String? = null) {
         if (compact) {
             // No `onSectionChange` here, and that omission is the whole point.
             //
@@ -323,21 +374,31 @@ fun SettingsHub(
             // The `key(activeHostId)` in `SupermuxApp` is the same rule already learned once, one
             // level down: `route.section` must not be allowed to remount this hub.
             guard {
+                val samePage = opened == target
                 opened = target
-                place.reopen()
+                place.sub = sub
+                place.anchor = anchor
+                if (!samePage) place.reopen()
             }
             return
         }
         // The wide rail's pick is also what a narrowing window opens on the phone.
         when (target) {
             is Target.Sec -> {
-                if (extraSelected == null && target.section == section) return
+                val samePage = extraSelected == null && target.section == wideSection
+                if (samePage && sub == place.sub && anchor == null) return
                 guard {
                     extraSelected = null
                     opened = target
-                    place.landedFor = target.section
-                    place.reopen()
-                    onSectionChange(target.section)
+                    place.sub = sub
+                    place.anchor = anchor
+                    if (!samePage) place.reopen()
+                    if (target.section != section) {
+                        // The shell writes `Route.Settings(section)` — no sub-page, no anchor — and that is
+                        // not a new landing: the hub already shows it.
+                        place.landedFor = routeKey(target.section, null, null)
+                        onSectionChange(target.section)
+                    }
                 }
             }
             is Target.Ext -> {
@@ -345,6 +406,7 @@ fun SettingsHub(
                 guard {
                     extraSelected = target.extra
                     opened = target
+                    toPage()
                     place.reopen()
                 }
             }
@@ -359,19 +421,21 @@ fun SettingsHub(
         if (next != null) next() else onBack()
     }
 
-    LaunchedEffect(compact, section) {
+    LaunchedEffect(compact, routeKey) {
         if (swapping) {
             // The Compact↔wide swap: the layout now drawn takes over the page the other one had
-            // on display (#89). The rail selection is the shell's, so a widening window reports
-            // the phone's section to it, as a rail click would.
+            // on display (#89), with its sub-page and pending anchor (#97). The rail selection is
+            // the shell's, so a widening window reports the phone's section to it, as a rail
+            // click would.
             if (compact) {
                 opened = narrowed()
+                if (opened == null) toPage()
             } else {
                 when (val t = opened) {
                     is Target.Sec -> {
                         extraSelected = null
                         if (t.section != section) {
-                            place.landedFor = t.section
+                            place.landedFor = routeKey(t.section, null, null)
                             onSectionChange(t.section)
                         }
                     }
@@ -384,18 +448,26 @@ fun SettingsHub(
         }
         // A deep link that arrives while this hub is already composed (the stable content key
         // keeps the entry alive across a `Route.Settings` rewrite) still has to land on its
-        // section. Only a NEW section lands: a recreation brings the same one back, and landing
-        // on it again would take the user off the page they moved to since.
-        if (section == place.landedFor) return@LaunchedEffect
-        place.landedFor = section
+        // place. Only a NEW place lands — a new section, sub-page or anchor: a recreation
+        // brings the same one back, and landing on it again would take the user off the page
+        // they moved to since.
+        if (routeKey == place.landedFor) return@LaunchedEffect
+        val before = place.landedFor.substringBefore('|')
+        place.landedFor = routeKey
         if (compact) {
             landing()?.let {
+                val samePage = opened == it
                 opened = it
-                place.reopen()
+                place.sub = routeSub
+                place.anchor = routeAnchor
+                if (!samePage) place.reopen()
             }
         } else if (extraSelected == null) {
-            // The wide hub shows the new section: a page of its own, as a rail click opens one.
-            place.reopen()
+            // The wide hub shows the new place: a new section is a page of its own, as a rail
+            // click opens one; a sub-page or anchor on the page on display keeps the page's.
+            place.sub = routeSub
+            place.anchor = routeAnchor
+            if (before != (section?.name ?: "")) place.reopen()
         }
     }
 
@@ -410,15 +482,20 @@ fun SettingsHub(
     // `rememberUpdatedState` so the remembered scope always runs the CURRENT `leave()`.
     val leaveNow = rememberUpdatedState<() -> Unit> { leave() }
     val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
-    val openNow = rememberUpdatedState<(SettingsSection) -> Unit> { open(Target.Sec(it)) }
+    val openNow = rememberUpdatedState<(SettingsPlace) -> Unit> { open(Target.Sec(it.section), it.sub, it.anchor) }
+    val anchorShownNow = rememberUpdatedState<() -> Unit> { place.anchor = null }
     val scope = remember(compact) {
         SettingsSlotScope(
             onClose = { leaveNow.value() },
             onDirtyChange = { dirtyNow.value(it) },
             topBarShown = compact,
-            onOpenSection = { openNow.value(it) },
+            onOpen = { openNow.value(it) },
+            onAnchorShown = { anchorShownNow.value() },
         )
     }
+
+    /** What a section's slot is handed: its page, with the sub-page and anchor on it. */
+    fun placeOf(target: Target.Sec) = SettingsPlace(target.section, place.sub, place.anchor)
 
     if (compact) {
         val target = phonePage
@@ -437,6 +514,7 @@ fun SettingsHub(
             under = {
                 SettingsIndex(
                     extras = extras,
+                    labs = labs,
                     onBack = { leave() },
                     onOpen = { open(it) },
                 )
@@ -445,12 +523,16 @@ fun SettingsHub(
             if (target != null) {
                 CompositionLocalProvider(LocalIosBackSwipe provides detailSwipe, LocalRetainedPage provides pageKey) {
                     CompactDetail(
-                        title = target.label(),
+                        title = when (target) {
+                            // Task 10 names the Machine page after the active machine.
+                            is Target.Sec -> settingsTitle(placeOf(target), machineName = null, labs = labs)
+                            is Target.Ext -> target.extra.label
+                        },
                         onBack = { leave() },
                     ) {
                         Box(Modifier.fillMaxSize().testTag("settings_hub_detail")) {
                             when (target) {
-                                is Target.Sec -> content(target.section, scope)
+                                is Target.Sec -> content(placeOf(target), scope)
                                 is Target.Ext -> extraContent(target.extra, scope)
                             }
                         }
@@ -470,7 +552,8 @@ fun SettingsHub(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Space.md),
             ) {
-                IconButton(onClick = { tryClose() }, modifier = Modifier.testTag("settings_hub_back")) {
+                // Back pops a sub-page first, then closes (Escape and system back do the same).
+                IconButton(onClick = { leave() }, modifier = Modifier.testTag("settings_hub_back")) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
@@ -497,9 +580,9 @@ fun SettingsHub(
                         .padding(vertical = Space.sm)
                         .testTag("settings_hub_rail"),
                 ) {
-                    SettingsSection.entries.forEach { s ->
+                    railSections.forEach { s ->
                         RailRow(
-                            label = s.label,
+                            label = settingsTitle(SettingsPlace(s), labs = labs),
                             selected = widePage == Target.Sec(s),
                             onClick = { open(Target.Sec(s)) },
                             testTag = "settings_section_${s.name.lowercase()}",
@@ -520,13 +603,17 @@ fun SettingsHub(
                     CompositionLocalProvider(LocalRetainedPage provides pageKey) {
                         when (val p = widePage) {
                             is Target.Ext -> extraContent(p.extra, scope)
-                            is Target.Sec -> content(p.section, scope)
+                            is Target.Sec -> content(placeOf(p), scope)
                         }
                     }
                 }
             }
         }
     }
+
+    // A sub-page goes back to its page, instantly: no slide, and not the route's swipe (which would drag the whole
+    // Settings page off). Registered last, so it runs before the handlers above.
+    SwipeBackHandler(enabled = place.sub != null, swipe = null) { leave() }
 
     if (showDiscardDialog) {
         AlertDialog(
@@ -563,6 +650,7 @@ fun SettingsHub(
 @Composable
 private fun SettingsIndex(
     extras: List<SettingsExtra>,
+    labs: Boolean,
     onBack: () -> Unit,
     onOpen: (Target) -> Unit,
 ) {
@@ -592,11 +680,11 @@ private fun SettingsIndex(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            SettingsSection.entries.forEachIndexed { i, s ->
+            railSections.forEachIndexed { i, s ->
                 if (i > 0) HorizontalDivider(color = cs.outlineVariant)
                 IndexRow(
                     icon = s.icon(),
-                    label = s.label,
+                    label = settingsTitle(SettingsPlace(s), labs = labs),
                     desc = s.desc(),
                     testTag = "settings_row_${s.name.lowercase()}",
                     onClick = { onOpen(Target.Sec(s)) },
@@ -762,41 +850,32 @@ private fun RailRow(
     )
 }
 
-private fun Target.label(): String = when (this) {
-    is Target.Sec -> section.label
-    is Target.Ext -> extra.label
-}
+/** The rail's and the index's rows: every page but [SettingsSection.Machine], which a machine card opens. */
+private val railSections = SettingsSection.entries.filter { it != SettingsSection.Machine }
 
-/** One-line "what is behind this row", from Android's index. */
+/** One-line "what is behind this row" on the phone's index (#97 spec §2.1). */
 internal fun SettingsSection.desc(): String = when (this) {
-    SettingsSection.Providers -> "CLI authorization and API-key fallback"
-    SettingsSection.Accounts -> "Extra logins per agent and auto-switch"
-    SettingsSection.Devices -> "Paired phones, tablets and desktops"
-    SettingsSection.System -> "Broker update, restart and status"
-    SettingsSection.GitHosting -> "GitHub & GitLab connections"
-    SettingsSection.Proxies -> "Public URLs for session ports"
-    SettingsSection.Worktrees -> "Disk usage and cleanup of session worktrees"
-    SettingsSection.Curator -> "Nightly knowledge curation schedule"
-    SettingsSection.Voice -> "Speech engine, cleanup model & glossary"
-    SettingsSection.EditorLsp -> "Font, wrap, and language servers"
+    SettingsSection.General -> "Theme, text size, live replies, updates"
+    SettingsSection.Providers -> "Sign in, extra logins, switch at a limit"
+    SettingsSection.Voice -> "Dictation, languages, read aloud"
+    SettingsSection.Coding -> "GitHub & GitLab, editor, code intelligence"
+    SettingsSection.Memory -> "Nightly tidy-up of what agents learn"
+    SettingsSection.PrivacyLabs -> "Usage statistics, experiments"
+    SettingsSection.Machine -> "Status, devices, shared links and worktrees"
 }
 
-/** Material icons stand in for Android's `R.drawable` index icons (no resources in `:ui`). */
+/** Material icons stand in until the kit's glyphs take over (Task 10). */
 private fun SettingsSection.icon(): ImageVector = when (this) {
+    SettingsSection.General -> Icons.Filled.Palette
     SettingsSection.Providers -> Icons.Filled.SmartToy
-    SettingsSection.Accounts -> Icons.Filled.ManageAccounts
-    SettingsSection.Devices -> Icons.Filled.Devices
-    SettingsSection.System -> Icons.Filled.Dns
-    SettingsSection.GitHosting -> Icons.Filled.Hub
-    SettingsSection.Proxies -> Icons.Filled.Public
-    SettingsSection.Worktrees -> Icons.Filled.AccountTree
-    SettingsSection.Curator -> Icons.Filled.AutoAwesome
     SettingsSection.Voice -> Icons.Filled.Mic
-    SettingsSection.EditorLsp -> Icons.Filled.Code
+    SettingsSection.Coding -> Icons.Filled.Code
+    SettingsSection.Memory -> Icons.Filled.AutoAwesome
+    SettingsSection.PrivacyLabs -> Icons.Filled.Lock
+    SettingsSection.Machine -> Icons.Filled.Computer
 }
 
 private fun SettingsExtra.icon(): ImageVector = when (this) {
-    SettingsExtra.Hosting -> Icons.Filled.Computer
     SettingsExtra.Appearance -> Icons.Filled.Palette
     SettingsExtra.AppUpdate -> Icons.Filled.SystemUpdate
     SettingsExtra.Storage -> Icons.Filled.Storage

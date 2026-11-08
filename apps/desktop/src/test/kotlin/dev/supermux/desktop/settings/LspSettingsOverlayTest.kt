@@ -16,6 +16,8 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
+import dev.supermux.ui.nav.Route
+import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -32,6 +34,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -147,5 +150,8 @@ class LspSettingsOverlayTest {
         ui.openLspSettings()
         assertFalse(ui.usageOpen)
         assertTrue(ui.lspSettingsOpen)
+        // #97: File ▸ "Coding…" opens Coding at its code-intelligence row.
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
+        assertEquals(Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"), ui.currentRoute)
     }
 }

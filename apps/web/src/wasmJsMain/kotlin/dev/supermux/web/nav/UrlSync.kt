@@ -40,12 +40,24 @@ fun applyTarget(ui: ShellUiState, target: UrlTarget) {
                 ui.selectedId = null
                 ui.selectedArchivedWorkspaceId = null
             }
-            is Route.Settings -> ui.openSettings(r.section)
+            is Route.Settings -> ui.openSettings(r.section, r.sub, r.anchor)
             is Route.NewSession -> ui.openLauncher(r.draftId.ifBlank { null })
             else -> ui.navigate(r)
         }
     }
 }
+
+/** Two targets are the same page when they differ only in a one-shot anchor. */
+internal fun UrlTarget.samePage(): UrlTarget =
+    if (this is UrlTarget.Screen && route is Route.Settings) UrlTarget.Screen((route as Route.Settings).copy(anchor = null)) else this
+
+/**
+ * Should the shell→URL mirror REPLACE the address bar's [current] entry with [path] rather than push one? Yes when
+ * both name the same page: [path] only normalises [current] (`/settings/editor` → `/settings/coding`). Pure, so the
+ * Back-loop rule is tested without a DOM.
+ */
+internal fun replacesHistoryEntry(current: String, path: String): Boolean =
+    parsePath(current).samePage() == parsePath(path).samePage()
 
 /** The path the address bar shows while the first-run setup wizard owns the screen. */
 const val SETUP_PATH = "/setup"
@@ -120,7 +132,10 @@ fun UrlSync(ui: ShellUiState, enabled: Boolean = true, wizard: Boolean = false) 
             // must REPLACE the entry, not push one: the typed URL and the canonical URL are the
             // same destination, and pushing would put the un-normalised path one step back — so
             // Back would re-apply it, the mirror would push again, and Back would be trapped.
-            if (parsePath(current) == parsePath(path)) window.history.replaceState(null, "", path)
+            // An old Settings slug and its canonical URL are the same page too (they differ only in
+            // the one-shot anchor the old slug carried), so `/settings/editor` → `/settings/coding`
+            // replaces as well, or Back would loop on it the same way (#97).
+            if (replacesHistoryEntry(current, path)) window.history.replaceState(null, "", path)
             else window.history.pushState(null, "", path)
         }
     }

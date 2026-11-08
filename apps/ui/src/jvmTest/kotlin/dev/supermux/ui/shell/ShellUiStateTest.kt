@@ -138,7 +138,21 @@ class WorkspaceUiStateTest {
         ui.openLspSettings()
         assertTrue(ui.settingsOpen)
         assertTrue(ui.lspSettingsOpen)
-        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
+        assertEquals(Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"), ui.currentRoute)
+    }
+
+    @Test fun plainSettingsIsNoSectionAndARailClickDropsTheSubPageAndAnchor() {
+        val ui = ShellUiState()
+        ui.openSettings()
+        assertEquals(null, ui.settingsSection)
+        ui.openSettings(SettingsSection.Machine, sub = "devices")
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
+        ui.settingsSection = SettingsSection.Voice
+        assertEquals(Route.Settings(SettingsSection.Voice), ui.currentRoute)
+        // Closed, it remembers the last page for the next open.
+        ui.goBack()
+        assertEquals(SettingsSection.Voice, ui.settingsSection)
     }
 
     // ── Nav3 back stack is the source of truth ──────────────────────────────────────────────────
@@ -163,14 +177,14 @@ class WorkspaceUiStateTest {
 
     @Test fun navigatePushesOverlayAboveHome() {
         val ui = ShellUiState()
-        ui.navigate(Route.Settings(SettingsSection.Devices))
+        ui.navigate(Route.Settings(SettingsSection.Machine, sub = "devices"))
         assertEquals(
-            listOf(Route.Home, Route.Settings(SettingsSection.Devices)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Machine, sub = "devices")),
             ui.backStack.toList(),
         )
         assertTrue(ui.overlayOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
     @Test fun goBackPopsToHome() {

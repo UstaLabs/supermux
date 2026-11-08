@@ -74,8 +74,8 @@ internal fun TestAppShell(
         // Desktop's own Settings wiring — the same one `Main.kt` passes, so a hub suite drives
         // the real sections rather than an empty slot.
         settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
-        settingsSection = { section, scope ->
-            DesktopSettingsSection(section, scope, store.activeApp() ?: app)
+        settingsSection = { place, scope ->
+            DesktopSettingsSection(place, scope, store.activeApp() ?: app)
         },
     )
 }

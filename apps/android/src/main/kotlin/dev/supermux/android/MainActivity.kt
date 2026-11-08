@@ -376,7 +376,7 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                    settingsSection = { section, scope -> FleetSettingsSection(section, scope, vm.fleet) },
+                    settingsSection = { place, scope -> FleetSettingsSection(place, scope, vm.fleet) },
                 )
             }
         }

@@ -161,8 +161,10 @@ import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
@@ -296,7 +298,7 @@ fun SupermuxApp(
     /** Whether a broker identity (`GET /host` hostId) is the broker this app runs itself. */
     isLocalHost: (hostId: String?) -> Boolean = { false },
     settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
-    settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
+    settingsSection: @Composable (SettingsPlace, SettingsSlotScope) -> Unit = { _, _ -> },
 ) {
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // The anchored popover needs a pointer (UsagePopover draws nothing without one), so a wide
@@ -806,10 +808,10 @@ fun SupermuxApp(
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
-                    // A card whose login was refused: the system login signs in again under
-                    // Providers (the CLI's own login flow), an added account under Accounts.
-                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
-                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    // A card whose login was refused signs in again on that provider's page, which
+                    // holds both its own login and the added ones (#97).
+                    val usageSignIn: (String, String?) -> Unit = { agent, _ ->
+                        ui.openSettings(SettingsSection.Providers, sub = agent)
                     }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
@@ -946,7 +948,7 @@ fun SupermuxApp(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
                                             onUsage = { ui.openUsage() },
-                                            onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                            onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
                                             onSettings = { ui.openSettings() },
                                             usageOpen = ui.usageOpen,
                                             onUsageDismiss = { ui.closeUsage() },
@@ -1018,7 +1020,7 @@ fun SupermuxApp(
                                     appearance = appearance,
                                     onToggleTheme = onToggleTheme,
                                     onUsage = { ui.openUsage() },
-                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
                                     onSettings = { ui.openSettings() },
                                     usageOpen = ui.usageOpen,
                                     onUsageDismiss = { ui.closeUsage() },
@@ -1148,10 +1150,7 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
                                 EscapeBox(
-                                    tag = when (route.section) {
-                                        SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        else -> "settings_overlay"
-                                    },
+                                    tag = if (route.section == SettingsSection.Coding) "lsp_settings_overlay" else "settings_overlay",
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
                                 ) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
@@ -1162,6 +1161,8 @@ fun SupermuxApp(
                                         key(activeHostId) {
                                             SettingsHub(
                                                 section = route.section,
+                                                sub = route.sub,
+                                                anchor = route.anchor,
                                                 onSectionChange = { ui.settingsSection = it },
                                                 onBack = { ui.goBack() },
                                                 onRegisterCloseHandler = { settingsTryClose = it },

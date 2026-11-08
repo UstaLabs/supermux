@@ -1124,8 +1124,9 @@ private fun WorkspacePaneContent(
                 actions = rememberShellActions(viewApp, appFor),
                 chatState = { sid -> rememberChatState(viewApp, sid) },
                 chatActions = { s ->
-                    val openAccounts = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Accounts) } }
-                    val openSignIn = remember(ui) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers) } }
+                    // Both land on this chat's provider page: its own login and the added ones (#97).
+                    val openAccounts = remember(ui, s.agent) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers, sub = s.agent) } }
+                    val openSignIn = remember(ui, s.agent) { { ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers, sub = s.agent) } }
                     rememberChatActions(viewApp, s, openAccounts = openAccounts, openSignIn = openSignIn)
                 },
                 drafts = drafts,

@@ -109,7 +109,7 @@ internal fun ShellWithSettings(fleet: FleetStore, ui: ShellUiState, settings: Bo
         SupermuxApp(
             fleet = fleet,
             ui = ui,
-            settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+            settingsSection = { place, scope -> FleetSettingsSection(place, scope, fleet) },
             settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
         )
     } else {

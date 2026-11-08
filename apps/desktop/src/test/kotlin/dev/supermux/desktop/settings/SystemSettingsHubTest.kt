@@ -16,6 +16,7 @@ import dev.supermux.state.cioHttpFactory
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.host.HostPersistence
@@ -209,7 +210,8 @@ class SystemSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_system_section_and_loads() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
+        // #97: System is the machine page's "Status & updates" screen.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.STATUS) }
         val app = appForSystem()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -228,10 +230,11 @@ class SystemSettingsHubTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_system").assertIsDisplayed()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
-    @Test fun rail_switches_from_agents_to_system() = runComposeUiTest {
+    @Test fun the_machine_page_opens_status_from_agents() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -272,9 +275,11 @@ class SystemSettingsHubTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_system").performClick()
+        ui.openSettings(SettingsSection.Machine)
         waitForIdle()
-        assertEquals(SettingsSection.System, ui.settingsSection)
+        onNodeWithTag("machine_row_status").performClick()
+        waitForIdle()
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithText("supermux 4.5.6").assertIsDisplayed()
@@ -343,7 +348,7 @@ class SystemSettingsHubTest {
                 )
             },
         )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.STATUS) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -374,9 +379,9 @@ class SystemSettingsHubTest {
 
     @Test fun open_settings_system_selects_section() {
         val ui = ShellUiState()
-        ui.openSettings(SettingsSection.System)
+        ui.openSettings(SettingsSection.Machine, sub = MachineSub.STATUS)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.System, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         assertTrue(ui.overlayOpen)
         assertFalse(ui.launcherOpen)
         assertFalse(ui.appUpdateOpen)
@@ -386,7 +391,7 @@ class SystemSettingsHubTest {
         val ui = ShellUiState()
         ui.openAppUpdate()
         assertTrue(ui.appUpdateOpen)
-        ui.openSettings(SettingsSection.System)
+        ui.openSettings(SettingsSection.Machine, sub = MachineSub.STATUS)
         assertTrue(ui.settingsOpen)
         assertFalse(ui.appUpdateOpen)
     }

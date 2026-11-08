@@ -90,6 +90,20 @@ class AppearanceHubTest {
         onNodeWithTag("appearance_settings_back").assertDoesNotExist()
     }
 
+    @Test fun plain_settings_opens_on_general_which_shows_appearance_for_now() = runComposeUiTest {
+        // #97: File ▸ "Settings…" opens General on a wide window; until General is rebuilt it is today's
+        // Appearance screen.
+        val ui = ShellUiState().apply { openSettings() }
+        setContent {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
+                TestAppShell(app(), ui)
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("settings_section_general").assertIsDisplayed()
+        onNodeWithTag("appearance_settings_screen").assertIsDisplayed()
+    }
+
     @Test fun the_rail_offers_check_for_updates() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         setContent {

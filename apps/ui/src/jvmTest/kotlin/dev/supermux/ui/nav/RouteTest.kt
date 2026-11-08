@@ -23,9 +23,20 @@ class RouteTest {
     }
 
     @Test
-    fun settings_defaults_to_providers() {
-        assertEquals(SettingsSection.Providers, Route.Settings().section)
-        assertEquals(Route.Settings(SettingsSection.Providers), roundTrip(Route.Settings()))
+    fun settings_defaults_to_just_settings() {
+        // #97: no section is "just Settings" — the phone's index, General on a wide window.
+        assertEquals(null, Route.Settings().section)
+        assertEquals(Route.Settings(), roundTrip(Route.Settings()))
+    }
+
+    @Test
+    fun settings_round_trips_with_its_sub_page_and_anchor() {
+        val route = Route.Settings(SettingsSection.Machine, sub = "devices", anchor = "pair")
+        assertEquals(route, roundTrip(route))
+        assertEquals(
+            """{"type":"settings","section":"Machine","sub":"devices","anchor":"pair"}""",
+            json.encodeToString(Route.serializer(), route),
+        )
     }
 
     @Test
@@ -82,9 +93,10 @@ class RouteTest {
     }
 
     @Test
-    fun settings_sections_keep_desktops_rail_order_and_labels() {
+    fun settings_sections_keep_the_rail_order_and_labels() {
+        // #97 structure C; Machine last, opened by a machine card rather than listed.
         assertEquals(
-            listOf("Providers", "Accounts", "Devices", "System", "Git hosting", "Proxies", "Worktrees", "Curator", "Voice", "Editor / LSP"),
+            listOf("General", "Providers & accounts", "Voice", "Coding", "Memory", "Privacy & labs", "Machine"),
             SettingsSection.entries.map { it.label },
         )
     }

@@ -1,7 +1,9 @@
 package dev.supermux.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -12,6 +14,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -22,6 +25,7 @@ import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.nav.SettingsSection
@@ -29,6 +33,7 @@ import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NO_CAPS
+import dev.supermux.ui.retain.LocalRetainedPage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -48,12 +53,15 @@ class SettingsHubTest {
     /** Renders `section_<name>` for whatever the hub selected, plus a dirty toggle. */
     @Suppress("TestFunctionName")
     private fun sectionStub(dirty: Boolean = false): @androidx.compose.runtime.Composable (
-        SettingsSection,
+        SettingsPlace,
         SettingsSlotScope,
-    ) -> Unit = { s, scope ->
+    ) -> Unit = { p, scope ->
         if (dirty) scope.onDirtyChange(true)
-        Text("body", modifier = Modifier.testTag("section_${s.name.lowercase()}"))
+        Text("body", modifier = Modifier.testTag("section_${p.section.name.lowercase()}"))
     }
+
+    /** The rail and the index: every page but [SettingsSection.Machine], which machine cards open. */
+    private val listed = SettingsSection.entries.filter { it != SettingsSection.Machine }
 
     private val extraStub: @androidx.compose.runtime.Composable (
         SettingsExtra,
@@ -76,9 +84,10 @@ class SettingsHubTest {
         waitForIdle()
         onNodeWithTag("settings_hub").assertIsDisplayed()
         onNodeWithTag("settings_hub_rail").assertIsDisplayed()
-        SettingsSection.entries.forEach {
+        listed.forEach {
             onNodeWithTag("settings_section_${it.name.lowercase()}").assertExists()
         }
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
         onNodeWithTag("settings_hub_detail").assertIsDisplayed()
         onNodeWithTag("section_providers").assertIsDisplayed()
         // The compact chrome is NOT on a wide window.
@@ -198,7 +207,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
                 content = sectionStub(),
@@ -207,9 +216,10 @@ class SettingsHubTest {
         waitForIdle()
         onNodeWithTag("settings_index").assertExists()
         onNodeWithTag("settings_hub_rail").assertDoesNotExist()
-        SettingsSection.entries.forEach {
+        listed.forEach {
             onNodeWithTag("settings_row_${it.name.lowercase()}").assertExists()
         }
+        onNodeWithTag("settings_row_machine").assertDoesNotExist()
         // Nothing is pushed yet, so no detail and no section body.
         onNodeWithTag("settings_hub_detail").assertDoesNotExist()
         onNodeWithTag("section_providers").assertDoesNotExist()
@@ -224,13 +234,13 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = { picked = it },
                 onBack = { closed++ },
                 content = sectionStub(),
             )
         }
-        onNodeWithTag("settings_row_devices").performClick()
+        onNodeWithTag("settings_row_coding").performClick()
         waitForIdle()
         // The compact push does NOT report the section, and this assertion is the fix for a real
         // bug rather than an accommodation of one. The host writes what it is told into
@@ -245,14 +255,14 @@ class SettingsHubTest {
         // the whole shell and would have.
         assertEquals(null, picked)
         onNodeWithTag("settings_hub_detail").assertExists()
-        onNodeWithTag("section_devices").assertExists()
-        onNodeWithTag("settings_detail_title").assertExists()
+        onNodeWithTag("section_coding").assertExists()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Coding")
         onNodeWithTag("settings_index").assertDoesNotExist()
 
         onNodeWithTag("settings_detail_back").performClick()
         waitForIdle()
         onNodeWithTag("settings_index").assertExists()
-        onNodeWithTag("section_devices").assertDoesNotExist()
+        onNodeWithTag("section_coding").assertDoesNotExist()
         // Back inside the hub is NOT a close of the hub.
         assertEquals(0, closed)
 
@@ -270,21 +280,21 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
                 hostKey = host,
                 content = sectionStub(),
             )
         }
-        onNodeWithTag("settings_row_curator").performClick()
+        onNodeWithTag("settings_row_memory").performClick()
         waitForIdle()
-        onNodeWithTag("section_curator").assertExists()
+        onNodeWithTag("section_memory").assertExists()
 
         runOnIdle { host = "h2" }
         waitForIdle()
         onNodeWithTag("settings_index").assertExists()
-        onNodeWithTag("section_curator").assertDoesNotExist()
+        onNodeWithTag("section_memory").assertDoesNotExist()
     }
 
     /**
@@ -299,21 +309,21 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
-                content = { s, scope ->
+                content = { p, scope ->
                     // A real screen's contract: draw a bar only when the hub did not.
                     if (!scope.topBarShown) {
                         Text("own bar", modifier = Modifier.testTag("page_own_bar"))
                     }
-                    Text("body", modifier = Modifier.testTag("section_${s.name.lowercase()}"))
+                    Text("body", modifier = Modifier.testTag("section_${p.section.name.lowercase()}"))
                 },
             )
         }
-        onNodeWithTag("settings_row_system").performClick()
+        onNodeWithTag("settings_row_privacylabs").performScrollTo().performClick()
         waitForIdle()
-        onNodeWithTag("section_system").assertExists()
+        onNodeWithTag("section_privacylabs").assertExists()
         onNodeWithTag("settings_detail_title").assertIsDisplayed()
         onNodeWithTag("settings_detail_back").assertIsDisplayed()
         onNodeWithTag("page_own_bar").assertDoesNotExist()
@@ -328,7 +338,7 @@ class SettingsHubTest {
     @Test fun a_wide_detail_pane_reports_that_the_hub_painted_no_detail_bar() = runComposeUiTest {
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
-                section = SettingsSection.System,
+                section = SettingsSection.Coding,
                 onSectionChange = {},
                 onBack = {},
                 content = { _, scope ->
@@ -351,7 +361,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
                 content = sectionStub(dirty = true),
@@ -378,7 +388,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
                 extraContent = extraStub,
@@ -398,7 +408,7 @@ class SettingsHubTest {
             inputMode = InputMode.Touch,
         ) {
             SettingsHub(
-                section = SettingsSection.Providers,
+                section = null,
                 onSectionChange = {},
                 onBack = {},
                 extraContent = extraStub,
@@ -422,30 +432,40 @@ class SettingsHubTest {
         onNodeWithTag("settings_index").assertExists()
     }
 
-    @Test fun the_hosting_row_is_shown_only_with_the_local_broker_cap() = runComposeUiTest {
-        var withBroker by mutableStateOf(false)
+    /**
+     * The Hosting extra row is gone (#97): this computer's hosting is the Machine page's "This computer" sub-page,
+     * whose row `InterimMachinePageTest` gates on `Caps.localBroker`. The Machine page itself is never a rail row —
+     * a machine card opens it — and its sub-pages go back to it before Settings closes.
+     */
+    @Test fun the_machine_page_is_not_a_rail_row_and_its_sub_pages_go_back_to_it() = runComposeUiTest {
+        var handler: (() -> Unit)? = null
+        var closed = 0
         setPlatformContent(
-            platform = FakePlatform(caps = gatedCaps),
+            platform = FakePlatform(caps = gatedCaps.copy(localBroker = true)),
             widthClass = WindowWidthClass.Expanded,
         ) {
-            val caps = if (withBroker) gatedCaps.copy(localBroker = true) else gatedCaps
-            CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = caps)) {
-                SettingsHub(
-                    section = SettingsSection.Providers,
-                    onSectionChange = {},
-                    onBack = {},
-                    extraContent = extraStub,
-                    content = sectionStub(),
-                )
-            }
+            SettingsHub(
+                section = SettingsSection.Machine,
+                sub = MachineSub.COMPUTER,
+                onSectionChange = {},
+                onBack = { closed++ },
+                onRegisterCloseHandler = { handler = it },
+                extraContent = extraStub,
+            ) { place, _ -> Text("page ${place.section} ${place.sub}") }
         }
         waitForIdle()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
         onNodeWithTag("settings_section_hosting").assertDoesNotExist()
-        withBroker = true
+        onNodeWithText("page Machine computer").assertIsDisplayed()
+
+        runOnIdle { handler!!() }
         waitForIdle()
-        onNodeWithTag("settings_section_hosting").assertExists().performClick()
+        onNodeWithText("page Machine null").assertIsDisplayed()
+        assertEquals(0, closed)
+
+        runOnIdle { handler!!() }
         waitForIdle()
-        onNodeWithTag("extra_hosting").assertIsDisplayed()
+        assertEquals(1, closed)
     }
 
     @Test fun the_gated_rows_join_the_rail_on_a_wide_window_too() = runComposeUiTest {
@@ -483,7 +503,7 @@ class SettingsHubTest {
             widthClass = WindowWidthClass.Compact,
             inputMode = InputMode.Touch,
         ) {
-            var current by remember { mutableStateOf(SettingsSection.Providers) }
+            var current by remember { mutableStateOf<SettingsSection?>(null) }
             SettingsHub(
                 section = current,
                 onSectionChange = { current = it },
@@ -500,9 +520,9 @@ class SettingsHubTest {
         // And a second row, reached after going back, behaves the same.
         onNodeWithTag("settings_detail_back").performClick()
         waitForIdle()
-        onNodeWithTag("settings_row_system").performClick()
+        onNodeWithTag("settings_row_coding").performClick()
         waitForIdle()
-        onNodeWithTag("section_system").assertExists()
+        onNodeWithTag("section_coding").assertExists()
         assertEquals(0, closed)
     }
 
@@ -525,7 +545,7 @@ class SettingsHubTest {
         ) {
             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SettingsHub(
-                    section = SettingsSection.Providers,
+                    section = null,
                     onSectionChange = {},
                     onBack = { closed++ },
                     content = sectionStub(),
@@ -551,6 +571,147 @@ class SettingsHubTest {
 
     @Test fun every_section_has_an_index_description() {
         SettingsSection.entries.forEach { assertTrue(it.desc().isNotBlank(), "no desc for $it") }
+    }
+
+    // ── #97: plain Settings, sub-pages and anchors ─────────────────────────────────────────────
+
+    @Test fun a_phone_opened_on_plain_settings_shows_the_index() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}) { place, _ -> Text("page ${place.section}") }
+        }
+        onNodeWithTag("settings_index").assertExists()
+    }
+
+    @Test fun a_wide_window_opened_on_plain_settings_shows_general() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}) { place, _ -> Text("page ${place.section}") }
+        }
+        onNodeWithText("page General").assertIsDisplayed()
+    }
+
+    @Test fun a_phone_opened_on_general_lands_on_general() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = SettingsSection.General, onSectionChange = {}, onBack = {}) { place, _ -> Text("page ${place.section}") }
+        }
+        onNodeWithText("page General").assertExists()
+    }
+
+    @Test fun a_sub_page_goes_back_to_its_page_first() = runComposeUiTest {
+        var closed = 0
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = SettingsSection.Providers, sub = "claude", onSectionChange = {}, onBack = { closed++ }) { place, _ ->
+                Text("page ${place.section} ${place.sub}")
+            }
+        }
+        onNodeWithText("page Providers claude").assertExists()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Claude Code")
+        onNodeWithTag("settings_detail_back").performClick()
+        onNodeWithText("page Providers null").assertExists()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Providers & accounts")
+        assertEquals(0, closed)
+    }
+
+    @Test fun the_anchor_reaches_the_page_once() = runComposeUiTest {
+        val seen = mutableListOf<String?>()
+        setPlatformContent {
+            SettingsHub(section = SettingsSection.Coding, anchor = "github", onSectionChange = {}, onBack = {}) { place, scope ->
+                seen += place.anchor
+                LaunchedEffect(place.anchor) { if (place.anchor != null) scope.onAnchorShown() }
+            }
+        }
+        waitForIdle()
+        assertEquals("github", seen.first())
+        assertEquals(null, seen.last())
+    }
+
+    @Test fun a_new_anchor_on_the_page_on_display_still_lands() = runComposeUiTest {
+        var anchor by mutableStateOf<String?>(null)
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = SettingsSection.Coding, anchor = anchor, onSectionChange = {}, onBack = {}) { place, _ ->
+                Text("page ${place.section} ${place.anchor}")
+            }
+        }
+        onNodeWithText("page Coding null").assertExists()
+        anchor = "github"
+        waitForIdle()
+        onNodeWithText("page Coding github").assertExists()
+    }
+
+    @Test fun the_system_back_gesture_pops_a_sub_page_then_the_page_then_closes() = runComposeUiTest {
+        val input = TestBackInput()
+        val dispatcher = NavigationEventDispatcher()
+        dispatcher.addInput(input)
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = dispatcher
+        }
+        var closed = 0
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
+                SettingsHub(section = SettingsSection.Machine, sub = MachineSub.DEVICES, onSectionChange = {}, onBack = { closed++ }) { place, _ ->
+                    Text("page ${place.section} ${place.sub}")
+                }
+            }
+        }
+        onNodeWithText("page Machine devices").assertExists()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Devices")
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        onNodeWithText("page Machine null").assertExists()
+        assertEquals(0, closed)
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        onNodeWithTag("settings_index").assertExists()
+        assertEquals(0, closed)
+
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, closed)
+    }
+
+    @Test fun opening_a_sub_page_of_the_page_on_display_keeps_what_the_page_retains() = runComposeUiTest {
+        val keys = mutableListOf<String?>()
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = SettingsSection.Machine, onSectionChange = {}, onBack = {}) { place, scope ->
+                keys += LocalRetainedPage.current
+                Text(
+                    "page ${place.section} ${place.sub}",
+                    Modifier.testTag("open_devices").clickable { scope.onOpen(SettingsPlace(SettingsSection.Machine, MachineSub.DEVICES)) },
+                )
+            }
+        }
+        onNodeWithText("page Machine null").assertExists()
+        onNodeWithTag("open_devices").performClick()
+        waitForIdle()
+        onNodeWithText("page Machine devices").assertExists()
+        assertEquals(1, keys.distinct().size, "the sub-page must not start a new opening: $keys")
+    }
+
+    @Test fun the_compact_to_wide_swap_keeps_the_page_its_sub_page_and_the_pending_anchor() = runComposeUiTest {
+        var width by mutableStateOf(WindowWidthClass.Compact)
+        val reported = mutableListOf<SettingsSection>()
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            CompositionLocalProvider(LocalWindowWidthClass provides width) {
+                SettingsHub(
+                    section = SettingsSection.Providers,
+                    sub = "codex",
+                    anchor = "auto-switch",
+                    onSectionChange = { reported += it },
+                    onBack = {},
+                ) { place, _ -> Text("page ${place.section} ${place.sub} ${place.anchor}") }
+            }
+        }
+        onNodeWithText("page Providers codex auto-switch").assertExists()
+        width = WindowWidthClass.Expanded
+        waitForIdle()
+        onNodeWithTag("settings_hub_rail").assertExists()
+        onNodeWithText("page Providers codex auto-switch").assertExists()
+        width = WindowWidthClass.Compact
+        waitForIdle()
+        onNodeWithText("page Providers codex auto-switch").assertExists()
+        onNodeWithTag("settings_index").assertDoesNotExist()
+        assertEquals(emptyList(), reported)
     }
 }
 

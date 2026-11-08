@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -50,6 +52,23 @@ internal fun telemetryLockedReason(state: TelemetryState): String? = when (state
     "env" -> "Turned off by an environment variable on the host (DO_NOT_TRACK or MUX_TELEMETRY)."
     "build" -> "Test broker: nothing is sent."
     else -> null
+}
+
+/**
+ * Privacy & labs until its page is rebuilt (#97 Task 13): today's telemetry section, scrolling on its own. Public
+ * because desktop's slot wiring renders it too.
+ */
+@Composable
+fun InterimPrivacyPage(actions: SystemSettingsActions) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(Space.lg)
+            .testTag("privacy_settings_screen"),
+    ) {
+        TelemetrySettingsSection(actions)
+    }
 }
 
 @Composable

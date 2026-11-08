@@ -71,6 +71,7 @@ import dev.supermux.ui.display.DisplaysScreen
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.ui.intro.testPairing
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.prefs.UiPrefs
@@ -239,19 +240,31 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_settings_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
         val activity = phoneShell(devicesHost(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_devices", "devices_settings_screen")
+        openFromTheIndex("settings_row_memory", "curator_settings_screen")
 
         activity.recreate()
 
-        // Back on Devices, not on the index it used to land on.
+        // Back on Memory, not on the index it used to land on.
+        await("curator_settings_screen")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun a_machine_sub_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        // #97: Devices is a sub-page of the machine page; the hub saves the sub-page with its place.
+        val activity = phoneShell(devicesHost(), settings = true) { openSettings(SettingsSection.Machine) }
+        openFromTheIndex("machine_row_devices", "devices_settings_screen")
+
+        activity.recreate()
+
         await("devices_settings_screen")
+        onNodeWithTag("machine_page").assertDoesNotExist()
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
     @Test fun the_settings_page_open_on_a_phone_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
         val ui = ShellUiState()
-        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings() }
-        openFromTheIndex("settings_row_devices", "devices_settings_screen")
+        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings(SettingsSection.Machine) }
+        openFromTheIndex("machine_row_devices", "devices_settings_screen")
 
         unfold(width)
 
@@ -259,7 +272,7 @@ class ConfigurationChangeWorkTest {
         // its rail says so.
         await("settings_hub_rail")
         await("devices_settings_screen")
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
     private fun withAppearance() = FakePlatform(caps = NO_CAPS.copy(appearanceControls = true))
@@ -461,7 +474,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_git_account_form_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(gitHost(), settings = true) { openSettings(SettingsSection.GitHosting) }
+        val activity = phoneShell(gitHost(), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         activity.recreate()
@@ -471,7 +484,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_git_account_form_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(gitHost(), settings = true) { openSettings(SettingsSection.GitHosting) }
+        val width = flippablePhone(gitHost(), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         unfold(width)
@@ -505,7 +518,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(accountsHost().first, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = phoneShell(accountsHost().first, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         pasteAnAccountToken("sk-ant-oat01-token")
 
         activity.recreate()
@@ -515,7 +528,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(accountsHost().first, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = flippablePhone(accountsHost().first, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         pasteAnAccountToken("sk-ant-oat01-token")
 
         unfold(width)
@@ -535,7 +548,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         startAnAccountSignIn(gate)
 
         activity.recreate()
@@ -549,7 +562,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         startAnAccountSignIn(gate)
 
         unfold(width)
@@ -571,7 +584,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_a_recreation() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         pasteASignInCode("CODE#1")
 
         activity.recreate()
@@ -583,7 +596,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_the_compact_to_wide_swap() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Providers, sub = "claude") }
         pasteASignInCode("CODE#1")
 
         unfold(width)
@@ -615,7 +628,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         fillTheExposeForm()
 
         activity.recreate()
@@ -624,7 +637,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         fillTheExposeForm()
 
         unfold(width)
@@ -639,7 +652,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToRemoveTheProxy()
 
         activity.recreate()
@@ -649,7 +662,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToRemoveTheProxy()
 
         unfold(width)
@@ -665,7 +678,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_make_public_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToMakeTheProxyPublic()
 
         activity.recreate()
@@ -674,7 +687,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_make_public_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToMakeTheProxyPublic()
 
         unfold(width)
@@ -767,7 +780,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun an_unsaved_curator_change_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(curatorHost(), settings = true) { openSettings(SettingsSection.Curator) }
+        val activity = phoneShell(curatorHost(), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         activity.recreate()
@@ -778,7 +791,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun an_unsaved_curator_change_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(curatorHost(), settings = true) { openSettings(SettingsSection.Curator) }
+        val width = flippablePhone(curatorHost(), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         unfold(width)
@@ -812,7 +825,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_pairing_link_minted_during_a_recreation_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Devices) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         mintAPairingLink(gate)
 
         activity.recreate()
@@ -827,7 +840,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_pairing_link_minted_during_the_compact_to_wide_swap_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Devices) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         mintAPairingLink(gate)
 
         unfold(width)
@@ -847,7 +860,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Devices) }
+        val activity = phoneShell(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         askToRevokeTheDevice()
 
         activity.recreate()
@@ -857,7 +870,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Devices) }
+        val width = flippablePhone(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         askToRevokeTheDevice()
 
         unfold(width)
@@ -898,7 +911,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_worktree_batch_delete_finishes_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Worktrees) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
         deleteEveryWorktree(gate)
 
         activity.recreate()
@@ -913,7 +926,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_worktree_batch_delete_finishes_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Worktrees) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
         deleteEveryWorktree(gate)
 
         unfold(width)

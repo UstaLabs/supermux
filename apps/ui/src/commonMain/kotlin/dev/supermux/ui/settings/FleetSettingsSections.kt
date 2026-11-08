@@ -21,79 +21,110 @@ import androidx.compose.runtime.Composable
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.settings.pages.InterimMachinePage
 
-/** Renders [section] against the fleet's active host. Called from the hub's `content` slot. */
+/**
+ * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
+ *
+ * #97's switch-over: every new section shows today's screen until its page is rebuilt (Tasks 11–16 replace one line
+ * each). Two old sections have no page of their own any more and are reached through their new place meanwhile:
+ * Accounts is a provider's sub-page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land)
+ * and Git hosting is Coding's `github` anchor (the old slug, the menu hook).
+ */
 @Composable
 fun FleetSettingsSection(
-    section: SettingsSection,
+    place: SettingsPlace,
     scope: SettingsSlotScope,
     fleet: FleetStore,
 ) {
-    when (section) {
-        SettingsSection.Providers -> AgentSettingsScreen(
-            actions = rememberAgentSettingsActions(fleet),
+    when (place.section) {
+        SettingsSection.General -> AppearanceSettingsScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.Accounts -> dev.supermux.ui.accounts.AccountsSettingsScreen(
-            actions = dev.supermux.ui.accounts.rememberAccountsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-            onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
-        )
-        SettingsSection.Curator -> CuratorSettingsScreen(
-            actions = rememberCuratorSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
+        SettingsSection.Providers -> if (place.sub == null) {
+            AgentSettingsScreen(
+                actions = rememberAgentSettingsActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+        } else {
+            dev.supermux.ui.accounts.AccountsSettingsScreen(
+                actions = dev.supermux.ui.accounts.rememberAccountsActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+                onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
+            )
+        }
         SettingsSection.Voice -> VoiceSettingsScreen(
             actions = rememberVoiceSettingsActions(fleet),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.EditorLsp -> EditorSettingsScreen(
-            lspLoad = { fleet.lspLoad() },
-            lspToggle = { id, enabled -> fleet.lspToggle(id, enabled) },
-            lspInstall = { id -> fleet.lspInstall(id) },
-            lspInstallLog = fleet.lspInstallLog,
-            lspInstallDone = fleet.lspInstallDone,
-            lspAddCustom = { args ->
-                fleet.lspAddCustom(
-                    args.id, args.label, args.command, args.extensions, args.args,
-                    args.languageId, args.installCmd,
-                )
-            },
-            lspRemoveCustom = { id -> fleet.lspRemoveCustom(id) },
+        SettingsSection.Coding -> if (place.anchor == "github") {
+            GitHostingScreen(
+                actions = rememberGitHostingActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+        } else {
+            EditorSettingsScreen(
+                lspLoad = { fleet.lspLoad() },
+                lspToggle = { id, enabled -> fleet.lspToggle(id, enabled) },
+                lspInstall = { id -> fleet.lspInstall(id) },
+                lspInstallLog = fleet.lspInstallLog,
+                lspInstallDone = fleet.lspInstallDone,
+                lspAddCustom = { args ->
+                    fleet.lspAddCustom(
+                        args.id, args.label, args.command, args.extensions, args.args,
+                        args.languageId, args.installCmd,
+                    )
+                },
+                lspRemoveCustom = { id -> fleet.lspRemoveCustom(id) },
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+        }
+        SettingsSection.Memory -> CuratorSettingsScreen(
+            actions = rememberCuratorSettingsActions(fleet),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.GitHosting -> GitHostingScreen(
-            actions = rememberGitHostingActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.System -> SystemSettingsScreen(
-            actions = rememberSystemSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
-        // screens, which paint their own chrome there via `standalone = true`.
-        SettingsSection.Devices -> DevicesSettingsScreen(
-            actions = rememberDevicesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Proxies -> ProxiesSettingsScreen(
-            actions = rememberProxiesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Worktrees -> WorktreesSettingsScreen(
-            actions = rememberWorktreesSettingsActions(fleet),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
+        SettingsSection.PrivacyLabs -> InterimPrivacyPage(rememberSystemSettingsActions(fleet))
+        SettingsSection.Machine -> when (place.sub) {
+            MachineSub.STATUS -> SystemSettingsScreen(
+                actions = rememberSystemSettingsActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            // Hosting is desktop-only: `Caps.localBroker` hides the row everywhere this renderer is used.
+            MachineSub.COMPUTER -> Unit
+            // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
+            // screens, which paint their own chrome there via `standalone = true`.
+            MachineSub.DEVICES -> DevicesSettingsScreen(
+                actions = rememberDevicesSettingsActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            MachineSub.LINKS -> ProxiesSettingsScreen(
+                actions = rememberProxiesSettingsActions(fleet),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            MachineSub.WORKTREES -> WorktreesSettingsScreen(
+                actions = rememberWorktreesSettingsActions(fleet),
+                onBack = scope.onClose,
+                // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
+                topBarShown = true,
+            )
+            else -> InterimMachinePage(
+                onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
+                showComputer = LocalPlatform.current.caps.localBroker,
+                anchor = place.anchor,
+                onAnchorShown = scope.onAnchorShown,
+            )
+        }
     }
 }
 
@@ -106,8 +137,6 @@ fun FleetSettingsSection(
 @Composable
 fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
     when (extra) {
-        // Desktop-only: `Caps.localBroker` hides the row everywhere this renderer is used.
-        SettingsExtra.Hosting -> Unit
         SettingsExtra.Appearance -> AppearanceSettingsScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,

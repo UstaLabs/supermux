@@ -356,12 +356,12 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ -> Text("body:" + section.name) },
+                settingsSection = { place, _ -> Text("body:" + place.section.name) },
             )
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Providers)
+        ui.openSettings()
         waitForIdle()
         onNodeWithTag("settings_row_voice").assertIsDisplayed()
 
@@ -371,8 +371,9 @@ class SupermuxAppNavTest {
         onNodeWithTag("settings_row_voice").assertDoesNotExist()
         // The CAUSE, not just the symptom: the route was never rewritten. `settingsSection` reads
         // the live `Route.Settings` off the stack, so anything other than the section it was
-        // opened with means the compact push reported itself back and the entry was re-keyed.
-        assertEquals(SettingsSection.Providers, ui.settingsSection)
+        // opened with (none: plain Settings) means the compact push reported itself back and the
+        // entry was re-keyed.
+        assertEquals(null, ui.settingsSection)
     }
 
     /**
@@ -380,7 +381,7 @@ class SupermuxAppNavTest {
      * phone, not on the index with `ShellUiState.lspSettingsOpen` claiming otherwise.
      *
      * The hub seeds its compact push stack from `section` for exactly this, treating the
-     * `Route.Settings` default ([SettingsSection.Providers]) as "just Settings" and anything else as a
+     * `Route.Settings` default (no section, #97) as "just Settings" and anything else as a
      * destination. That seeding is only safe because the settings entry has a stable content key;
      * while the route WAS the key, a rewrite would have re-seeded and reopened the section under
      * the user.
@@ -392,7 +393,7 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ -> Text("body:" + section.name) },
+                settingsSection = { place, _ -> Text("body:" + place.section.name) },
             )
         }
         waitForIdle()
@@ -401,7 +402,7 @@ class SupermuxAppNavTest {
         waitForIdle()
 
         onNodeWithTag("settings_hub_detail").assertIsDisplayed()
-        onNodeWithText("body:" + SettingsSection.EditorLsp.name).assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Coding.name).assertIsDisplayed()
         // The index is BEHIND us, not under us.
         onNodeWithTag("settings_row_voice").assertDoesNotExist()
         assertTrue(ui.lspSettingsOpen)
@@ -436,10 +437,10 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ ->
+                settingsSection = { place, _ ->
                     var alive by remember { mutableStateOf(0) }
                     Text(
-                        "body:" + section.name + ":" + alive,
+                        "body:" + place.section.name + ":" + alive,
                         Modifier.testTag("probe").clickable { alive++ },
                     )
                 },
@@ -457,12 +458,33 @@ class SupermuxAppNavTest {
         waitForIdle()
         onNodeWithText("body:" + SettingsSection.Providers.name + ":2").assertIsDisplayed()
 
-        onNodeWithTag("settings_section_devices").performClick()
+        onNodeWithTag("settings_section_coding").performClick()
         waitForIdle()
 
         // The section changed — and the hub did not.
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
-        onNodeWithText("body:" + SettingsSection.Devices.name + ":2").assertIsDisplayed()
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
+        onNodeWithText("body:" + SettingsSection.Coding.name + ":2").assertIsDisplayed()
+    }
+
+    /**
+     * The footer's Devices icon opens the active machine's Devices screen (#97: Devices lives on the machine
+     * page now), and the hub lands on it rather than on General.
+     */
+    @Test fun wide_the_footers_devices_icon_opens_the_machines_devices_screen() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name + "/" + place.sub) },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("sidebar_footer_devices").performClick()
+        waitForIdle()
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
+        onNodeWithText("body:Machine/devices").assertIsDisplayed()
     }
 
     /**
