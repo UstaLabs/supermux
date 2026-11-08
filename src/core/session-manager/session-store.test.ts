@@ -72,3 +72,26 @@ test("setBaseCommits records a born-asleep session's base commits once its workt
   expect(store.getById(s.id)!.base_commits).toEqual({ "": "abc123" })
   expect(new SessionStore(db).getById(s.id)!.base_commits).toEqual({ "": "abc123" })
 })
+
+test("onAccount lists every session on an account, archived ones included (#106)", () => {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new SessionStore(db)
+  store.register({ id: "live", name: "live", agent: "claude", workdir: "/w", pid: 0, account: "a" })
+  store.register({ id: "old", name: "old", agent: "claude", workdir: "/w", pid: 0, account: "a" })
+  store.register({ id: "other", name: "other", agent: "claude", workdir: "/w", pid: 0, account: "b" })
+  store.register({ id: "sys", name: "sys", agent: "claude", workdir: "/w", pid: 0 })
+  store.archive("old")
+  expect(store.onAccount("a")).toEqual([{ id: "live", agent: "claude", archived: false }, { id: "old", agent: "claude", archived: true }])
+})
+
+test("setAccount also moves an archived session, which is not cached (#106)", () => {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new SessionStore(db)
+  store.register({ id: "old", name: "old", agent: "claude", workdir: "/w", pid: 0, account: "a" })
+  store.archive("old")
+  const fresh = new SessionStore(db)
+  fresh.setAccount("old", null)
+  expect(fresh.onAccount("a")).toEqual([])
+})

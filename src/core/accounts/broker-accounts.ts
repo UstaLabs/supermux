@@ -225,6 +225,10 @@ export type BrokerAccountsDeps = {
   onChanged?(): void
   /** Fetches the agent's usage where stale; Auto starts it in the background, for the next pick. */
   refreshUsage?(agent: AccountAgent): Promise<void>
+  /** Sessions (archived ones included) on `account`, which a removal moves first (#106). */
+  sessionsOn?(account: string): Array<{ id: string; agent: string }>
+  /** Moves a session to `account`: a running one now, a sleeping or archived one for its next wake. */
+  rehome?(sessionId: string, account: string): Promise<void>
   now?: () => number
 }
 
@@ -296,8 +300,23 @@ export class BrokerAccounts {
     return toAccountView(account, this.deps.usage)
   }
 
+  /**
+   * Moves every session on the account to the one Auto picks among the rest (else the system login), then
+   * removes it (#106): a session never stays pinned to an account that is gone. A session that cannot move now
+   * (mid-turn) keeps the account, and the removal fails with its error.
+   */
   async remove(id: string, options: { deleteHome?: boolean } = {}): Promise<void> {
     try {
+      const account = await this.deps.registry.get(id)
+      if (account && account.method !== "system") {
+        const pinned = this.deps.sessionsOn?.(id) ?? []
+        if (pinned.length) {
+          await this.deps.usage.load()
+          const rest = (await this.deps.registry.list(account.agent)).filter((a) => a.id !== id)
+          const target = this.choose(account.agent, rest)?.id ?? systemAccountId(account.agent)
+          for (const session of pinned) await this.deps.rehome?.(session.id, target)
+        }
+      }
       await this.deps.registry.remove(id, options)
     } catch (err) {
       throw toApiError(err)
