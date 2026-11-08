@@ -9,6 +9,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -347,6 +349,46 @@ private fun mix(a: V, b: V, k: Float): V {
 
 // ── Rendering ────────────────────────────────────────────────────────────────────────────────
 
+/** False while nobody can see the window (hidden, minimised, screen locked): avatars stand still. */
+val LocalAvatarsLive = compositionLocalOf { true }
+
+/**
+ * How fast an avatar's clock ticks: smooth under the pointer, slower idle, slowest asleep, still
+ * while it can't be seen. Every tick redraws the whole window, so it never follows the screen's refresh.
+ */
+internal fun avatarFps(state: String, hovered: Boolean, live: Boolean): Int = when {
+    !live -> 0
+    hovered -> 60
+    state == "asleep" -> 8
+    else -> 24
+}
+
+/**
+ * A clock (ms) that ticks [fps] times a second, carrying on from where it was when the rate changes;
+ * 0 stops it. At 60 it ticks with the screen's frames. Below that its ticks land on a grid of the frame
+ * time shared by every clock at that rate, so a window of avatars redraws [fps] times a second in all.
+ */
+@Composable
+fun rememberAvatarClock(fps: Int): Long {
+    var now by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(fps) {
+        if (fps <= 0) return@LaunchedEffect
+        var frame = withFrameMillis { it }
+        val start = frame - now
+        if (fps >= 60) {
+            while (true) withFrameMillis { now = it - start }
+        } else {
+            val period = 1000L / fps
+            while (true) {
+                delay(period - frame % period)
+                // Set inside the frame, so it is drawn in this frame rather than asking for another.
+                withFrameMillis { frame = it; now = it - start }
+            }
+        }
+    }
+    return now
+}
+
 private class RigClock { var state = ""; var prev = ""; var switchedAt = 0f; var hovered = false; var hoverAt = 0f }
 
 @Composable
@@ -364,12 +406,7 @@ fun AvatarRigView(
     /** Fixed time (ms) instead of the frame clock — for contact sheets. */
     fixedTime: Long? = null,
 ) {
-    var now by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(fixedTime) {
-        if (fixedTime != null) return@LaunchedEffect
-        val start = withFrameMillis { it }
-        while (true) withFrameMillis { now = it - start }
-    }
+    val now = rememberAvatarClock(if (fixedTime != null) 0 else avatarFps(state, hovered, LocalAvatarsLive.current))
     val t = (fixedTime ?: now).toFloat()
     val clock = remember { RigClock() }
     if (clock.state != state) {
