@@ -3325,6 +3325,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       list: (agent) => brokerAccounts.list(agent),
       add: (body) => brokerAccounts.add(body),
       remove: (id, options) => brokerAccounts.remove(id, options),
+      removalPlan: (id) => brokerAccounts.removalPlan(id),
       startLogin: (body) => brokerAccounts.startLogin(body),
       loginState: (loginId) => brokerAccounts.loginState(loginId),
       submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),

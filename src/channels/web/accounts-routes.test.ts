@@ -62,6 +62,7 @@ function setup(overrides: Partial<WebAccountsApi> = {}) {
     list: (agent) => accounts.list(agent),
     add: (body) => accounts.add(body),
     remove: (id, options) => accounts.remove(id, options),
+    removalPlan: (id) => accounts.removalPlan(id),
     startLogin: (body) => accounts.startLogin(body),
     loginState: (id) => accounts.loginState(id),
     submitCode: (id, code) => accounts.submitLoginCode(id, code),
@@ -311,4 +312,12 @@ test("Auto's background refresh failing is logged, never thrown, and the pick st
   usage.set("grok:system", [{ name: "weekly", usedPercent: 100, resetsAt: new Date(Date.now() + 86_400_000) }])
   expect(await accounts.autoAccount("grok")).toBe("grok-a")
   await Bun.sleep(0)
+})
+
+test("GET /accounts/:id/removal says where a removal moves the account's chats (#106)", async () => {
+  const { call } = setup({ removalPlan: async (id) => ({ account: id, sessions: 3, to: "claude-b", toLabel: "4@supermux.dev" }) })
+  await channel!.start()
+  const r = await call("GET", "/accounts/claude-a/removal")
+  expect(r.status).toBe(200)
+  expect(r.body).toEqual({ account: "claude-a", sessions: 3, to: "claude-b", toLabel: "4@supermux.dev" })
 })

@@ -61,3 +61,15 @@ test("a session that cannot move (busy) blocks the removal: the account stays (#
   await expect(accounts.remove("a")).rejects.toMatchObject({ status: 409, code: "session_busy" })
   expect(await registry.get("a")).toBeDefined()
 })
+
+test("removalPlan says how many sessions a removal moves and where, without moving them (#106)", async () => {
+  const sessions = [{ id: "s1", agent: "claude", account: "a" }, { id: "s2", agent: "claude", account: "a" }]
+  const { registry, usage, accounts, moves } = setup(sessions)
+  await registry.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  await registry.add({ id: "b", agent: "claude", method: "token", secret: "t-b", label: "Work" })
+  usage.set("claude:system", [{ name: "five_hour", usedPercent: 100, resetsAt: soon() }])
+  usage.set("b", [{ name: "five_hour", usedPercent: 10, resetsAt: soon() }])
+  expect(await accounts.removalPlan("a")).toEqual({ account: "a", sessions: 2, to: "b", toLabel: "Work" })
+  expect(moves).toEqual([])
+  await expect(accounts.removalPlan("nope")).rejects.toMatchObject({ status: 404 })
+})

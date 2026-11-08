@@ -289,6 +289,8 @@ export interface WebAccountsApi {
   list(agent?: string): Promise<unknown[]>
   add(body: Record<string, unknown>): Promise<unknown>
   remove(id: string, options: { deleteHome?: boolean }): Promise<void>
+  /** What removing the account would do: how many chats move, and to which account (#106). */
+  removalPlan(id: string): Promise<unknown>
   startLogin(body: Record<string, unknown>): unknown
   loginState(loginId: string): unknown | undefined
   submitCode(loginId: string, code: string): void
@@ -3356,6 +3358,8 @@ export class WebChannel implements Channel {
             return this.json({ ok: true })
           }
         }
+        const removal = path.match(/^\/accounts\/([^/]+)\/removal$/)
+        if (removal && method === "GET") return this.json(await api.removalPlan(decodeURIComponent(removal[1]!)))
         const one = path.match(/^\/accounts\/([^/]+)$/)
         if (one && method === "DELETE") {
           const deleteHome = url.searchParams.get("deleteHome")

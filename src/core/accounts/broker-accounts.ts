@@ -300,6 +300,21 @@ export class BrokerAccounts {
     return toAccountView(account, this.deps.usage)
   }
 
+  /** What removing `id` would do (#106): how many sessions move, and to which account (the remove sheet says it). */
+  async removalPlan(id: string): Promise<{ account: string; sessions: number; to: string; toLabel: string }> {
+    const account = await this.deps.registry.get(id)
+    if (!account) throw new AccountsApiError(404, `Account ${id} was not found`, "unknown_account")
+    const to = await this.removalTarget(account)
+    return { account: id, sessions: this.deps.sessionsOn?.(id).length ?? 0, to: to.id, toLabel: displayLabel(to) }
+  }
+
+  /** Where a removal moves the account's sessions: Auto's pick among the agent's other accounts, else the system login. */
+  private async removalTarget(account: Account): Promise<Account> {
+    await this.deps.usage.load()
+    const rest = (await this.deps.registry.list(account.agent)).filter((a) => a.id !== account.id)
+    return this.choose(account.agent, rest) ?? rest.find((a) => a.method === "system")!
+  }
+
   /**
    * Moves every session on the account to the one Auto picks among the rest (else the system login), then
    * removes it (#106): a session never stays pinned to an account that is gone. A session that cannot move now
@@ -311,9 +326,7 @@ export class BrokerAccounts {
       if (account && account.method !== "system") {
         const pinned = this.deps.sessionsOn?.(id) ?? []
         if (pinned.length) {
-          await this.deps.usage.load()
-          const rest = (await this.deps.registry.list(account.agent)).filter((a) => a.id !== id)
-          const target = this.choose(account.agent, rest)?.id ?? systemAccountId(account.agent)
+          const target = (await this.removalTarget(account)).id
           for (const session of pinned) await this.deps.rehome?.(session.id, target)
         }
       }
