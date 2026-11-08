@@ -101,6 +101,7 @@ export interface Result {
   prompt: string
   sample: number
   expect: EvalPrompt["expect"]
+  heldOut?: boolean
   score: Score
   usage: Usage
   finalText: string

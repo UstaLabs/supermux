@@ -4,6 +4,7 @@
 // module will implement the same rules over raw CDP.
 import { chromium, type Browser, type Frame, type Page } from "playwright"
 import { inflateSync } from "node:zlib"
+import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { pagePrelude } from "./page-api"
 import { startProxy } from "./proxy"
@@ -52,42 +53,22 @@ export function findBrowser(): string | undefined {
   return CHROMES.find((p): p is string => !!p && existsSync(p))
 }
 
-const proxies = new WeakMap<Browser, Awaited<ReturnType<typeof startProxy>>>()
-
-/** Chrome behind the check's own SOCKS5 proxy, which refuses private addresses after resolving the name. */
-export async function launchBrowser(blockedHosts: string[] = []): Promise<Browser | undefined> {
+/** Chrome set up for one SOCKS5 proxy per check (startProxy), which refuses private addresses after resolving. */
+export async function launchBrowser(): Promise<Browser | undefined> {
   const executablePath = findBrowser()
   if (!executablePath) return undefined
-  const proxy = await startProxy(blockedHosts)
-  const browser = await chromium.launch({
+  return chromium.launch({
     executablePath,
     headless: true,
     env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: "disabled:" },
-    proxy: { server: `socks5://127.0.0.1:${proxy.port}`, bypass: "<-loopback>" },
+    proxy: { server: "per-context" },
     args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
   })
-  proxies.set(browser, proxy)
-  browser.on("disconnected", () => proxy.stop())
-  return browser
-}
-
-/** Loopback, private, link-local and CGNAT (Tailscale) addresses: what the host can reach and the page must not. */
-export function isPrivateHost(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, "").toLowerCase()
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") || h === "0.0.0.0") return true
-  const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])]
-    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
-      (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)
-  }
-  if (h.includes(":")) return h === "::" || h === "::1" || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith("::ffff:")
-  return false
 }
 
 /** The card as the app frames it: the page API first, then the agent's document or fragment. */
-export function cardDocument(html: string, theme: "dark" | "light" = "dark"): string {
-  const prelude = pagePrelude(theme)
+export function cardDocument(html: string, theme: "dark" | "light" = "dark", nonce = randomUUID()): string {
+  const prelude = pagePrelude(theme, nonce)
   const doctype = html.match(/^\s*<!doctype[^>]*>/i)
   if (!doctype && !/<html[\s>]/i.test(html)) {
     return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8">` +
@@ -103,16 +84,17 @@ export function cardDocument(html: string, theme: "dark" | "light" = "dark"): st
 
 // The host declares the card's colour scheme: a frame whose scheme differs from its embedder's gets an opaque
 // canvas, which would hide a page painted in the background's own colour (and lose the card's transparency).
-function hostPage(card: string): string {
+function hostPage(card: string, nonce: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 html{color-scheme:dark} html,body{margin:0;background:#16181a} iframe{display:block;border:0;width:100%;height:80px}
 </style></head><body><iframe id="card" sandbox="allow-scripts" title="card"></iframe><script>
 window.__sends = [];
 const card = document.getElementById("card");
-card.addEventListener("load", () => {
-  const ch = new MessageChannel();
-  ch.port1.onmessage = (e) => { if (e.data && (e.data.sm === "send" || e.data.sm === "refused")) window.__sends.push(String(e.data.text).slice(0, 2000)); };
-  card.contentWindow.postMessage({ sm: "port" }, "*", [ch.port2]);
+let opened = false;
+addEventListener("message", (e) => {
+  if (opened || e.source !== card.contentWindow || !e.data || e.data.sm !== "hello" || e.data.nonce !== ${JSON.stringify(nonce)} || !e.ports[0]) return;
+  opened = true;
+  e.ports[0].onmessage = (m) => { if (m.data && (m.data.sm === "send" || m.data.sm === "refused")) window.__sends.push(String(m.data.text).slice(0, 2000)); };
 });
 card.src = URL.createObjectURL(new Blob([${JSON.stringify(card).replace(/</g, "\\u003c")}], { type: "text/html" }));
 </script></body></html>`
@@ -188,31 +170,37 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn() } finally { running--; queue.shift()?.() }
 }
 
-export function checkPage(html: string, browser: Browser | undefined, o: { screenshots?: boolean } = {}): Promise<CheckResult> {
+export function checkPage(html: string, browser: Browser | undefined, o: { screenshots?: boolean; blockedHosts?: string[] } = {}): Promise<CheckResult> {
   const empty = { problems: [], notes: [], heights: { phone: 0, desktop: 0 }, unpromptedSends: [] }
   if (!browser) return Promise.resolve({ checked: false, reason: "no Chrome, Edge or Chromium on this machine", ...empty })
   return slot(async () => {
-    const context = await browser.newContext({ viewport: PHONE, colorScheme: "dark", reducedMotion: "reduce", deviceScaleFactor: 1 })
+    const proxy = await startProxy(o.blockedHosts)
+    const context = await browser.newContext({
+      viewport: PHONE, colorScheme: "dark", reducedMotion: "reduce", deviceScaleFactor: 1,
+      proxy: { server: `socks5://127.0.0.1:${proxy.port}`, bypass: "<-loopback>" },
+    })
     let timer: ReturnType<typeof setTimeout> | undefined
+    // A page that hasn't rendered by the cap is a problem, not a pass: a stuck script would otherwise be shown unchecked.
     const capped = new Promise<CheckResult>((resolve) => {
-      timer = setTimeout(() => resolve({ checked: false, reason: `the check ran out of time (${CHECK_CAP_MS / 1000} s)`, ...empty }), CHECK_CAP_MS)
+      timer = setTimeout(() => resolve({ checked: true, ...empty,
+        problems: [{ kind: "script-error", message: `the page didn't finish rendering within ${CHECK_CAP_MS / 1000} s (a script may be stuck)` }] }), CHECK_CAP_MS)
     })
     try {
-      return await Promise.race([measure(context, html, browser, o), capped])
+      return await Promise.race([measure(context, html, proxy.refused, o), capped])
     } finally {
       clearTimeout(timer)
       await context.close().catch(() => {})
+      proxy.stop()
     }
   })
 }
 
-async function measure(context: import("playwright").BrowserContext, html: string, browser: Browser, o: { screenshots?: boolean }): Promise<CheckResult> {
+async function measure(context: import("playwright").BrowserContext, html: string, refused: string[], o: { screenshots?: boolean }): Promise<CheckResult> {
   const problems: Problem[] = []
   const notes: string[] = []
-  const proxy = proxies.get(browser)
-  const refusedBefore = proxy?.refused.length ?? 0
+  const nonce = randomUUID()
   try {
-    await context.route(HOST, (route) => route.fulfill({ contentType: "text/html", body: hostPage(cardDocument(html)) }))
+    await context.route(HOST, (route) => route.fulfill({ contentType: "text/html", body: hostPage(cardDocument(html, "dark", nonce), nonce) }))
     const page = await context.newPage()
     page.on("pageerror", (e) => problems.push({ kind: "script-error", message: e.message.split("\n")[0]!.slice(0, 300) }))
     page.on("console", (m) => { if (m.type() === "error" && notes.length < 5 && !m.text().startsWith("Failed to load resource")) notes.push(`console.error: ${m.text().slice(0, 200)}`) })
@@ -268,7 +256,7 @@ async function measure(context: import("playwright").BrowserContext, html: strin
     await setFrameHeight(page, Math.max(80, Math.min(desktopHeight, 1600)))
     const desktopShot = o.screenshots ? await page.locator("#card").screenshot() : undefined
 
-    for (const r of proxy?.refused.slice(refusedBefore) ?? []) notes.push(`refused a local address: ${r}`)
+    for (const r of refused) notes.push(`refused a local address: ${r}`)
     const unpromptedSends = await page.evaluate(() => (window as unknown as { __sends: string[] }).__sends)
     return {
       checked: true,

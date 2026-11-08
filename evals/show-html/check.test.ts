@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import type { Browser } from "playwright"
-import { cardDocument, checkPage, findBrowser, isPrivateHost, launchBrowser } from "./check"
+import { cardDocument, checkPage, findBrowser, launchBrowser } from "./check"
+import { isLocalName, isPrivateAddress } from "./proxy"
 
 let browser: Browser | undefined
 beforeAll(async () => { browser = await launchBrowser() }, 30_000)
@@ -96,11 +97,28 @@ test("no browser: not checked, and said why", async () => {
   expect(r.reason).toContain("no Chrome")
 })
 
-test("private hosts", () => {
-  for (const h of ["localhost", "a.localhost", "127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.5", "169.254.1.1",
-    "100.100.1.1", "[::1]", "fd00::1", "fe80::1", "printer.local", "0.0.0.0"]) expect(isPrivateHost(h)).toBe(true)
-  for (const h of ["cdn.jsdelivr.net", "8.8.8.8", "172.32.0.1", "100.128.0.1", "example.com"]) expect(isPrivateHost(h)).toBe(false)
+test("private addresses, in every spelling the proxy can be handed", () => {
+  for (const ip of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.5", "169.254.1.1", "100.100.1.1", "0.0.0.0", "198.18.0.1",
+    "224.0.0.1", "::1", "::", "0000:0000:0000:0000:0000:0000:0000:0001", "::ffff:7f00:1", "::ffff:127.0.0.1",
+    "0000:0000:0000:0000:0000:ffff:0a00:0001", "fd00::1", "fe80::1", "64:ff9b::7f00:1", "2001::1", "2002::1", "[::1]", "not-an-ip"])
+    expect({ ip, blocked: isPrivateAddress(ip) }).toEqual({ ip, blocked: true })
+  for (const ip of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "2606:4700::1", "::ffff:808:808"])
+    expect({ ip, blocked: isPrivateAddress(ip) }).toEqual({ ip, blocked: false })
+  for (const h of ["localhost", "a.localhost", "printer.local", "nas.home.arpa", "LOCALHOST."]) expect(isLocalName(h)).toBe(true)
+  expect(isLocalName("example.com")).toBe(false)
 })
+
+run("an IPv6 literal for loopback is refused too", async () => {
+  const r = await checkPage(`<p>hi</p><img src="http://[::1]:4000/x.png" alt=""><img src="http://[::ffff:127.0.0.1]:4000/y.png" alt="">`, browser)
+  expect(r.problems).toEqual([])
+  expect(r.notes.filter((n) => n.startsWith("refused a local address")).length).toBe(2)
+}, 30_000)
+
+run("a page stuck in a loop is a problem, never shown unchecked", async () => {
+  const r = await checkPage(`<p>hi</p><script>setTimeout(() => { for (;;) {} }, 50)</script>`, browser)
+  expect(r.checked).toBe(true)
+  expect(r.problems.some((p) => p.kind === "script-error" && p.message.includes("didn't finish rendering"))).toBe(true)
+}, 60_000)
 
 test("a <header> is not a <head>", () => {
   const doc = cardDocument("<!doctype html><html><body><header>top</header></body></html>")

@@ -7,26 +7,25 @@ export const ARMS: Arm[] = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 export interface ToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
 
-const PAGE_RULES_1 = "One self-contained document: inline CSS and JS; libraries from public CDNs are fine; no local files, no storage. " +
-  "Style with the theme variables (var(--sm-fg), --sm-muted-fg, --sm-card, --sm-border, --sm-primary, --sm-chart-1 to --sm-chart-5) " +
-  "and leave the page background transparent. Fluid width: it is about 390 px wide on a phone and 720 px on a desktop. Fixed pixel " +
-  "heights for charts; no vh units. Example: <div style=\"height:14px;width:62%;background:var(--sm-chart-1)\"></div>"
+// The two wordings carry the same facts and the same example; 1 says them as terse rules, 2 with reasons.
+const EXAMPLE = `<style>.bar{height:14px;border-radius:4px;background:var(--sm-chart-1)}</style>
+<div class="bar" style="width:62%"></div>
+<button onclick="supermux.send('Use B')">Use B</button>`
+const VARS = "--sm-fg, --sm-muted-fg, --sm-card, --sm-border, --sm-muted, --sm-primary, --sm-chart-1 to --sm-chart-5"
+
+const PAGE_RULES_1 = `One self-contained document: inline CSS and JS; libraries from public CDNs are fine; no local files, no localhost, no storage (localStorage, cookies). Colours from the theme variables (${VARS}); no background on html or body. Fluid width (about 390 px on a phone, 720 px on a desktop); charts at a fixed pixel height; no vh units or height:100% on html or body. Example:
+${EXAMPLE}`
 
 const PAGE_RULES_2 = `The page renders in a sandboxed frame inside the chat, on desktops and phones, in the user's light or dark theme.
-- One self-contained document: inline CSS and JS. Libraries from public CDNs load fine; local files, localhost and storage
-  (localStorage, cookies) don't.
-- Colours come from the theme variables on :root, so the page matches the app: --sm-fg, --sm-muted-fg, --sm-card,
-  --sm-border, --sm-muted, --sm-primary, --sm-chart-1 … --sm-chart-5. Leave html and body without a background.
-- Width is fluid: about 390 px on a phone, 720 px on a desktop. Give charts a fixed pixel height. Don't use vh units or
-  height:100% on html/body: the card grows to the page's height.
+- Keep it one self-contained document, with inline CSS and JS. Libraries from public CDNs load fine; local files, localhost and storage (localStorage, cookies) don't, because the frame can't reach them.
+- Take colours from the theme variables (${VARS}) and leave html and body without a background, so the page matches the app in either theme.
+- Keep the width fluid, about 390 px on a phone and 720 px on a desktop. Give charts a fixed pixel height, and don't use vh units or height:100% on html or body: the card grows to the page's height.
 - Example:
-  <style>.bar{height:14px;border-radius:4px;background:var(--sm-chart-1)}</style>
-  <div class="bar" style="width:62%"></div>
-  <button onclick="supermux.send('Use B')">Use B</button>`
+${EXAMPLE}`
 
-const SEND_1 = "A <button> in the page can send the user's choice back to you with supermux.send(text); only their click on a button sends."
-const SEND_2 = "A <button> that calls supermux.send(text) lets the user answer you: their click sends that text to you as their message. " +
-  "Only a real click on a button sends, so a choice needs a button, not a clickable div."
+const SEND_1 = "A <button> that calls supermux.send(text) sends the user's choice to you as their message. Only a real click on a button sends; a clickable div doesn't."
+const SEND_2 = "To let the user answer you, give the page a <button> that calls supermux.send(text): their click sends that text to you as their message. " +
+  "Only a real click on a button sends, so a clickable div won't work."
 
 const RESULT_A = "The result says whether the page was shown. If it lists problems, the page was not shown."
 const RESULT_B = "show_html checks the page again: if it lists problems, the page was not shown."
@@ -36,12 +35,12 @@ const file = { type: "string", description: "Or a path to an .html file." }
 
 function showHtml(variant: Variant, wording: Wording): ToolSpec {
   const what = "Show the user a live HTML page as a card in the chat: a chart, a comparison, a small interactive tool, a mockup."
-  // Both wordings say the same things (when, when not, how, send, the result); 1 as terse rules, 2 with reasons and an example.
+  // Both wordings say the same things (when, when not, how, send, the result); 1 as terse rules, 2 with reasons.
   const when = wording === "1"
-    ? "Use it when a visual or interactive result explains better than text, asked for or not. Not for an answer that is a fact or a sentence, not for code work, not for an image to post (attach a PNG)."
-    : "Use it when the result is easier to see or try than to read, whether or not the user asked for a visual. A fact, a one-line answer " +
-      "or code work stays in plain text, because a card would only slow them down. An image they want to post is a PNG you attach, " +
-      "since a card can't leave the chat."
+    ? "Use it when a visual or interactive result explains better than text, asked for or not. Not for an answer that is a fact or a sentence, not for code work, not for an image to post (make a PNG and attach it)."
+    : "Use it when the result is easier to see or try than to read, whether or not the user asked for a visual. Keep an answer that is " +
+      "a fact or a sentence, and code work, in plain text: a card there only slows them down. An image to post is a PNG you make " +
+      "and attach, because a card can't leave the chat."
   const before = variant === "B" ? " Call preview_html first and fix what it reports." : ""
   return {
     name: "show_html",
@@ -93,12 +92,12 @@ export function instructionsFor(arm: Arm): string {
   const body = wording === "1"
     ? "The show_html tool shows the user a live HTML page as a card in the chat. Use it when a visual or interactive result " +
       "explains better than text, asked for or not. Not for an answer that is a fact or a sentence, not for code work, not for an " +
-      "image to post. One self-contained page, the --sm-* theme variables, a transparent background, fluid down to phone width. " +
-      "A button with supermux.send(text) lets the user answer you."
+      "image to post (make a PNG and attach it). One self-contained page, the --sm-* theme variables, no page background, fluid " +
+      "down to phone width. A <button> calling supermux.send(text) lets the user answer you."
     : "The show_html tool puts a live page in the chat as a card. Reach for it when the result is easier to see or try than to read, " +
-      "whether or not the user asked for a visual. Keep plain text for a fact, a one-line answer or code work: a card there only " +
-      "slows them down. An image to post is a PNG you attach, because a card can't leave the chat.\n" +
-      "Cards render on phones too, so keep the page fluid, use the --sm-* theme variables and leave the background transparent. " +
-      "A button calling supermux.send(text) lets the user answer you with a click."
+      "whether or not the user asked for a visual. Keep plain text for an answer that is a fact or a sentence, and for code work: a " +
+      "card there only slows them down. An image to post is a PNG you make and attach, because a card can't leave the chat.\n" +
+      "Cards render on phones too, so keep the page self-contained and fluid, use the --sm-* theme variables and leave the page " +
+      "without a background. A <button> calling supermux.send(text) lets the user answer you with a click."
   return `${DIAGRAMS}\n## Interactive HTML\n\n${body}${check}\n`
 }

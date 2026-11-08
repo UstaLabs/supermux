@@ -21,38 +21,45 @@ const LIGHT = {
 
 export const THEME_VARIABLES = Object.keys(DARK).map((k) => `--sm-${k}`)
 
-export function pagePrelude(theme: "dark" | "light"): string {
+/**
+ * `nonce` names this document to the host: the shim sends it up with its end of the private channel, so a document
+ * the page navigated to on its own (which has no shim and doesn't know the nonce) can never open a channel.
+ */
+export function pagePrelude(theme: "dark" | "light", nonce: string): string {
   const vars = Object.entries(theme === "dark" ? DARK : LIGHT).map(([k, v]) => `--sm-${k}:${v}`).join(";")
   return `<style id="sm-base">:root{color-scheme:${theme};${vars};--sm-radius:8px;` +
     `--sm-font:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;--sm-mono:"Geist Mono",ui-monospace,monospace}` +
     `html,body{margin:0;background:transparent;color:var(--sm-fg);font:14px/1.45 var(--sm-font)}</style>` +
     `<script id="sm-api">(() => {
-  // Captured before any page script runs, so the page can't swap them out.
-  const apply = Reflect.apply, now = Date.now, portPost = MessagePort.prototype.postMessage, closest = Element.prototype.closest;
+  // Everything the shim touches later is captured now, before any page script runs: a page can redefine
+  // prototype getters and setters, but not these references.
+  const apply = Reflect.apply, now = Date.now;
+  const getter = (proto, key) => Object.getOwnPropertyDescriptor(proto, key).get;
+  const dataOf = getter(MessageEvent.prototype, "data"), targetOf = getter(Event.prototype, "target");
+  const nodeTypeOf = getter(Node.prototype, "nodeType"), closest = Element.prototype.closest;
+  const portPost = MessagePort.prototype.postMessage;
   const uaGet = Object.getOwnPropertyDescriptor(Navigator.prototype, "userActivation")?.get;
-  const activeGet = typeof UserActivation === "function" ? Object.getOwnPropertyDescriptor(UserActivation.prototype, "isActive")?.get : undefined;
+  const activeGet = typeof UserActivation === "function" ? getter(UserActivation.prototype, "isActive") : undefined;
   const activated = () => !uaGet || !activeGet || apply(activeGet, apply(uaGet, navigator, []), []);
+  // The private channel to the host, made here; the page never sees either end.
+  const channel = new MessageChannel(), port = channel.port1;
+  parent.postMessage({ sm: "hello", nonce: ${JSON.stringify(nonce)} }, "*", [channel.port2]);
+  const waiting = new Map();
+  port.onmessage = (m) => {
+    const d = apply(dataOf, m, []);
+    const done = d && waiting.get(d.id);
+    if (done) { waiting.delete(d.id); done(d.ok ? { ok: true } : { ok: false, reason: String(d.reason || "refused") }); }
+  };
   // A send is armed only by a click the browser made (a tap, a mouse click, Enter or Space, a screen reader's
-  // activation) on a button: never by a scroll, a drag, a key, or a page's own el.click() or dispatchEvent.
-  const CONTROL = 'button, [role="button"], input[type="button"], input[type="submit"], input[type="image"]';
+  // activation) on a real button: never by a scroll, a drag, a key, or a page's own el.click() or dispatchEvent.
+  const BUTTON = 'button, input[type="button"], input[type="submit"]';
   let clickAt = 0, armed = false;
   addEventListener("click", (e) => {
-    if (e.isTrusted && e.target && apply(closest, e.target, [CONTROL])) { clickAt = now(); armed = true; }
-  }, { capture: true });
-  // The host's private channel, handed over once; the page never sees it.
-  let port = null;
-  const early = [];
-  const waiting = new Map();
-  const out = (m) => (port ? apply(portPost, port, [m]) : early.push(m));
-  addEventListener("message", (e) => {
-    if (port || e.source !== parent || !e.data || e.data.sm !== "port" || !e.ports || !e.ports[0]) return;
-    e.stopImmediatePropagation();
-    port = e.ports[0];
-    port.onmessage = (m) => {
-      const done = m.data && waiting.get(m.data.id);
-      if (done) { waiting.delete(m.data.id); done(m.data.ok ? { ok: true } : { ok: false, reason: String(m.data.reason || "refused") }); }
-    };
-    for (const m of early.splice(0)) apply(portPost, port, [m]);
+    if (!e.isTrusted) return;
+    try {
+      const t = apply(targetOf, e, []);
+      if (apply(nodeTypeOf, t, []) === 1 && apply(closest, t, [BUTTON])) { clickAt = now(); armed = true; }
+    } catch {}
   }, { capture: true });
   let n = 0;
   Object.defineProperty(window, "supermux", { value: Object.freeze({
@@ -61,12 +68,13 @@ export function pagePrelude(theme: "dark" | "light"): string {
       const id = ++n;
       text = String(text).slice(0, 2000);
       const reason = !text ? "empty" : !armed ? "no click on a button" : now() - clickAt > 1000 ? "too late after the click"
-        : !activated() ? "no user activation" : !port ? "not ready" : "";
-      if (reason) { out({ sm: "refused", id, text, reason }); return Promise.resolve({ ok: false, reason }); }
+        : !activated() ? "no user activation" : "";
+      if (reason) { apply(portPost, port, [{ sm: "refused", id, text, reason }]); return Promise.resolve({ ok: false, reason }); }
       armed = false;
-      return new Promise((resolve) => { waiting.set(id, resolve); out({ sm: "send", id, text, clickAt }); });
+      return new Promise((resolve) => { waiting.set(id, resolve); apply(portPost, port, [{ sm: "send", id, text, clickAt }]); });
     },
   }) });
   document.documentElement.dataset.theme = ${JSON.stringify(theme)};
+  document.currentScript?.remove();
 })();</script>`
 }

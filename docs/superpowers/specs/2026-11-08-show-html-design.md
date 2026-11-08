@@ -69,14 +69,17 @@ One check serves the tool's result (every variant), the card's stored heights an
   - The page is served by request interception on its own origin.
   - The theme and a stub `supermux` API are injected, as the app does.
 - **Network:** open, except loopback, LAN, link-local, CGNAT/Tailscale, NAT64/6to4 and the broker's own hosts.
-  - A local SOCKS5 proxy enforces it at the socket, with `--proxy-bypass-list=<-loopback>`, so loopback goes through it too.
-  - The proxy resolves the name itself and refuses it if any of its addresses is private. So `127.0.0.1.nip.io`, a bare LAN hostname or a rebinding name can't get through. It dials IPv4 first.
+  - A local SOCKS5 proxy, one per check, enforces it at the socket, with `<-loopback>`, so loopback goes through it too.
+  - The proxy resolves the name itself and refuses it if any of its addresses is private (`node:net`'s `BlockList`). So `127.0.0.1.nip.io`, a bare LAN hostname, an IPv6 literal in any spelling (`[::1]`, `[::ffff:127.0.0.1]`) or a rebinding name can't get through.
+  - The ranges: 0/8, 10/8, CGNAT 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, multicast and 240/4; IPv6 `::`, `::1`, NAT64, Teredo, 6to4, ULA, link-local, multicast; IPv4-mapped addresses by their IPv4 rule.
+  - It takes CONNECT only, dials IPv4 first, and holds client bytes until its reply is sent.
   - WebRTC is limited to proxied UDP, which is none.
   - This way a page can't reach services on the host while it is checked. Pages on the user's device are not limited this way.
 - **Widths:** 390 × 844 (a phone) and 720 × 900 (the desktop chat column), dark theme.
 - **Settling:** the check waits for load, then 1 s with no network activity or 4 s, whichever comes first, then for fonts and two frames.
   - Reduced motion is on, so animated charts are drawn when measured.
-  - The cap is 6 s, with at most 2 checks at once. A check that runs out of time shows the page unchecked and says so.
+  - The cap is 6 s, with at most 2 checks at once.
+  - A page that hasn't rendered by the cap is a script error ("didn't finish rendering within 6 s"), never shown unchecked. Only "no browser on this machine" shows a page unchecked.
 - **Problems** (the card is not shown), Ahmet's three:
   1. **Script error:** an uncaught exception or unhandled rejection before the page settles, or a script that failed to load. Message and line.
   2. **Blank:** nothing painted at phone width. Fewer than 40 pixels of the card's screenshot differ by more than 8 levels from its main colour. That also catches text drawn in the background's own colour.
@@ -99,13 +102,17 @@ Nothing else crosses the bridge: no session, no tools, no files, no app state.
 ## Click-to-send: only a real click or tap in that card
 
 The rules, the same everywhere:
-- A send is armed only by a click that the engine itself made on a **button** in that card: `button`, `[role=button]`, `input[type=button|submit]`.
+- A send is armed only by a click that the engine itself made on a **button** in that card: `button` or `input[type=button|submit]`. `[role=button]` isn't enough, because a page can put it on the whole body.
   - That covers a tap, a mouse click, Enter or Space on a focused button, and a screen reader's activation.
   - It doesn't cover a scroll, a drag, a key press elsewhere, or a page's own `el.click()` or `dispatchEvent`.
 - The send must come within 1 s of that click, and one click allows one send.
 - `text` is 1–2000 characters.
-- The send travels on **the card's private channel**: the library's bridge port, which the shim captures before any page script runs. A message the page posts on its own is never a send.
-- The host refuses a send if the user touched the app after that click.
+- The send travels on **the card's private channel**. The shim creates it at document start, before any page script runs, and sends one end up with this document's nonce. A message the page posts on its own is never a send.
+- The host accepts one channel per document it built. A document the page navigates to on its own has no shim and doesn't know the nonce.
+- The host re-checks every send:
+  - the click is within the last second, by its own clock;
+  - the user hasn't touched the app since;
+  - the browser reports the user's activation at the host too, since activation propagates from the card to its embedder.
 
 A refused call returns `{ ok: false, reason }` to the page and is logged. It is never sent silently. These are refused:
 - a call while the page loads;
@@ -120,21 +127,23 @@ A refused call returns `{ ok: false, reason }` to the page and is logged. It is 
 
 Focus is never trusted: a page can move focus itself, and a window that wasn't focused gets no blur on a real click.
 
-**Web (iframe).** The shim is part of the document the app builds, so it runs first. It does three things:
-- It captures `Reflect.apply`, `Element.prototype.closest`, `MessagePort.prototype.postMessage` and the `userActivation` getters.
+**Web (iframe).** The shim is part of the document the app builds, so it runs first. It does four things:
+- It captures every accessor it touches later: `Reflect.apply`, the `data`, `target` and `nodeType` getters, `Element.prototype.closest`, `MessagePort.prototype.postMessage` and the `userActivation` getters. A page can redefine prototype accessors, but it can't reach these captured references, so it can neither steal the channel nor fake a click's target.
+- It makes its `MessageChannel` and posts one end to the host at once.
 - It listens for trusted `click` events in the capture phase.
-- It takes the host's port from the first message, with `stopImmediatePropagation`, so no page listener ever sees it.
+- It removes its own script element, so the nonce isn't in the DOM.
 
 The frame's transient user activation (`navigator.userActivation.isActive`) must hold at call time.
 
 **Native** (WKWebView on macOS and iOS, Android WebView, WebView2, WPE):
 - The same shim runs through the library's document-start bridge. On Apple's engines it runs in its own `WKContentWorld`, out of the page's reach.
-- The host also records the real pointer, touch and key input delivered to that card's view. A send is accepted only within 1 s of that input, consumed by the send.
-- Open decision 4: a screen reader's activation (VoiceOver, TalkBack) reaches the page as a click but delivers no input to the view.
+- The host also records the real pointer, touch and key input delivered to that card's view. A send is accepted only within 1 s of that input, consumed by the send. On Windows this works in webview-compose's visual hosting, where the library forwards the input itself.
+- Open decision 4: assistive input (VoiceOver, TalkBack, Voice Control, Switch Access, Narrator) reaches the page as a click but delivers no input to the view.
 
 **Built and tested for the web already,** in the eval harness:
 - the shim is `evals/show-html/page-api.ts` and the host is `click.ts`;
-- 6 tests in real Chrome cover every refused case above and the happy path.
+- 8 tests in real Chrome cover every refused case above and the happy path;
+- they include a page that patches every prototype accessor to steal the channel, fakes a click's target, and sends a hello of its own.
 
 **Tests for the build:**
 - On every platform, on the library's fake engine: each refused case and the happy path.
@@ -276,10 +285,13 @@ Ahmet: *"maybe a single tool isn't enough."* The evals decide between A, B and C
 
 **Arms:** variants A, B and C, each with two instruction wordings, so six arms.
 
-**Phases** (six arms × 18 prompts × 12 models × 3 samples would be ~3,900 runs, so the runs are phased):
-1. **Smoke:** Haiku, every arm, 1 sample (108 runs). This proves the harness and the scoring.
-2. **Breadth, cheap models:** Haiku, Luna, Flash and the free OpenCode model, every arm, 1 sample. A second sample runs where an arm's result on a prompt is borderline.
-3. **Depth, after Ahmet sees the estimate:** the best two arms on Sonnet, Opus, Terra, Argon, Grok, a paid OpenCode model and Cursor, with 2 samples.
+**Phases** (six arms × 24 prompts × 12 models × 3 samples would be ~5,200 runs, so the runs are phased):
+1. **Smoke:** Haiku, A1, B1 and C1 over the 24 prompts, 1 sample (72 runs). This proves the harness and the scoring.
+2. **The smallest trustworthy run** (council-19's estimate), on the two CLIs that can run now, Haiku and a free OpenCode model, with 3 samples:
+   - Stage 1: A1 vs B1 vs C1, 432 runs (144 paired trials per arm). That's enough to see a 10–12 point difference in tool use, or a 25-point difference in repair, at p < 0.05 (McNemar).
+   - Stage 2: the winner's two wordings, 144 more runs.
+   - In all, 576 runs, 288 of them on Haiku.
+3. **Depth, after Ahmet sees the estimate:** the winning arm on Sonnet, Opus, and whichever of Codex, Antigravity, Grok and Cursor can run by then.
 
 **Scores per model × arm:**
 - **Tool use:** a card when expected, none when not (precision and recall, the negatives counted apart).
@@ -307,7 +319,7 @@ Ahmet: *"maybe a single tool isn't enough."* The evals decide between A, B and C
 
 TDD, cars to Muxie, real checks on his Mac, Fold and iPhone.
 
-1. **The check** as a broker module: browser discovery, the pipe, the proxy, the four problems. Tests on fixed pages, one per problem, plus a clean one.
+1. **The check** as a broker module: browser discovery, the pipe, the proxy, the three problems. Tests on fixed pages, one per problem, plus a clean one.
 2. **The tool:** `show_html` (or the evals' winner) in `src/shim/tools.ts`, storage, the message, `toolResult`, and the `from_card` user message.
 3. **webview-compose:**
    - the web engine loads `Html` from `blob:`;
@@ -337,8 +349,9 @@ TDD, cars to Muxie, real checks on his Mac, Fold and iPhone.
 3. The check without a browser on the host: **shown, said in the result** · or offer to download a headless Chromium (~150 MB) once.
 4. **Screen readers and click-to-send on native platforms.**
    - VoiceOver and TalkBack activate a button as a click inside the page, but deliver no input to the view. So the host's input stamp (your rule for native platforms) refuses their sends.
-   - **(a) accept the shim's trusted button click alone while the platform's screen reader is on.** The app asks the OS (`UIAccessibility.isVoiceOverRunning`, Android's `AccessibilityManager.isTouchExplorationEnabled`).
-   - (b) keep the host stamp strict: no click-to-send with a screen reader.
+   - **(a) accept the shim's trusted button click alone while assistive input is on.** The app asks the OS (`UIAccessibility.isVoiceOverRunning`, `isSwitchControlRunning`, Android's `AccessibilityManager.isTouchExplorationEnabled`, Windows' screen-reader flag). That leaves gaps: Voice Control and Android's Voice Access have no reliable flag.
+   - (b) keep the host stamp strict: no click-to-send with assistive input.
+   - (c) council-19's view: drop the native host stamp and rely, as the web does, on the shim's trusted button click on its private channel, with the engine's own transient activation. On Apple's engines the shim runs in its own `WKContentWorld`. That works for every assistive input, but it replaces the native rule as you set it, so it's your call.
 
 ## Eval runs: what works on this box (2026-11-08)
 
