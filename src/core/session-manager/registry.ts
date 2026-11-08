@@ -354,6 +354,16 @@ export class Registry {
     }
   }
 
+  private refusedProxyPorts = new Set<number>()
+
+  /**
+   * Ports a proxy may never point at; main.ts passes the broker's own. A request the proxy forwards to the broker arrives
+   * from loopback with Host 127.0.0.1 and no forwarding header, which the broker takes for the desktop app on this
+   * computer, and GET /host then answers with the local-only facts (state dir, install mode). By-port previews refuse it
+   * in the web channel; this is the same rule for a named proxy, and every way of making one lands in addProxy.
+   */
+  refuseProxyPort(port: number): void { this.refusedProxyPorts.add(port) }
+
   addProxy(input: { domain: string; sessionId: string; port: number; isPublic?: boolean }): ProxyEntry {
     const { domain, sessionId, port } = input
     // typeof first: the web route only casts the JSON body's domain, and a regex coerces (true reads as "true", but
@@ -368,6 +378,7 @@ export class Registry {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`invalid port: ${port}`)
     }
+    if (this.refusedProxyPorts.has(port)) throw new Error(`can't expose port ${port}: that is the broker itself`)
     const session = this.sessions.getById(sessionId)
     if (!session) throw new Error(`no such session: ${sessionId}`)
     const existing = this.proxies.get(domain)

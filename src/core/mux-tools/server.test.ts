@@ -147,6 +147,17 @@ describe("mux-shim host server: calls through the shared handlers", () => {
     expect(random.domain).toMatch(/^px-[0-9a-f]{8}$/)
   })
 
+  test("expose_port refuses the broker's own port and still takes any other", async () => {
+    const t = setup(); cleanups.push(t.unbind)
+    t.registry.refuseProxyPort(9898)
+    const worker = await connect(AgentKind.Codex, t.worker.id)
+    expect(await call(worker, "expose_port", { port: 9898, domain: "app" }))
+      .toEqual({ isError: true, content: [{ type: "text", text: "can't expose port 9898: that is the broker itself" }] })
+    expect(t.registry.listProxies()).toEqual([])
+    const ok = await call(worker, "expose_port", { port: 9899, domain: "app" })
+    expect(JSON.parse(ok.content[0].text)).toMatchObject({ domain: "app", port: 9899 })
+  })
+
   test("rename_session needs no gate: a worker renames itself", async () => {
     const t = setup(); cleanups.push(t.unbind)
     const worker = await connect(AgentKind.Codex, t.worker.id)

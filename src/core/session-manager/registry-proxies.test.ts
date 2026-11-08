@@ -177,6 +177,26 @@ test("a digits-only proxy stored before the rule still loads, can be made public
   expect(registry.getProxy("5173")).toBeUndefined()
 })
 
+// A proxy forwarded to the broker's own port arrives from loopback with Host 127.0.0.1 and no forwarding header, which the
+// broker takes for the desktop app on this computer: GET /host then answers with the local-only facts (state dir, install mode).
+test("addProxy refuses a port the broker has said is its own, and accepts every other", () => {
+  const { registry, db } = reg()
+  const s = addSession(registry, "alpha")
+  registry.refuseProxyPort(9898)
+  expect(() => registry.addProxy({ domain: "app", sessionId: s.id, port: 9898 })).toThrow("can't expose port 9898: that is the broker itself")
+  expect(registry.listProxies()).toEqual([])
+  expect(db.query("SELECT domain FROM proxies").all()).toEqual([])
+  for (const port of [9897, 9899, 3000, 1, 65535]) {
+    expect(registry.addProxy({ domain: `app${port}`, sessionId: s.id, port }).port).toBe(port)
+  }
+})
+
+test("a registry that was told no port refuses none", () => {
+  const { registry } = reg()
+  const s = addSession(registry, "alpha")
+  expect(registry.addProxy({ domain: "app", sessionId: s.id, port: 9898 }).port).toBe(9898)
+})
+
 test("reload across restart: archived (killed) session's proxy is dropped and the row deleted", () => {
   const db = freshDb()
   const a = new Registry(db)
