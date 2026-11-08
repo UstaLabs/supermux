@@ -404,8 +404,9 @@ async function main() {
     parked.clear()
     if (!alive(agent.pid ?? 0)) { finish(); return }
     // A tree kill: on Windows a .cmd agent runs behind cmd.exe, and ending cmd.exe alone would leave the agent running.
-    // Elsewhere it signals the agent (its process group, when it leads one).
-    const stop = (signal: NodeJS.Signals) => { if (agent.pid) proc.killTree(agent.pid, { signal }) }
+    // Elsewhere it signals the agent (its process group, when it leads one). Never once the agent has exited: the
+    // SIGKILL below can come after that (a program it started may hold its pipes open), and its pid be another's.
+    const stop = (signal: NodeJS.Signals) => proc.killChildTree(agent, { signal })
     stop('SIGTERM')
     const t = setTimeout(() => stop('SIGKILL'), limits.shutdownTimeoutMs)
     agent.once('close', () => clearTimeout(t))
@@ -502,8 +503,9 @@ async function main() {
     if (msg.type === 'signal') {
       if (msg.signal !== 'SIGINT') { sendClient(sock, { type: 'error', message: 'invalid signal' }); return }
       // To the recorded pid as the root of the agent's tree: on Windows an interrupt is TerminateProcess, and a .cmd
-      // agent's pid is cmd.exe's, so ending it alone would leave the agent behind it running.
-      if (agent.pid) proc.killTree(agent.pid, { signal: 'SIGINT' })
+      // agent's pid is cmd.exe's, so ending it alone would leave the agent behind it running. Nothing once the agent
+      // has exited: the keeper outlives it (up to its parked deadline), and the pid may be another process's by then.
+      proc.killChildTree(agent, { signal: 'SIGINT' })
       return
     }
     if (msg.type === 'frame') {

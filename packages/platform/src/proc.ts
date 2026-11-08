@@ -263,6 +263,15 @@ export function killTree(pid: number, options: KillTreeOptions = {}): void {
 }
 
 /**
+ * [killTree] for a [child] this process started, while it runs. Nothing once it has exited (Node's own rule for
+ * child.kill): its pid may be another process's by then, and a tree kill would end that process instead.
+ */
+export function killChildTree(child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">, options: KillTreeOptions = {}): void {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+  killTree(child.pid, options)
+}
+
+/**
  * A bash that runs a POSIX shell script (a worktree's .mux/worktree-setup.sh or .mux/verify.sh): the bash on PATH. On
  * Windows, Git for Windows' bash.exe: on PATH, beside the git on PATH, or where Git installs, but never WSL's
  * System32\bash.exe, which runs the script inside Linux. Null when there is none (MinGit, the git the broker installs,

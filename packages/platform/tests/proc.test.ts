@@ -105,6 +105,23 @@ test("killTree on Windows ends the process itself when taskkill cannot be starte
   expect(sent).toEqual([4322])
 })
 
+// #29: the keeper stopped its agent with child.kill(), which Node never sends to a child that has exited. Its pid may be
+// another process's by then (Windows reuses pids quickly), and a tree kill of that pid would end that process instead.
+test("killChildTree ends a running child's tree, and nothing once the child has exited", () => {
+  const sent: [number, string][] = []
+  const kill = (pid: number, signal: NodeJS.Signals) => { sent.push([pid, signal]) }
+  proc.killChildTree({ pid: 41, exitCode: null, signalCode: null }, { platform: "linux", kill })
+  proc.killChildTree({ pid: 42, exitCode: 0, signalCode: null }, { platform: "linux", signal: "SIGKILL", kill })
+  proc.killChildTree({ pid: 43, exitCode: null, signalCode: "SIGTERM" }, { platform: "linux", signal: "SIGKILL", kill })
+  proc.killChildTree({ pid: undefined, exitCode: null, signalCode: null }, { platform: "linux", kill })
+  expect(sent).toEqual([[-41, "SIGTERM"]])
+  const started: unknown[][] = []
+  const spawn = (...args: unknown[]) => { started.push(args); return { on: () => undefined } }
+  proc.killChildTree({ pid: 4323, exitCode: 1, signalCode: null }, { platform: "win32", spawn })
+  proc.killChildTree({ pid: 4324, exitCode: null, signalCode: null }, { platform: "win32", spawn })
+  expect(started.map((call) => call[1])).toEqual([["/PID", "4324", "/T", "/F"]])
+})
+
 // Worktree hooks are POSIX scripts (.mux/worktree-setup.sh, .mux/verify.sh). The broker ran them with `bash` from PATH
 // (on Windows: missing, since Git's installer puts only Git\cmd there, or WSL's launcher, which runs them inside Linux)
 // and through cmd.exe.
