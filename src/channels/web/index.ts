@@ -15,7 +15,7 @@ import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { AUTH_COOKIE, authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
+import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
@@ -2483,7 +2483,8 @@ export class WebChannel implements Channel {
       // (subdomain mode), so a paired device already sends it here. A static
       // 401 (no reflected input) replaces the old /proxy-auth redirect dance.
       const token = authToken(req)
-      if (!token || !this.opts.proxyAuth?.(token)) {
+      const preview = previewCookieToken(req)
+      if (!(token && this.opts.proxyAuth?.(token)) && !(preview && this.store.verifyPreview(preview))) {
         const mainUrl = this.opts.publicUrl.replace(/\/$/, "")
         return new Response(
           `<!DOCTYPE html><meta charset="utf-8"><title>Not paired</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pair this device in the <a style="color:#6ea8fe" href="${mainUrl}/">main app</a> first, then reload.</p></body>`,
@@ -2509,7 +2510,7 @@ export class WebChannel implements Channel {
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
+    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE, PREVIEW_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -4654,6 +4655,13 @@ export class WebChannel implements Channel {
       const pairBase = this.getRelayUrl?.() ?? this.opts.publicUrl
       const url = `${pairBase.replace(/\/$/, "")}/pair?t=${token}`
       return this.json({ url, name: finalName })
+    }
+    if (method === "POST" && path === "/devices/preview-token") {
+      // Native apps only: the web app never shows private previews, and a token in page JavaScript is one to lose.
+      if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
+      const token = this.store.mintPreview(bearerToken(req))
+      if (!token) return this.json({ error: "unknown device" }, 401)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))

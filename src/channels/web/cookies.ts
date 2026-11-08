@@ -5,6 +5,8 @@
 import { parseCookie } from "./proxy"
 
 export const AUTH_COOKIE = "cmux_token"
+/** #105's preview-only credential: a Browser tab's own cookie store holds it; it opens port previews and nothing else. */
+export const PREVIEW_COOKIE = "cmux_preview"
 
 interface CookieOpts {
   publicUrl: string
@@ -46,6 +48,27 @@ export function buildClearCookie(o: CookieOpts): string {
   return `${AUTH_COOKIE}=; ${attrs(o)}; Max-Age=0`
 }
 
+export function previewCookieToken(req: Request): string {
+  return parseCookie(req.headers.get("cookie"), PREVIEW_COOKIE) ?? ""
+}
+
+/**
+ * The preview cookie as the app sets it in a Browser tab's cookie store (never as a Set-Cookie in its own jar):
+ * under /p/ on the app's host in path mode; on every preview host (Domain=.<base>, Path=/) in subdomain mode.
+ * The app may set it on the origin it reaches the broker through; `url` is the public one.
+ */
+export function previewCookieSpec(token: string, o: CookieOpts): Record<string, string | number | boolean> {
+  const host = hostOf(o.publicUrl)
+  const origin = new URL(o.publicUrl).origin
+  const sub = !!o.proxyBaseDomain && (host === o.proxyBaseDomain || host.endsWith(`.${o.proxyBaseDomain}`))
+  return {
+    name: PREVIEW_COOKIE, value: token,
+    url: `${origin}${sub ? "/" : "/p/"}`, path: sub ? "/" : "/p/",
+    ...(sub ? { domain: `.${o.proxyBaseDomain}` } : {}),
+    httpOnly: true, secure: o.publicUrl.startsWith("https:") || isLocalhost(host), sameSite: "Lax", maxAge: 31536000,
+  }
+}
+
 export function cookieToken(req: Request): string {
   return parseCookie(req.headers.get("cookie"), AUTH_COOKIE) ?? ""
 }
@@ -84,7 +107,7 @@ export function authedViaBearer(req: Request): boolean {
  * Bearer clients (the native apps) and requests without the cookie have no ambient session to ride.
  */
 export function crossSiteRefusal(req: Request, o: { appOrigins: (string | undefined)[]; proxied: boolean }): string | undefined {
-  if (!cookieToken(req)) return undefined
+  if (!cookieToken(req) && !previewCookieToken(req)) return undefined
   const origin = req.headers.get("origin")
   if (origin?.trim().toLowerCase() === "null") return "opaque origin"
   if (req.headers.get("sec-fetch-site") === "cross-site" && !isTopLevelNavigation(req)) return "cross-site request"
