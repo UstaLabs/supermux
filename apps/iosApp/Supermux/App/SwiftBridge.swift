@@ -161,17 +161,43 @@ final class SwiftBridge: NSObject, IosBridge {
         }
     }
 
-    /// Writes the bytes to a temp file and presents the share sheet over them.
+    /// "Save to Files" for a finished download (#95): the file at `path`, already staged under its
+    /// real name by the Kotlin side (`stageNamed`), exported by the document picker as a COPY to the
+    /// folder the user picks — nothing passes through memory. The picker and not the share sheet,
+    /// unlike `saveAs`: a download offers Share as an action of its own, so Save is the file system
+    /// alone.
     ///
-    /// The completion fires twice-shaped information exactly once: `presented` says whether the
-    /// sheet ever went up, and `completed`/`activity` describe what the user chose (or nothing, if
-    /// it was never presented). The two callers above want different halves of that.
+    /// The result is the name the copy was saved under ("Keep Both" can make it `report 2.pdf`), or
+    /// nil when the picker was dismissed — `DocumentPickDelegate` resolves both ways out.
+    func saveFileAt(path: String, onResult: @escaping (String?) -> Void) {
+        guard let presenter = presenter() else { return onResult(nil) }
+        let picker = UIDocumentPickerViewController(forExporting: [URL(fileURLWithPath: path)], asCopy: true)
+        let delegate = DocumentPickDelegate { urls in
+            onResult(urls.first?.lastPathComponent)
+        }
+        picker.delegate = delegate
+        retain(delegate)
+        delegate.onFinish = { [weak self] in self?.release(delegate) }
+        presenter.present(picker, animated: true)
+    }
+
+    /// The share sheet over a finished download (#95), already staged under its real name by the
+    /// Kotlin side — iOS's "Open in…" is this same sheet. True when the sheet was PRESENTED, the
+    /// contract `openExternally` has, for the same reason.
+    func shareFileAt(path: String, onResult: @escaping (KotlinBoolean) -> Void) {
+        share(url: URL(fileURLWithPath: path)) { presented, _, _ in
+            onResult(KotlinBoolean(bool: presented))
+        }
+    }
+
+    /// Writes the bytes to a temp file and presents the share sheet over it (`share(url:)`).
     private func share(
         name: String,
         bytes: KotlinByteArray,
         onResult: @escaping (_ presented: Bool, _ completed: Bool, _ activity: UIActivity.ActivityType?) -> Void
     ) {
-        guard let presenter = presenter() else { return onResult(false, false, nil) }
+        // Nowhere to present from: no file to write either.
+        guard presenter() != nil else { return onResult(false, false, nil) }
         let data = IosBytesKt.dataFrom(bytes: bytes)
         // The name is broker-supplied and ends up in a path: strip any directory part so it cannot
         // escape the temp directory. Mirrors `safeFileName` on the Kotlin side.
@@ -179,6 +205,20 @@ final class SwiftBridge: NSObject, IosBridge {
             .flatMap { $0.isEmpty ? nil : $0 } ?? "file"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(leaf)
         guard (try? data.write(to: url, options: .atomic)) != nil else { return onResult(false, false, nil) }
+        share(url: url, onResult: onResult)
+    }
+
+    /// Presents the share sheet over the file at `url` — the one presenter path, for bytes just
+    /// written (`share(name:bytes:)`) and for a finished download already on disk (`shareFileAt`).
+    ///
+    /// The completion fires twice-shaped information exactly once: `presented` says whether the
+    /// sheet ever went up, and `completed`/`activity` describe what the user chose (or nothing, if
+    /// it was never presented). The callers above want different halves of that.
+    private func share(
+        url: URL,
+        onResult: @escaping (_ presented: Bool, _ completed: Bool, _ activity: UIActivity.ActivityType?) -> Void
+    ) {
+        guard let presenter = presenter() else { return onResult(false, false, nil) }
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         // iPad has no "present from nowhere": a popover without an anchor is a runtime trap.
         sheet.popoverPresentationController?.sourceView = presenter.view

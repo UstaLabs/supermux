@@ -12,6 +12,15 @@ internal fun hostFileId(path: String, mtime: Long, size: Long): String {
     return hex(fnv1a(bytes, FNV_OFFSET_BASIS)) + hex(fnv1a(bytes, SECOND_OFFSET_BASIS))
 }
 
+/**
+ * The folder a finished download is staged in to be handed to another app under its REAL name (#95):
+ * `<staging>/<this>/<name>`. The media store keeps the file under an id of its own, which would arrive as
+ * "3f9c4d….bin"; this folder, 16 lowercase hex digits of a hash of [storedPath] (where the file is stored), is the
+ * same for one file and apart for any two, so two different `report.pdf`s never overwrite each other while an app
+ * reads one. A plain path segment on every file system: nothing to escape.
+ */
+fun stagingFolderName(storedPath: String): String = hex(fnv1a(storedPath.encodeToByteArray(), FNV_OFFSET_BASIS))
+
 private fun fnv1a(bytes: ByteArray, basis: ULong): ULong {
     var hash = basis
     for (b in bytes) hash = (hash xor b.toUByte().toULong()) * FNV_PRIME
