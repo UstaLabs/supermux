@@ -387,6 +387,9 @@ Terminal=false
      */
     internal fun ownership(env: String?, marked: Boolean, legacy: Boolean, me: Owner): Ownership = when {
         legacy -> Ownership.LEGACY
+        // Our own definition's env file, written but lost (a power cut left it zeros or empty, #113): ours and broken,
+        // so the next install rewrites it. Never another copy's: that would leave the app no way to start.
+        marked && env != null && env.all { it == '\u0000' || it.isWhitespace() } -> Ownership.OURS
         env != null && INSTALL_ENV in env -> if (me.id in env) Ownership.OURS else Ownership.OTHER
         marked && me.ownsUnstamped -> Ownership.OURS
         else -> Ownership.OTHER
@@ -648,7 +651,13 @@ Terminal=false
      * created private and then moved over the old one, so it is never readable by others, not even
      * for a moment, and a crash never leaves it half-written.
      */
-    internal fun writePrivate(file: Path, text: String, charset: java.nio.charset.Charset = Charsets.UTF_8) {
+    internal fun writePrivate(
+        file: Path,
+        text: String,
+        charset: java.nio.charset.Charset = Charsets.UTF_8,
+        /** Flushes the written temp file to disk before the move, so a power cut can't leave the file zeroed (#113). */
+        sync: (Path) -> Unit = { p -> java.nio.channels.FileChannel.open(p, java.nio.file.StandardOpenOption.WRITE).use { it.force(true) } },
+    ) {
         val dir = file.parent
         Files.createDirectories(dir)
         val posix = "posix" in file.fileSystem.supportedFileAttributeViews()
@@ -659,6 +668,7 @@ Terminal=false
         }
         try {
             Files.writeString(tmp, text, charset)
+            sync(tmp)
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } finally {
             Files.deleteIfExists(tmp)
