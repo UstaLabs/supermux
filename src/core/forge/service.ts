@@ -7,7 +7,7 @@ import { bindHttpsCredentials } from "./credential-helper"
 import { ensureKeypair, seedKnownHosts, sshCommandFor, bindSshCommand, removeKeypair } from "./ssh-keys"
 import { join } from "path"
 import { mkdirSync } from "fs"
-import { execFileSync } from "child_process"
+import { runSyncOrThrow } from "../git/exec-sync"
 import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } from "./cloned"
 import { pullBranch, isAuthError, type PullResult } from "../git/remote"
 import { parseHostInput, schemeOf, withScheme } from "./host"
@@ -127,7 +127,7 @@ export class ForgeService {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name === "..") throw new ForgeError("invalid_input", "invalid project name")
     const dir = join(this.cfg.projectsRoot, "local", name)
     mkdirSync(dir, { recursive: true })
-    if (this.cfg.gitAvailable?.() !== false) execFileSync("git", ["init", "-q", dir])
+    if (this.cfg.gitAvailable?.() !== false) runSyncOrThrow("git", ["init", "-q", dir], { timeoutMs: 30_000 })
     return { localPath: dir }
   }
 

@@ -1,21 +1,18 @@
 // src/core/forge/cli-import.ts
-import { execFile, execFileSync } from "child_process"
+import { runAsync } from "../git/exec"
+import { runSyncOrThrow } from "../git/exec-sync"
 import type { ForgeKind } from "./types"
 
 export type Runner = (cmd: string, args: string[]) => string
 export type StatusRunner = (cmd: string, args: string[]) => string | Promise<string>
 
-const defaultRunner: Runner = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()
-const defaultStatusRunner: StatusRunner = (cmd, args) => new Promise((resolve, reject) => {
-  execFile(cmd, args, {
-    encoding: "utf8",
-    timeout: 2_000,
-    windowsHide: true,
-  }, (error, stdout) => {
-    if (error) reject(error)
-    else resolve(stdout.trim())
-  })
-})
+const defaultRunner: Runner = (cmd, args) => runSyncOrThrow(cmd, args, { timeoutMs: 30_000 })
+// What the CLI said, stdout and stderr: older gh and glab print their auth status on stderr.
+const defaultStatusRunner: StatusRunner = async (cmd, args) => {
+  const r = await runAsync(cmd, args, { cwd: process.cwd(), timeoutMs: 2_000 })
+  if (r.code !== 0) throw new Error(r.output.trim() || `${cmd} exited with ${r.code}`)
+  return r.output.trim()
+}
 
 const CLI: Record<ForgeKind, string> = { github: "gh", gitlab: "glab" }
 
