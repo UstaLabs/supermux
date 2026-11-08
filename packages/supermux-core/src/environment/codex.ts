@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+// platform-ok: Codex exec-policy rules exist for POSIX shells only (Windows gets none); posix on any host
 import { join, posix } from "node:path"
 import { codexCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"

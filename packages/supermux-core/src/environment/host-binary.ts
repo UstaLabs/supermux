@@ -1,4 +1,5 @@
 import { accessSync, constants, lstatSync, readlinkSync } from "node:fs"
+// platform-ok: a POSIX trust check (uid, mode, root-owned folders), posix on any host
 import { posix } from "node:path"
 
 /** What the check needs to know about one path, without following links. */
@@ -63,7 +64,7 @@ function physicalProgram(path: string, fs: HostFs): string | undefined {
   let dir = "/"
   let dirStat = fs.lstat("/")
   if (!dirStat.isDirectory()) return undefined
-  const pending = path.split("/").filter(part => part !== "")
+  const pending = path.split(posix.sep).filter(part => part !== "")
   let links = 0
   while (pending.length > 0) {
     const part = pending.shift()!
@@ -79,11 +80,11 @@ function physicalProgram(path: string, fs: HostFs): string | undefined {
     if (stat.isSymbolicLink()) {
       if (++links > MAX_LINKS) return undefined
       const target = fs.readlink(entry)
-      if (target.startsWith("/")) {
+      if (posix.isAbsolute(target)) {
         dir = "/"
         dirStat = fs.lstat("/")
       }
-      pending.unshift(...target.split("/").filter(part => part !== ""))
+      pending.unshift(...target.split(posix.sep).filter(part => part !== ""))
       continue
     }
     if (stat.isDirectory()) {

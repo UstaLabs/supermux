@@ -128,11 +128,6 @@
     "src/shared/preflight.ts": 3
   },
   "path-shape": {
-    "packages/supermux-core/src/accounts/registry.ts": 1,
-    "packages/supermux-core/src/environment/codex.ts": 1,
-    "packages/supermux-core/src/environment/cursor.ts": 1,
-    "packages/supermux-core/src/environment/host-binary.ts": 4,
-    "packages/supermux-core/src/environment/opencode.ts": 1,
     "src/channels/web/proxy.ts": 5,
     "src/core/editor/changes.ts": 1,
     "src/core/editor/workdir-diff.ts": 1,
