@@ -43,6 +43,14 @@ test('interrupt during start acknowledgement and steer use exact turn',async()=>
  pending=r.prompt(input('hang'),signal());await r.steer!(input('change'));expect(await pending).toEqual({stopReason:'end_turn'})
  }finally{await r.close({ mode: "shutdown" })}
 })
+test('an abort that lands while codex is still starting ends setup at once, not at the setup timeout',async()=>{
+ const controller=new AbortController()
+ // Budgets no test outlives: only the abort can end this setup.
+ const pending=driver({MODE:'setup-hang'},{setupTimeoutMs:600_000,requestTimeoutMs:600_000}).open(ctx({signal:controller.signal}))
+ // open() is now inside its first await (starting codex): the abort lands before setup listens for one.
+ controller.abort()
+ await expect(pending).rejects.toThrow()
+})
 test('missing executable, setup timeout, and stream failures reject',async()=>{
  await expect(driver({}, {command:'/not-a-codex-executable'}).open(ctx())).rejects.toThrow()
  await expect(driver({MODE:'setup-hang'},{setupTimeoutMs:30}).open(ctx())).rejects.toThrow()
