@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -447,7 +448,8 @@ fun KitSlider(
                     moveTo(at(ch.position.x))
                 }
             }
-            .alpha(if (enabled) 1f else 0.45f),
+            // Not Modifier.alpha: below 1 it clips, and the knob overhangs the track by half at either end.
+            .then(if (enabled) Modifier else Modifier.graphicsLayer(alpha = 0.45f)),
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(1.dp)).background(c.line))
