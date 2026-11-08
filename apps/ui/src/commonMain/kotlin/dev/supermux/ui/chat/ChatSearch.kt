@@ -57,11 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isAltPressed
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -174,11 +170,6 @@ fun chatFindMatches(items: List<TimelineItem>, query: String): List<Int> {
         item is TimelineItem.Msg && item.entry.text?.contains(q, ignoreCase = true) == true
     }
 }
-
-/** Ctrl/Cmd+F, exactly. */
-fun isFindChord(event: KeyEvent): Boolean =
-    event.type == KeyEventType.KeyDown && event.key == Key.F &&
-        (event.isCtrlPressed || event.isMetaPressed) && !event.isShiftPressed && !event.isAltPressed
 
 /** "3/17", "No results", "" before a query. */
 internal fun findCountLabel(query: String, matches: Int, current: Int): String = when {

@@ -64,14 +64,14 @@ class KeymapConflictTest {
 
     /** A focused terminal keeps its find and paste ([terminalKeeps]): these app keys reach the app only when it leaves them. */
     private val terminalAllowed = setOf(
-        AppCommands.FindInChat.id to "Mod-f",
+        AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
     )
 
     /** ⌘/ and ⌘F stay the editor's (the deeper scope wins); paste-image is handled only by a composer. */
     private val editorAllowed = setOf(
         AppCommands.ShowShortcuts.id to "Mod-/",
-        AppCommands.FindInChat.id to "Mod-f",
+        AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
     )
 

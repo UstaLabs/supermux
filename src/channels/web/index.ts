@@ -14,7 +14,7 @@ import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
-import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
+import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
@@ -98,6 +98,10 @@ const RATE_LIMIT_MAX = 16
 // 10min delete) are meaningless while the SERVER drops the connection first, so this must be
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
+
+/** What a proxied WebSocket may send before its upstream socket has opened: past either bound the client is closed with 1009. */
+export const PROXY_WS_PENDING_MAX_BYTES = 1024 * 1024
+export const PROXY_WS_PENDING_MAX_MESSAGES = 256
 
 // Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
@@ -493,6 +497,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
+  proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
   /**
    * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
@@ -832,6 +838,13 @@ export class WebChannel implements Channel {
               ? new WebSocket(wsUrl, protocols)
               : new WebSocket(wsUrl)
             ;(ws.data as any)._proxyWs = upstream
+            // A client that speaks first sends before this dial has finished; keep those frames and flush them on open.
+            const pending: { frames: Array<string | Buffer>; bytes: number } = { frames: [], bytes: 0 }
+            ;(ws.data as any)._proxyPending = pending
+            upstream.addEventListener("open", () => {
+              for (const frame of pending.frames.splice(0)) { try { upstream.send(frame) } catch {} }
+              pending.bytes = 0
+            })
             upstream.addEventListener("message", (e) => { try { ws.send(e.data) } catch {} })
             upstream.addEventListener("close", () => { try { ws.close() } catch {} })
             upstream.addEventListener("error", () => { try { ws.close() } catch {} })
@@ -849,6 +862,20 @@ export class WebChannel implements Channel {
         message: (ws, msg) => {
           if ((ws.data as any)?._proxyWs) {
             const upstream = (ws.data as any)._proxyWs as WebSocket
+            if (upstream.readyState === WebSocket.CONNECTING) {
+              const pending = (ws.data as any)._proxyPending as { frames: Array<string | Buffer>; bytes: number }
+              const size = typeof msg === "string" ? Buffer.byteLength(msg) : msg.byteLength
+              if (pending.frames.length >= PROXY_WS_PENDING_MAX_MESSAGES || pending.bytes + size > PROXY_WS_PENDING_MAX_BYTES) {
+                pending.frames.length = 0
+                pending.bytes = 0
+                try { upstream.close() } catch {}
+                try { ws.close(1009, "too much sent before the app's socket opened") } catch {}
+                return
+              }
+              pending.frames.push(typeof msg === "string" ? msg : Buffer.from(msg)) // a copy: the socket reuses its buffer
+              pending.bytes += size
+              return
+            }
             try { upstream.send(msg) } catch {}
             return
           }
@@ -1079,8 +1106,9 @@ export class WebChannel implements Channel {
     const sub = this.opts.proxyBaseDomain
       ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       : undefined
-    // Path-based proxy (active only when no base domain is configured).
-    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
+    const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
+    const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
     if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
@@ -1090,6 +1118,8 @@ export class WebChannel implements Channel {
       return this.handleProxyRoute(req, sub, server)
     }
     if (pm) {
+      // A digits slug that is not a usable port is a 404 whatever follows it (no 301 on the way to one).
+      if (portFromSlug(pm.slug) !== undefined && !this.proxyTarget(pm.slug)) return new Response("not found", { status: 404 })
       if (pm.rest === null) {
         // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
         return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
@@ -2474,14 +2504,28 @@ export class WebChannel implements Channel {
     })
   }
 
+  /**
+   * What a preview slug opens. A digits slug is a PORT on this host (never a name; Registry.addProxy refuses digits-only
+   * names), always private. It is looked up nowhere, so a digits-only named proxy stored before that rule is shadowed:
+   * the by-port route wins. Nothing for a digits slug that is no usable port, nor for this broker's own port: a request
+   * forwarded to it would arrive from loopback with Host 127.0.0.1 and no forwarding header, which classifyPeer takes
+   * for the desktop app on this computer and answers GET /host with the local-only facts (state dir, install mode).
+   */
+  private proxyTarget(slug: string): { port: number; sessionName: string; isPublic: boolean } | undefined {
+    const port = portFromSlug(slug)
+    if (port === undefined) return this.opts.proxyLookup?.(slug)
+    if (port === null || port === this.boundPort || port === this.opts.port) return undefined
+    return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
   private async handleProxyRoute(
     req: Request,
     slug: string,
     server?: import("bun").Server<WSData>,
     pathOpts?: { prefix: string; upstreamPath: string },
   ): Promise<Response | undefined> {
-    if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(slug)
+    if (!this.opts.proxyLookup && portFromSlug(slug) === undefined) return new Response("proxy not configured", { status: 500 })
+    const upstream = this.proxyTarget(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
@@ -4744,6 +4788,15 @@ export class WebChannel implements Channel {
       }
     }
 
+    // The by-port URL as a template, `{port}` where the port goes, built the way a named proxy's URL is.
+    if (method === "GET" && path === "/proxies/by-port") {
+      return this.json({
+        url: buildProxyPublicUrl("{port}", {
+          baseDomain: this.opts.proxyBaseDomain,
+          publicUrl: this.opts.proxyLinksBaseUrl?.() ?? this.opts.publicUrl,
+        }),
+      })
+    }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)

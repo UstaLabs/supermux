@@ -55,6 +55,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.FrameWindowScope
 import androidx.compose.ui.window.MenuBar
+import dev.supermux.editor.core.KeyChord
+import dev.supermux.ui.keys.AppCommand
+import dev.supermux.ui.keys.DefaultKeymap
+import dev.supermux.ui.keys.KeyOs
+import dev.supermux.ui.keys.composeKeyOf
+import dev.supermux.ui.keys.currentKeyOs
+import dev.supermux.ui.keys.formatChord
+import dev.supermux.ui.keys.keyNameOf
 import java.awt.event.KeyEvent
 
 /** A menu accelerator. Compose's [KeyShortcut] keeps its fields internal, so the menu keeps its own. */
@@ -67,20 +75,31 @@ data class MenuShortcut(
 ) {
     fun toKeyShortcut(): KeyShortcut = KeyShortcut(key, ctrl = ctrl, meta = meta, alt = alt, shift = shift)
 
-    /** "Ctrl+N", as a menu shows it. */
-    val label: String
-        get() = buildList {
-            if (ctrl) add("Ctrl")
-            if (alt) add("Alt")
-            if (shift) add("Shift")
-            if (meta) add("Super")
-            add(KeyEvent.getKeyText(key.nativeKeyCode))
-        }.joinToString("+")
+    /** The keymap chord this accelerator is, or null for a key the keymap has no name for. */
+    fun chord(): KeyChord? = keyNameOf(key)?.let { KeyChord(it, ctrl = ctrl, alt = alt, shift = shift, meta = meta) }
+
+    /** "Ctrl+N" / "⌘N", the way the device writes it (the custom ☰ menu draws this). */
+    fun label(os: KeyOs = currentKeyOs): String = chord()?.let { formatChord(it, os) } ?: KeyEvent.getKeyText(key.nativeKeyCode)
 }
 
+/** [command]'s first key on [os], as a menu accelerator; null when it has none a menu can carry. */
+fun menuShortcutFor(command: AppCommand, os: KeyOs = currentKeyOs): MenuShortcut? =
+    DefaultKeymap.chordsFor(command, os).firstNotNullOfOrNull { c ->
+        composeKeyOf(c.key)?.let { MenuShortcut(it, ctrl = c.ctrl, shift = c.shift, alt = c.alt, meta = c.meta) }
+    }
+
+/** Every accelerator in [this] menu, as keymap chords. */
+fun List<MainMenuGroup>.menuChords(): Set<KeyChord> = flatMap { it.entries }.mapNotNull { e ->
+    when (e) {
+        is MainMenuEntry.Action -> e.shortcut?.chord()
+        is MainMenuEntry.Toggle -> e.shortcut?.chord()
+        MainMenuEntry.Separator -> null
+    }
+}.toSet()
+
 sealed interface MainMenuEntry {
-    data class Action(val label: String, val shortcut: MenuShortcut? = null, val onClick: () -> Unit) : MainMenuEntry
-    data class Toggle(val label: String, val checked: Boolean, val onToggle: () -> Unit) : MainMenuEntry
+    data class Action(val label: String, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onClick: () -> Unit) : MainMenuEntry
+    data class Toggle(val label: String, val checked: Boolean, val shortcut: MenuShortcut? = null, val enabled: Boolean = true, val onToggle: () -> Unit) : MainMenuEntry
     data object Separator : MainMenuEntry
 }
 
@@ -94,8 +113,8 @@ fun FrameWindowScope.DesktopMenuBar(menu: List<MainMenuGroup>) {
             Menu(group.title, mnemonic = group.mnemonic) {
                 for (entry in group.entries) {
                     when (entry) {
-                        is MainMenuEntry.Action -> Item(entry.label, shortcut = entry.shortcut?.toKeyShortcut(), onClick = entry.onClick)
-                        is MainMenuEntry.Toggle -> CheckboxItem(entry.label, checked = entry.checked) { entry.onToggle() }
+                        is MainMenuEntry.Action -> Item(entry.label, enabled = entry.enabled, shortcut = entry.shortcut?.toKeyShortcut(), onClick = entry.onClick)
+                        is MainMenuEntry.Toggle -> CheckboxItem(entry.label, checked = entry.checked, enabled = entry.enabled, shortcut = entry.shortcut?.toKeyShortcut()) { entry.onToggle() }
                         MainMenuEntry.Separator -> Separator()
                     }
                 }
@@ -241,18 +260,29 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
                         HorizontalDivider()
                         continue
                     }
-                    // Desktop-dense rows: a menu, not a touch list.
+                    val enabled = when (entry) {
+                        is MainMenuEntry.Action -> entry.enabled
+                        is MainMenuEntry.Toggle -> entry.enabled
+                        MainMenuEntry.Separator -> false
+                    }
+                    // Desktop-dense rows: a menu, not a touch list. A keyboard open lands on the group's first
+                    // item that can run: a greyed-out one takes no focus.
                     val itemModifier = Modifier
                         .height(36.dp)
-                        .then(if (first) Modifier.focusRequester(firstItems.getValue(group.title)) else Modifier)
+                        .then(if (first && enabled) Modifier.focusRequester(firstItems.getValue(group.title)) else Modifier)
                         .testTag("main_menu_item")
-                    first = false
+                    if (enabled) first = false
+                    // The key, in the trailing slot's own colour (onSurfaceVariant), which greys out with the row.
+                    val shortcut = when (entry) {
+                        is MainMenuEntry.Action -> entry.shortcut
+                        is MainMenuEntry.Toggle -> entry.shortcut
+                        MainMenuEntry.Separator -> null
+                    }?.let { s -> @Composable { Text(s.label(), style = MaterialTheme.typography.labelSmall) } }
                     when (entry) {
                         is MainMenuEntry.Action -> MainMenuRow(
                             text = { Text(entry.label) },
-                            trailingIcon = entry.shortcut?.let { s ->
-                                { Text(s.label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant) }
-                            },
+                            trailingIcon = shortcut,
+                            enabled = entry.enabled,
                             onClick = {
                                 state.close()
                                 entry.onClick()
@@ -266,6 +296,8 @@ fun MainMenuButton(menu: List<MainMenuGroup>, state: MainMenuState, modifier: Mo
                             } else {
                                 null
                             },
+                            trailingIcon = shortcut,
+                            enabled = entry.enabled,
                             onClick = {
                                 state.close()
                                 entry.onToggle()
@@ -295,6 +327,7 @@ private fun MainMenuRow(
     modifier: Modifier,
     leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     var focused by remember { mutableStateOf(false) }
     DropdownMenuItem(
@@ -302,6 +335,7 @@ private fun MainMenuRow(
         onClick = onClick,
         leadingIcon = leadingIcon,
         trailingIcon = trailingIcon,
+        enabled = enabled,
         modifier = modifier
             .onFocusChanged { focused = it.hasFocus }
             .background(mainMenuRowBackground(MaterialTheme.colorScheme, focused)),

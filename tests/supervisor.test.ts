@@ -223,3 +223,33 @@ test("an Agent archived mid-pass is never reactivated or started fresh", async (
   expect(calls).toEqual(["resume:n"])
   expect(registry.sessions.getById(noAdapter.id)?.status).toBe("archived")
 })
+
+// Muxie, 2026-11-08: its folder (<mux home>/workspace/Supermux) was deleted under it; every revive then failed with
+// "ENOENT: posix_spawn 'claude'" (a missing cwd), and the merge train stopped. An Agent's folder is supermux's own.
+test("an Agent whose own folder was deleted gets it back, empty, before it is revived", async () => {
+  const { agentWorkdir } = await import("../src/shared/paths")
+  const { existsSync } = await import("fs")
+  const registry = new Registry(db)
+  const workdir = agentWorkdir(`gone-${Date.now()}`)
+  const row = registry.registerPA({ name: "gone", agent: AgentKind.Claude, workdir, pid: 0, is_default: true, core: true })
+  expect(existsSync(workdir)).toBe(false)
+  let sawFolder = false
+  const adapter = { alive: false, isAlive() { return this.alive }, async resume() { sawFolder = existsSync(workdir); this.alive = true } }
+  const sup = createSupervisor({ registry, bindSocket: async () => {}, sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: (id) => (id === row.id ? adapter : undefined), resumeSuspended: async () => true } })
+  await sup.reconcile()
+  sup.stop()
+  expect(sawFolder).toBe(true)
+  rmSync(workdir, { recursive: true, force: true })
+})
+
+test("a folder outside supermux's own is never created for an Agent", async () => {
+  const { existsSync } = await import("fs")
+  const registry = new Registry(db)
+  const workdir = join(tmpDir, "a-users-project-that-is-gone")
+  const row = registry.registerPA({ name: "p", agent: AgentKind.Claude, workdir, pid: 0, is_default: true, core: true })
+  const adapter = { alive: false, isAlive() { return this.alive }, async resume() { this.alive = true } }
+  const sup = createSupervisor({ registry, bindSocket: async () => {}, sessionManager: { registerSpawnedAdapter: () => {}, adapterFor: (id) => (id === row.id ? adapter : undefined), resumeSuspended: async () => true } })
+  await sup.reconcile()
+  sup.stop()
+  expect(existsSync(workdir)).toBe(false)
+})
