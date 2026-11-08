@@ -775,3 +775,70 @@ test("an HTTP 402 at the end of a turn whose account was refused keeps the unava
   expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
     .toEqual({ type: "account.switched", sessionId: id, from: "grok:system", to: "b", reason: "unavailable" })
 })
+
+// #92: a session that cannot carry on after a limit waits for the first reset.
+const rejectedAt = (epochSeconds: number) => JSON.stringify({ status: "rejected", rateLimitType: "five_hour", resetsAt: epochSeconds })
+
+test("account.waiting: every account full → wait for the account that resets first, after account.exhausted", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const soon = future(), later = future() + 3600
+  const sys = await core.sessions.create({ id: nextId(), agent: "claude", cwd })
+  await (await sys.send({ content: text(`usage:${rejectedAt(soon)}`), whenBusy: "queue" })).completed
+  await waitFor(events, e => e.type === "account.switched" && e.from === "claude:system" ? e : undefined)
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd, account: "b" })
+  await (await s.send({ content: text(`usage:${rejectedAt(later)}`), whenBusy: "queue" })).completed
+  await waitFor(events, e => e.type === "account.exhausted" && e.sessionId === sid ? e : undefined)
+  expect(await waitFor(events, e => e.type === "account.waiting" && e.sessionId === sid ? e : undefined))
+    .toEqual({ type: "account.waiting", sessionId: sid, agent: "claude", account: "claude:system", resetsAt: new Date(soon * 1000), background: false })
+})
+
+test("account.waiting without autoSwitch: the session waits for its own account, another one is never taken", async () => {
+  const { core, events } = await setup()
+  const cwd = await scratch()
+  await core.accounts.add({ id: "b", agent: "claude", method: "token", secret: "t-b" })
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd })
+  const at = future()
+  await (await s.send({ content: text(`usage:${rejectedAt(at)}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.waiting" ? e : undefined))
+    .toEqual({ type: "account.waiting", sessionId: sid, agent: "claude", account: "claude:system", resetsAt: new Date(at * 1000), background: false })
+  expect(events.some(e => e.type === "account.switched" || e.type === "account.exhausted")).toBe(false)
+  expect(await core.accounts.willSwitch(sid)).toBe(false)
+})
+
+test("account.waiting: an isolated account waits for its own reset", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "iso", agent: "claude", method: "token", secret: "t-i", isolated: true })
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd, account: "iso" })
+  const at = future()
+  await (await s.send({ content: text(`usage:${rejectedAt(at)}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.waiting" ? e : undefined))
+    .toEqual({ type: "account.waiting", sessionId: sid, agent: "claude", account: "iso", resetsAt: new Date(at * 1000), background: false })
+})
+
+test("account.waiting: no reset time known → resetsAt is absent", async () => {
+  const { core, events } = await setup()
+  const cwd = await scratch()
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd })
+  await (await s.send({ content: text(`usage:${JSON.stringify({ status: "rejected", rateLimitType: "five_hour" })}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.waiting" ? e : undefined))
+    .toEqual({ type: "account.waiting", sessionId: sid, agent: "claude", account: "claude:system", background: false })
+})
+
+test("a session whose account was removed still switches to a registered one (#106)", async () => {
+  const { core, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "gone", agent: "claude", method: "token", secret: "t-g" })
+  const sid = nextId()
+  const s = await core.sessions.create({ id: sid, agent: "claude", cwd, account: "gone" })
+  await core.accounts.remove("gone")
+  await (await s.send({ content: text(`usage:${rejectedAt(future())}`), whenBusy: "queue" })).completed
+  expect(await waitFor(events, e => e.type === "account.switched" && e.sessionId === sid ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: sid, from: "gone", to: "claude:system", reason: "limit" })
+})
