@@ -43,16 +43,19 @@ const FAIL = join(dir, "fail-start")
 const STARTS = join(dir, "starts.log")
 const project = join(dir, "project")
 let broker: ReturnType<typeof Bun.spawn> | undefined
+let brokerLog = ""
 let base = ""
 let token = ""
 let ws: WebSocket | undefined
 const frames: any[] = []
 
-function freePort(): number {
-  const l = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } })
-  const p = l.port
-  l.stop(true)
-  return p
+/** Ports nothing listens on right now, all different: each is held until every one is picked (one at a time, the
+ *  kernel can hand the same free port out twice). */
+function freePorts(n: number): number[] {
+  const held = Array.from({ length: n }, () => Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } }))
+  const ports = held.map((l) => l.port)
+  for (const l of held) l.stop(true)
+  return ports
 }
 
 async function waitFor<T>(what: string, probe: () => T | undefined | false | Promise<T | undefined | false>, timeoutMs = 30_000): Promise<T> {
@@ -133,29 +136,44 @@ beforeAll(async () => {
     execFileSync("git", ["-C", repo, "commit", "-q", "-m", "init"])
   }
 
-  const port = freePort()
-  waPort = freePort()
-  base = `http://127.0.0.1:${port}`
-  broker = Bun.spawn(["bun", "src/main.ts"], {
-    cwd: REPO,
-    stdout: Bun.file(join(dir, "broker.log")),
-    stderr: Bun.file(join(dir, "broker.log")),
-    env: {
-      ...(env as Record<string, string>),
-      MUX_TEST_BROKER: "1",
-      MUX_SHIM: "host",
-      MUX_SOCKETS_DIR: join(state, "sockets"),
-      MUX_WEB_PORT: String(port),
-      MUX_WEB_PUBLIC_URL: base,
-      MUX_UPDATE_CHECK: "0",
-      MUX_CURATOR_ENABLED: "0",
-      MUX_WORKTREES_ROOT: join(dir, "worktrees"),
-      MUX_WHATSAPP_GOWA_URL: `http://127.0.0.1:${gowa.port}`,
-      MUX_WHATSAPP_WEBHOOK_PORT: String(waPort),
-      MUX_WHATSAPP_WEBHOOK_SECRET: WA_SECRET,
-    },
-  })
-  await waitFor("the broker", async () => (await fetch(`${base}/me`).then((r) => r.status).catch(() => 0)) === 401, 90_000)
+  // The ports are free when picked and the broker binds them a moment later. Something else can take one in between;
+  // the broker then exits on EADDRINUSE at once, and is started again on new ports. Any other early exit fails here,
+  // with its log, instead of after a 90 s wait.
+  for (let attempt = 1; ; attempt++) {
+    brokerLog = join(dir, `broker-${attempt}.log`)
+    const [port, webhookPort] = freePorts(2) as [number, number]
+    waPort = webhookPort
+    base = `http://127.0.0.1:${port}`
+    const started = Bun.spawn(["bun", "src/main.ts"], {
+      cwd: REPO,
+      stdout: Bun.file(brokerLog),
+      stderr: Bun.file(brokerLog),
+      env: {
+        ...(env as Record<string, string>),
+        MUX_TEST_BROKER: "1",
+        MUX_SHIM: "host",
+        MUX_SOCKETS_DIR: join(state, "sockets"),
+        MUX_WEB_PORT: String(port),
+        MUX_WEB_PUBLIC_URL: base,
+        MUX_UPDATE_CHECK: "0",
+        MUX_CURATOR_ENABLED: "0",
+        MUX_WORKTREES_ROOT: join(dir, "worktrees"),
+        MUX_WHATSAPP_GOWA_URL: `http://127.0.0.1:${gowa.port}`,
+        MUX_WHATSAPP_WEBHOOK_PORT: String(waPort),
+        MUX_WHATSAPP_WEBHOOK_SECRET: WA_SECRET,
+      },
+    })
+    broker = started
+    const up = await waitFor("the broker", async () => {
+      if (started.exitCode !== null) return "exited" as const
+      // Bounded: a port someone else holds may take the request and never answer it.
+      const status = await fetch(`${base}/me`, { signal: AbortSignal.timeout(2000) }).then((r) => r.status).catch(() => 0)
+      return status === 401 && ("up" as const)
+    }, 90_000)
+    if (up === "up") break
+    const said = readFileSync(brokerLog, "utf8")
+    if (!said.includes("EADDRINUSE") || attempt === 3) throw new Error(`the broker exited (${started.exitCode}) before it answered:\n${said.slice(-3000)}`)
+  }
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const w = new WebSocket(`${base.replace("http", "ws")}/ws?clientSurface=web`, { headers: { Authorization: `Bearer ${token}` } } as any)
     w.onopen = () => resolve(w)
@@ -238,7 +256,7 @@ test("Stop while it starts: no reply, the session goes back to sleep, and the ne
   expect((await api(`/sessions/${created.id}/interrupt`, { method: "POST" })).status).toBe(200)
   rmSync(HOLD)
   // What started is stopped and the row is asleep again (it was asleep from birth, so the log line is the evidence).
-  await waitFor("put back to sleep", () => readFileSync(join(dir, "broker.log"), "utf8").split("\n").some((l) => l.includes("session_put_back_to_sleep") && l.includes(created.id)))
+  await waitFor("put back to sleep", () => readFileSync(brokerLog, "utf8").split("\n").some((l) => l.includes("session_put_back_to_sleep") && l.includes(created.id)))
   expect((await session(created.id)).status).toBe("suspended")
   await waitFor("the status change back", () => statuses(created.id).at(-1) === "suspended")
   await Bun.sleep(500)
