@@ -403,13 +403,11 @@ async function main() {
     for (const p of parked.values()) clearTimeout(p.timer)
     parked.clear()
     if (!alive(agent.pid ?? 0)) { finish(); return }
-    // A tree kill: on Windows a .cmd agent runs behind cmd.exe, and ending cmd.exe alone would leave the agent running.
-    // Elsewhere it signals the agent (its process group, when it leads one). Never once the agent has exited: the
-    // SIGKILL below can come after that (a program it started may hold its pipes open), and its pid be another's.
-    const stop = (signal: NodeJS.Signals) => proc.killChildTree(agent, { signal })
-    stop('SIGTERM')
-    const t = setTimeout(() => stop('SIGKILL'), limits.shutdownTimeoutMs)
-    agent.once('close', () => clearTimeout(t))
+    // A tree stop: on Windows a .cmd agent runs behind cmd.exe, and ending cmd.exe alone would leave the agent running.
+    // Elsewhere SIGTERM, then SIGKILL after shutdownTimeoutMs, to the agent (its process group, when it leads one).
+    // Never once the agent has exited: the SIGKILL can come after that (a program it started may hold its pipes open),
+    // and its pid be another's.
+    proc.stop(agent, { graceMs: limits.shutdownTimeoutMs })
   }
 
   function attach(sock: Socket, cursor: number) {

@@ -257,12 +257,9 @@ async function keeperFailure(err: unknown, statusPath: string, pid: number): Pro
 }
 
 async function reapSpawned(pid: number, sockPath: string, statusPath: string, shutdownTimeoutMs: number) {
-  try { process.kill(pid, 'SIGTERM') } catch { /* */ }
-  await waitPidDead(pid, shutdownTimeoutMs)
-  if (alive(pid)) {
-    try { process.kill(pid, 'SIGKILL') } catch { /* */ }
-    await waitPidDead(pid, shutdownTimeoutMs + 2000)
-  }
+  // The keeper alone on POSIX: asked to stop, it stops its agent itself. Windows ends its tree at once.
+  proc.stop(pid, { graceMs: shutdownTimeoutMs, alone: true })
+  await waitPidDead(pid, 2 * shutdownTimeoutMs + 2000)
   try { await unlink(sockPath) } catch { /* */ }
   try { await unlink(statusPath) } catch { /* */ }
 }
@@ -314,25 +311,22 @@ function askKeeperToStop(dir: string, status: KeeperStatus, connectTimeoutMs: nu
 /**
  * Stops a running keeper (one whose agent was launched for another fingerprint, or a detached one): asked over its own
  * socket first (askKeeperToStop), it shuts its agent down (SIGTERM, then SIGKILL after shutdownTimeoutMs) and exits. A
- * keeper that does not is sent SIGTERM, then SIGKILL, and its agent after it.
+ * keeper that does not is stopped (proc.stop: SIGTERM, then SIGKILL; on Windows its tree at once), and its agent after it.
  */
 async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeeperLimits) {
   if (await askKeeperToStop(dir, status, limits.connectTimeoutMs)) {
     await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
   }
   if (alive(status.keeperPid)) {
-    try { process.kill(status.keeperPid, 'SIGTERM') } catch { /* already gone */ }
-    await waitPidDead(status.keeperPid, limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000)
-  }
-  if (alive(status.keeperPid)) {
-    try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
-    await waitPidDead(status.keeperPid, 2000)
+    // The keeper alone on POSIX (it stops its agent itself), then an end; Windows ends its tree at once.
+    const graceMs = limits.shutdownTimeoutMs + limits.connectTimeoutMs + 2000
+    proc.stop(status.keeperPid, { graceMs, alone: true })
+    await waitPidDead(status.keeperPid, graceMs + 2000)
   }
   // The recorded agent pid is the root of the agent's tree: a .cmd agent's is cmd.exe's on Windows.
   if (alive(status.agentPid)) {
-    proc.killTree(status.agentPid, { signal: 'SIGTERM' })
-    await waitPidDead(status.agentPid, limits.shutdownTimeoutMs)
-    if (alive(status.agentPid)) { proc.killTree(status.agentPid, { signal: 'SIGKILL' }); await waitPidDead(status.agentPid, 2000) }
+    proc.stop(status.agentPid, { graceMs: limits.shutdownTimeoutMs })
+    await waitPidDead(status.agentPid, limits.shutdownTimeoutMs + 2000)
   }
   if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error(`keeper ${status.keeperPid} or its agent ${status.agentPid} did not stop`)
 }

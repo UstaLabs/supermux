@@ -178,9 +178,12 @@ export interface InstallDeps {
 const MAX_LOG = 64 * 1024 // keep the tail bounded; installers can be chatty
 export const INSTALL_DEADLINE_MS = 15 * 60_000
 
-/** Kill [child] and its descendants (proc.killTree): the installer leads its own process group (spawned detached). */
+/**
+ * End [child] and its descendants at once (proc.stop): the installer leads its own process group (spawned detached),
+ * which goes even when the installer itself has already exited and left something it started running.
+ */
 export function killProcessTree(child: ChildProcess, platform: NodeJS.Platform): void {
-  if (child.pid) proc.killTree(child.pid, { signal: "SIGKILL", platform })
+  proc.stop(child, { platform, running: () => true })
 }
 const EXIT_OUTPUT_GRACE_MS = 2_000
 

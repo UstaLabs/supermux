@@ -264,6 +264,7 @@ const defaultProcessControl: ZmxProcessControl = {
     }
   },
   isAlive: isProcessAlive,
+  // platform-ok: zmx is the POSIX workspace-terminal backend (no Windows), and this ends the one pid it names
   kill: pid => { process.kill(pid, "SIGKILL") },
 }
 
