@@ -61,7 +61,7 @@ val DefaultKeymap = Keymap(
         bindOther("Ctrl-Shift-t", AppCommands.NewTerminal, overOwner = true),
         bind("Mod-b", AppCommands.ToggleSidebar),
         bind("Mod-p", AppCommands.GoToFile),
-        bind("Mod-f", AppCommands.FindInChat),
+        bind("Mod-f", AppCommands.Find),
         bind("Mod-,", AppCommands.OpenSettings, overOwner = true),
         bind("Mod-/", AppCommands.ShowShortcuts),
         // The composer runs this key itself (Composer.kt); listed for the shortcuts screen and the conflict test.

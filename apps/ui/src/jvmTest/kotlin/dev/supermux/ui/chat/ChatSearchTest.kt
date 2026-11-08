@@ -150,9 +150,9 @@ class ChatSearchTest {
             }
         }
         waitForIdle()
-        runOnIdle { assertFalse(dispatcher.canInvoke(AppCommands.FindInChat)) }
+        runOnIdle { assertFalse(dispatcher.canInvoke(AppCommands.Find)) }
         runOnIdle { active = true }
         waitForIdle()
-        runOnIdle { assertTrue(dispatcher.canInvoke(AppCommands.FindInChat)) }
+        runOnIdle { assertTrue(dispatcher.canInvoke(AppCommands.Find)) }
     }
 }

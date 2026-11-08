@@ -63,7 +63,7 @@ class KeymapTest {
 
     @Test fun aCommandMatchesAKeyDownOfItsOwnChordOnThatOsOnly() {
         // For a widget that runs a command itself, outside a ShortcutRoot (the assistant overlay's chat, #96).
-        val find = AppCommands.FindInChat
+        val find = AppCommands.Find
         assertTrue(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, ctrl = true), KeyOs.Other))
         assertFalse(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, meta = true), KeyOs.Other), "⌘ is not Ctrl off Apple")
         assertTrue(find.matchesKey(keyEvent(Key.F, KeyEventType.KeyDown, meta = true), KeyOs.Apple))

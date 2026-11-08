@@ -143,7 +143,7 @@ class ShortcutRootTest {
             ShortcutRoot(remember { ShortcutDispatcher() }, Modifier.size(300.dp).testTag("root")) {
                 val chat = rememberKeyScope(KeyContext.Chat)
                 ProvideKeyScope(chat) {
-                    RegisterCommand(AppCommands.FindInChat) { ran++; true }
+                    RegisterCommand(AppCommands.Find) { ran++; true }
                     Box(Modifier.size(100.dp).keyScope(chat).testTag("transcript"))
                 }
             }
@@ -279,7 +279,7 @@ class ShortcutRootTest {
                 Column {
                     val chat = rememberKeyScope(KeyContext.Chat)
                     ProvideKeyScope(chat) {
-                        RegisterCommand(AppCommands.FindInChat) { ran++; true }
+                        RegisterCommand(AppCommands.Find) { ran++; true }
                         Column(Modifier.keyScope(chat)) {
                             BasicTextField("", {}, Modifier.focusRequester(chatField))
                             Box(Modifier.size(80.dp))
@@ -293,7 +293,7 @@ class ShortcutRootTest {
                         }
                     }
                     // As a menu item's `enabled` reads it: composition must follow it with nothing else changing.
-                    BasicText(dispatcher.canInvoke(AppCommands.FindInChat).toString(), Modifier.testTag("can_find"))
+                    BasicText(dispatcher.canInvoke(AppCommands.Find).toString(), Modifier.testTag("can_find"))
                 }
             }
         }
@@ -302,12 +302,12 @@ class ShortcutRootTest {
 
         runOnIdle { chatField.requestFocus() }
         onNodeWithTag("can_find").assertTextEquals("true")
-        runOnIdle { assertTrue(dispatcher.invoke(AppCommands.FindInChat)) }
+        runOnIdle { assertTrue(dispatcher.invoke(AppCommands.Find)) }
         assertEquals(1, ran)
 
         runOnIdle { filesField.requestFocus() }
         onNodeWithTag("can_find").assertTextEquals("false")
-        runOnIdle { assertFalse(dispatcher.invoke(AppCommands.FindInChat)) }
+        runOnIdle { assertFalse(dispatcher.invoke(AppCommands.Find)) }
         assertEquals(1, ran)
 
         // The chat took the focus last, with no click: once the focus is gone from it, it still counts.
