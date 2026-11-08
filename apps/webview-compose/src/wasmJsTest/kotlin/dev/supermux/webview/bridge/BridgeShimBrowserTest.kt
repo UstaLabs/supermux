@@ -173,7 +173,9 @@ class BridgeShimBrowserTest {
         val size = events(w, "\$size").last().data as JsonObject
         assertEquals(500, size["h"]!!.jsonPrimitive.int)
         assertEquals(200, size["vh"]!!.jsonPrimitive.int)
-        assertEquals(300, size["w"]!!.jsonPrimitive.int)
+        // The page's own width: 300 under overlay scrollbars (macOS), 285 under Linux Chrome's classic ones, whose
+        // vertical scrollbar takes its 15 px from the layout.
+        assertEquals(evalIn(w, "document.documentElement.clientWidth").toInt(), size["w"]!!.jsonPrimitive.int)
     }
 
     @Test fun absolutelyPositionedContentCounts() = runTest {

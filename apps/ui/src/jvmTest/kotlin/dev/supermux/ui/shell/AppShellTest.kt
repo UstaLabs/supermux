@@ -6,16 +6,21 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.click
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
+import dev.supermux.ui.chat.CHAT_FIND_FIELD_TAG
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.TestWalkthroughSeam
 import dev.supermux.ui.prefs.InMemorySettingsStore
@@ -72,6 +77,7 @@ import dev.supermux.net.BrokerApi
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class AppShellTest {
+    private val mod = if (dev.supermux.editor.compose.isApplePlatform) Key.MetaLeft else Key.CtrlLeft
 
     /** A [HostStore] whose HTTP answers /paths/validate and /sessions (spawn); outbound WS
      *  frames (e.g. the first-message Send) land in [sent] instead of a live socket. */
@@ -370,9 +376,9 @@ class AppShellTest {
     }
 
     @Test fun shell_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {
-        // The overlay is modal — a pane/sidebar chord (Ctrl+B) it leaves unhandled must NOT bubble
-        // to shellShortcuts and silently mutate the layout behind it. Ctrl+B typed while the
-        // launcher's message field is focused should be a no-op on ui.sidebarCollapsed.
+        // The overlay is modal — a pane/sidebar chord (⌘B / Ctrl+B) it leaves unhandled must NOT
+        // reach the window's commands and silently mutate the layout behind it. The key typed while
+        // the launcher's message field is focused should be a no-op on ui.sidebarCollapsed.
         val app = appFor(mutableListOf())
         val ui = ShellUiState().apply { openLauncher() } // sidebarCollapsed defaults false
         val prefs = UiPrefs(InMemorySettingsStore())
@@ -383,13 +389,50 @@ class AppShellTest {
         waitForIdle()
         assertFalse(ui.sidebarCollapsed) // precondition
 
-        // Focus a node inside the overlay, then send Ctrl+B — it bubbles up to the root Box, where
-        // shellShortcuts is gated OFF (…else Modifier) while launcherOpen.
-        onNodeWithTag("launcher_message").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        // Focus a node inside the overlay, then send the key — it bubbles up to the ShortcutRoot,
+        // where ToggleSidebar is registered only while no page is up (enabled = !ui.overlayOpen).
+        onNodeWithTag("launcher_message").performKeyInput { withKeyDown(mod) { pressKey(Key.B) } }
         waitForIdle()
 
         assertFalse(ui.sidebarCollapsed) // NOT toggled — the chord never reached the layout
         assertTrue(ui.launcherOpen)             // ...and the overlay stayed up
+    }
+
+    @Test fun the_sidebar_key_works_with_nothing_focused() = runComposeUiTest {
+        // The bug Ahmet reported as "⌘N only works while an input has focus": a click in the transcript or on a
+        // sidebar row leaves nothing focused, and the shortcuts hung on a box that then saw no key.
+        val app = appFor(mutableListOf())
+        val ui = ShellUiState()
+        lateinit var focus: androidx.compose.ui.focus.FocusManager
+        setPlatformContent(uiPrefs = UiPrefs(InMemorySettingsStore())) {
+            focus = androidx.compose.ui.platform.LocalFocusManager.current
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        runOnIdle { focus.clearFocus() }
+        waitForIdle()
+        assertFalse(ui.sidebarCollapsed)
+        onRoot().performKeyInput { withKeyDown(mod) { pressKey(Key.B) } }
+        waitForIdle()
+        assertTrue(ui.sidebarCollapsed)
+    }
+
+    @Test fun cmd_f_after_a_transcript_click_opens_that_chats_find_bar() = runComposeUiTest {
+        // Through a real pane: the chat registers find in its pane's key scope, and a click in the
+        // transcript, which drops the focus, makes that pane the one the window's keys go to.
+        val app = twoWorkspaceApp()
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        setPlatformContent {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        // The transcript's own background, above the starter prompts (which are buttons).
+        onNodeWithTag("chat_body").performTouchInput { click(Offset(centerX, 8f)) }
+        waitForIdle()
+        onNodeWithTag(CHAT_FIND_FIELD_TAG).assertDoesNotExist()
+        onRoot().performKeyInput { withKeyDown(mod) { pressKey(Key.F) } }
+        waitForIdle()
+        onNodeWithTag(CHAT_FIND_FIELD_TAG).assertIsDisplayed()
     }
 
     // ── M5-3 notifications ──────────────────────────────────────────────────────────────────

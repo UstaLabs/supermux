@@ -9,6 +9,7 @@ import { claude } from '../src/claude/index.js'
 import { transport } from '../src/claude/transport.js'
 import type { CoreEvent, DriverContext } from '../src/types.js'
 import { fakeKeeper } from './fake-keeper.js'
+import { FIXTURE_SETUP_MS } from './helpers.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -42,7 +43,7 @@ function libraryClaude(extra: Record<string, unknown> = {}) {
     permissionPrompts: 'none',
     permissions: { kind: 'claude', permissionMode: 'dontAsk' },
     partialMessages: false,
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 5000,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,

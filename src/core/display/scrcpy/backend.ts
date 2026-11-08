@@ -5,7 +5,7 @@ import { makeLogger } from "../../../shared/log"
 import { allocateFreePort } from "../ports"
 import { ScrcpyVideoParser } from "./video"
 import type { AccessUnit } from "./video"
-import { proc as platformProc } from "@supermux/platform"
+import { spawnProcess } from "../../process/launcher"
 
 const log = makeLogger("display.scrcpy")
 
@@ -31,7 +31,7 @@ export function scrcpyUnavailableReason(hasBin: (b: string) => boolean): string 
 }
 
 async function adb(args: string[]): Promise<void> {
-  const proc = Bun.spawn(["adb", ...args], { ...platformProc.spawnDefaults(), stdout: "pipe", stderr: "pipe" })
+  const proc = spawnProcess(["adb", ...args], { stdout: "pipe", stderr: "pipe" })
   const code = await proc.exited
   if (code !== 0) {
     const err = await new Response(proc.stderr).text()
@@ -107,7 +107,7 @@ export async function startScrcpy(serial: string, opts?: { maxSize?: number }): 
   await adb(["-s", serial, "push", SERVER_JAR, "/data/local/tmp/scrcpy-server.jar"])
   await adb(["-s", serial, "forward", `tcp:${port}`, `localabstract:scrcpy_${scid}`])
 
-  const serverProc = Bun.spawn(
+  const serverProc = spawnProcess(
     [
       "adb",
       "-s",
@@ -128,7 +128,7 @@ export async function startScrcpy(serial: string, opts?: { maxSize?: number }): 
       `max_size=${maxSize}`,
       "send_frame_meta=true",
     ],
-    { ...platformProc.spawnDefaults(), stdout: "pipe", stderr: "pipe" },
+    { stdout: "pipe", stderr: "pipe" },
   )
 
   const instance: ScrcpyInstance = {

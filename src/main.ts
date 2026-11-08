@@ -131,7 +131,8 @@ import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
-import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
+import { runSyncOrThrow } from "./core/git/exec-sync"
+import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -164,9 +165,9 @@ import { readEnvText } from "./shared/env-file"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
 import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
-import { spawn as nodeSpawn, execFileSync } from "child_process"
+import type { ChildProcess } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { startFailureNotice, wakeFailureNotice } from "./core/agents/start-failure"
@@ -177,7 +178,6 @@ import {
   GitInstaller, GitRequirementMonitor, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
-import { spawnSync as spawnSyncForGit } from "child_process"
 import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -191,6 +191,9 @@ import { keeperAgentRunning } from "../packages/supermux-core/src/keeper/index.j
 import { discoverAntigravityModels } from "./core/agents/antigravity/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
+import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
+import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
+import { openCodeDataDir } from "./core/agents/opencode/auth"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { resolveSessionFast, supportsFastMode } from "./core/models/fast-mode"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
@@ -303,7 +306,7 @@ const gitRequirement = new GitRequirementMonitor({
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
     try {
-      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+      return spawnCommandSync("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
     } catch {
       return 1
     }
@@ -951,8 +954,8 @@ function bgOpenCount(sessionId: string): number {
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
-    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
-    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    const gitDir = runSyncOrThrow("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, timeoutMs: 10_000 })
+    const raw = runSyncOrThrow("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, timeoutMs: 10_000 })
     return { gitDir, commonDir: isAbsolute(raw) ? raw : resolve(workdir, raw) }
   } catch { return null }
 }
@@ -2437,7 +2440,7 @@ function spawnLoginProc(kind: string) {
   }
   // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
   if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
-  let child: ReturnType<typeof nodeSpawn>
+  let child: ChildProcess
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
@@ -2718,6 +2721,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onStopRequest: () => { void gracefulShutdown("stop-request") },
     // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
     onRestartRequest: () => restartService(),
+    // The desktop app's Restart (it restarts this broker itself): its stop, coming next, leaves the agents running.
+    onExpectRestart: () => expectRestart(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())
@@ -3221,6 +3226,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return { port: entry.port, sessionName: entry.sessionName, isPublic: entry.isPublic }
     },
     proxyAuth: (token: string) => !!proxyDeviceStore.verify(token),
+    proxyLinksBaseUrl: exposedProxyLinksBaseUrl,
     listProxies: () => registry.listProxies().map((e) => proxyWsPayload(e, proxyLivenessMonitor.getStatus(e.domain))),
     createProxy: (args) => {
       const session = registry.resolveName(args.sessionName)
@@ -3582,6 +3588,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     hasCredential: (kind) =>
       agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
+    // OpenCode's Console (Go) sign-in lives in opencode.db beside any API key in auth.json.
+    signInProbe: (kind) => kind === AgentKind.OpenCode
+      ? () => openCodeConsoleFingerprint(join(openCodeDataDir({ home: home() }), "opencode.db"))
+      : undefined,
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
@@ -3593,6 +3603,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   channels.web = webChannel as Channel
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
+  // A session hit OpenCode's free limit: the usage card says so now, not on its next 5-minute refresh.
+  onOpenCodeFreeLimit(() => { void getUsageStore().refresh(["opencode"], { force: true }) })
 }
 void getUsageStore().seedFromLocal()
 
@@ -4600,7 +4612,7 @@ if (webChannel) {
           },
         })
         // The draft row was restored just above, so the session exists again and the notice has a home.
-        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err))
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err, undefined, draftSnapshot.agent))
         return
       }
     }
@@ -4823,7 +4835,13 @@ try {
   if (swept.length) log.info("runtime_assets_swept", { removed: swept })
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
-if (webChannel) await webChannel.start()
+if (webChannel) {
+  // No named proxy may point at the broker itself (Registry.refuseProxyPort says why). Both: the configured port, and the
+  // one actually bound (they differ only for port 0).
+  if (MUX_WEB_PORT) registry.refuseProxyPort(MUX_WEB_PORT)
+  await webChannel.start()
+  registry.refuseProxyPort(webChannel.boundPort)
+}
 telemetry.start()
 {
   const t = telemetryState()
@@ -4928,6 +4946,12 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
   }
 }
 
+// The graceful shutdown's listeners, before the channels start: Telegram's long poll below never returns until
+// shutdown, and listeners registered after it were never registered at all (#29). A broker with Telegram on then
+// died at every SIGTERM without its graceful shutdown, and stopped or restarted alike.
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT",  () => gracefulShutdown("SIGINT"))
+
 // Telegram long-polling (grammy bot.start()) does not resolve until shutdown, so it
 // MUST be the last awaited call at boot — anything awaited after it never runs.
 // WhatsApp's start() is quick (bind webhook + one status probe), so start it BEFORE
@@ -4938,7 +4962,10 @@ if (telegram) await telegram.start()
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
-  log.info("graceful_shutdown", { signal })
+  // A restart (one this broker scheduled, or one the desktop app announced before restarting it) leaves the agents to
+  // the broker that comes back; a plain stop shuts them down.
+  const agents = agentsCloseMode()
+  log.info("graceful_shutdown", { signal, agents })
   try {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
@@ -4974,22 +5001,22 @@ async function gracefulShutdown(signal: string) {
     brokerAccounts.close()
   } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeGrokCoreHost()
+    await closeGrokCoreHost(agents)
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeAntigravityCoreHost()
+    await closeAntigravityCoreHost(agents)
   } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCodexCoreHost()
+    await closeCodexCoreHost(agents)
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeOpenCodeCoreHost()
+    await closeOpenCodeCoreHost(agents)
   } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCursorCoreHost()
+    await closeCursorCoreHost(agents)
   } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeClaudeCoreHost()
+    await closeClaudeCoreHost(agents)
   } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
@@ -5006,5 +5033,3 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("db_close_failed", { err: err?.message ?? String(err) }) }
   process.exit(0)
 }
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
-process.on("SIGINT",  () => gracefulShutdown("SIGINT"))

@@ -133,6 +133,12 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.ui.host.HostSwitcher
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalKeyScope
+import dev.supermux.ui.keys.LocalKeyScopeActive
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.ShortcutDispatcher
+import dev.supermux.ui.keys.ShortcutRoot
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.notify.NotificationController
@@ -192,7 +198,6 @@ import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.ui.panes.TAB_STRIP_HEIGHT
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
-import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
@@ -299,6 +304,8 @@ fun SupermuxApp(
     isLocalHost: (hostId: String?) -> Boolean = { false },
     settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
+    /** This window's keyboard. A desktop host passes its own, to drive its menu bar through it. */
+    shortcuts: ShortcutDispatcher = remember { ShortcutDispatcher() },
 ) {
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // The anchored popover needs a pointer (UsagePopover draws nothing without one), so a wide
@@ -737,11 +744,6 @@ fun SupermuxApp(
         }
     }
 
-    // Root focus so the shortcuts (Ctrl/Cmd B/N) resolve even before the user clicks into a pane;
-    // once the composer/terminal is focused, key events still bubble up here.
-    val rootFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { rootFocus.requestFocus() } }
-
     // ── ONE back handler for the whole app: Android's `PhoneLayerBack` plus the two per-layer
     //    handlers, folded together. Panes that own BACK themselves — the editor's search overlay
     //    and its tree drawer — register their own handler deeper in the tree, and Compose
@@ -795,19 +797,17 @@ fun SupermuxApp(
         LocalDownloads provides fleet.downloads,
     ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .focusRequester(rootFocus)
-                .focusable()
-                // Gate the pane/sidebar shortcuts OFF while any destination above Home is up: it
-                // is modal, so a chord it leaves unhandled must NOT bubble here and silently
-                // mutate the layout behind it.
-                .then(
-                    if (ui.overlayOpen) Modifier
-                    else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow).newTerminalShortcut(ui),
-                ),
-        ) {
+        ShortcutRoot(shortcuts, Modifier.fillMaxSize()) {
+            // The window's commands. Those that change the layout are off while a page is up (Settings, Archived,
+            // New session…): it is modal, so a key must not change the layout behind it. New session and Settings
+            // open a page of their own, so they work over another page.
+            RegisterCommand(AppCommands.NewSession, enabled = !ui.launcherOpen) { onNewSession(); true }
+            RegisterCommand(AppCommands.MoveToNewWindow, enabled = !ui.overlayOpen) { onMoveToNewWindow(); true }
+            RegisterCommand(AppCommands.ToggleSidebar, enabled = !ui.overlayOpen) {
+                ui.sidebarCollapsed = !ui.sidebarCollapsed
+                true
+            }
+            RegisterCommand(AppCommands.OpenSettings, enabled = !ui.settingsOpen) { ui.openSettings(); true }
             // One update check per launch, here rather than in the sidebar's card: on a phone the
             // sidebar comes and goes with every chat, and each return would be another poll.
             val appUpdater = LocalPlatform.current.updates
@@ -1630,7 +1630,10 @@ private fun ShellHome(
                         val visible = sessionId == ui.selectedId && activeWorkspace == null
                         key(sessionId) {
                             Box(Modifier.keepAlivePanel(visible)) {
-                                chatFallback(session, visible) { ui.selectedId = null }
+                                // Hidden, a chat registers no commands (its find would take ⌘F from the one shown).
+                                CompositionLocalProvider(LocalKeyScopeActive provides (LocalKeyScopeActive.current && visible)) {
+                                    chatFallback(session, visible) { ui.selectedId = null }
+                                }
                             }
                         }
                     }
@@ -1890,29 +1893,19 @@ private fun WorkspacePanel(
         ui.forceWorkspaceView = null
     }
 
-    // Ctrl/Cmd+T: a terminal tab in the pane last pressed (else the first), the way "+ → Terminal"
-    // adds one there.
+    // ⌘T / Ctrl+T (Ctrl+Shift+T in a terminal off Apple): a terminal tab in the pane last pressed
+    // (else the first), the way "+ → Terminal" adds one there.
     if (isActive) {
         val addTerminal by rememberUpdatedState {
             if (compact) {
                 addPhoneView(current, ws, wsApp, NewViewKind.TERMINAL)
             } else {
-                val hostId = ui.windows.mainHostId
-                val tree = ui.windows.layoutFor(hostId, layoutSync.tree)
-                val gid = ws.focusedViewId?.let { groupIdOf(tree, it) }
-                    ?: ws.focusedFileViewId?.let { groupIdOf(tree, it) }
-                    ?: firstGroupId(tree)
-                if (gid != null) {
-                    wsApp.addWorkspaceView(current.id, NewViewKind.TERMINAL, gid) { newViewId ->
-                        ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                    }
-                }
+                addTerminalInWindow(ui, ui.windows.mainHostId, ws, wsApp, current.id)
             }
         }
-        androidx.compose.runtime.DisposableEffect(ui) {
-            val action = { addTerminal() }
-            ui.newTerminalAction = action
-            onDispose { if (ui.newTerminalAction === action) ui.newTerminalAction = null }
+        RegisterCommand(AppCommands.NewTerminal, enabled = !ui.overlayOpen, scope = LocalKeyScope.current?.root) {
+            addTerminal()
+            true
         }
     }
 

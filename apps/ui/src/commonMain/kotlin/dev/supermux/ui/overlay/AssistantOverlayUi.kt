@@ -134,6 +134,7 @@ import dev.supermux.ui.session.AgentAvatar
 import dev.supermux.ui.session.AvatarRig
 import dev.supermux.ui.session.AvatarRigView
 import dev.supermux.ui.session.rememberAgentAvatars
+import dev.supermux.ui.session.rememberAvatarClock
 import dev.supermux.ui.session.wearingGlasses
 import dev.supermux.ui.PlainMessage
 import dev.supermux.ui.messagePlainText
@@ -509,28 +510,6 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     }
 }
 
-/**
- * A clock (ms) that ticks [fps] times a second, carrying on from where it was when the rate changes;
- * 0 stops it. At 60 it ticks with the screen's frames.
- */
-@Composable
-private fun rememberOverlayClock(fps: Int): Long {
-    var now by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(fps) {
-        if (fps <= 0) return@LaunchedEffect
-        val start = withFrameMillis { it } - now
-        if (fps >= 60) {
-            while (true) withFrameMillis { now = it - start }
-        } else {
-            while (true) {
-                delay(1000L / fps)
-                now = withFrameMillis { it } - start
-            }
-        }
-    }
-    return now
-}
-
 /** The living avatar on its glass circle, with its count, the ring that shows it listening, and its glasses. */
 @Composable
 fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size: Dp, modifier: Modifier = Modifier) {
@@ -564,7 +543,7 @@ fun OverlayHead(agent: OverlayAgent?, rig: AvatarRig?, ui: OverlayUiState, size:
         state == "asleep" -> 8
         else -> 24
     }
-    val clock = rememberOverlayClock(fps)
+    val clock = rememberAvatarClock(fps)
     val lift by animateFloatAsState(if (ui.pressed || ui.listening) 1.08f else 1f, label = "lift")
     val worn = remember(rig) { rig?.wearingGlasses() }
     // Just after a picture of the screen is taken, a glint sweeps across it.

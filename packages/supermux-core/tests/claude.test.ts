@@ -7,7 +7,7 @@ import {join} from 'node:path'
 import {claude} from '../src/claude/index.js'
 import { createCore } from '../src/core.js'
 import type {CoreEvent, DriverContext} from '../src/types.js'
-import { TEST_LIMITS, TEST_CLAUDE_PERMISSIONS, nextId } from './helpers.js'
+import { TEST_LIMITS, TEST_CLAUDE_PERMISSIONS, nextId, FIXTURE_SETUP_MS } from './helpers.js'
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -32,7 +32,7 @@ const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => claude({
   id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none', permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false,
-  setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
+  setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
   keeper: keeperOf(), ...extra,
 })
 const input = (text: string) => [{type: 'text' as const, text}]
@@ -196,6 +196,15 @@ test('failed interrupt does not fabricate a cancelled completion', async () => {
     await expect(r.interrupt()).rejects.toThrow('interrupt failed')
     expect(await pending).toEqual({stopReason: 'end_turn'})
   } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('an abort that lands while claude is still starting ends setup at once, not at the setup timeout', async () => {
+  const controller = new AbortController()
+  // Budgets no test outlives: only the abort can end this setup.
+  const pending = driver({MODE: 'setup-hang'}, {setupTimeoutMs: 600_000, requestTimeoutMs: 600_000}).open(ctx({signal: controller.signal}))
+  // open() is now inside its first await (starting claude): the abort lands before setup listens for one.
+  controller.abort()
+  await expect(pending).rejects.toThrow()
 })
 
 test('missing executable, setup timeout, request timeout, and stream failures reject', async () => {

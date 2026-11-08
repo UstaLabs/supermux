@@ -1,4 +1,4 @@
-import { spawn as defaultSpawn, type ChildProcess } from "child_process"
+import type { ChildProcess } from "child_process"
 export type AcpClient = {
   feed: (chunk: string) => void
   setWrite: (fn: (line: string) => void) => void
@@ -52,7 +52,7 @@ export function makeRealGrokRunner(deps: {
   const shouldResolve = !deps.spawn || deps.platform !== undefined || deps.fileExists !== undefined
   const command = shouldResolve ? (resolveCommand(["grok"], childEnv, platform, { fileExists: deps.fileExists }) ?? "grok") : "grok"
   const child = spawnCommand(command, args, {
-    platform, fileExists: deps.fileExists, spawn: (deps.spawn ?? defaultSpawn) as never,
+    platform, fileExists: deps.fileExists, spawn: deps.spawn as never,
     cwd: workdir,
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],

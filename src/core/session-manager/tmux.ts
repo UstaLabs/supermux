@@ -1,4 +1,4 @@
-import { proc as platformProc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
 type TmuxResult = { code: number; stdout: string; stderr: string }
 type TmuxRunner = (args: string[]) => Promise<TmuxResult>
 // Runs an arbitrary command (used to wrap tmux in `systemd-run`); injectable for tests.
@@ -11,7 +11,7 @@ export async function runCommand(cmd: string, args: string[], timeoutMs = TMUX_C
   // child_process compatibility events, which are unreliable for tmux clients in a compiled
   // macOS executable. The first-server path is separately detached below, so every command that
   // reaches this runner is expected to exit and close its own output streams.
-  const proc = Bun.spawn([cmd, ...args], { ...platformProc.spawnDefaults(), stdin: input === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" })
+  const proc = spawnProcess([cmd, ...args], { stdin: input === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" })
   if (input !== undefined) {
     const stdin = proc.stdin
     if (!stdin) throw new Error(`${cmd} stdin pipe was not created`)

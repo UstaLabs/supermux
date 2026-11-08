@@ -34,6 +34,8 @@ export type ProxyEntry = {
 }
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+/** A digits-only slug means a PORT (/p/5173/ opens localhost:5173), so a named proxy may never be one. */
+const DIGITS_ONLY_RE = /^[0-9]+$/
 
 export class Registry {
   readonly sessions: SessionStore
@@ -352,14 +354,31 @@ export class Registry {
     }
   }
 
+  private refusedProxyPorts = new Set<number>()
+
+  /**
+   * Ports a proxy may never point at; main.ts passes the broker's own. A request the proxy forwards to the broker arrives
+   * from loopback with Host 127.0.0.1 and no forwarding header, which the broker takes for the desktop app on this
+   * computer, and GET /host then answers with the local-only facts (state dir, install mode). By-port previews refuse it
+   * in the web channel; this is the same rule for a named proxy, and every way of making one lands in addProxy.
+   */
+  refuseProxyPort(port: number): void { this.refusedProxyPorts.add(port) }
+
   addProxy(input: { domain: string; sessionId: string; port: number; isPublic?: boolean }): ProxyEntry {
     const { domain, sessionId, port } = input
-    if (!domain || domain.length > 63 || !DOMAIN_RE.test(domain)) {
+    // typeof first: the web route only casts the JSON body's domain, and a regex coerces (true reads as "true", but
+    // SQLite would store it as the name "1").
+    if (typeof domain !== "string" || !domain || domain.length > 63 || !DOMAIN_RE.test(domain)) {
       throw new Error(`invalid domain: ${domain}`)
+    }
+    // Every way of naming a proxy (expose_port, POST /proxies, /proxy) lands here, so the rule lives here.
+    if (DIGITS_ONLY_RE.test(domain)) {
+      throw new Error(`proxy names can't be only digits: /p/${domain}/ means a port`)
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`invalid port: ${port}`)
     }
+    if (this.refusedProxyPorts.has(port)) throw new Error(`can't expose port ${port}: that is the broker itself`)
     const session = this.sessions.getById(sessionId)
     if (!session) throw new Error(`no such session: ${sessionId}`)
     const existing = this.proxies.get(domain)

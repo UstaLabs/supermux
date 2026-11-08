@@ -10,7 +10,7 @@ import { codex } from "../src/codex/index.js"
 import { acp } from "../src/acp/index.js"
 import { acpPermissionDecision, isSendsOnlyMuxTool, appliedFor, launchPermissions, validatePermissionsSpec } from "../src/permissions.js"
 import type { AgentDriver, AgentRuntime, CoreEvent, DriverContext, PermissionsSpec } from "../src/types.js"
-import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -176,7 +176,7 @@ test("claude fixture handles set_permission_mode", async () => {
     permissionPrompts: "none",
     permissions: TEST_CLAUDE_PERMISSIONS,
     partialMessages: false,
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 3000,
     shutdownTimeoutMs: 40,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -207,7 +207,7 @@ test("codex fixture asserts approvalPolicy/sandboxPolicy on turn/start after set
     sandbox: "read-only",
     approvalPolicy: "never",
     permissions: TEST_CODEX_PERMISSIONS,
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     requestTimeoutMs: 3000,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,
@@ -235,7 +235,7 @@ test("ACP auto-approve answers allow with no permission-request; ask surfaces; r
   })
   const mk = (permissions: PermissionsSpec) => acp({
     id: "fixture", command: process.execPath, args: [fixture], inheritEnv: true, mcpServers: [],
-    setupTimeoutMs: 3000, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, captureStderr: false, keeper: keeperDir(),
     permissions: permissions as Extract<PermissionsSpec, { kind: "acp" }>,
   })
@@ -276,7 +276,7 @@ test("ACP ask with readableRoots: the driver hands the tool call's locations to 
     let asked = 0
     const runtime = await acp({
       id: "fixture", command: process.execPath, args: [fixture], inheritEnv: true, mcpServers: [],
-      setupTimeoutMs: 3000, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+      setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
       cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, captureStderr: false, keeper: keeperDir(),
       permissions: permissions as Extract<PermissionsSpec, { kind: "acp" }>,
     }).open({
@@ -304,7 +304,7 @@ test("ACP set_mode and set_config_option paths", async () => {
   const r = await acp({
     id: "fixture", command: process.execPath, args: [fixture],
     env: { TRACE: trace, ACP_MODES: "1" }, inheritEnv: true, mcpServers: [],
-    setupTimeoutMs: 3000, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, captureStderr: false, keeper: keeperDir(),
     permissions: { kind: "acp", policy: "ask", nativeMode: "plan" },
   }).open({
@@ -324,7 +324,7 @@ test("ACP set_mode and set_config_option paths", async () => {
   const r2 = await acp({
     id: "fixture", command: process.execPath, args: [fixture],
     env: { TRACE: trace2, ACP_MODE_OPTION: "1" }, inheritEnv: true, mcpServers: [],
-    setupTimeoutMs: 3000, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, captureStderr: false, keeper: keeperDir(),
     permissions: { kind: "acp", policy: "ask", nativeMode: "ask" },
     sessionConfig: { mode: "agent" },

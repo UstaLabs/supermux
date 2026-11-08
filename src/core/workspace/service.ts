@@ -125,6 +125,7 @@ export class WorkspaceService {
         break
       }
       case "editor":
+      case "browser":
         break
     }
 

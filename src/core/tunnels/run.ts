@@ -5,6 +5,7 @@ import { closeSync, mkdirSync, openSync } from "fs"
 import { dirname } from "path"
 import { proc as platformProc } from "@supermux/platform"
 import type { Run, RunResult } from "./types"
+import { spawnProcess } from "../process/launcher"
 
 /**
  * Drain a child stream to a string, optionally teeing each chunk to a live sink
@@ -39,8 +40,7 @@ async function drain(
 /** Production Run: spawn a process, capture stdout/stderr, honor a timeout. */
 export const realRun: Run = async (argv, opts) => {
   const stream = opts?.stream === true
-  const proc = Bun.spawn(argv, {
-    ...platformProc.spawnDefaults(),
+  const proc = spawnProcess(argv, {
     // Interactive (streamed) calls inherit stdin so the user can answer prompts;
     // a piped input still wins. Otherwise stdin is closed.
     stdin: opts?.input !== undefined ? "pipe" : stream ? "inherit" : "ignore",
@@ -87,8 +87,7 @@ export function realStartDetached(argv: string[], log: string): number {
   mkdirSync(dirname(log), { recursive: true })
   const out = openSync(log, "w")
   try {
-    // platform-ok: spawnDefaults spread first; a detached background tunnel, no shell
-    const child = Bun.spawn(argv, { ...platformProc.spawnDefaults(), detached: true, stdin: "ignore", stdout: out, stderr: out })
+    const child = spawnProcess(argv, { detached: true, stdin: "ignore", stdout: out, stderr: out })
     child.unref()
     return child.pid
   } finally {

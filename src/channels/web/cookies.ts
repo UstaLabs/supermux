@@ -5,6 +5,8 @@
 import { parseCookie } from "./proxy"
 
 export const AUTH_COOKIE = "cmux_token"
+/** #105's preview-only credential: a Browser tab's own cookie store holds it; it opens port previews and nothing else. */
+export const PREVIEW_COOKIE = "cmux_preview"
 
 interface CookieOpts {
   publicUrl: string
@@ -46,6 +48,27 @@ export function buildClearCookie(o: CookieOpts): string {
   return `${AUTH_COOKIE}=; ${attrs(o)}; Max-Age=0`
 }
 
+export function previewCookieToken(req: Request): string {
+  return parseCookie(req.headers.get("cookie"), PREVIEW_COOKIE) ?? ""
+}
+
+/**
+ * The preview cookie as the app sets it in a Browser tab's cookie store (never as a Set-Cookie in its own jar):
+ * under /p/ on the app's host in path mode; on every preview host (Domain=.<base>, Path=/) in subdomain mode.
+ * The app may set it on the origin it reaches the broker through; `url` is the public one.
+ */
+export function previewCookieSpec(token: string, o: CookieOpts): Record<string, string | number | boolean> {
+  const host = hostOf(o.publicUrl)
+  const origin = new URL(o.publicUrl).origin
+  const sub = !!o.proxyBaseDomain && (host === o.proxyBaseDomain || host.endsWith(`.${o.proxyBaseDomain}`))
+  return {
+    name: PREVIEW_COOKIE, value: token,
+    url: `${origin}${sub ? "/" : "/p/"}`, path: sub ? "/" : "/p/",
+    ...(sub ? { domain: `.${o.proxyBaseDomain}` } : {}),
+    httpOnly: true, secure: o.publicUrl.startsWith("https:") || isLocalhost(host), sameSite: "Lax", maxAge: 31536000,
+  }
+}
+
 export function cookieToken(req: Request): string {
   return parseCookie(req.headers.get("cookie"), AUTH_COOKIE) ?? ""
 }
@@ -69,6 +92,34 @@ export function authToken(req: Request): string {
 // matters for cookie-bearing browsers.
 export function authedViaBearer(req: Request): boolean {
   return !cookieToken(req) && bearerToken(req) !== ""
+}
+
+/**
+ * The one cross-site guard every request passes before it is routed. A request that carries the
+ * app's cookie is the browser acting for the user, so it must come from a page the app trusts.
+ * SameSite=Lax is not that line on its own: WebKit attaches the cookie even from a sandboxed srcdoc
+ * frame inside the app (measured 2026-11-08), and a proxied page on `<slug>.<base>` gets the
+ * `Domain=.<base>` cookie by design. Returns why the request is refused, or undefined.
+ *   - `Origin: null` is an opaque origin: a sandboxed frame or a data: page.
+ *   - `Sec-Fetch-Site: cross-site` is refused unless it is a top-level GET/HEAD navigation (a link).
+ *   - The app's own WebSockets open only from `appOrigins`. A proxied app's sockets (`proxied`) come
+ *     from its own origin, so only the two rules above apply to them.
+ * Bearer clients (the native apps) and requests without the cookie have no ambient session to ride.
+ */
+export function crossSiteRefusal(req: Request, o: { appOrigins: (string | undefined)[]; proxied: boolean }): string | undefined {
+  if (!cookieToken(req) && !previewCookieToken(req)) return undefined
+  const origin = req.headers.get("origin")
+  if (origin?.trim().toLowerCase() === "null") return "opaque origin"
+  if (req.headers.get("sec-fetch-site") === "cross-site" && !isTopLevelNavigation(req)) return "cross-site request"
+  const websocket = req.headers.get("upgrade")?.toLowerCase() === "websocket"
+  if (websocket && !o.proxied && !sameOriginOk(req, ...o.appOrigins)) return "socket from another origin"
+  return undefined
+}
+
+function isTopLevelNavigation(req: Request): boolean {
+  const dest = req.headers.get("sec-fetch-dest")
+  return req.headers.get("sec-fetch-mode") === "navigate" && (dest === null || dest === "document") &&
+    (req.method === "GET" || req.method === "HEAD")
 }
 
 // CSRF guard (defense-in-depth). SameSite=Lax is the primary defense — it stops

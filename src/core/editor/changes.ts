@@ -3,10 +3,10 @@
 // a cheap per-repo file list with counts and base blob SHAs, and base texts by blob on demand.
 // Everything here is async — the broker is one event loop.
 
-import { spawn } from "node:child_process"
 import { lstat, open } from "fs/promises"
 import { join } from "path"
 import { gitAsync } from "../git/exec"
+import { spawnCommand } from "../process/launcher"
 import { mapLimit } from "../fs/pool"
 import { discoverRepos, parseBaseSpec, resolveSpecBase, REPO_CONCURRENCY } from "./workdir-diff"
 
@@ -119,7 +119,7 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
     let rest = ""
     let error: string | undefined
     let done = false
-    const child = spawn("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
+    const child = spawnCommand("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
     const take = (p: string) => {
       if (!p || p.endsWith("/")) return
       total++
@@ -132,8 +132,8 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
       resolve({ paths, total, ...(error ? { error } : {}) })
     }
     const timer = setTimeout(() => { error = "git ls-files timed out"; child.kill("SIGKILL") }, LS_FILES_TIMEOUT_MS)
-    child.stdout.setEncoding("utf-8")
-    child.stdout.on("data", (chunk: string) => {
+    child.stdout!.setEncoding("utf-8")
+    child.stdout!.on("data", (chunk: string) => {
       const parts = (rest + chunk).split("\0")
       rest = parts.pop() ?? ""
       for (const p of parts) take(p)

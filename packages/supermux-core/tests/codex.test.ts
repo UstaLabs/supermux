@@ -6,6 +6,7 @@ import {join} from 'node:path'
 import {codex} from '../src/codex/index.js'
 import {LIBRARY_VERSION} from '../src/version.js'
 import type {DriverContext} from '../src/types.js'
+import { FIXTURE_SETUP_MS } from './helpers.js'
 setDefaultTimeout(20_000)
 const fixture=fileURLToPath(new URL('./fixtures/codex-agent.mjs',import.meta.url))
 const signal=()=>new AbortController().signal
@@ -14,7 +15,7 @@ const keeperDirs:string[]=[]
 const driver=(env={},extra:any={})=>{
  const stateDirectory=require('node:fs').mkdtempSync(join(tmpdir(),'codex-keeper-'))
  keeperDirs.push(stateDirectory)
- return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
+ return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},setupTimeoutMs:FIXTURE_SETUP_MS,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
 }
 afterEach(async()=>{
  for(const dir of keeperDirs.splice(0)){
@@ -42,6 +43,14 @@ test('interrupt during start acknowledgement and steer use exact turn',async()=>
  let pending=r.prompt(input('hang'),signal());await r.interrupt();expect(await pending).toEqual({stopReason:'cancelled'})
  pending=r.prompt(input('hang'),signal());await r.steer!(input('change'));expect(await pending).toEqual({stopReason:'end_turn'})
  }finally{await r.close({ mode: "shutdown" })}
+})
+test('an abort that lands while codex is still starting ends setup at once, not at the setup timeout',async()=>{
+ const controller=new AbortController()
+ // Budgets no test outlives: only the abort can end this setup.
+ const pending=driver({MODE:'setup-hang'},{setupTimeoutMs:600_000,requestTimeoutMs:600_000}).open(ctx({signal:controller.signal}))
+ // open() is now inside its first await (starting codex): the abort lands before setup listens for one.
+ controller.abort()
+ await expect(pending).rejects.toThrow()
 })
 test('missing executable, setup timeout, and stream failures reject',async()=>{
  await expect(driver({}, {command:'/not-a-codex-executable'}).open(ctx())).rejects.toThrow()
@@ -279,7 +288,7 @@ test('explicit factory remains restorable after reopen with saved override',asyn
 })
 
 test('sandbox and approvalPolicy are validated before spawn and forwarded on start',async()=>{
- const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
+ const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:FIXTURE_SETUP_MS,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,permissions:{kind:'codex',approvalPolicy:'never',sandbox:'read-only'},keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
  expect(()=>codex({...required,sandbox:'nope',approvalPolicy:'never'})).toThrow('sandbox')
  expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'always'})).toThrow('approvalPolicy')
  const {r,dir,lines}=await traced({EXPECT_SANDBOX:'workspace-write',EXPECT_POLICY:'on-request'},{sandbox:'workspace-write',approvalPolicy:'on-request',permissions:{kind:'codex',approvalPolicy:'on-request',sandbox:'workspace-write'}})

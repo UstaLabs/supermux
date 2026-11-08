@@ -15,12 +15,14 @@ let base = ""
 let stops = 0
 let restarts = 0
 let restartable = true
+let expected = 0
 
 beforeEach(async () => {
   __resetAuthFailures()
   stops = 0
   restarts = 0
   restartable = true
+  expected = 0
   ch = new WebChannel({
     port: 0,
     devicesFile: DEV_PATH,
@@ -33,6 +35,7 @@ beforeEach(async () => {
     stopToken: TOKEN,
     onStopRequest: () => { stops++ },
     onRestartRequest: () => { restarts++; return restartable },
+    onExpectRestart: () => { expected++ },
   } as any)
   await ch.start()
   base = `http://127.0.0.1:${ch.boundPort}`
@@ -90,4 +93,22 @@ test("a broker nothing would bring back refuses to restart (409), and a missing 
   restartable = true
   expect((await fetch(`${base}/internal/restart`, { method: "POST" })).status).toBe(403)
   expect(restarts).toBe(1)
+})
+
+// #29: the desktop app restarts its broker itself (systemctl restart, launchctl kickstart -k, a child it stops and
+// starts again), so it says so first. The broker then leaves the agents running when that stop comes.
+test("the stop token tells the broker its next stop is a restart, and stops nothing", async () => {
+  const res = await fetch(`${base}/internal/expect-restart`, { method: "POST", headers: { "x-supermux-stop-token": TOKEN } })
+  expect(res.status).toBe(204)
+  await Bun.sleep(20)
+  expect(expected).toBe(1)
+  expect(stops + restarts).toBe(0)
+})
+
+test("a restart announced without the token, or with a GET, is refused", async () => {
+  for (const headers of [{}, { "x-supermux-stop-token": "nope" }] as Record<string, string>[]) {
+    expect((await fetch(`${base}/internal/expect-restart`, { method: "POST", headers })).status).toBe(403)
+  }
+  expect((await fetch(`${base}/internal/expect-restart`, { headers: { "x-supermux-stop-token": TOKEN } })).status).toBe(405)
+  expect(expected).toBe(0)
 })

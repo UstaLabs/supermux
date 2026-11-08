@@ -707,12 +707,25 @@ private fun AgentRow(
                         },
                         onCancel = cancelInstall,
                     )
-                    status.kind == "opencode" -> OpenCodeProvidersSection(
-                        load = actions.openCodeProviders,
-                        setKey = actions.openCodeSetKey,
-                        startOAuth = actions.openCodeStartOAuth,
-                        finishOAuth = actions.openCodeFinishOAuth,
-                    )
+                    status.kind == "opencode" && !loginActive -> Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
+                        OpenCodeSignIn(
+                            startFailed = loginStartFailed,
+                            timedOut = loginTimedOut,
+                            onStart = {
+                                login = null
+                                loginResumed = false
+                                loginStartFailed = false
+                                loginTimedOut = false
+                                loginActive = true
+                            },
+                        )
+                        OpenCodeProvidersSection(
+                            load = actions.openCodeProviders,
+                            setKey = actions.openCodeSetKey,
+                            startOAuth = actions.openCodeStartOAuth,
+                            finishOAuth = actions.openCodeFinishOAuth,
+                        )
+                    }
                     loginActive -> LoginFlow(
                         kind = status.kind,
                         login = login,
@@ -969,6 +982,30 @@ private fun ApiKeyField(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("agent_secret_error_$kind"),
             )
+        }
+    }
+}
+
+/**
+ * OpenCode's own sign-in (`opencode console login`): the OpenCode Zen / Go subscription, approved at opencode.ai in a
+ * browser with a device code. It is the machine's OpenCode login, so every OpenCode session gets those models (#109).
+ */
+@Composable
+private fun OpenCodeSignIn(startFailed: Boolean, timedOut: Boolean, onStart: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        SettingsSectionHeader("OPENCODE SUBSCRIPTION")
+        SettingsCaption("For OpenCode Go or Zen: approve this machine at opencode.ai with a code.")
+        if (startFailed) {
+            Text("Couldn't start authorization.", color = cs.error, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("agent_login_start_failed_opencode"))
+        }
+        if (timedOut) {
+            Text("Authorization timed out — the broker may be unreachable.", color = cs.error, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("agent_login_timeout_opencode"))
+        }
+        OutlinedButton(onClick = onStart, modifier = Modifier.testTag("agent_login_start_opencode")) {
+            Text("Sign in with OpenCode", color = cs.primary)
         }
     }
 }

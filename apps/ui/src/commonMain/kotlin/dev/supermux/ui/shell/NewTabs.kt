@@ -35,9 +35,16 @@ internal fun isNewTabId(id: String): Boolean = id.startsWith(NEW_TAB_PREFIX)
  * A pane that exists only until its New tab is given a view, split "row" (right) or "column" (down).
  * [edge]: at the edge of the whole workspace — a new rightmost column or bottom row, drawn around
  * everything drawn before it; otherwise beside [anchorGroupId]. A pick's view is first added to
- * [anchorGroupId] when that pane is real (the broker needs a real one).
+ * [anchorGroupId] when that pane is real (the broker needs a real one). [share]: the part of its split
+ * it takes — where its seam was dragged to, since the real tree has no split to keep that in; null
+ * shares the split equally.
  */
-internal data class PendingPane(val anchorGroupId: String, val direction: String, val edge: Boolean = false)
+internal data class PendingPane(
+    val anchorGroupId: String,
+    val direction: String,
+    val edge: Boolean = false,
+    val share: Double? = null,
+)
 
 /**
  * Where one New tab sits: its group, its index among everything that group's strip shows, and
@@ -118,26 +125,30 @@ internal fun withNewTabs(tree: LayoutNode, slots: Map<String, NewTabSlot>): Layo
         val pane = s.pane ?: continue
         val group = LayoutNode.Group(s.groupId, listOf(id), id)
         t = if (pane.edge) {
-            withPaneAtEdge(t, pane.direction, group)
+            withPaneAtEdge(t, pane.direction, group, pane.share)
         } else {
-            replaceGroup(t, pane.anchorGroupId) { anchor -> LayoutNode.Split(pane.direction, listOf(0.5, 0.5), listOf(anchor, group)) }
+            val s = pane.share ?: 0.5
+            replaceGroup(t, pane.anchorGroupId) { anchor -> LayoutNode.Split(pane.direction, listOf(1 - s, s), listOf(anchor, group)) }
         }
     }
     return withTabsInGroups(t, slots.filterValues { it.pane == null })
 }
 
 /**
- * [tree] with [pane] added at the workspace's edge: "row" = a new rightmost column the full height,
- * "column" = a new bottom row the full width. A root already split that way gets one more child, the
- * others keeping their proportions.
+ * [tree] with [pane] added at the workspace's edge, taking [share] of it (null: an equal share):
+ * "row" = a new rightmost column the full height, "column" = a new bottom row the full width. A root
+ * already split that way gets one more child, the others keeping their proportions.
  */
-internal fun withPaneAtEdge(tree: LayoutNode, direction: String, pane: LayoutNode): LayoutNode {
+internal fun withPaneAtEdge(tree: LayoutNode, direction: String, pane: LayoutNode, share: Double? = null): LayoutNode {
     if (tree is LayoutNode.Split && tree.direction == direction) {
         val n = tree.children.size
-        val sizes = if (tree.sizes.size == n) tree.sizes.map { it * n / (n + 1) } + (1.0 / (n + 1)) else List(n + 1) { 1.0 / (n + 1) }
-        return LayoutNode.Split(direction, sizes, tree.children + pane)
+        val s = share ?: (1.0 / (n + 1))
+        val sum = tree.sizes.sum()
+        val sizes = if (tree.sizes.size == n && sum > 0.0) tree.sizes.map { it / sum * (1 - s) } else List(n) { (1 - s) / n }
+        return LayoutNode.Split(direction, sizes + s, tree.children + pane)
     }
-    return LayoutNode.Split(direction, listOf(0.5, 0.5), listOf(tree, pane))
+    val s = share ?: 0.5
+    return LayoutNode.Split(direction, listOf(1 - s, s), listOf(tree, pane))
 }
 
 /** The pane at the workspace's top-right corner: its strip carries the split buttons. */
@@ -166,8 +177,20 @@ private fun withTabsInGroups(tree: LayoutNode, slots: Map<String, NewTabSlot>): 
     is LayoutNode.Split -> tree.copy(children = tree.children.map { withTabsInGroups(it, slots) })
 }
 
-/** [shown] without its New tabs. A group whose New tab was on show keeps [real]'s active tab. */
-internal fun withoutNewTabs(shown: LayoutNode, real: LayoutNode): LayoutNode = when (shown) {
+/**
+ * [shown] without its New tabs, the inverse of [withNewTabs]: the pending panes of [slots] come out
+ * last-drawn first, each giving its room back to the panes beside it in proportion — or all of it to
+ * the pane before it, for one in [intoPrevious] — so every pane stays the size it is drawn at. A group
+ * whose New tab was on show keeps [real]'s active tab.
+ */
+internal fun withoutNewTabs(
+    shown: LayoutNode,
+    real: LayoutNode,
+    slots: Map<String, NewTabSlot> = emptyMap(),
+    intoPrevious: Set<String> = emptySet(),
+): LayoutNode = withoutTabs(pendingPanesOut(shown, slots, intoPrevious).first, real)
+
+private fun withoutTabs(shown: LayoutNode, real: LayoutNode): LayoutNode = when (shown) {
     is LayoutNode.Group -> {
         val ids = shown.viewIds.filterNot(::isNewTabId)
         val active = shown.activeViewId?.takeIf { it in ids }
@@ -175,7 +198,58 @@ internal fun withoutNewTabs(shown: LayoutNode, real: LayoutNode): LayoutNode = w
             ?: ids.firstOrNull()
         LayoutNode.Group(shown.id, ids, active)
     }
-    is LayoutNode.Split -> shown.copy(children = shown.children.map { withoutNewTabs(it, real) })
+    is LayoutNode.Split -> shown.copy(children = shown.children.map { withoutTabs(it, real) })
+}
+
+/**
+ * [shown] with the pending panes of [slots] taken out, last-drawn first (see [withoutNewTabs]), and the
+ * part of its split each took, by its group: the share it is drawn at from now on.
+ */
+private fun pendingPanesOut(
+    shown: LayoutNode,
+    slots: Map<String, NewTabSlot>,
+    intoPrevious: Set<String> = emptySet(),
+): Pair<LayoutNode, Map<String, Double>> {
+    var tree = shown
+    val shares = mutableMapOf<String, Double>()
+    for (slot in slots.values.filter { it.pane != null }.sortedByDescending { it.seq }) {
+        val (out, share) = withoutPane(tree, slot.groupId, slot.groupId in intoPrevious)
+        if (share != null) {
+            tree = out
+            shares[slot.groupId] = share
+        }
+    }
+    return tree to shares
+}
+
+/**
+ * [node] without pane [groupId] while it holds nothing but New tabs, and the part of its split it took
+ * (null: no such pane in a split). Its room goes to the panes beside it in proportion, or all of it to
+ * the one before it when [intoPrevious].
+ */
+private fun withoutPane(node: LayoutNode, groupId: String, intoPrevious: Boolean): Pair<LayoutNode, Double?> {
+    if (node !is LayoutNode.Split) return node to null
+    val i = node.children.indexOfFirst { it is LayoutNode.Group && it.id == groupId && it.viewIds.all(::isNewTabId) }
+    if (i < 0) {
+        for ((k, child) in node.children.withIndex()) {
+            val (out, share) = withoutPane(child, groupId, intoPrevious)
+            if (share != null) return node.copy(children = node.children.toMutableList().also { it[k] = out }) to share
+        }
+        return node to null
+    }
+    val n = node.children.size
+    val sum = node.sizes.sum()
+    val sizes = if (node.sizes.size == n && sum > 0.0) node.sizes.map { it / sum } else List(n) { 1.0 / n }
+    val share = sizes[i]
+    val children = node.children.filterIndexed { k, _ -> k != i }
+    if (children.size == 1) return children.single() to share
+    val rest = sizes.filterIndexed { k, _ -> k != i }
+    val kept = when {
+        intoPrevious && i > 0 -> rest.mapIndexed { k, size -> if (k == i - 1) size + share else size }
+        share < 1.0 -> rest.map { it / (1 - share) }
+        else -> List(rest.size) { 1.0 / rest.size }
+    }
+    return LayoutNode.Split(node.direction, kept, children) to share
 }
 
 /** The active tab of [groupId], or null when there is no such group. */
@@ -190,6 +264,29 @@ private fun groupIdsOf(node: LayoutNode): Set<String> = when (node) {
 }
 
 // ── Edits PaneHost makes on the drawn tree ──────────────────────────────────────────────────────────
+
+/** An edit of the drawn tree, made on the real tree instead. */
+internal class NewTabEdit(
+    /** The real tree's edit: a function of the tree, so it replays onto a broker frame like any edit. */
+    val onReal: (LayoutNode) -> LayoutNode,
+    /** The New tabs it changes. */
+    val slots: Map<String, NewTabSlot>,
+)
+
+/**
+ * [edit], which PaneHost made on [real] with [slots] drawn in, as an edit of the real tree: the New
+ * tabs are put in first and taken out after. Null when it is not made at all: a New tab dropped on a
+ * pane edge would be a pane of its own.
+ */
+internal fun newTabEdit(real: LayoutNode, slots: Map<String, NewTabSlot>, edit: (LayoutNode) -> LayoutNode): NewTabEdit? {
+    val shown = withNewTabs(real, slots)
+    val edited = normalizeLayout(edit(shown))
+    if (edited != null && newTabWouldMakeAPane(edited, shown)) return null
+    return NewTabEdit(
+        onReal = { tree -> withoutNewTabs(edit(withNewTabs(tree, slots)), tree, slots) },
+        slots = edited?.let { newTabSlotsAfter(it, normalizeLayout(withoutNewTabs(it, real, slots)) ?: real, slots) } ?: slots,
+    )
+}
 
 /**
  * True when [edited] puts a New tab into a group [shown] did not have — it was dropped on a pane
@@ -208,11 +305,12 @@ internal fun newTabWouldMakeAPane(edited: LayoutNode, shown: LayoutNode): Boolea
 /**
  * Where each New tab is after an edit of the tree they were drawn into ([edited]); [realAfter] is the
  * same edit without them. A pending pane stays pending only while it is the same pane and nothing
- * real has joined it.
+ * real has joined it, at the share of its split it now takes.
  */
 internal fun newTabSlotsAfter(edited: LayoutNode, realAfter: LayoutNode, before: Map<String, NewTabSlot>): Map<String, NewTabSlot> {
     val out = mutableMapOf<String, NewTabSlot>()
     val real = groupIdsOf(realAfter)
+    val shares = pendingPanesOut(edited, before).second
     fun walk(n: LayoutNode) {
         when (n) {
             is LayoutNode.Group -> n.viewIds.forEachIndexed { i, id ->
@@ -223,7 +321,8 @@ internal fun newTabSlotsAfter(edited: LayoutNode, realAfter: LayoutNode, before:
                     index = i,
                     selected = selected,
                     shownOver = if (selected) groupActiveViewId(realAfter, n.id) else prior.shownOver,
-                    pane = prior.pane?.takeIf { n.id == prior.groupId && n.id !in real },
+                    pane = prior.pane?.takeIf { n.id == prior.groupId && n.id !in real }
+                        ?.let { pane -> shares[n.id]?.let { pane.copy(share = it) } ?: pane },
                 )
             }
             is LayoutNode.Split -> n.children.forEach(::walk)
@@ -247,9 +346,10 @@ internal fun newTabPick(kind: NewViewKind, tree: LayoutNode, viewsById: Map<Stri
 
 /**
  * [real] once [viewId] — which the broker put in some group of it — takes the place New tab
- * [newTabId] is drawn in: its index in a strip, or its whole pending pane. Every other New tab and
- * pending pane stays out of the real tree. [from] is the group the view was added to and the tab it
- * showed before, which it shows again.
+ * [newTabId] is drawn in: its index in a strip, or its whole pending pane, at the size it is drawn.
+ * Every other New tab and pending pane stays out of the real tree; the room of one in [intoPrevious]
+ * (anchored to the pane before it from now on) goes to that pane. [from] is the group the view was
+ * added to and the tab it showed before, which it shows again.
  */
 internal fun placeWhereDrawn(
     real: LayoutNode,
@@ -257,10 +357,12 @@ internal fun placeWhereDrawn(
     newTabId: String,
     viewId: String,
     from: Pair<String, String?>? = null,
+    intoPrevious: Set<String> = emptySet(),
 ): LayoutNode {
     val drawn = withNewTabs(real, slots)
     if (groupIdOf(drawn, newTabId) == null) return real
-    var out = normalizeLayout(withoutNewTabs(swapIn(dropView(drawn, viewId), newTabId, viewId), real)) ?: return real
+    val placed = swapIn(dropView(drawn, viewId), newTabId, viewId)
+    var out = normalizeLayout(withoutNewTabs(placed, real, slots - newTabId, intoPrevious)) ?: return real
     if (from != null) {
         val (group, before) = from
         if (before != null && groupIdOf(out, viewId) != group) out = setActiveViewInGroup(out, group, before)
@@ -269,23 +371,51 @@ internal fun placeWhereDrawn(
 }
 
 /**
+ * New tab [newTabId] picked, once the broker has made [viewId] for it in [tree]: the real tree's edit
+ * that puts the view where the New tab is drawn, and the workspace-edge panes opened before it, which
+ * change with it (see [anchorEarlierEdgePanes]). Null when the New tab is gone.
+ */
+internal fun newTabPicked(
+    tree: LayoutNode,
+    slots: Map<String, NewTabSlot>,
+    newTabId: String,
+    viewId: String,
+    from: Pair<String, String?>?,
+): NewTabEdit? {
+    val picked = slots[newTabId] ?: return null
+    val anchored = anchorEarlierEdgePanes(withNewTabs(tree, slots), slots, picked)
+    val intoPrevious = anchored.values.map { it.groupId }.toSet()
+    return NewTabEdit(
+        onReal = { t -> placeWhereDrawn(t, slots, newTabId, viewId, from, intoPrevious) },
+        slots = anchored,
+    )
+}
+
+/**
  * Workspace-edge panes opened before [picked] are drawn around the whole workspace, so once [picked]
  * is real they would wrap it as well and jump. Each is anchored instead to the pane drawn just before
- * it in [drawn].
+ * it in [drawn], taking the part of the two it is drawn at.
  */
 internal fun anchorEarlierEdgePanes(drawn: LayoutNode, slots: Map<String, NewTabSlot>, picked: NewTabSlot): Map<String, NewTabSlot> =
     slots.filter { (_, s) -> s.pane?.edge == true && s.seq < picked.seq }
         .mapNotNull { (id, s) ->
-            val (prev, direction) = previousOf(drawn, s.groupId) ?: return@mapNotNull null
-            id to s.copy(pane = PendingPane(prev, direction))
+            val (prev, direction, share) = previousOf(drawn, s.groupId) ?: return@mapNotNull null
+            id to s.copy(pane = PendingPane(prev, direction, share = share))
         }
         .toMap()
 
-/** The pane drawn just before [groupId] in its split (the last pane of the child before it), and that split's direction. */
-private fun previousOf(node: LayoutNode, groupId: String): Pair<String, String>? {
+/**
+ * The pane drawn just before [groupId] in its split (the last pane of the child before it), that
+ * split's direction, and the part of the two [groupId] takes.
+ */
+private fun previousOf(node: LayoutNode, groupId: String): Triple<String, String, Double>? {
     if (node !is LayoutNode.Split) return null
     val i = node.children.indexOfFirst { it is LayoutNode.Group && it.id == groupId }
-    if (i > 0) return lastGroupId(node.children[i - 1]) to node.direction
+    if (i > 0) {
+        val mine = node.sizes.getOrNull(i) ?: 0.0
+        val two = mine + (node.sizes.getOrNull(i - 1) ?: 0.0)
+        return Triple(lastGroupId(node.children[i - 1]), node.direction, if (two > 0.0) mine / two else 0.5)
+    }
     return node.children.firstNotNullOfOrNull { previousOf(it, groupId) }
 }
 
@@ -330,11 +460,9 @@ internal fun NewTabUpkeep(newTabs: NewTabsState, tree: LayoutNode, edit: ((Layou
     LaunchedEffect(tree, replaced, slots) {
         for ((newId, viewId) in replaced) {
             if (groupIdOf(tree, viewId) == null) continue
-            val slot = slots[newId]
-            if (slot != null) {
-                val from = newTabs.pickedFrom[newId]
-                edit { t -> placeWhereDrawn(t, slots, newId, viewId, from) }
-                for ((id, s) in anchorEarlierEdgePanes(withNewTabs(tree, slots), slots, slot)) newTabs.slots[id] = s
+            newTabPicked(tree, slots, newId, viewId, newTabs.pickedFrom[newId])?.let { picked ->
+                edit(picked.onReal)
+                for ((id, s) in picked.slots) newTabs.slots[id] = s
             }
             newTabs.close(newId)
         }

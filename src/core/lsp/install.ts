@@ -1,9 +1,25 @@
-import { spawn } from "node:child_process"
+import { resolveCommand, spawnCommand, type FileExists, type SpawnLike } from "../process/launcher"
 import { lspPathEnv, muxLspBinDir } from "./paths"
 import type { LspInstallSpec } from "./catalog"
 
 export interface InstallHandle {
   cancel(): void
+}
+
+/** How an LSP install or server process starts: on this OS with node's spawn, unless a test says otherwise. */
+export interface LspLaunch {
+  platform?: NodeJS.Platform
+  spawn?: SpawnLike
+  fileExists?: FileExists
+}
+
+/**
+ * [command] as the launcher should start it: found on [env]'s PATH when it is a bare name, so a Windows .cmd or .ps1
+ * shim (npm, a user's own server) is known to be one and goes through cmd.exe or PowerShell. Unfound, it stays as
+ * named and its spawn says so.
+ */
+export function lspCommand(command: string, env: NodeJS.ProcessEnv, launch: LspLaunch = {}): string {
+  return resolveCommand([command], env, launch.platform, { fileExists: launch.fileExists }) ?? command
 }
 
 /** Headless broker installs: no apt/snap prompts, no TTY. */
@@ -30,6 +46,7 @@ export function runInstall(
   onLine: (line: string) => void,
   onDone: (ok: boolean) => void,
   spec?: Pick<LspInstallSpec, "env">,
+  launch: LspLaunch = {},
 ): InstallHandle {
   const [bin, ...args] = cmd
   if (!bin) {
@@ -42,10 +59,8 @@ export function runInstall(
     settled = true
     onDone(ok)
   }
-  const child = spawn(bin, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: installEnv(spec?.env),
-  })
+  const env = installEnv(spec?.env)
+  const child = spawnCommand(lspCommand(bin, env, launch), args, { stdio: ["ignore", "pipe", "pipe"], env, ...launch })
   const pipe = (c: Buffer) => {
     for (const line of c.toString("utf8").split(/\r?\n/)) {
       if (line.trim()) onLine(line)

@@ -8,6 +8,7 @@ import { createCore } from '../src/index.js'
 import { acp } from '../src/acp/index.js'
 import { grok } from '../src/agents/index.js'
 import type { CoreEvent, DriverContext } from '../src/types.js'
+import { FIXTURE_SETUP_MS } from './helpers.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
@@ -53,7 +54,7 @@ function libraryAcp(extra: Record<string, unknown> = {}) {
     args: [fixture],
     inheritEnv: true,
     mcpServers: [],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,
     maxOutstandingActivity: 256,
@@ -254,7 +255,7 @@ test('Grok configure restart through the keeper keeps the native id', async () =
     noLeader: true,
     inheritEnv: true,
     mcpServers: [],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,
     maxOutstandingActivity: 256,

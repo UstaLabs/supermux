@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { runRollbackCommand, runUpdateCommand } from "./cli-update"
+import { mkdtempSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { restartAfterSwap, runRollbackCommand, runUpdateCommand } from "./cli-update"
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -137,5 +140,56 @@ describe("cli dispatcher wiring (spawn)", () => {
     expect(r.code).toBe(2)
     expect(r.stderr).toContain("update")
     expect(r.stderr).toContain("rollback")
+  })
+})
+
+// ── restartAfterSwap: who restarts the broker after an update or a rollback ───
+// #29: a CLI that restarted the service itself (systemctl, launchctl) left the broker to a stop it could not tell from
+// a plain one, so it shut its agents down: an agent that ran `supermux update` lost its turn. The broker restarts
+// itself instead, as for `supermux connect --restart`, and a restart it scheduled leaves the agents running.
+describe("restartAfterSwap", () => {
+  function brokerAnswering(status: number, seen: string[] = []) {
+    return (async (url: string, init?: RequestInit) => {
+      seen.push(`${url} ${new Headers(init?.headers).get("x-supermux-stop-token")}`)
+      return new Response(null, { status })
+    }) as unknown as typeof fetch
+  }
+  function stateWithToken(): string {
+    const dir = mkdtempSync(join(tmpdir(), "mux-update-restart-"))
+    writeFileSync(join(dir, "stop-token"), "tok-9")
+    writeFileSync(join(dir, ".env"), "MUX_WEB_PORT=9911\n")
+    return dir
+  }
+
+  test("asks the running broker to restart itself, on its own port, says so, and restarts nothing from here", async () => {
+    const seen: string[] = []
+    const { lines, println } = collector()
+    let local = 0
+    const ok = await restartAfterSwap(println, { stateDir: stateWithToken(), fetchImpl: brokerAnswering(202, seen), restartService: () => { local++; return true } })
+    expect(ok).toBe(true)
+    expect(seen).toEqual(["http://127.0.0.1:9911/internal/restart tok-9"])
+    expect(local).toBe(0)
+    expect(lines).toEqual(["Asked the running broker to restart: its sessions keep running."])
+  })
+
+  test("a broker nothing would bring back (409) is not restarted from here either, and says what to do", async () => {
+    const { lines, println } = collector()
+    let local = 0
+    const ok = await restartAfterSwap(println, { stateDir: stateWithToken(), fetchImpl: brokerAnswering(409), restartService: () => { local++; return true } })
+    expect(ok).toBe(false)
+    expect(local).toBe(0)
+    expect(lines.join("\n")).toContain("restart it yourself")
+  })
+
+  test("a broker that cannot be asked (none answers, an older one) is restarted from here, as before", async () => {
+    const down = (async () => { throw new TypeError("Unable to connect") }) as unknown as typeof fetch
+    let local = 0
+    const first = collector()
+    expect(await restartAfterSwap(first.println, { stateDir: stateWithToken(), fetchImpl: down, restartService: () => { local++; return true } })).toBe(true)
+    expect(first.lines).toEqual(["No running broker answered: restarted its service from here."])
+    const second = collector()
+    expect(await restartAfterSwap(second.println, { stateDir: stateWithToken(), fetchImpl: brokerAnswering(404), restartService: () => { local++; return false } })).toBe(false)
+    expect(second.lines).toEqual([])
+    expect(local).toBe(2)
   })
 })

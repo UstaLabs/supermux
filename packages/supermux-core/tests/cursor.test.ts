@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cursor, type CursorOptions } from '../src/agents/index.js'
 import type { DriverContext } from '../src/types.js'
+import { FIXTURE_SETUP_MS } from './helpers.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/cursor-agent.mjs', import.meta.url))
@@ -44,7 +45,7 @@ function required(extra: Partial<CursorOptions> = {}): CursorOptions {
     permissions: { kind: 'acp', policy: 'auto-approve', nativeMode: 'agent' },
     inheritEnv: true,
     mcpServers: [],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,
     maxOutstandingActivity: 256,

@@ -1,7 +1,4 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
-
-const pexec = promisify(execFile)
+import { gitAsync } from "../git/exec"
 
 export interface GitLiteStatus {
   mode: "base" | "remote"   // worktree → base, plain repo → remote
@@ -27,10 +24,9 @@ export interface LiteStatusInput {
 // a permanent ~1/s git loop per repo-backed session (git's documented fix for background status).
 async function runGit(cwd: string, args: string[], timeout = 30_000): Promise<{ ok: boolean; out: string }> {
   try {
-    const { stdout } = await pexec("git", args, { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, encoding: "utf-8", timeout, maxBuffer: 16 * 1024 * 1024 })
-    return { ok: true, out: stdout.trim() }
-  } catch (e: any) {
-    return { ok: false, out: String(e?.stdout ?? "").trim() }
+    return { ok: true, out: await gitAsync(cwd, args, { timeoutMs: timeout, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }) }
+  } catch {
+    return { ok: false, out: "" }
   }
 }
 

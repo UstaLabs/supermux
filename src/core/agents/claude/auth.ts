@@ -17,7 +17,7 @@
  * answer is, and the CLI reports its own auth error. The answer drives the
  * status badge and the login flow only.
  */
-import { spawnSync } from "node:child_process"
+import { spawnCommandSync } from "../../process/launcher"
 import { existsSync } from "fs"
 import { join, win32 } from "path"
 import type { AgentAuthResult } from "../auth-result"
@@ -45,11 +45,7 @@ const CLAUDE_ENV_MODES: readonly (readonly [string, ClaudeAuthMode])[] = [
 ]
 
 const runAuthStatus: AuthStatusRunner = (command, args) => {
-  const result = spawnSync(command, args, {
-    env: process.env,
-    stdio: "ignore",
-    timeout: 5_000,
-  })
+  const result = spawnCommandSync(command, args, { stdio: "ignore", timeout: 5_000 })
   return result.status === 0 && !result.error
 }
 

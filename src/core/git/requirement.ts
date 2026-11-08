@@ -15,7 +15,8 @@
 // Nothing is bundled (the user's decision): the install action is one click into the OS's own
 // installer — `xcode-select --install` on macOS, `winget` (or the download page) on Windows — and
 // a hint on Linux.
-import { execFile, spawn as nodeSpawn } from "child_process"
+import { spawnCommand } from "../process/launcher"
+import { runCommand } from "../process/run"
 import { delimiter, win32 as winPath } from "path"
 import { APPLE_GIT_STUB, applyCltGuard, noCltDir } from "./clt-guard"
 import { registry, Unsupported } from "@supermux/platform"
@@ -109,18 +110,9 @@ export const readRegistryPath = registryPathReader({
 })
 
 /** The real async `xcode-select -p`: its exit code, 1 on any failure (5 s cap). */
-export function xcodeSelectExit(): Promise<number> {
-  return new Promise((resolve) => {
-    try {
-      execFile("xcode-select", ["-p"], { timeout: 5_000 }, (err) => {
-        if (!err) return resolve(0)
-        const code = (err as { code?: unknown }).code
-        resolve(typeof code === "number" && code !== 0 ? code : 1)
-      })
-    } catch {
-      resolve(1)
-    }
-  })
+export async function xcodeSelectExit(): Promise<number> {
+  const r = await runCommand("xcode-select", ["-p"], { timeoutMs: 5_000 })
+  return r.code === 0 ? 0 : typeof r.code === "number" ? r.code : 1
 }
 
 export interface GitCheckDeps {
@@ -376,9 +368,7 @@ export class GitRequirementMonitor {
 
 /** `tmux set-environment -g PATH <path>`: new tmux windows lose the shim. Async, errors ignored. */
 export function setTmuxGlobalPath(path: string): void {
-  try {
-    execFile("tmux", ["set-environment", "-g", "PATH", path], { timeout: 5_000 }, () => {})
-  } catch {}
+  void runCommand("tmux", ["set-environment", "-g", "PATH", path], { timeoutMs: 5_000 })
 }
 
 // ── POST /system/install-git ─────────────────────────────────────────────────────────────────
@@ -426,7 +416,8 @@ export function spawnDetached(cmd: string[], log?: (event: string, data: Record<
     }
   }
   try {
-    const child = nodeSpawn(cmd[0]!, cmd.slice(1), { detached: true, stdio: "ignore", windowsHide: false })
+    // windowsHide: false on purpose: the installer (winget, Apple's Command Line Tools) shows its own window.
+    const child = spawnCommand(cmd[0]!, cmd.slice(1), { detached: true, stdio: "ignore", windowsHide: false })
     child.on("error", (err) => {
       log?.("install_git_spawn_failed", { cmd: cmd[0], err: String(err) })
       finish(null)

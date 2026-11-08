@@ -1,7 +1,10 @@
 // The ONLY child-process helpers the worktree/git-inspection code may use. The
 // broker is one event loop: a synchronous git call freezes every session, and
 // a freeze past 2 s makes new Claude shims give up registering (2026-09-22).
+// Every call starts from proc.spawnDefaults: the live env, no console window on Windows. A caller that cannot await
+// yet has exec-sync.ts.
 import { execFile, spawn } from "node:child_process"
+import { proc } from "@supermux/platform"
 
 /** `trim: false` keeps stdout byte-exact (needed for `-z` / porcelain output whose
  *  first record may start with a space). `okExitCodes` lists non-zero exits that
@@ -9,11 +12,12 @@ import { execFile, spawn } from "node:child_process"
 export function gitAsync(
   cwd: string,
   args: string[],
-  opts?: { timeoutMs?: number; trim?: boolean; okExitCodes?: number[] },
+  opts?: { timeoutMs?: number; trim?: boolean; okExitCodes?: number[]; env?: Record<string, string | undefined> },
 ): Promise<string> {
   const timeoutMs = opts?.timeoutMs ?? 30_000
+  const env = opts?.env ? { env: opts.env as NodeJS.ProcessEnv } : {}
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, encoding: "utf-8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile("git", args, { ...proc.spawnDefaults(), ...env, cwd, encoding: "utf-8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = (err as { code?: unknown } | null)?.code
       if (err && !(typeof code === "number" && opts?.okExitCodes?.includes(code))) {
         // A git cut short says so: its stderr then holds only half-written progress.
@@ -40,7 +44,8 @@ export function runAsync(
   return new Promise((resolve) => {
     let out = ""
     let timedOut = false
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv | undefined, stdio: ["ignore", "pipe", "pipe"] })
+    const env = opts.env ? { env: opts.env as NodeJS.ProcessEnv } : {}
+    const child = spawn(cmd, args, { ...proc.spawnDefaults(), ...env, cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] })
     const append = (b: Buffer) => { out += b.toString("utf-8"); if (out.length > max) out = out.slice(out.length - max) }
     child.stdout.on("data", append)
     child.stderr.on("data", append)
@@ -49,3 +54,4 @@ export function runAsync(
     child.on("close", (code) => { if (timer) clearTimeout(timer); resolve({ code: code ?? -1, output: out, timedOut }) })
   })
 }
+

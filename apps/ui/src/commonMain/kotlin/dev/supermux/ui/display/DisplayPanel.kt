@@ -79,6 +79,10 @@ import dev.supermux.net.ScrcpyStatus
 import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.keys.KeyContext
+import dev.supermux.ui.keys.ProvideKeyScope
+import dev.supermux.ui.keys.keyScope
+import dev.supermux.ui.keys.rememberKeyScope
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.newRetainedPageOpening
 import dev.supermux.ui.retain.rememberRetained
@@ -380,10 +384,14 @@ private fun VncView(
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val viewSizeRef by rememberUpdatedState(viewSize)
 
+    // The remote screen takes every key it can name; the app claims its own keys here first (KeyContext.Display).
+    val displayKeys = rememberKeyScope(KeyContext.Display)
+    ProvideKeyScope(displayKeys) {
     Box(
         modifier
             .fillMaxSize()
             .testTag("vnc_surface")
+            .keyScope(displayKeys)
             .onSizeChanged { viewSize = it }
             // Desktop's hardware-key route, and ONLY where there is a pointer (G4 review): on a
             // phone the surface taking focus on the first remote tap pulls it off
@@ -441,6 +449,7 @@ private fun VncView(
                 },
             )
         }
+    }
     }
 
     if (showPassword) {

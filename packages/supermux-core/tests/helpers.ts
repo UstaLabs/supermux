@@ -23,6 +23,13 @@ export const BROKER_LIMITS: CoreLimits = {
   outstandingActivity: 256,
 }
 
+/**
+ * The setup budget a fixture agent gets in tests that are not about setup timeouts. A cold CI runner took 7.2 s to start
+ * one (Windows lane); a tighter budget is a clock those tests race. It stays under every file's test timeout (20 s and
+ * up), so a fixture that really hangs still fails as a named setup timeout.
+ */
+export const FIXTURE_SETUP_MS = 15_000
+
 let seq = 0
 export const TEST_ACP_PERMISSIONS = { kind: "acp" as const, policy: "ask" as const, nativeMode: null }
 export const TEST_CLAUDE_PERMISSIONS = { kind: "claude" as const, permissionMode: "dontAsk" as const }

@@ -8,6 +8,7 @@ import dev.supermux.workspace.addViewToGroup
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.reorderWithinGroup
 import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -22,11 +23,14 @@ class NewTabsTest {
 
     /** What WorkspacePanes does with an edit PaneHost made on the drawn tree. */
     private fun route(edit: (LayoutNode) -> LayoutNode, tree: LayoutNode, slots: Map<String, NewTabSlot>): Pair<LayoutNode, Map<String, NewTabSlot>> {
-        val shown = withNewTabs(tree, slots)
-        val edited = normalizeLayout(edit(shown))!!
-        if (newTabWouldMakeAPane(edited, shown)) return tree to slots
-        val realAfter = normalizeLayout(withoutNewTabs(edited, tree))!!
-        return realAfter to newTabSlotsAfter(edited, realAfter, slots)
+        val routed = newTabEdit(tree, slots, edit) ?: return tree to slots
+        return (normalizeLayout(routed.onReal(tree)) ?: tree) to slots + routed.slots
+    }
+
+    /** What NewTabUpkeep does once the broker has made [view] for New tab [nt] in [tree]. */
+    private fun pick(tree: LayoutNode, slots: Map<String, NewTabSlot>, nt: String, view: String, from: Pair<String, String?>?): Pair<LayoutNode, Map<String, NewTabSlot>> {
+        val picked = newTabPicked(tree, slots, nt, view, from)!!
+        return picked.onReal(tree) to slots - nt + picked.slots
     }
 
     // ── A New tab in a strip ───────────────────────────────────────────────────────────────────────
@@ -180,11 +184,9 @@ class NewTabsTest {
             // The broker puts the view in a real pane and shows it there.
             val target = topRightGroupId(tree)
             val before = groupActiveViewId(tree, target)
-            tree = addViewToGroup(tree, target, view)
-            val drawn = withNewTabs(tree, slots)
-            val picked = slots.getValue(nt)
-            tree = placeWhereDrawn(tree, slots, nt, view, target to before)
-            slots = slots - nt + anchorEarlierEdgePanes(drawn, slots, picked)
+            val (t, s) = pick(addViewToGroup(tree, target, view), slots, nt, view, target to before)
+            tree = t
+            slots = s
         }
         return tree to slots
     }
@@ -223,6 +225,78 @@ class NewTabsTest {
     private fun groupIdsIn(node: LayoutNode): List<String> = when (node) {
         is LayoutNode.Group -> listOf(node.id)
         is LayoutNode.Split -> node.children.flatMap { groupIdsIn(it) }
+    }
+
+    // ── A pending pane resizes like any pane ──────────────────────────────────────────────────────
+    // Ahmet (2026-11-08), on a pane split off before anything is picked in it: "that causes it not to
+    // be able to resize". Its seam is dragged on the drawn tree, which the real tree has no split for.
+
+    private fun sizes(node: LayoutNode) = (node as LayoutNode.Split).sizes.map { Math.round(it * 1e6) }
+
+    private fun sizes(vararg s: Double) = s.map { Math.round(it * 1e6) }
+
+    private val one = LayoutNode.Group("g", listOf("a"), "a")
+    private val twoColumns = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(LayoutNode.Group("g1", listOf("a"), "a"), LayoutNode.Group("g2", listOf("b"), "b")))
+
+    private fun split(tree: LayoutNode, vararg dirs: String): Map<String, NewTabSlot> =
+        NewTabsState().apply { for (d in dirs) splitWorkspace(d, tree) }.slots.toMap()
+
+    private fun dragSeams(to: List<Double>, at: List<Int> = emptyList()): (LayoutNode) -> LayoutNode = { setSplitSizes(it, at, to) }
+
+    @Test fun aSplitRightPaneKeepsTheSizeItsSeamIsDraggedTo() {
+        val (tree, slots) = route(dragSeams(listOf(0.7, 0.3)), one, split(one, "row"))
+        assertEquals(one, tree)
+        assertEquals(sizes(0.7, 0.3), sizes(withNewTabs(tree, slots)))
+    }
+
+    @Test fun aSplitDownPaneKeepsTheSizeItsSeamIsDraggedTo() {
+        val (tree, slots) = route(dragSeams(listOf(0.65, 0.35)), twoColumns, split(twoColumns, "column"))
+        assertEquals(twoColumns, tree)
+        assertEquals(sizes(0.65, 0.35), sizes(withNewTabs(tree, slots)))
+    }
+
+    @Test fun theRealPanesBesideAPendingOneKeepWhereTheirSeamIsDragged() {
+        val (tree, slots) = route(dragSeams(listOf(0.5, 1.0 / 6, 1.0 / 3)), twoColumns, split(twoColumns, "row"))
+        assertEquals(sizes(0.75, 0.25), sizes(tree))
+        assertEquals(sizes(0.5, 1.0 / 6, 1.0 / 3), sizes(withNewTabs(tree, slots)))
+    }
+
+    @Test fun twoPendingPanesKeepTheSizesTheirSeamsAreDraggedTo() = repeat(20) {
+        val (tree, slots) = route(dragSeams(listOf(0.5, 0.2, 0.3)), one, split(one, "row", "row"))
+        assertEquals(one, tree)
+        assertEquals(sizes(0.5, 0.2, 0.3), sizes(withNewTabs(tree, slots)))
+    }
+
+    @Test fun aPickKeepsTheSizeThePaneWasDraggedTo() {
+        val (dragged, slots) = route(dragSeams(listOf(0.7, 0.3)), one, split(one, "row"))
+        val (tree, left) = pick(addViewToGroup(dragged, "g", "v"), slots, slots.keys.single(), "v", "g" to "a")
+        assertTrue(left.isEmpty())
+        assertEquals(sizes(0.7, 0.3), sizes(tree))
+        assertEquals(listOf("v"), ((tree as LayoutNode.Split).children[1] as LayoutNode.Group).viewIds)
+    }
+
+    // Picking the later of two panes first anchors the earlier one to the pane before it: every pane
+    // stays the size it is drawn at, the picked one included.
+    @Test fun pickingTheLaterOfTwoColumnsFirstLeavesEveryPaneWhereItWas() = repeat(20) {
+        val (dragged, slots) = route(dragSeams(listOf(0.5, 0.2, 0.3)), one, split(one, "row", "row"))
+        val later = slots.entries.maxBy { it.value.seq }.key
+        val (tree, left) = pick(addViewToGroup(dragged, "g", "v"), slots, later, "v", "g" to "a")
+        assertEquals(sizes(0.7, 0.3), sizes(tree))
+        val drawn = withNewTabs(tree, left) as LayoutNode.Split
+        assertEquals(sizes(0.7, 0.3), sizes(drawn))
+        assertEquals(sizes(0.5 / 0.7, 0.2 / 0.7), sizes(drawn.children[0]))
+    }
+
+    @Test fun pickingTheBottomRowFirstAfterRightThenDownLeavesEveryPaneWhereItWas() = repeat(20) {
+        val slots0 = split(one, "row", "column")
+        val (inner, slots1) = route(dragSeams(listOf(0.6, 0.4), at = listOf(0)), one, slots0)
+        val (dragged, slots) = route(dragSeams(listOf(0.7, 0.3)), inner, slots1)
+        val bottom = slots.entries.maxBy { it.value.seq }.key
+        val (tree, left) = pick(addViewToGroup(dragged, "g", "v"), slots, bottom, "v", "g" to "a")
+        assertEquals(sizes(0.7, 0.3), sizes(tree))
+        val drawn = withNewTabs(tree, left) as LayoutNode.Split
+        assertEquals(sizes(0.7, 0.3), sizes(drawn))
+        assertEquals(sizes(0.6, 0.4), sizes(drawn.children[0]))
     }
 
     // ── What a pick does, and which New tabs go away ──────────────────────────────────────────────

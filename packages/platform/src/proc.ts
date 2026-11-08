@@ -1,7 +1,10 @@
 // Processes. Only what the runtimes get wrong or leave out (platform-layer spec §3.3): Node and Bun signal a
 // process the same way everywhere, but say nothing about who owns it; Bun.which searches the PATH the process started
 // with, never .ps1, and Node has no which at all.
-import { spawn as nodeSpawn } from "node:child_process"
+import {
+  spawn as nodeSpawn, spawnSync as nodeSpawnSync, type ChildProcess, type SpawnOptions, type SpawnSyncOptions,
+  type SpawnSyncReturns,
+} from "node:child_process"
 import { accessSync, constants, statSync } from "node:fs"
 import { posix, win32 } from "node:path"
 
@@ -177,6 +180,63 @@ export function spawnDefaults(): { env: Record<string, string | undefined>; wind
   return { env: { ...process.env }, windowsHide: true }
 }
 
+/** node's spawn as [spawnCommand] takes it (a test passes its own). */
+export type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
+/** node's spawnSync as [spawnCommandSync] takes it. */
+export type SpawnSyncLike = (command: string, args: readonly string[], options: SpawnSyncOptions) => SpawnSyncReturns<Buffer>
+
+export interface SpawnCommandOptions extends SpawnOptions {
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** Starts the process; node's spawn by default. */
+  spawn?: SpawnLike
+  fileExists?: (path: string) => boolean
+}
+
+export interface SpawnCommandSyncOptions extends SpawnSyncOptions {
+  platform?: NodeJS.Platform
+  spawnSync?: SpawnSyncLike
+  fileExists?: (path: string) => boolean
+}
+
+// What starts [command] with [args]. On Windows a bare name is first found on [env]'s PATH ([resolve]): the runtime's own
+// search knows no .cmd or .ps1 (an npm install of opencode is opencode.cmd) and looks in the current folder first. Then
+// it is wrapped by its kind ([windowsLaunch]). A name found nowhere, and any command elsewhere, as given.
+function launchPlan(command: string, args: readonly string[], platform: NodeJS.Platform, env: CommandEnvironment, fileExists?: (path: string) => boolean): WindowsLaunch {
+  if (platform !== "win32") return { command, args: [...args] }
+  const files = fileExists ? { fileExists } : {}
+  const named = isExplicitPath(command, platform) ? command : resolve([command], env, { platform, ...files }) ?? command
+  return windowsLaunch(named, args, { env, ...files })
+}
+
+/**
+ * Starts [command] with node's spawn, never through a general shell. On Windows a bare name is first found on the env's
+ * PATH, then a .cmd/.bat shim goes through cmd.exe with every argument escaped and a .ps1 through PowerShell's -File
+ * ([windowsLaunch]); anything else starts as it is. Every start begins from [spawnDefaults] (the live env, no console
+ * window), which the caller's own options override. The broker's launcher and core's keeper both start their programs
+ * here.
+ */
+export function spawnCommand(command: string, args: readonly string[], options: SpawnCommandOptions = {}): ChildProcess {
+  const { platform = process.platform, spawn = nodeSpawn as unknown as SpawnLike, fileExists, ...spawnOptions } = options
+  const wrapped = launchPlan(command, args, platform, (spawnOptions.env ?? process.env) as CommandEnvironment, fileExists)
+  return spawn(wrapped.command, wrapped.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
+
+/** The synchronous twin of [spawnCommand], with the same Windows wrappers and defaults. */
+export function spawnCommandSync(command: string, args: readonly string[], options: SpawnCommandSyncOptions = {}): SpawnSyncReturns<Buffer> {
+  const { platform = process.platform, spawnSync = nodeSpawnSync as unknown as SpawnSyncLike, fileExists, ...spawnOptions } = options
+  const wrapped = launchPlan(command, args, platform, (spawnOptions.env ?? process.env) as CommandEnvironment, fileExists)
+  return spawnSync(wrapped.command, wrapped.args, {
+    ...spawnDefaults(),
+    ...spawnOptions,
+    ...(wrapped.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  })
+}
+
 export interface KillTreeOptions {
   /** The signal on POSIX; SIGTERM by default. Windows has none: taskkill /F ends the tree. */
   signal?: NodeJS.Signals
@@ -209,6 +269,15 @@ export function killTree(pid: number, options: KillTreeOptions = {}): void {
   } catch {
     try { kill(pid, signal) } catch { /* gone */ }
   }
+}
+
+/**
+ * [killTree] for a [child] this process started, while it runs. Nothing once it has exited (Node's own rule for
+ * child.kill): its pid may be another process's by then, and a tree kill would end that process instead.
+ */
+export function killChildTree(child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">, options: KillTreeOptions = {}): void {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+  killTree(child.pid, options)
 }
 
 /**

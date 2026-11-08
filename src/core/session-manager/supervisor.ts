@@ -4,6 +4,8 @@ import { normalizeName } from "../../shared/slug"
 import { AgentKind } from "../../shared/agents"
 import { isPersistentRuntimeSession, type Session } from "./types"
 import { makeLogger } from "../../shared/log"
+import { isMuxInternalPath } from "../../shared/paths"
+import { existsSync, mkdirSync } from "fs"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 
@@ -67,6 +69,21 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     return targetId
   }
 
+  /**
+   * An Agent's folder is supermux's own (`<mux home>/workspace/<name>`). One deleted under it (by hand, by a session)
+   * failed every start with "ENOENT: posix_spawn 'claude'" (Muxie, 2026-11-08): it comes back, empty. A folder outside
+   * supermux's own (a user's project) is never created.
+   */
+  function restoreOwnFolder(agent: Session): void {
+    if (!agent.workdir || existsSync(agent.workdir) || !isMuxInternalPath(agent.workdir)) return
+    try {
+      mkdirSync(agent.workdir, { recursive: true })
+      log.warn("agent_workdir_recreated", { id: agent.id, name: agent.name, workdir: agent.workdir })
+    } catch (err) {
+      log.warn("agent_workdir_recreate_failed", { id: agent.id, name: agent.name, err: String(err) })
+    }
+  }
+
   /** The row as it is now: an Agent archived or killed mid-pass must not be brought back. */
   function stillSupervised(id: string): boolean {
     const row = opts.registry.sessions.getById(id)
@@ -76,6 +93,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   async function superviseOne(agent: Session): Promise<void> {
     if (opts.sessionManager?.bootResumeInFlight?.(agent.id)) return
     if (!stillSupervised(agent.id)) return
+    restoreOwnFolder(agent)
     const adapter = asLiveAdapter(opts.sessionManager?.adapterFor?.(agent.id))
     if (adapter) {
       // isAlive covers every provider (pid is 0 for Core sessions; never judge an Agent by it).

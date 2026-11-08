@@ -8,7 +8,7 @@ import { acp } from "../src/acp/index.js"
 import { claude } from "../src/claude/index.js"
 import { codex } from "../src/codex/index.js"
 import type { AgentDriver, AuthProfile, DriverContext } from "../src/types.js"
-import { TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS } from "./helpers.js"
+import { TEST_ACP_PERMISSIONS, TEST_CLAUDE_PERMISSIONS, TEST_CODEX_PERMISSIONS, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
@@ -25,16 +25,16 @@ const ctx = (profile: AuthProfile): DriverContext => ({
 const families: Array<[string, (env: Record<string, string>) => AgentDriver]> = [
   ["claude", env => claude({
     id: "claude", command: process.execPath, args: [fixture("claude-agent.mjs")], env, inheritEnv: true, tools: [], permissionPrompts: "none",
-    permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30,
+    permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false, setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 3000, shutdownTimeoutMs: 30,
     maxFrameBytes: 16 * 1024 * 1024, keeper: keeper(),
   })],
   ["codex", env => codex({
     id: "codex", command: process.execPath, args: [fixture("codex-agent.mjs")], env, inheritEnv: true, sandbox: "read-only", approvalPolicy: "never",
-    permissions: TEST_CODEX_PERMISSIONS, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 500,
+    permissions: TEST_CODEX_PERMISSIONS, setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 3000, shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024, keeper: keeper(),
   })],
   ["acp", env => acp({
-    id: "fixture", command: process.execPath, args: [fixture("acp-agent.mjs")], env, inheritEnv: true, mcpServers: [], setupTimeoutMs: 3000,
+    id: "fixture", command: process.execPath, args: [fixture("acp-agent.mjs")], env, inheritEnv: true, mcpServers: [], setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 40, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000,
     keeper: keeper(), captureStderr: false, permissions: TEST_ACP_PERMISSIONS,
   })],

@@ -9,11 +9,13 @@ package dev.supermux.ui.shell
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import dev.supermux.ui.keys.LocalKeyScopeActive
 import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.workspace.MAX_RETAINED_WORKSPACES
 import dev.supermux.workspace.WorkspaceKeepAliveCache
@@ -49,7 +51,10 @@ fun WorkspaceKeepAliveHost(
                     visible = active,
                     modifier = Modifier.testTag("workspace-layer-$workspaceId"),
                 ) {
-                    content(workspaceId, active)
+                    // Hidden, a workspace registers no commands: they would compete with the one on screen.
+                    CompositionLocalProvider(LocalKeyScopeActive provides (LocalKeyScopeActive.current && active)) {
+                        content(workspaceId, active)
+                    }
                 }
             }
         }

@@ -6,7 +6,7 @@ import type { CodexRpc } from "../../slash-commands/types"
 import { CoreAdapter, CODEX_CORE_PROFILE, type ConfigurationPatch } from "../core-bridge/core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
 import { attachCodexRuntimeAdapter, BROKER_CODEX_ARGS, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
-import { resolveCommand } from "../../process/launcher"
+import { resolveCommand, type CommandEnvironment } from "../../process/launcher"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { STATE_DIR, homeDirName } from "../../../shared/paths"
@@ -46,7 +46,9 @@ export function brokerCodexArgs(_sessionName: string): string[] {
   return [...BROKER_CODEX_ARGS]
 }
 
-function resolveCodexCommand(env: Record<string, string>): string {
+/** Codex as found on the broker's PATH now: on Windows an npm install's codex.cmd, which the keeper starts through
+ *  cmd.exe only when it is named (a bare `codex` it cannot wrap). The bare name when there is none. */
+function resolveCodexCommand(env: CommandEnvironment = process.env): string {
   return resolveCommand(["codex"], env, process.platform) ?? "codex"
 }
 
@@ -126,7 +128,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     ...(args.account ? { account: args.account } : {}),
     id,
     env: {},
-    command: resolveCodexCommand({}),
+    command: resolveCodexCommand(),
     args: brokerCodexArgs(name),
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode }),
   })
@@ -139,7 +141,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       reregister: (fields) => host.register({
         id,
         env: {},
-        command: resolveCodexCommand({}),
+        command: resolveCodexCommand(),
         args: brokerCodexArgs(name),
         extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, permissionMode: fields.permissionMode }),
       }),
@@ -230,7 +232,7 @@ export async function resumeCodexSession(
     ...(session.account ? { account: session.account } : {}),
     id: session.id,
     env: {},
-    command: resolveCodexCommand({}),
+    command: resolveCodexCommand(),
     args: brokerCodexArgs(session.name),
     extra: prepareExtra({
       id: session.id,
@@ -249,7 +251,7 @@ export async function resumeCodexSession(
         ...(session.account ? { account: session.account } : {}),
         id: session.id,
         env: {},
-        command: resolveCodexCommand({}),
+        command: resolveCodexCommand(),
         args: brokerCodexArgs(session.name),
         extra: prepareExtra({
           id: session.id,

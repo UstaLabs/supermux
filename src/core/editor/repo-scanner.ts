@@ -2,8 +2,8 @@
 import { readdirSync, existsSync, realpathSync } from "fs"
 import { readdir, realpath } from "fs/promises"
 import { join, relative } from "path"
-import { execSync } from "child_process"
 import { gitAsync } from "../git/exec"
+import { gitSync } from "../git/exec-sync"
 
 export interface RepoInfo {
   relPath: string // relative to workdir; "" if workdir itself is a repo
@@ -31,14 +31,8 @@ export function scanRepos(workdir: string, maxDepth = DEFAULT_MAX_DEPTH): RepoIn
     const { dir, depth } = queue.shift()!
 
     if (existsSync(join(dir, ".git"))) {
-      let toplevel: string
-      try {
-        toplevel = execSync("git rev-parse --show-toplevel", {
-          cwd: dir, encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"],
-        }).trim()
-      } catch {
-        toplevel = ""
-      }
+      const top = gitSync(dir, ["rev-parse", "--show-toplevel"], 5000)
+      const toplevel = top.ok ? top.out : ""
       if (toplevel) {
         let canonical: string
         try { canonical = realpathSync(toplevel) } catch { canonical = toplevel }

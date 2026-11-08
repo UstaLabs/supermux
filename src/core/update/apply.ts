@@ -50,7 +50,7 @@ import { chmodSync, closeSync, existsSync, linkSync, openSync, readFileSync, ren
 import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
-import { proc as platformProc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
 
 const TMP_NAME = `.supermux-update.${process.pid}.tmp`
 const PREV_SUFFIX = ".prev"
@@ -578,6 +578,41 @@ function ownSystemdUnit(): string | null {
   }
 }
 
+/**
+ * How long a restart stays expected. The stop follows within seconds (a second's wait, then the service manager's
+ * signal or the task loop's exit; the desktop app's restart right after it said so), and a restart that never came
+ * must not turn a later plain stop into a detach.
+ */
+export const RESTART_EXPECTED_MS = 60_000
+
+/** Until when this broker's next stop is a restart ([expectRestart]); 0: none expected. */
+let restartExpectedUntil = 0
+
+/**
+ * This broker is about to be restarted: by itself (one of the restartVia* paths below scheduled it) or by another
+ * process that said so over POST /internal/expect-restart (the desktop app's Restart and relaunches, which restart the
+ * broker themselves). Until [RESTART_EXPECTED_MS] from [now], its graceful shutdown leaves the agents running
+ * ([agentsCloseMode]).
+ */
+export function expectRestart(now: number = Date.now()): void {
+  restartExpectedUntil = now + RESTART_EXPECTED_MS
+}
+
+/**
+ * How this broker's graceful shutdown closes its agents. "detach" while a restart is expected (Restart broker, an
+ * update, `supermux connect --restart`, the desktop app's Restart): the keepers park, and the broker that comes back
+ * re-attaches them, so a turn in flight goes on. A keeper that no broker reaches shuts its agent down after its parked
+ * deadline. A plain stop is "shutdown".
+ */
+export function agentsCloseMode(now: number = Date.now()): "shutdown" | "detach" {
+  return now < restartExpectedUntil ? "detach" : "shutdown"
+}
+
+/** @internal */
+export function resetExpectedRestartForTests(): void {
+  restartExpectedUntil = 0
+}
+
 export function restartViaSystemd(opts: { unit?: string }): boolean {
   if (!process.env.INVOCATION_ID) return false
   const unit = opts.unit ?? process.env.MUX_SERVICE_UNIT ?? ownSystemdUnit() ?? "supermux"
@@ -586,16 +621,16 @@ export function restartViaSystemd(opts: { unit?: string }): boolean {
   // passed as an ARGV positional ("$1"), NOT interpolated into the script, so a
   // hostile unit value cannot inject shell. (sh -c SCRIPT NAME ARG... binds
   // NAME→$0, ARG→$1...; we pass "--" as $0 so `unit` lands in $1 — verified.)
-  const proc = Bun.spawn(
+  const proc = spawnProcess(
     ["sh", "-c", 'sleep 1; exec systemctl --user restart "$1"', "--", unit],
     {
-      ...platformProc.spawnDefaults(),
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
     },
   )
   proc.unref()
+  expectRestart()
   return true
 }
 
@@ -626,16 +661,16 @@ export function restartViaLaunchd(opts: { label?: string }): boolean {
   // The label is passed as an ARGV positional ("$1"), never interpolated into the
   // script, so a hostile label cannot inject shell (sh -c SCRIPT -- LABEL binds
   // $0="--", $1=LABEL). The uid is a trusted integer from process.getuid().
-  const proc = Bun.spawn(
+  const proc = spawnProcess(
     ["sh", "-c", `sleep 1; exec launchctl kickstart -k "gui/${uid}/$1"`, "--", label],
     {
-      ...platformProc.spawnDefaults(),
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
     },
   )
   proc.unref()
+  expectRestart()
   return true
 }
 
@@ -697,6 +732,7 @@ export function restartViaWindowsTask(opts: {
   if (!(opts.underTask ?? underWindowsTask)) return false
   const schedule = opts.schedule ?? ((fn, ms) => setTimeout(fn, ms))
   schedule(() => windowsRestartExit(opts.hooks), opts.delayMs ?? 1_000)
+  expectRestart()
   return true
 }
 

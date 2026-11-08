@@ -130,6 +130,9 @@ describe("prepareCursorEnvironment", () => {
     await expect(prepareCursorEnvironment(spec({
       credentials: { apiKey: null, userCursorDir: join(dir, "user", ".cursor"), userConfigDir: join(dir, "user", ".config") },
     }))).rejects.toThrow(/cursor-agent login/)
+    await expect(prepareCursorEnvironment(spec({
+      credentials: { apiKey: null, userCursorDir: join(dir, "user", ".cursor"), userConfigDir: join(dir, "user", ".config") },
+    }))).rejects.toMatchObject({ code: "not_signed_in" })
   })
 
   test("cursorCredentialFreshness reads the access token expiry", () => {
