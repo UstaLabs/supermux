@@ -201,6 +201,16 @@ export class WorkspaceStore {
     this.pruneLayout(view.workspace_id, viewId)
   }
 
+  /**
+   * Drop every New tab (#91: a view of kind "new", which only asks what to show), out of its layout too. One
+   * left behind by an app that crashed or lost the broker means nothing after a restart. Returns how many.
+   */
+  dropNewTabs(): number {
+    const ids = (this.db.query("SELECT id FROM views WHERE kind = 'new'").all() as { id: string }[]).map((r) => r.id)
+    for (const id of ids) this.removeView(id)
+    return ids.length
+  }
+
   moveView(viewId: string, toWorkspaceId: string, toGroupId?: string): void {
     const view = this.getView(viewId)
     if (!view) return

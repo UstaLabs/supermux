@@ -2176,6 +2176,9 @@ const displayManager = new DisplayManager({
 // Workspace behaviour layer: close-a-view side effects and create-for-session.
 // archiveSession closes over killSession/unregisterSession/webChannel, which are
 // only invoked after startup wiring.
+// New tabs an app left behind (it crashed, or lost the broker) only ask what to show: none outlives a restart.
+const droppedNewTabs = registry.workspaces.dropNewTabs()
+if (droppedNewTabs > 0) log.info("new_tabs_dropped", { count: droppedNewTabs })
 const workspaceService = new WorkspaceService(
   registry.workspaces,
   {

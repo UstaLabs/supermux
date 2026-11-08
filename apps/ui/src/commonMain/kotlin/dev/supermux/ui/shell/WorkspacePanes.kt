@@ -119,6 +119,10 @@ import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.files.isFilesTreeView
 import dev.supermux.ui.files.nextFocusedFileView
 import dev.supermux.ui.keys.KeyContext
+import dev.supermux.ui.workspace.WorkspaceLayoutState
+import dev.supermux.ui.keys.LocalKeyScope
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.AppCommands
 import dev.supermux.ui.keys.LocalKeyScopeActive
 import dev.supermux.ui.keys.ProvideKeyScope
 import dev.supermux.ui.keys.keyScope
@@ -144,6 +148,8 @@ import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.ui.panes.PaneStripEnd
@@ -279,86 +285,59 @@ fun WorkspacePanes(
     fun bulkEntries(itemId: String): List<RowContextMenuEntry> =
         bulkCloseEntries(groupViewIdsOf(layout, itemId), itemId) { which, ids -> bulkClose(itemId, which, ids) }
 
-    // A New tab stays in its window: it is not a view another window could hold.
-    val tearOff = remember(windowsSeam, hostId, ws, current.id) {
-        windowsSeam?.tabTearOff(hostId, ws, current.id)?.let(::NewTabsStayInWindow)
-    }
-    // The "+" and the split buttons open New tabs (#91), drawn into the tree PaneHost shows; every
-    // edit PaneHost makes is replayed on the real tree with them put in first and taken out after.
-    // The split buttons are the workspace's, at its top-right: the main window's (a torn-off window
-    // shows only part of the workspace), and so are the panes they open.
-    val newTabs = kept.newTabs
+    val tearOff = remember(windowsSeam, hostId, ws, current.id) { windowsSeam?.tabTearOff(hostId, ws, current.id) }
+    // The "+" and the split buttons open New tabs (#91): views of kind "new" that ask what to show. The split
+    // buttons are the workspace's, at its top-right: the main window's (a torn-off window shows only part of the
+    // workspace). Theirs is made in that pane, then moved into a pane of its own at the workspace's edge.
     val mainWindow = hostId == ui.windows.mainHostId
-    val drawnHere = newTabs.slots.filterValues { it.pane?.edge != true || mainWindow }
-    val shownLayout = withNewTabs(layout, drawnHere)
-    NewTabUpkeep(newTabs, layoutSync.tree) { layoutSync.edit(it) }
-    val topRight = topRightGroupId(shownLayout)
-    val splitButtons = remember(mainWindow, topRight, newTabs, layoutSync) {
+    val topRight = topRightGroupId(layout)
+    val splitButtons = remember(mainWindow, topRight, layoutSync, app, current.id, hostId) {
         if (!mainWindow) {
             null
         } else {
             PaneStripEnd(topRight, WorkspaceSplitButtonsWidth) {
-                WorkspaceSplitButtons { direction -> newTabs.splitWorkspace(direction, layoutSync.tree) }
+                WorkspaceSplitButtons { direction -> splitWorkspace(direction, hostId, current, layoutSync, app, ui) }
             }
         }
     }
-
-    fun pickNewTab(newTabId: String, kind: NewViewKind) {
-        val slot = newTabs.slots[newTabId] ?: return
-        val tree = layoutSync.tree
-        when (val pick = newTabPick(kind, tree, viewsById)) {
-            is NewTabPick.SwitchTo -> {
-                newTabs.close(newTabId)
-                layoutSync.edit { setActiveViewInGroup(it, pick.groupId, pick.viewId) }
-            }
-            NewTabPick.Add -> {
-                newTabs.opening[newTabId] = kind
-                // The broker puts the view in a real pane; NewTabUpkeep then moves it to where the
-                // New tab is drawn, and that pane goes back to the tab it showed.
-                val target = (slot.pane?.anchorGroupId ?: slot.groupId).takeIf { groupActiveViewId(tree, it) != null }
-                    ?: topRightGroupId(tree)
-                newTabs.pickedFrom[newTabId] = target to groupActiveViewId(tree, target)
-                app.addWorkspaceView(
-                    current.id, kind, target,
-                    onCreated = { newViewId ->
-                        newTabs.replacedBy[newTabId] = newViewId
-                        ui.windows.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
-                    },
-                    onFailed = { newTabs.opening.remove(newTabId) },
-                )
-            }
+    val keyScope = LocalKeyScope.current?.root
+    if (mainWindow) {
+        RegisterCommand(AppCommands.SplitRight, enabled = !ui.overlayOpen, scope = keyScope) {
+            splitWorkspace("row", hostId, current, layoutSync, app, ui)
+            true
         }
+        RegisterCommand(AppCommands.SplitDown, enabled = !ui.overlayOpen, scope = keyScope) {
+            splitWorkspace("column", hostId, current, layoutSync, app, ui)
+            true
+        }
+    }
+    RegisterCommand(AppCommands.CloseTab, enabled = !ui.overlayOpen, scope = keyScope) {
+        val view = closeTabTarget(layout, ws.focusedViewId)?.let { viewsById[it] }
+        view?.let { onCloseCandidate(it) }
+        view != null
     }
 
     PaneHost(
-        layout = shownLayout,
+        layout = layout,
         tearOff = tearOff,
-        titleFor = { vid -> if (isNewTabId(vid)) "New tab" else viewsById[vid]?.let { liveViewTitle(it, sessionNames::get) } ?: "view" },
-        onCloseView = { if (isNewTabId(it)) newTabs.close(it) else onCloseCandidate(viewsById[it]) },
-        onEdit = { edit ->
-            val before = drawnHere
-            if (before.isEmpty()) {
-                layoutSync.edit(edit)
-            } else {
-                newTabEdit(layoutSync.tree, before, edit)?.let { routed ->
-                    for ((id, slot) in routed.slots) {
-                        if (newTabs.slots[id] != slot) newTabs.slots[id] = slot
-                    }
-                    layoutSync.edit(routed.onReal)
-                }
+        titleFor = { vid -> viewsById[vid]?.let { if (it.isNewTab()) "New tab" else liveViewTitle(it, sessionNames::get) } ?: "view" },
+        onCloseView = { onCloseCandidate(viewsById[it]) },
+        onEdit = { edit -> layoutSync.edit(edit) },
+        addSlot = { groupId ->
+            WorkspaceAddButton {
+                app.addNewTab(current.id, groupId) { id -> ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree) }
             }
         },
-        addSlot = { groupId -> WorkspaceAddButton { newTabs.open(groupId, groupActiveViewId(layoutSync.tree, groupId)) } },
         stripEnd = splitButtons,
         dragState = tabDragState,
         // Desktop tears a tab dropped outside every pane into a new window. Not on touch: a
-        // finger that lets go a little off-target must not spawn a window. Never a New tab.
-        onDragEndMiss = { viewId -> if (!isNewTabId(viewId) && windowsSeam?.tearOutOnDragMiss == true) onTearOutTab(viewId) },
+        // finger that lets go a little off-target must not spawn a window.
+        onDragEndMiss = { viewId -> if (windowsSeam?.tearOutOnDragMiss == true) onTearOutTab(viewId) },
         onDocked = { viewId ->
-            if (!isNewTabId(viewId)) ui.windows.transfer(viewId, hostId, layoutSync.tree)
+            ui.windows.transfer(viewId, hostId, layoutSync.tree)
         },
         onMoveToWorkspace = { viewId, toWs ->
-            if (!isNewTabId(viewId) && toWs != current.id) {
+            if (toWs != current.id) {
                 app.moveViewToWorkspace(viewId, toWs)
             }
         },
@@ -368,14 +347,15 @@ fun WorkspacePanes(
         labelFont = GeistFontFamily,
         sheetColor = { id -> sheetToneOf(id?.let { viewsById[it] }) },
         tabSlot = tabSlot@{ itemId, tabState ->
-            if (isNewTabId(itemId)) {
+            val v = viewsById[itemId]
+            if (v.isNewTab()) {
                 DefaultTabChip(
                     itemId = itemId,
                     title = "New tab",
                     state = tabState,
                     labelFont = GeistFontFamily,
                     closeLabel = "Close tab",
-                    onClose = { newTabs.close(itemId) },
+                    onClose = { _ -> onCloseCandidate(v) },
                     icon = {
                         Icon(
                             Icons.Outlined.Tab,
@@ -387,7 +367,6 @@ fun WorkspacePanes(
                 )
                 return@tabSlot
             }
-            val v = viewsById[itemId]
             val filePath = v
                 ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
                 ?.stateString("path")
@@ -446,19 +425,6 @@ fun WorkspacePanes(
             }
         },
     ) { viewId ->
-        if (isNewTabId(viewId)) {
-            key(viewId) {
-                NewTabPage(
-                    choices = newTabChoices(current, layoutSync.tree, viewsById),
-                    workspace = current.name,
-                    branch = current.branch,
-                    opening = newTabs.opening[viewId],
-                    onPick = { kind -> pickNewTab(viewId, kind) },
-                    onClose = { newTabs.close(viewId) },
-                )
-            }
-            return@PaneHost
-        }
         WorkspacePaneContent(
             viewId = viewId,
             hostId = hostId,
@@ -1022,7 +988,6 @@ internal class WorkspacePanesKept {
     private var closingOpening: String? = null
     var gridOpen by mutableStateOf(false)
     var addViewOpen by mutableStateOf(false)
-    val newTabs = NewTabsState()
 
     /** Ask about closing [view], or drop the question (null). */
     fun askToClose(view: ViewDto?) {
@@ -1129,6 +1094,10 @@ private fun WorkspacePaneContent(
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
     val v = viewsById[viewId]
+    if (v != null && v.isNewTab()) {
+        key(hostId, viewId) { NewTabView(v, hostId, current, ws, app, ui) }
+        return
+    }
     if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
         // key: a different pending tab is a different launcher (its own draft, its own state).
         key(hostId, viewId) {
@@ -1436,4 +1405,63 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
         else -> Icons.AutoMirrored.Outlined.InsertDriveFile
     }
     Icon(glyph, contentDescription = null, tint = if (selected) cs.onSurface else cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+}
+
+/**
+ * The workspace's split buttons (and ⌘\ / ⌘⌥\): a New tab, made in the top-right pane, then moved into a pane of
+ * its own at the workspace's edge: "row" a new rightmost column, "column" a new bottom row.
+ */
+@OptIn(ExperimentalUuidApi::class)
+private fun splitWorkspace(direction: String, hostId: String, current: WorkspaceDto, layoutSync: WorkspaceLayoutState, app: HostStore, ui: ShellUiState) {
+    val pane = Uuid.random().toString()
+    app.addNewTab(current.id, topRightGroupId(layoutSync.tree)) { id ->
+        ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
+        layoutSync.edit { newTabToEdge(it, id, direction, pane) }
+    }
+}
+
+/** The tab ⌘W closes: the one on show in the pane last worked in ([focusedViewId]'s), else in the first pane. */
+internal fun closeTabTarget(tree: LayoutNode, focusedViewId: String?): String? {
+    val groupId = focusedViewId?.let { groupIdOf(tree, it) } ?: firstGroupId(tree) ?: return null
+    fun find(node: LayoutNode): LayoutNode.Group? = when (node) {
+        is LayoutNode.Group -> node.takeIf { it.id == groupId }
+        is LayoutNode.Split -> node.children.firstNotNullOfOrNull(::find)
+    }
+    val group = find(tree) ?: return null
+    return group.activeViewId?.takeIf { it in group.viewIds } ?: group.viewIds.firstOrNull()
+}
+
+/** A New tab (#91): asks what to show, then puts that view in its place and closes. */
+@Composable
+private fun NewTabView(newTab: ViewDto, hostId: String, current: WorkspaceDto, ws: WorkspaceSession, app: HostStore, ui: ShellUiState) {
+    val layoutSync = ws.layoutSync
+    var opening by remember { mutableStateOf<NewViewKind?>(null) }
+    NewTabPage(
+        choices = newTabChoices(current, layoutSync.tree, ws.viewsById),
+        workspace = current.name,
+        branch = current.branch,
+        opening = opening,
+        onPick = { kind ->
+            val tree = layoutSync.tree
+            when (val pick = newTabPick(kind, tree, ws.viewsById)) {
+                is NewTabPick.SwitchTo -> {
+                    layoutSync.edit { setActiveViewInGroup(it, pick.groupId, pick.viewId) }
+                    app.closeWorkspaceView(current.id, newTab.id)
+                }
+                NewTabPick.Add -> groupIdOf(tree, newTab.id)?.let { group ->
+                    opening = kind
+                    app.addWorkspaceView(
+                        current.id, kind, group,
+                        onFailed = { opening = null },
+                        onCreated = { id ->
+                            ui.windows.expandClaim(hostId, setOf(id), layoutSync.tree)
+                            layoutSync.edit { pickedInPlace(it, newTab.id, id) }
+                            app.closeWorkspaceView(current.id, newTab.id)
+                        },
+                    )
+                }
+            }
+        },
+        onClose = { app.closeWorkspaceView(current.id, newTab.id) },
+    )
 }

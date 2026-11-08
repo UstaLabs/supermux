@@ -29,9 +29,10 @@ object AppCommands {
     val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)
     val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)
     val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)
+    val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)
 
     val all: List<AppCommand> = listOf(
         NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find,
-        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown,
+        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab,
     )
 }
