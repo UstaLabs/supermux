@@ -37,6 +37,51 @@ class WebViewStateTest {
             command(engine ?: return false)
             return true
         }
+
+        override suspend fun <T> withEngine(command: suspend (WebEngine) -> T): T? = engine?.let { command(it) }
+    }
+
+    @Test fun navigatorReachesTheBrowserOperations() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.findAnswer = { query, backwards -> FindResult(found = query == "pass", count = if (backwards) 2 else 1) }
+        val s = state()
+        s.owner = Owner(engine)
+        assertEquals(FindResult(found = true, count = 1), s.navigator.find("pass"))
+        assertEquals(FindResult(found = true, count = 2), s.navigator.find("pass", backwards = true))
+        s.navigator.clearFind()
+        assertTrue(s.navigator.setZoom(1.5f))
+        val cookie = WebCookie(name = "cmux_preview", value = "t", url = "https://app.test/p/", path = "/p/")
+        assertTrue(s.navigator.setCookie(cookie))
+        assertEquals(InspectorResult.Opened, s.navigator.openInspector())
+        assertEquals(listOf(cookie), engine.cookies)
+        assertTrue(engine.calls.containsAll(listOf("find:pass:false", "find:pass:true", "clearFind", "zoom:1.5", "inspector")), "${engine.calls}")
+    }
+
+    @Test fun navigatorWithoutAnEngineSaysSo() = runTest {
+        val s = state()
+        assertNull(s.navigator.find("x"))
+        assertFalse(s.navigator.setZoom(2f))
+        assertFalse(s.navigator.setCookie(WebCookie(name = "a", value = "b", url = "https://app.test/")))
+        assertEquals(InspectorResult.Unsupported, s.navigator.openInspector())
+    }
+
+    @Test fun faviconComesFromThePage() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.evaluateAnswer = { script -> if ("rel~=\"icon\"" in script) "\"https://vitejs.dev/logo.svg\"" else null }
+        val s = state()
+        s.owner = Owner(engine)
+        assertEquals("https://vitejs.dev/logo.svg", s.navigator.favicon())
+        engine.evaluateAnswer = { "null" }
+        assertNull(s.navigator.favicon())
+    }
+
+    @Test fun zoomStaysWithinItsBounds() = runTest {
+        val engine = FakeWebEngine(1)
+        val s = state()
+        s.owner = Owner(engine)
+        s.navigator.setZoom(9f)
+        s.navigator.setZoom(0.01f)
+        assertEquals(listOf("zoom:5.0", "zoom:0.25"), engine.calls.filter { it.startsWith("zoom:") })
     }
 
     @Test fun engineEventsUpdateTheState() {

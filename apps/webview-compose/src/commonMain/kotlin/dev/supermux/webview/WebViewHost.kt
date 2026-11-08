@@ -533,6 +533,21 @@ internal class WebViewHost(
         return true
     }
 
+    /** [onEngine] for suspending commands: the same guard; a throw marks the engine crashed and answers null. */
+    override suspend fun <T> withEngine(command: suspend (WebEngine) -> T): T? {
+        val current = engine ?: return null
+        if (!owns()) return null
+        return try {
+            command(current)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            runtime.report(e)
+            onCrashed(current)
+            null
+        }
+    }
+
     fun signal() {
         wake.trySend(Unit)
     }
