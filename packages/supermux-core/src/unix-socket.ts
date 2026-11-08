@@ -27,6 +27,7 @@ export function socketCandidates(inside: string, prefix: string, name: string, e
   if (Buffer.byteLength(inside) <= SUN_PATH_MAX) return [inside]
   const user = typeof process.getuid === "function" ? `-${process.getuid()}` : ""
   const runtime = env.XDG_RUNTIME_DIR
+  // platform-ok: /tmp is POSIX's short base, there for sun_path when the OS temp dir is long (macOS); on Windows %TEMP% comes first and fits
   const bases = [tmp, "/tmp", ...(runtime && isAbsolute(runtime) && existsSync(runtime) ? [runtime] : [])].filter(base => isAbsolute(base))
   return [...new Set(bases.map(base => join(base, `${prefix}${user}`, name)))]
     .filter(path => Buffer.byteLength(path) <= SUN_PATH_MAX)

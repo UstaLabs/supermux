@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { tmpdir } from "node:os"
 import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "./session-backend"
 
 type MemoryTarget = RuntimeTarget & {
@@ -119,7 +120,7 @@ export async function verifySessionBackendContract(
   const created = await backend.create({
     group: "contract",
     name: "worker",
-    cwd: "/tmp",
+    cwd: tmpdir(),
     argv: ["sh", "-c", "printf ready"],
     env: { CONTRACT_VALUE: "safe value" },
     cols: 100,

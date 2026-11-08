@@ -21,6 +21,7 @@ import { SIGN_IN_EXPIRED, isSystemAccount, markSignInExpired } from "../../accou
 import { CURSOR_SIGN_IN_EXPIRED, cursorRefusedLogin } from "./auth"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/index.js"
+import { dirs } from "@supermux/platform"
 
 const log = makeLogger("agents/cursor/core-host")
 
@@ -151,11 +152,9 @@ function withSignInRefusal(driver: AgentDriver, account: string | undefined): Ag
   }
 }
 
+/** Where cursor-agent keeps its settings and login: %APPDATA% on Windows, the XDG config folder elsewhere. */
 function userConfigDir(): string {
-  if (process.platform === "win32") {
-    return process.env.APPDATA || join(HOME, "AppData", "Roaming")
-  }
-  return process.env.XDG_CONFIG_HOME || join(HOME, ".config")
+  return dirs.userConfig()
 }
 
 /** One per process: a cursor-agent binary that passed is not asked again (#102). */

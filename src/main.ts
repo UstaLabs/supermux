@@ -250,7 +250,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { paths, proc } from "@supermux/platform"
+import { dirs, paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -719,8 +719,7 @@ function sessionAccountFields(s: { agent?: string; account?: string | null }): {
 const detectAgentStatuses = () => applySignInExpiry(detectAllAgents(
   { hasBinary, resolveBinary: (bin: string) => resolveCommand([bin], process.env, process.platform), fileExists: existsSync, hasCredential: agentHasCredential },
   {
-    home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-    appData: process.env.APPDATA, platform: process.platform,
+    home: home(), ...dirs.baseDirs(), platform: process.platform,
     env: process.env,
   },
 ), (kind) => systemSignInExpired(sharedAccounts().usage, kind))
@@ -3570,8 +3569,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   // (the `let` binding) — they run at request time, by which point loginManager is assigned.
   loginManager = new LoginManager({
     paths: {
-      home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
-      appData: process.env.APPDATA, platform: process.platform,
+      home: home(), ...dirs.baseDirs(), platform: process.platform,
     },
     fileExists: existsSync,
     // Every kind answers with the stored-settings oracle, so a stored

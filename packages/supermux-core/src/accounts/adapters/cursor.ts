@@ -5,7 +5,7 @@ import { jwtPayload, readJson, requireSecret, str, unsupported } from "./shared.
 import { dirs } from "@supermux/platform"
 
 export function cursorRoot(roots: HomeRoots = {}): string {
-  return resolve(roots.cursorRoot ?? process.env.XDG_CONFIG_HOME ?? join(dirs.home(), ".config"))
+  return resolve(roots.cursorRoot ?? dirs.xdgConfigHome())
 }
 
 /** `<config>/cursor/auth.json` `{ accessToken, refreshToken }`: the JWT `sub` names the user (email when present). */

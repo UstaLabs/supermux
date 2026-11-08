@@ -10,6 +10,7 @@ import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
 import { home } from "../../shared/home"
+import { dirs } from "@supermux/platform"
 
 const log = makeLogger("usage")
 
@@ -606,8 +607,7 @@ export async function redeemCodexReset(
 export function cursorAuthPath(): string {
   return authCredPath(AgentKind.Cursor, {
     home: home(),
-    xdgConfigHome: process.env.XDG_CONFIG_HOME,
-    appData: process.env.APPDATA,
+    ...dirs.baseDirs(),
     platform: process.platform,
   })
 }

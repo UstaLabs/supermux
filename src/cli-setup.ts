@@ -19,6 +19,7 @@ import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
 import { home, username } from "./shared/home"
 import { spawnProcessSync } from "./core/process/launcher"
+import { dirs } from "@supermux/platform"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -109,7 +110,7 @@ function installSystemdUnit(_flags: Flags, println: (s: string) => void): void {
   // Detect a usable `systemctl --user`. (The shared source-mode guard lives in
   // the installService dispatcher, alongside the macOS LaunchAgent path.)
   const hasSystemctl = Bun.which("systemctl", { PATH: process.env.PATH }) !== null
-  const runtimeDir = process.env.XDG_RUNTIME_DIR
+  const runtimeDir = dirs.baseDirs().xdgRuntimeDir
   if (!hasSystemctl || !runtimeDir) {
     println(`No systemd --user available; run the broker manually: ${process.execPath}`)
     return
