@@ -74,9 +74,9 @@ import {
   setAccountsAutoSwitchSource,
   setAccountsChangedListener,
   sharedAccounts,
-  toApiError,
   type AccountAgent,
 } from "./core/accounts/broker-accounts"
+import { setSessionAccount as moveSessionAccount } from "./core/accounts/session-account"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -672,6 +672,12 @@ const brokerAccounts = new BrokerAccounts({
   },
   // Auto (decision #18) picks by fresh usage: the agent's system login and added accounts, where stale.
   refreshUsage: async (agent) => { if (isUsageProvider(agent)) await getUsageStore().refreshAgent(agent) },
+  // Card #106: a removal first moves the account's sessions; an archived one just takes the account for its unarchive.
+  sessionsOn: (account) => registry.sessions.onAccount(account),
+  rehome: async (sessionId, account) => {
+    if (registry.sessions.getById(sessionId)?.status === "archived") registry.sessions.setAccount(sessionId, isSystemAccount(account) ? null : account)
+    else await setSessionAccount(sessionId, account)
+  },
 })
 // Provider usage reaches the account policy (decision #18): Auto and the limit switch pick by it. It merges
 // once the saved windows are loaded (a fetch can land first at boot). A provider that refused the login
@@ -1619,23 +1625,18 @@ function applySessionAccount(sessionId: string, account: string): void {
   webChannel?.broadcastToAll({ type: "session_state", session: s.id, ...sessionAccountFields({ agent: s.agent, account }) })
 }
 
-/** Manual account switch of a running session (Core resume { account }: shutdown + reopen). */
-async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string }> {
-  const s = registry.get(sessionId)
-  if (!s) throw new AccountsApiError(404, "session not found", "session_not_found")
-  const resolved = (await brokerAccounts.resolveSessionAccount(s.agent, account))!
-  const adapter = runtimes.get(s.id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined
-  if (!adapter || typeof adapter.setAccount !== "function") {
-    throw new AccountsApiError(409, "the session is not running; start it first", "session_not_running")
-  }
-  try {
-    await adapter.setAccount(resolved)
-  } catch (err) {
-    throw toApiError(err)
-  }
-  // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
-  applySessionAccount(s.id, resolved)
-  return { ok: true, session: s.id, ...sessionAccountFields({ agent: s.agent, account: resolved }) }
+/** Manual account switch: a running session reopens on it now, a sleeping one takes it on its next wake (#106). */
+async function setSessionAccount(sessionId: string, account: string): Promise<{ ok: true; session: string; account: string; accountLabel: string; applied: "now" | "next_wake" }> {
+  const r = await moveSessionAccount({
+    session: (id) => registry.get(id),
+    resolve: (agent, id) => brokerAccounts.resolveSessionAccount(agent, id),
+    adapter: (id) => runtimes.get(id)?.adapter as (AgentAdapter & { setAccount?: (id: string) => Promise<void> }) | undefined,
+    waking: (id) => sessionChain.waking(id),
+    // The adapter's "account" event already persisted a real switch; same-account is a no-op there.
+    store: applySessionAccount,
+  }, sessionId, account)
+  const s = registry.get(r.session)!
+  return { ok: true, session: r.session, ...sessionAccountFields({ agent: s.agent, account: r.account }), applied: r.applied }
 }
 
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
