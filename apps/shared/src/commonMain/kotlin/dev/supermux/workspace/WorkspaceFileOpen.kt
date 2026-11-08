@@ -18,14 +18,10 @@ package dev.supermux.workspace
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.stateString
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.addViewToGroup
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
-import dev.supermux.workspace.removeViewFromLayout
 import dev.supermux.workspace.setActiveViewInGroup
-import dev.supermux.workspace.splitGroup
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -94,14 +90,6 @@ fun planFileOpen(
     // Nothing to split AWAY from: an empty group is already the file's own pane.
     return if (viewIdsOfGroup(scope, source).isEmpty()) FileOpenPlan.AddToGroup(source)
     else FileOpenPlan.SplitFrom(source)
-}
-
-/** The views held by one group, or empty when the tree has no such group. */
-private fun viewIdsOfGroup(node: LayoutNode, groupId: String): List<String> = when (node) {
-    is LayoutNode.Group -> if (node.id == groupId) node.viewIds else emptyList()
-    is LayoutNode.Split -> node.children.firstNotNullOfOrNull {
-        viewIdsOfGroup(it, groupId).takeIf { ids -> ids.isNotEmpty() }
-    } ?: emptyList()
 }
 
 /** True when [node] holds a group with id [groupId] (empty or not). */
@@ -218,59 +206,13 @@ class WorkspaceFileOpener(
         onPlaced: (viewId: String) -> Unit,
     ) {
         val id = newId()
-        val state = fileViewState(path)
-        provisional[id] = ViewDto(id = id, workspaceId = workspaceId, kind = "editor", state = state)
         placing[path] = id
-
-        if (split) {
-            // Add THEN split, the same two tested primitives the "+" menu uses: splitGroup refuses
-            // a group with fewer than two views, and an empty group would fail validateLayout, so
-            // there is no way to make a fresh group directly. Every intermediate tree stays valid.
-            //
-            // Minted OUTSIDE the transform: a replay must land on the SAME group id, not invent a
-            // new one each time it is rebased onto a frame.
-            val newGroupId = newId()
-            edit { tree ->
-                // Address the view's CURRENT group, never the one it started in. This transform is
-                // replayed over every workspace_changed frame, and the split's whole job is to move
-                // the view OUT of `groupId` — so a naive `addViewToGroup(tree, groupId, id)` stops
-                // finding it there on the second pass and adds it AGAIN. That is what "opening a
-                // file opens it twice" was: the same file in two groups at once.
-                when (val owner = groupIdOf(tree, id)) {
-                    // Already split out (our own edit, echoed back). Nothing to do.
-                    newGroupId -> tree
-                    // Not placed yet: put it in the source group so splitGroup has two to divide.
-                    null -> splitGroup(addViewToGroup(tree, groupId, id), groupId, id, "row", newGroupId)
-                    // The broker placed it (it runs addViewToGroup for the groupId we POSTed).
-                    // Split it out of wherever it actually landed.
-                    else -> splitGroup(tree, owner, id, "row", newGroupId)
-                }
-            }
-        } else {
-            edit { tree -> addViewToGroup(tree, groupId, id) }
-        }
-        onPlaced(id)
-
-        scope.launch {
-            val created = post(id, state, groupId)
-            if (created == id) return@launch
-            // Either the POST was rejected (null), or the broker created the view under a DIFFERENT
-            // id than the one we drew. Both leave the same wreckage if ignored: a tab naming a view
-            // that will never exist, which draws as "view", cannot be closed through the broker, and
-            // pins the layout write open forever waiting for a confirmation that cannot come.
-            //
-            // So both take the same exit — withdraw the optimistic tab and let the broker's own
-            // placement stand. Withdrawing is safe to compose: this edit is applied AFTER the split
-            // that created the tab, so on every replay the pair cancels out rather than fighting.
-            // A mismatched id costs the split (the file lands wherever the broker put it) but never
-            // an unclosable duplicate — degrade, don't wedge.
-            if (created != null) {
-                println("[WorkspaceFileOpener] broker created '$path' as $created, not the $id we drew — withdrawing our tab")
-            }
-            provisional.remove(id)
+        placeNewView(
+            id = id, kind = "editor", state = fileViewState(path), groupId = groupId, split = split,
+            workspaceId = workspaceId, provisional = provisional, edit = edit, post = post, scope = scope, newId = newId,
+            onPlaced = onPlaced,
             // Two-arg remove(key, value) is a JVM default method, absent on Kotlin/Native.
-            if (placing[path] == id) placing.remove(path)
-            edit { tree -> removeViewFromLayout(tree, id) ?: tree }
-        }
+            onWithdrawn = { if (placing[path] == id) placing.remove(path) },
+        )
     }
 }
