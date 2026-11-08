@@ -158,12 +158,26 @@ const STRIP_REQUEST_HEADERS = new Set(["cf-connecting-ip", "cf-ray", "cf-visitor
 // --- Headers to strip from upstream responses ---
 const STRIP_RESPONSE_HEADERS = new Set(["transfer-encoding"])
 
+/** The Cookie header without the named cookies, or null when nothing is left. */
+export function withoutCookies(header: string, names: string[]): string | null {
+  const kept = header.split(";").map((p) => p.trim()).filter((p) => {
+    if (!p) return false
+    const eq = p.indexOf("=")
+    return !names.includes((eq < 0 ? p : p.slice(0, eq)).trim())
+  })
+  return kept.length ? kept.join("; ") : null
+}
+
+/** What the proxied app must never see: supermux's own cookies, and a bearer that is one of its device tokens. */
+export interface OwnCredentials { cookies: string[]; isOwnBearer?: (token: string) => boolean }
+
 // --- Proxy handler ---
 
 export async function handleProxyRequest(
   req: Request,
   upstream: { port: number; sessionName: string },
   pathOpts?: { prefix: string; upstreamPath: string },
+  own?: OwnCredentials,
 ): Promise<Response> {
   const url = new URL(req.url)
   const pathAndQuery = pathOpts ? pathOpts.upstreamPath : url.pathname + (url.search || "")
@@ -174,6 +188,17 @@ export async function handleProxyRequest(
   forwardedHeaders.set("host", `127.0.0.1:${upstream.port}`)
   for (const h of STRIP_REQUEST_HEADERS) {
     forwardedHeaders.delete(h)
+  }
+  // An agent's dev server must not receive the user's device token: it would be the whole API, from anywhere.
+  if (own) {
+    const cookie = forwardedHeaders.get("cookie")
+    if (cookie) {
+      const kept = withoutCookies(cookie, own.cookies)
+      if (kept) forwardedHeaders.set("cookie", kept)
+      else forwardedHeaders.delete("cookie")
+    }
+    const bearer = /^Bearer\s+(.+)$/i.exec(forwardedHeaders.get("authorization")?.trim() ?? "")?.[1]?.trim()
+    if (bearer && own.isOwnBearer?.(bearer)) forwardedHeaders.delete("authorization")
   }
 
   log.debug("proxy.forward", {
