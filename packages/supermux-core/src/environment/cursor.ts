@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
-import { join, posix, win32 } from "node:path"
+import { join } from "node:path"
+import { paths } from "@supermux/platform"
 import { cursorCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ensureSharedCursorRuntime } from "./cursor-runtime.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
@@ -11,7 +12,7 @@ import { NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 const CURSOR_DIR_FILES = ["cli-config.json", "agent-cli-state.json"]
 
 function pathJoin(platform: NodeJS.Platform): (...parts: string[]) => string {
-  return platform === "win32" ? win32.join : posix.join
+  return paths.flavor(platform).join
 }
 
 function ensureHome(home: string): void {
@@ -54,7 +55,7 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
   const env: Record<string, string> = isolatedEnv(spec.home, spec.platform)
 
   if (spec.sharedRuntime !== null && spec.platform !== "win32") {
-    const userHomeDir = posix.dirname(spec.credentials.userCursorDir)
+    const userHomeDir = paths.flavor(spec.platform).dirname(spec.credentials.userCursorDir)
     const userRuntime = j(userHomeDir, ".local", "share", "cursor-agent")
     ensureSharedCursorRuntime(spec.home, {
       sharedDir: spec.sharedRuntime.source,
