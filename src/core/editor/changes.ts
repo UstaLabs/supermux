@@ -7,6 +7,7 @@ import { lstat, open } from "fs/promises"
 import { join } from "path"
 import { gitAsync } from "../git/exec"
 import { indexState, stagedOf, type Staged } from "../git/stage"
+import { proc } from "@supermux/platform"
 import { spawnCommand } from "../process/launcher"
 import { mapLimit } from "../fs/pool"
 import { discoverRepos, parseBaseSpec, resolveSpecBase, REPO_CONCURRENCY } from "./workdir-diff"
@@ -134,7 +135,7 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
       clearTimeout(timer)
       resolve({ paths, total, ...(error ? { error } : {}) })
     }
-    const timer = setTimeout(() => { error = "git ls-files timed out"; child.kill("SIGKILL") }, LS_FILES_TIMEOUT_MS)
+    const timer = setTimeout(() => { error = "git ls-files timed out"; proc.stop(child) }, LS_FILES_TIMEOUT_MS)
     child.stdout!.setEncoding("utf-8")
     child.stdout!.on("data", (chunk: string) => {
       const parts = (rest + chunk).split("\0")

@@ -338,20 +338,15 @@ export const defaultLoginRunner: LoginRunner = input => {
   // 'close', not 'exit': 'exit' can come before the last of the output (Bun emits it as the process ends, without
   // waiting for its pipes), and a failed login's message is that output ("Error: device code expired").
   child.on("close", code => exit(code))
-  // The CLI and what it started: its group (spawned detached), or on Windows its tree.
-  const signal = (name: NodeJS.Signals) => {
-    if (child.pid) proc.killTree(child.pid, { signal: name })
-    else try { child.kill(name) } catch { /* already gone */ }
-  }
   return {
     onOutput: listener => { output.push(listener) },
     onExit: listener => { if (exited) listener(exited.code); else exits.push(listener) },
     write: data => { try { child.stdin!.write(data) } catch { /* closed */ } },
     kill: () => {
       if (exited) return
-      signal("SIGTERM")
-      const timer = setTimeout(() => { if (!exited) signal("SIGKILL") }, KILL_GRACE_MS)
-      timer.unref?.()
+      // The CLI and what it started: its group (spawned detached), or on Windows its tree. Until its pipes close: the CLI
+      // may have exited while something it started still holds them.
+      proc.stop(child, { graceMs: KILL_GRACE_MS, running: () => !exited })
     },
   }
 }

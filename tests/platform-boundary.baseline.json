@@ -10,14 +10,5 @@
     "src/core/transcription/engines/cursor-stt.ts": 2,
     "src/core/usage/index.ts": 2,
     "src/main.ts": 4
-  },
-  "signals": {
-    "packages/supermux-core/src/accounts/login.ts": 1,
-    "packages/supermux-core/src/keeper/client.ts": 3,
-    "packages/supermux-core/src/keeper/keeper.ts": 1,
-    "src/core/agents/install.ts": 1,
-    "src/core/editor/changes.ts": 1,
-    "src/core/git/exec.ts": 1,
-    "src/core/terminal/zmx/backend.ts": 1
   }
 }
