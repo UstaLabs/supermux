@@ -14,7 +14,7 @@ import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
-import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
+import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
 import { AUTH_COOKIE, PREVIEW_COOKIE, authToken, authedViaBearer, bearerToken, buildAuthCookie, buildClearCookie, crossSiteRefusal, previewCookieSpec, previewCookieToken, sameOriginOk } from "./cookies"
 import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
@@ -487,6 +487,8 @@ export interface WebChannelOpts {
   proxyMainHost?: string
   proxyLookup?: (domain: string) => { port: number; sessionName: string; isPublic: boolean } | undefined
   proxyAuth?: (token: string) => boolean
+  /** The base URL named proxies' links are built on (main.ts: the relay's, else MUX_WEB_PUBLIC_URL); GET /proxies/by-port builds on it too. Defaults to [publicUrl]. */
+  proxyLinksBaseUrl?: () => string | undefined
   internalSecret?: string
   /**
    * The per-boot token of POST /internal/stop (src/core/session-manager/stop-token.ts). With [onStopRequest], a request
@@ -1073,8 +1075,9 @@ export class WebChannel implements Channel {
     const sub = this.opts.proxyBaseDomain
       ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
       : undefined
-    // Path-based proxy (active only when no base domain is configured).
-    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Path-based proxy (active only when no base domain is configured). A digits slug is a port and needs no lookup.
+    const pathMatch = !this.opts.proxyBaseDomain ? matchProxyPath(url.pathname) : null
+    const pm = pathMatch && (this.opts.proxyLookup || portFromSlug(pathMatch.slug) !== undefined) ? pathMatch : undefined
     // Before any route, so a new route can't miss it (cookies.ts explains the rules).
     const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
     if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
@@ -1084,6 +1087,8 @@ export class WebChannel implements Channel {
       return this.handleProxyRoute(req, sub, server)
     }
     if (pm) {
+      // A digits slug that is not a usable port is a 404 whatever follows it (no 301 on the way to one).
+      if (portFromSlug(pm.slug) !== undefined && !this.proxyTarget(pm.slug)) return new Response("not found", { status: 404 })
       if (pm.rest === null) {
         // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
         return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
@@ -2468,14 +2473,28 @@ export class WebChannel implements Channel {
     })
   }
 
+  /**
+   * What a preview slug opens. A digits slug is a PORT on this host (never a name; Registry.addProxy refuses digits-only
+   * names), always private. It is looked up nowhere, so a digits-only named proxy stored before that rule is shadowed:
+   * the by-port route wins. Nothing for a digits slug that is no usable port, nor for this broker's own port: a request
+   * forwarded to it would arrive from loopback with Host 127.0.0.1 and no forwarding header, which classifyPeer takes
+   * for the desktop app on this computer and answers GET /host with the local-only facts (state dir, install mode).
+   */
+  private proxyTarget(slug: string): { port: number; sessionName: string; isPublic: boolean } | undefined {
+    const port = portFromSlug(slug)
+    if (port === undefined) return this.opts.proxyLookup?.(slug)
+    if (port === null || port === this.boundPort || port === this.opts.port) return undefined
+    return { port, sessionName: `port ${port}`, isPublic: false }
+  }
+
   private async handleProxyRoute(
     req: Request,
     slug: string,
     server?: import("bun").Server<WSData>,
     pathOpts?: { prefix: string; upstreamPath: string },
   ): Promise<Response | undefined> {
-    if (!this.opts.proxyLookup) return new Response("proxy not configured", { status: 500 })
-    const upstream = this.opts.proxyLookup(slug)
+    if (!this.opts.proxyLookup && portFromSlug(slug) === undefined) return new Response("proxy not configured", { status: 500 })
+    const upstream = this.proxyTarget(slug)
     if (!upstream) return new Response("not found", { status: 404 })
 
     if (!upstream.isPublic) {
@@ -4722,6 +4741,15 @@ export class WebChannel implements Channel {
       }
     }
 
+    // The by-port URL as a template, `{port}` where the port goes, built the way a named proxy's URL is.
+    if (method === "GET" && path === "/proxies/by-port") {
+      return this.json({
+        url: buildProxyPublicUrl("{port}", {
+          baseDomain: this.opts.proxyBaseDomain,
+          publicUrl: this.opts.proxyLinksBaseUrl?.() ?? this.opts.publicUrl,
+        }),
+      })
+    }
     if (method === "GET" && path === "/proxies") {
       const proxies = this.opts.listProxies?.() ?? []
       return this.json(proxies)
