@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process"
 import { access, lstat, mkdir, readdir, readFile, rm, rmdir, chmod, symlink, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { delimiter, isAbsolute, join } from "node:path"
@@ -317,7 +316,8 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
 export const defaultLoginRunner: LoginRunner = input => {
   if (input.pty && process.platform === "win32") return spawnConptyLogin(input)
   const { command, args } = input.pty ? ptyCommand(input) : input
-  const child = spawn(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
+  // Through @supermux/platform's spawnCommand: on Windows a CLI that is an npm shim (codex.cmd) starts through cmd.exe.
+  const child = proc.spawnCommand(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
   const output: Array<(chunk: string) => void> = []
   const exits: Array<(code: number | null) => void> = []
   let exited: { code: number | null } | undefined
@@ -326,11 +326,11 @@ export const defaultLoginRunner: LoginRunner = input => {
     exited = { code }
     for (const listener of exits) listener(code)
   }
-  child.stdout.setEncoding("utf8")
-  child.stderr.setEncoding("utf8")
-  child.stdout.on("data", (chunk: string) => { for (const listener of output) listener(chunk) })
-  child.stderr.on("data", (chunk: string) => { for (const listener of output) listener(chunk) })
-  child.stdin.on("error", () => {})
+  child.stdout!.setEncoding("utf8")
+  child.stderr!.setEncoding("utf8")
+  child.stdout!.on("data", (chunk: string) => { for (const listener of output) listener(chunk) })
+  child.stderr!.on("data", (chunk: string) => { for (const listener of output) listener(chunk) })
+  child.stdin!.on("error", () => {})
   child.on("error", error => {
     for (const listener of output) listener(`${command}: ${error.message}\n`)
     exit(null)
@@ -346,7 +346,7 @@ export const defaultLoginRunner: LoginRunner = input => {
   return {
     onOutput: listener => { output.push(listener) },
     onExit: listener => { if (exited) listener(exited.code); else exits.push(listener) },
-    write: data => { try { child.stdin.write(data) } catch { /* closed */ } },
+    write: data => { try { child.stdin!.write(data) } catch { /* closed */ } },
     kill: () => {
       if (exited) return
       signal("SIGTERM")
