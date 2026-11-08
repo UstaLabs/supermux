@@ -296,8 +296,12 @@ export interface WebAccountsApi {
   submitCode(loginId: string, code: string): void
   cancelLogin(loginId: string): void
   setSessionAccount(sessionId: string, account: string): Promise<unknown>
-  getSettings(): { autoSwitch: boolean }
-  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean }
+  /** #92: drop the session's wait for a limit reset; false when it had none. */
+  cancelLimitWait?(sessionId: string): boolean
+  /** #92: resume a waiting session now; false when it had no wait. */
+  resumeLimitWait?(sessionId: string): Promise<boolean>
+  getSettings(): { autoSwitch: boolean; autoResume?: boolean }
+  setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
 }
 
 export interface WebChannelOpts {
@@ -3321,6 +3325,20 @@ export class WebChannel implements Channel {
       if (!body.code) return this.json({ error: "code required" }, 400)
       this.opts.sendAgentLoginCode?.(kind, body.code)
       return this.json({ ok: true })
+    }
+
+    // ── a session's wait for a usage-limit reset (#92): Cancel, Resume now ──
+    const limitWait = path.match(/^\/sessions\/([^/]+)\/limit-wait(\/resume)?$/)
+    if (limitWait) {
+      const api = this.opts.accounts
+      const id = decodeURIComponent(limitWait[1]!)
+      if (method === "DELETE" && !limitWait[2] && api?.cancelLimitWait) {
+        return api.cancelLimitWait(id) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      if (method === "POST" && limitWait[2] && api?.resumeLimitWait) {
+        return (await api.resumeLimitWait(id)) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
+      }
+      return this.json({ error: "not found" }, 404)
     }
 
     // ── accounts (one registry for every agent; secrets go in, never out) ──

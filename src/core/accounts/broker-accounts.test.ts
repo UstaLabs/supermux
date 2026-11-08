@@ -8,7 +8,7 @@ import { ACCOUNT_AGENTS, AccountsApiError, BrokerAccounts } from "./broker-accou
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(sessions: Array<{ id: string; agent: string; account: string }>, rehome?: (id: string, account: string) => Promise<void>) {
+function setup(sessions: Array<{ id: string; agent: string; account: string }>, rehome?: (id: string, account: string) => Promise<void>, removed: string[] = []) {
   const base = mkdtempSync(join(tmpdir(), "mux-broker-accounts-"))
   dirs.push(base)
   const registry = new AccountRegistry(join(base, "state"), [...ACCOUNT_AGENTS], { vault: memoryVault(), homes: { claudeRoot: join(base, "claude-root") } })
@@ -19,6 +19,7 @@ function setup(sessions: Array<{ id: string; agent: string; account: string }>, 
     coreFor: () => { throw new Error("not used") },
     broadcast: () => {},
     sessionsOn: (account) => sessions.filter((s) => s.account === account),
+    onRemoved: (id) => { removed.push(id) },
     rehome: async (id, account) => {
       await rehome?.(id, account)
       moves.push([id, account])
@@ -72,4 +73,13 @@ test("removalPlan says how many sessions a removal moves and where, without movi
   expect(await accounts.removalPlan("a")).toEqual({ account: "a", sessions: 2, to: "b", toLabel: "Work" })
   expect(moves).toEqual([])
   await expect(accounts.removalPlan("nope")).rejects.toMatchObject({ status: 404 })
+})
+
+test("a removal tells onRemoved once the account is gone, not when it is refused (#106 + #92's waits)", async () => {
+  const removed: string[] = []
+  const { registry, accounts } = setup([], undefined, removed)
+  await registry.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  await accounts.remove("a")
+  await expect(accounts.remove("a")).rejects.toMatchObject({ status: 404 })
+  expect(removed).toEqual(["a"])
 })

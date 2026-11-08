@@ -29,11 +29,12 @@ export const SYSTEM_ACCOUNT_LABEL = "System login"
 
 /** Settings key "accounts": the user's toggles plus the one-time migration marker. */
 export const SETTINGS_KEY_ACCOUNTS = "accounts"
-export type AccountsSettings = { autoSwitch: boolean; settingsMigrated?: boolean }
+export type AccountsSettings = { autoSwitch: boolean; autoResume: boolean; settingsMigrated?: boolean }
 
+/** autoSwitch is off unless turned on; autoResume (#92: wait for a limit reset, then carry on) is on unless turned off. */
 export function parseAccountsSettings(value: unknown): AccountsSettings {
   const o = (value ?? {}) as Record<string, unknown>
-  return { autoSwitch: o.autoSwitch === true, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
+  return { autoSwitch: o.autoSwitch === true, autoResume: o.autoResume !== false, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
 }
 
 export function isAccountAgent(agent: unknown): agent is AccountAgent {
@@ -229,6 +230,8 @@ export type BrokerAccountsDeps = {
   sessionsOn?(account: string): Array<{ id: string; agent: string }>
   /** Moves a session to `account`: a running one now, a sleeping or archived one for its next wake. */
   rehome?(sessionId: string, account: string): Promise<void>
+  /** The account is gone (e.g. #92's limit waits on it are dropped). */
+  onRemoved?(accountId: string): void
   now?: () => number
 }
 
@@ -335,6 +338,7 @@ export class BrokerAccounts {
       throw toApiError(err)
     }
     this.deps.usage.delete(id)
+    this.deps.onRemoved?.(id)
     await this.changed()
   }
 
