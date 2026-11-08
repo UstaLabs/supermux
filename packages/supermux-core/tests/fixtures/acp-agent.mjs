@@ -73,6 +73,8 @@ new AgentSideConnection(client => ({
   const text = params.prompt[0].text;
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
+  // A prompt that only marks the trace: every message the host sent before it is recorded above the mark (stdin order).
+  if(text === 'mark') { record({mark:true}); return {stopReason:'end_turn'}; }
   if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }
   // Answers and ends on its own once the RELEASE file exists (a turn that finishes while no host is attached).
   if(text === 'until-released') {

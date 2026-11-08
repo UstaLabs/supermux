@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { acp, type AcpActivityHint } from '../src/acp/index.js'
 import { createCore } from '../src/core.js'
 import type { AgentUpdate, DriverContext } from '../src/types.js'
-import { TEST_LIMITS, TEST_ACP_PERMISSIONS, nextId } from "./helpers.js"
+import { TEST_LIMITS, TEST_ACP_PERMISSIONS, nextId, FIXTURE_SETUP_MS } from "./helpers.js"
 import { LIBRARY_VERSION } from '../src/version.js'
 
 const dirs: string[] = []
@@ -57,7 +57,7 @@ async function answer(trace: string, tool: string): Promise<any> {
   return found
 }
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
-const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(), captureStderr: false,classifyActivity,permissions: TEST_ACP_PERMISSIONS,...extra})
+const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:FIXTURE_SETUP_MS,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(), captureStderr: false,classifyActivity,permissions: TEST_ACP_PERMISSIONS,...extra})
 function context(extra: Partial<DriverContext> = {}): DriverContext { return {sessionId:'core-1',cwd:process.cwd(),signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),requestAnswers:async()=>({outcome:'cancelled' as const}),...extra} }
 test('create, prompt, preserve updates, and close process', async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid'); const updates:any[]=[];
@@ -96,8 +96,10 @@ test('auth honors profile env, exposes methods, rejects terminal and failed auth
  await expect(d.auth!.login(ctx,'terminal')).rejects.toMatchObject({code:'unsupported_operation'});
  await expect(d.auth!.login({signal:ctx.signal},'token')).rejects.toThrow();
 })
+// These wait for the setup timeout itself, so it stays short: a fixture that hangs always outlasts it.
+const SETUP_TIMEOUT_UNDER_TEST = { setupTimeoutMs: 3000 }
 test('setup rejects incompatible versions, hangs, and early exits',async()=>{
- for(const mode of ['version','hang','exit']) await expect(driver({FIXTURE_MODE:mode}).open(context())).rejects.toThrow();
+ for(const mode of ['version','hang','exit']) await expect(driver({FIXTURE_MODE:mode},SETUP_TIMEOUT_UNDER_TEST).open(context())).rejects.toThrow();
 })
 test('permission cancellation settles uncooperative callback and prompt',async()=>{
  let requested!:()=>void; const seen=new Promise<void>(r=>requested=r); let permissionSignal:AbortSignal|undefined;
@@ -127,7 +129,7 @@ test('initialize names this library and the version it is',async()=>{
 test('failed setup and cancelled setup both reap their child',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid');
  for(const mode of ['version','hang']) {
-  await expect(driver({FIXTURE_MODE:mode,PID_FILE:pidFile}).open(context())).rejects.toThrow();
+  await expect(driver({FIXTURE_MODE:mode,PID_FILE:pidFile},SETUP_TIMEOUT_UNDER_TEST).open(context())).rejects.toThrow();
   const pid = Number(await readFile(pidFile,'utf8')); expect(()=>process.kill(pid,0)).toThrow();
  }
  const controller=new AbortController();const pending=driver({FIXTURE_MODE:'hang',PID_FILE:pidFile}).open(context({signal:controller.signal}));
@@ -154,7 +156,7 @@ test('missing executable rejects open without unhandled stream failures',async()
  await expect(driver({}, {command:'/definitely-not-a-real-acp-command'}).open(context())).rejects.toThrow();
 })
 test('acp() TypeError names each missing required field',()=>{
- const full:any={id:'fixture',command:process.execPath,args:[fixture],inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:1,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper()}
+ const full:any={id:'fixture',command:process.execPath,args:[fixture],inheritEnv:true,mcpServers:[],setupTimeoutMs:FIXTURE_SETUP_MS,shutdownTimeoutMs:40,maxFrameBytes:1,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper()}
  for(const field of ['id','command','args','inheritEnv','mcpServers','setupTimeoutMs','shutdownTimeoutMs','maxFrameBytes','maxOutstandingActivity','keeper','cancelRetryIntervalMs','cancelRetryTimeoutMs']){
   const opts={...full};delete opts[field]
   expect(()=>acp(opts)).toThrow(TypeError)
@@ -169,29 +171,42 @@ test('invalid cancel retry window options are rejected',()=>{
  expect(()=>driver({}, {cancelRetryTimeoutMs:Number.POSITIVE_INFINITY})).toThrow(TypeError)
 })
 
+/**
+ * Cancels the fixture recorded before and after the next prompt. The driver writes every message in order and the
+ * fixture records a cancel as it reads it, so a cancel the driver sent before that prompt is above its mark: none is
+ * still on its way. Reading right after the cancelled prompt ended raced a retry sent just before that end.
+ */
+async function cancelsAroundMark(r: { prompt: (...a: any[]) => Promise<unknown> }, trace: string) {
+  expect(await r.prompt([{type:'text',text:'mark'}],new AbortController().signal)).toEqual({stopReason:'end_turn'})
+  const lines=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x))
+  const mark=lines.findLastIndex(x=>x.mark===true)
+  return { before: lines.slice(0,mark).filter(x=>x.cancel===true), after: lines.slice(mark).filter(x=>x.cancel===true) }
+}
+
+/** Waits out the driver's retry window: nothing may be sent after it, so a retry that leaked has been sent by then. */
+const retryWindowClosed = (interruptedAt: number, cancelRetryTimeoutMs: number) =>
+  new Promise(resolve => setTimeout(resolve, Math.max(0, interruptedAt + cancelRetryTimeoutMs - Date.now())))
+
 test('early cancel retries until the delayed prompt honors it and does not leak into the next prompt',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const trace=join(dir,'trace');
  const r=await driver({TRACE:trace},{cancelRetryIntervalMs:25,cancelRetryTimeoutMs:500}).open(context());
  try {
   const result=r.prompt([{type:'text',text:'slow-start'}],new AbortController().signal);
+  const interruptedAt=Date.now()
   await r.interrupt();
-  const first=await Promise.race([result,new Promise(resolve=>setTimeout(()=>resolve('one-shot-miss'),40))]);
-  expect(first).toBe('one-shot-miss');
   expect(await result).toEqual({stopReason:'cancelled'});
-  const afterCancel=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));
-  const cancels=afterCancel.filter(x=>x.cancel===true);
+  const {before:cancels,after}=await cancelsAroundMark(r,trace)
+  // The first cancel came before the prompt was cancellable; a retry is what ended it.
   expect(cancels[0]?.promptActive).toBe(false);
   expect(cancels.some(x=>x.promptActive===true)).toBe(true);
   expect(cancels.length).toBeGreaterThan(1);
-  const cancelCount=cancels.length;
-  await new Promise(resolve=>setTimeout(resolve,80));
+  expect(after).toEqual([]);
+  await retryWindowClosed(interruptedAt,500)
   expect(await r.prompt([{type:'text',text:'hello'}],new AbortController().signal)).toEqual({stopReason:'end_turn'});
-  const later=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));
-  expect(later.filter(x=>x.cancel===true)).toHaveLength(cancelCount);
   await r.interrupt();
-  expect(await r.prompt([{type:'text',text:'hello'}],new AbortController().signal)).toEqual({stopReason:'end_turn'});
-  const idle=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));
-  expect(idle.filter(x=>x.cancel===true)).toHaveLength(cancelCount);
+  const idle=await cancelsAroundMark(r,trace)
+  expect(idle.before).toHaveLength(cancels.length);
+  expect(idle.after).toEqual([]);
  } finally { await r.close({ mode: "shutdown" }); await rm(dir,{recursive:true}); }
 })
 test('configured cancel retry budget covers activation delayed beyond 500ms without leaking later',async()=>{
@@ -199,17 +214,19 @@ test('configured cancel retry budget covers activation delayed beyond 500ms with
  const r=await driver({TRACE:trace},{cancelRetryIntervalMs:50,cancelRetryTimeoutMs:2000}).open(context());
  try {
   const result=r.prompt([{type:'text',text:'very-slow-start'}],new AbortController().signal);
+  const interruptedAt=Date.now()
   await r.interrupt();
   expect(await result).toEqual({stopReason:'cancelled'});
-  const afterCancel=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));
-  const cancels=afterCancel.filter(x=>x.cancel===true);
+  const {before:cancels,after}=await cancelsAroundMark(r,trace)
   expect(cancels[0]?.promptActive).toBe(false);
   expect(cancels.some(x=>x.promptActive===true)).toBe(true);
-  const cancelCount=cancels.length;
+  expect(after).toEqual([]);
+  await retryWindowClosed(interruptedAt,2000)
   expect(await r.prompt([{type:'text',text:'hello'}],new AbortController().signal)).toEqual({stopReason:'end_turn'});
   await r.interrupt();
-  const idle=(await readFile(trace,'utf8')).trim().split('\n').map(x=>JSON.parse(x));
-  expect(idle.filter(x=>x.cancel===true)).toHaveLength(cancelCount);
+  const idle=await cancelsAroundMark(r,trace)
+  expect(idle.before).toHaveLength(cancels.length);
+  expect(idle.after).toEqual([]);
  } finally { await r.close({ mode: "shutdown" }); await rm(dir,{recursive:true}); }
 })
 
