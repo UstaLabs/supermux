@@ -136,6 +136,31 @@ class DesktopAppUpdaterTest {
         assertEquals(err, updater.status.value.error)
     }
 
+    // #113: on Windows every agent's keeper runs from supermux-broker.exe, so the MSI can only replace it once the
+    // background service has stopped; an install that started anyway would ask about files in use or need a reboot.
+    @Test
+    fun `an MSI install first stops the background service, and goes no further when it does not stop`() = runTest {
+        val updater = updater()
+        updater.check()
+        var asked = 0
+        updater.stopServiceForInstaller = { asked++; false }
+        val err = updater.install(DownloadedInstaller("/nonexistent/supermux/supermux-windows.msi", "msi"))
+        assertEquals(1, asked)
+        assertEquals(dev.supermux.desktop.host.BrokerService.WINDOWS_STOP_FAILED, err)
+        assertEquals(UpdatePhase.Failed, updater.status.value.phase)
+        assertEquals(err, updater.status.value.error)
+    }
+
+    @Test
+    fun `other installers leave the background service alone`() = runTest {
+        val updater = updater()
+        updater.check()
+        var asked = 0
+        updater.stopServiceForInstaller = { asked++; true }
+        updater.install(DownloadedInstaller("/nonexistent/supermux/nope.deb", "deb"))
+        assertEquals(0, asked)
+    }
+
     @Test
     fun `nothing downloads before a check found a release`() = runTest {
         val updater = updater()
