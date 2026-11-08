@@ -141,7 +141,7 @@ export class FrameStats {
 /** A request path with its ids folded to `:id`, so one route's calls group together. */
 export function perfPath(path: string): string {
   return path
-    .split("/")
+    .split("/") // platform-ok: a request URL path, / by definition
     .map((seg) => (/^\d+$/.test(seg) || /^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(seg) || (seg.length >= 12 && /\d/.test(seg) && /^[A-Za-z0-9_-]+$/.test(seg)) ? ":id" : seg))
     .join("/")
 }

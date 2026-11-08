@@ -565,7 +565,7 @@ export function rollback(opts: { execPathOverride?: string }):
  */
 export function systemdUnitFromCgroup(cgroup: string): string | null {
   const path = cgroup.split("\n").find((l) => l.startsWith("0::"))?.slice(3).trim()
-  const leaf = path?.split("/").pop() ?? ""
+  const leaf = path?.split("/").pop() ?? "" // platform-ok: a cgroup path (the Linux kernel's, / always)
   if (!leaf.endsWith(".service") || /^user@\d+\.service$/.test(leaf)) return null
   return leaf
 }

@@ -1,3 +1,4 @@
+// platform-ok: a POSIX socket path is /-spelled on any host, so Windows test hosts match Linux
 import { posix } from "path"
 
 export function safePipeComponent(value: string): string {
