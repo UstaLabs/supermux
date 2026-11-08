@@ -39,6 +39,14 @@ class DesktopAppUpdater(
 
     /** Quits the app (set by Main.kt): the Windows MSI upgrade needs our files released. */
     @Volatile var onQuitForInstaller: (() -> Unit)? = null
+
+    /**
+     * Stops the background service's broker before a Windows MSI replaces its files (set by Main.kt; #113). On Windows
+     * every agent's keeper runs from supermux-broker.exe, and Windows Installer can't replace a running image: the stop
+     * is a plain one, its agents end, and their sessions resume when the updated app starts the service again. False:
+     * it didn't stop, so the install doesn't start.
+     */
+    @Volatile var stopServiceForInstaller: (suspend () -> Boolean)? = null
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
 
     /** Desktop packages carry no version CODE (that is Android's monotonic build counter). */
@@ -116,6 +124,11 @@ class DesktopAppUpdater(
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.IO) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         try {
+            if (installer.kind == "msi" && stopServiceForInstaller?.invoke() == false) {
+                val msg = dev.supermux.desktop.host.BrokerService.WINDOWS_STOP_FAILED
+                state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
+                return@withContext msg
+            }
             val mustQuit = DesktopUpdateSource.openInstaller(File(installer.location))
             // Windows: msiexec replaces the app's files only after this process is gone.
             if (mustQuit) onQuitForInstaller?.invoke()
