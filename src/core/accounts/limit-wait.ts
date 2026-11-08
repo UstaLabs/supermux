@@ -172,3 +172,38 @@ function isWait(value: unknown): value is LimitWait {
   return typeof w.sessionId === "string" && typeof w.account === "string" && typeof w.resumeAt === "string" && Number.isFinite(Date.parse(w.resumeAt))
     && (w.resetsAt === undefined || typeof w.resetsAt === "string") && typeof w.background === "boolean"
 }
+
+export const LIMIT_RESET_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit, which has now reset."
+export const LIMIT_RESET_BACKGROUND_SUFFIX = "Background subagents may have stopped on the limit: check them and resume or restart any unfinished work."
+
+export type ResumeDeps = {
+  exists: (sessionId: string) => boolean
+  /** A turn is running: the user (or something else) carried the session on already. */
+  busy: (sessionId: string) => boolean
+  /** The session's account now (its system account when it has none). */
+  account: (sessionId: string) => string
+  registered: (account: string) => boolean
+  switchAccount: (sessionId: string, account: string) => Promise<void>
+  label: (account: string) => string
+  /** A broker notice in the chat. */
+  notify: (sessionId: string, text: string) => Promise<void>
+  /** The continuation, to the agent, waking the session when it sleeps. */
+  deliver: (sessionId: string, text: string) => Promise<void>
+}
+
+/** A due wait: on the account that reset when it can, the session carries on with the continuation prompt. */
+export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps): Promise<void> {
+  const id = wait.sessionId
+  if (!deps.exists(id) || deps.busy(id)) return
+  let account = deps.account(id)
+  if (wait.account !== account && deps.registered(wait.account)) {
+    try {
+      await deps.switchAccount(id, wait.account)
+      account = wait.account
+    } catch { /* it carries on where it is; a limit there makes a new wait */ }
+  }
+  await deps.notify(id, wait.resetsAt
+    ? `Resumed on ${deps.label(account)} — the usage limit reset`
+    : `Trying again on ${deps.label(account)} — the usage limit may have reset`)
+  await deps.deliver(id, wait.background ? `${LIMIT_RESET_CONTINUE_PROMPT} ${LIMIT_RESET_BACKGROUND_SUFFIX}` : LIMIT_RESET_CONTINUE_PROMPT)
+}

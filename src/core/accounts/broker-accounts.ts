@@ -29,11 +29,12 @@ export const SYSTEM_ACCOUNT_LABEL = "System login"
 
 /** Settings key "accounts": the user's toggles plus the one-time migration marker. */
 export const SETTINGS_KEY_ACCOUNTS = "accounts"
-export type AccountsSettings = { autoSwitch: boolean; settingsMigrated?: boolean }
+export type AccountsSettings = { autoSwitch: boolean; autoResume: boolean; settingsMigrated?: boolean }
 
+/** autoSwitch is off unless turned on; autoResume (#92: wait for a limit reset, then carry on) is on unless turned off. */
 export function parseAccountsSettings(value: unknown): AccountsSettings {
   const o = (value ?? {}) as Record<string, unknown>
-  return { autoSwitch: o.autoSwitch === true, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
+  return { autoSwitch: o.autoSwitch === true, autoResume: o.autoResume !== false, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
 }
 
 export function isAccountAgent(agent: unknown): agent is AccountAgent {

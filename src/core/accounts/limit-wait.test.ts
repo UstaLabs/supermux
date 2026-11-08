@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { LimitWaits, RESUME_MARGIN_MS, STAGGER_MS, SPACING_MS, UNKNOWN_RESET_RETRY_MS, type LimitWait } from "./limit-wait"
+import { LIMIT_RESET_BACKGROUND_SUFFIX, LIMIT_RESET_CONTINUE_PROMPT, LimitWaits, RESUME_MARGIN_MS, STAGGER_MS, SPACING_MS, UNKNOWN_RESET_RETRY_MS, resumeAfterLimit, type LimitWait, type ResumeDeps } from "./limit-wait"
+import { parseAccountsSettings } from "./broker-accounts"
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
@@ -161,4 +162,76 @@ test("an unreadable file loads as no waits", () => {
   writeFileSync(h.file, "{not json")
   h.waits.load()
   expect(h.waits.list()).toEqual([])
+})
+
+// ── resumeAfterLimit: what the broker does when a wait is due ──
+
+function resumeHarness(over: Partial<ResumeDeps> = {}) {
+  const log: string[] = []
+  const deps: ResumeDeps = {
+    exists: () => true,
+    busy: () => false,
+    account: () => "personal",
+    registered: () => true,
+    switchAccount: async (id, account) => { log.push(`switch ${id} ${account}`) },
+    label: (account) => account.toUpperCase(),
+    notify: async (id, text) => { log.push(`notify ${id} ${text}`) },
+    deliver: async (id, text) => { log.push(`deliver ${id} ${text}`) },
+    ...over,
+  }
+  return { deps, log }
+}
+const due: LimitWait = { sessionId: "s1", account: "work", resetsAt: "2026-11-08T18:10:00.000Z", resumeAt: "2026-11-08T18:13:00.000Z", background: false }
+
+test("resumeAfterLimit: moves the session to the account that reset, says so, and continues the turn", async () => {
+  const { deps, log } = resumeHarness()
+  await resumeAfterLimit(due, deps)
+  expect(log).toEqual([
+    "switch s1 work",
+    "notify s1 Resumed on WORK — the usage limit reset",
+    `deliver s1 ${LIMIT_RESET_CONTINUE_PROMPT}`,
+  ])
+})
+
+test("resumeAfterLimit: already on that account, no switch; background work gets the subagent hint", async () => {
+  const { deps, log } = resumeHarness({ account: () => "work" })
+  await resumeAfterLimit({ ...due, background: true }, deps)
+  expect(log).toEqual([
+    "notify s1 Resumed on WORK — the usage limit reset",
+    `deliver s1 ${LIMIT_RESET_CONTINUE_PROMPT} ${LIMIT_RESET_BACKGROUND_SUFFIX}`,
+  ])
+})
+
+test("resumeAfterLimit: reset time unknown → it says it is trying again", async () => {
+  const { deps, log } = resumeHarness({ account: () => "work" })
+  const { resetsAt: _, ...unknown } = due
+  await resumeAfterLimit(unknown, deps)
+  expect(log[0]).toBe("notify s1 Trying again on WORK — the usage limit may have reset")
+})
+
+test("resumeAfterLimit: a removed account or a failed switch goes on where the session is", async () => {
+  {
+    const { deps, log } = resumeHarness({ registered: () => false })
+    await resumeAfterLimit(due, deps)
+    expect(log).toEqual(["notify s1 Resumed on PERSONAL — the usage limit reset", `deliver s1 ${LIMIT_RESET_CONTINUE_PROMPT}`])
+  }
+  {
+    const { deps, log } = resumeHarness({ switchAccount: async () => { throw new Error("session_busy") } })
+    await resumeAfterLimit(due, deps)
+    expect(log).toEqual(["notify s1 Resumed on PERSONAL — the usage limit reset", `deliver s1 ${LIMIT_RESET_CONTINUE_PROMPT}`])
+  }
+})
+
+test("resumeAfterLimit: a session that is gone, or already working again, is left alone", async () => {
+  for (const over of [{ exists: () => false }, { busy: () => true }]) {
+    const { deps, log } = resumeHarness(over)
+    await resumeAfterLimit(due, deps)
+    expect(log).toEqual([])
+  }
+})
+
+test("the setting: auto-resume is on unless turned off; auto-switch stays off unless turned on", () => {
+  expect(parseAccountsSettings(undefined)).toEqual({ autoSwitch: false, autoResume: true })
+  expect(parseAccountsSettings({ autoResume: false, autoSwitch: true })).toEqual({ autoSwitch: true, autoResume: false })
+  expect(parseAccountsSettings({ autoResume: "no" })).toEqual({ autoSwitch: false, autoResume: true })
 })
