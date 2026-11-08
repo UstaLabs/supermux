@@ -29,7 +29,7 @@ class BrowserAddressTest {
         assertEquals(PortTarget.Go("http://localhost:5173/login"), resolvePort(5173, "/login", previews = emptyList(), onHost = true))
         assertEquals(PortTarget.Go("https://relay.test/p/p-5173/login"), resolvePort(5173, "/login", listOf(preview), onHost = false))
         assertEquals(PortTarget.Go("https://relay.test/p/p-5173/"), resolvePort(5173, "/", listOf(preview), onHost = false))
-        assertEquals(PortTarget.OfferPreview(3000, "/"), resolvePort(3000, "/", listOf(preview), onHost = false))
+        assertEquals(PortTarget.NoRoute(3000), resolvePort(3000, "/", listOf(preview), onHost = false))
     }
 
     @Test fun theAddressBarShowsAPreviewAsItsPortAndHidesTheScheme() {
@@ -40,5 +40,21 @@ class BrowserAddressTest {
         assertEquals(DisplayAddress.Web("vitejs.dev", "/guide/"), displayAddress("https://vitejs.dev/guide/", previews))
         assertEquals(DisplayAddress.Web("github.com", "/UstaLabs/supermux/pull/412"), displayAddress("https://github.com/UstaLabs/supermux/pull/412", previews))
         assertEquals(DisplayAddress.Web("example.com", "/"), displayAddress("http://example.com", previews))
+    }
+
+    @Test fun aPortOpensThroughTheHostsByPortPreviewWhenItHasOne() {
+        val byPort = "https://relay.test/p/{port}/"
+        assertEquals(PortTarget.Go("https://relay.test/p/5173/login"), resolvePort(5173, "/login", listOf(preview), onHost = false, byPort = byPort))
+        assertEquals(PortTarget.Go("https://relay.test/p/3000/"), resolvePort(3000, "/", emptyList(), onHost = false, byPort = byPort))
+        assertEquals(PortTarget.Go("https://3000.base.test/"), resolvePort(3000, "/", emptyList(), onHost = false, byPort = "https://{port}.base.test/"))
+        assertEquals(PortTarget.Go("http://localhost:3000/"), resolvePort(3000, "/", emptyList(), onHost = true, byPort = byPort), "the host itself first")
+    }
+
+    @Test fun theAddressBarShowsAByPortPreviewAsItsPort() {
+        val byPort = "https://relay.test/p/{port}/"
+        assertEquals(DisplayAddress.Preview(5173, "/login"), displayAddress("https://relay.test/p/5173/login", emptyList(), byPort))
+        assertEquals(DisplayAddress.Preview(5173, "/"), displayAddress("https://relay.test/p/5173/", emptyList(), byPort))
+        assertEquals(DisplayAddress.Preview(3000, "/"), displayAddress("https://3000.base.test/", emptyList(), "https://{port}.base.test/"))
+        assertEquals(DisplayAddress.Web("relay.test", "/p/abc/"), displayAddress("https://relay.test/p/abc/", emptyList(), byPort), "a name isn't a port")
     }
 }
