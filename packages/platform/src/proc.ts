@@ -280,6 +280,61 @@ export function killChildTree(child: Pick<ChildProcess, "pid" | "exitCode" | "si
   killTree(child.pid, options)
 }
 
+export interface StopOptions {
+  /** How long the target may take to stop after the polite request before it is ended. Absent or 0: ended at once. */
+  graceMs?: number
+  /**
+   * POSIX: the process alone, not the group it leads: one that stops what it started itself (the keeper). Windows ends
+   * the tree all the same: it has no polite request, and ending only the root would leave the rest running.
+   */
+  alone?: boolean
+  /**
+   * Whether it still needs stopping. By default a child's own exit state, and for a pid whether it is alive: never a pid
+   * that may be another process's by then. A caller that knows better (a child whose group still holds its pipes) says.
+   */
+  running?: () => boolean
+  /** The OS whose rules apply; the running one by default. */
+  platform?: NodeJS.Platform
+  /** Starts taskkill (tests); node:child_process's spawn by default. */
+  spawn?: KillTreeOptions["spawn"]
+  /** Sends a signal, 0 to ask whether a pid is alive (tests); process.kill by default. */
+  kill?: (pid: number, signal: NodeJS.Signals | 0) => void
+}
+
+/**
+ * Stops [target] and what it started: a polite request, then, if it still runs after [options]' graceMs, an end. POSIX:
+ * SIGTERM, then SIGKILL, to the process group it leads, else to it ([killTree]); with `alone`, to the process only.
+ * Windows has no polite request: the tree ends at once (taskkill /T /F), and nothing follows. Nothing at all once the
+ * target has stopped running.
+ */
+export function stop(target: number | Pick<ChildProcess, "pid" | "exitCode" | "signalCode">, options: StopOptions = {}): void {
+  const pid = typeof target === "number" ? target : target.pid
+  if (!pid) return
+  const kill = options.kill ?? ((p: number, signal: NodeJS.Signals | 0) => { process.kill(p, signal) })
+  const running = options.running ?? (typeof target === "number"
+    ? () => isAliveWith(pid, (p) => kill(p, 0))
+    : () => target.exitCode === null && target.signalCode === null)
+  if (!running()) return
+  const platform = options.platform ?? process.platform
+  const tree: KillTreeOptions = { platform, kill, ...(options.spawn ? { spawn: options.spawn } : {}) }
+  if (platform === "win32") {
+    killTree(pid, tree)
+    return
+  }
+  const send = (signal: NodeJS.Signals) => {
+    if (!options.alone) killTree(pid, { ...tree, signal })
+    else try { kill(pid, signal) } catch { /* gone */ }
+  }
+  const graceMs = options.graceMs ?? 0
+  if (graceMs <= 0) {
+    send("SIGKILL")
+    return
+  }
+  send("SIGTERM")
+  const timer = setTimeout(() => { if (running()) send("SIGKILL") }, graceMs)
+  ;(timer as { unref?: () => void }).unref?.()
+}
+
 /**
  * A bash that runs a POSIX shell script (a worktree's .mux/worktree-setup.sh or .mux/verify.sh): the bash on PATH. On
  * Windows, Git for Windows' bash.exe: on PATH, beside the git on PATH, or where Git installs, but never WSL's
