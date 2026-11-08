@@ -22,7 +22,7 @@
 - On the web client, chat links open a new tab of the real browser.
 - **Ports (Ahmet, 2026-11-08, replacing the "Make a private link" offer).** `localhost:PORT` opens through the host's by-port preview, `/p/<port>/` (or `<port>.<base>` in subdomain mode). It needs no registration and asks no question. The broker serves it and tells the app its template, e.g. `https://h-….relay.supermux.dev/p/{port}/`. A separate broker car builds that.
   - Until it's live, a port opens through a named preview of it if one exists. Otherwise the tab says it can't open the port from here.
-  - The app only asks for the template where it also holds the preview-only cookie, i.e. a native Browser tab. That is the design proposed to Tally: by-port pages accept only the preview token, because in path mode a previewed page shares the web app's origin.
+  - By-port pages use the normal login, so the web client opens them too. Ahmet accepted the same-origin risk on 2026-11-08 (card #105).
 - **Shortcuts and ⌘-click are strict (#96):** ⌘ on Apple platforms and Ctrl elsewhere, never either (`isApplePlatform` from editor-compose). The tab's keys stay pane-local until #96 phase 2 is on dev; then they move into its registry as `KeyContext.Browser`, which is not opaque.
 
 **Out of this plan:**
@@ -1128,7 +1128,7 @@ class BrowserActions(
         { _, _, _, _ -> false },
     /** The host's named port previews: the bar names one by its port, and a port with no by-port route opens one. */
     val proxies: suspend () -> List<ProxyDto> = { emptyList() },
-    /** The host's by-port preview template (`https://…/p/{port}/`), or null when this tab can't use one. */
+    /** The host's by-port preview template (`https://…/p/{port}/`), or null from a broker without one. */
     val byPort: suspend () -> String? = { null },
     /** This device's preview-only cookie for the host, asked for once a run; null when the host gives none. */
     val previewCookie: suspend () -> PreviewCookieDto? = { null },
@@ -1155,9 +1155,8 @@ fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
             runCatching { app.api.patchView(workspaceId, viewId, PatchViewBody(title = title, state = state)) }.isSuccess
         },
         proxies = { app.proxies() },
-        // By-port pages take only the preview cookie: in path mode they share the web app's origin, where the app's own
-        // cookie would hand a page the user's session. So only a tab that holds the preview cookie asks for the route.
-        byPort = { if (previewCookie() == null) null else app.api.byPortTemplate() },
+        // By-port pages take the normal login (Ahmet accepted path mode's same-origin risk, 2026-11-08).
+        byPort = { app.api.byPortTemplate() },
         previewCookie = { previewCookie() },
         // A broker reached over loopback runs on this machine: a desktop that is the host reaches its own that way.
         onHost = TransportPolicy.isLoopback(app.baseUrl),
