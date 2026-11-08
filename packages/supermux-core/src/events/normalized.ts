@@ -205,7 +205,11 @@ export type NormalizedBodyBase =
   | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
   /** The agent started a new, empty conversation in place of the old one (Claude /clear); the session runs on in it. */
   | { kind: "conversation-reset"; agentSessionId: string; previousAgentSessionId: string; trigger?: string }
-  | { kind: "warning"; message: string; source?: string }
+  /**
+   * `code` names a warning a host can act on: `opencode_free_limit` = OpenCode's free models hit today's limit and
+   * OpenCode waits until `resetsAt` (ISO) before it retries.
+   */
+  | { kind: "warning"; message: string; source?: string; code?: string; resetsAt?: string }
   | { kind: "error"; message: string; errorType?: string; recoverable?: boolean }
   | {
       kind: "subagent"

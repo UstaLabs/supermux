@@ -147,6 +147,11 @@ function fmtOpenCode(c: OpenCodeUsage, now: number): string {
     const note = openCodePlanNote(c.plan)
     if (note) lines.push(`  ${note}`)
   }
+  const free = c.plan?.free
+  if (free) {
+    const rst = resetLabel(Date.parse(free.resetsAtIso), now)
+    lines.push(`  Free models: ${free.reached ? "limit reached" : "daily limit"} · resets ${rst}`)
+  }
   lines.push(`  Local: $${c.totalCostUsd.toFixed(2)} · ${fmtTokens(c.inputTokens)} in / ${fmtTokens(c.outputTokens)} out`)
   lines.push(`  ${c.sessions} sessions · ${c.messages} messages`)
   return lines.join("\n")

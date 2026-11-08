@@ -7,6 +7,7 @@
 // OpenCode key in auth.json (one key serves Zen and Go).
 import { existsSync, readFileSync } from "fs"
 import { readOpenCodeConsole } from "../agents/opencode/console"
+import type { OpenCodeFreeTier } from "./opencode-free"
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
@@ -39,6 +40,8 @@ export interface OpenCodePlan {
   /** The Console sign-in's email. */
   email?: string
   error?: string
+  /** The free models' daily limit: when it resets, and whether a session hit it. */
+  free?: OpenCodeFreeTier
 }
 
 const TIMEOUT_MS = 10_000

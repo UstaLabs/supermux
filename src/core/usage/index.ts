@@ -10,6 +10,7 @@ import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
 import { fetchOpenCodePlan, type OpenCodePlan } from "./opencode-go"
+import { openCodeFreeTier } from "./opencode-free"
 import { home } from "../../shared/home"
 
 const log = makeLogger("usage")
@@ -730,8 +731,9 @@ const EMPTY_OPENCODE_TOTALS: OpenCodeUsage = {
 }
 
 /** OpenCode Go limits for the system login: the native data dir's Console sign-in or OpenCode key. */
-export function fetchSystemOpenCodePlan(): Promise<OpenCodePlan> {
-  return fetchOpenCodePlan({ dbPath: OPENCODE_DB, authPath: join(dirname(OPENCODE_DB), "auth.json") })
+export async function fetchSystemOpenCodePlan(): Promise<OpenCodePlan> {
+  const plan = await fetchOpenCodePlan({ dbPath: OPENCODE_DB, authPath: join(dirname(OPENCODE_DB), "auth.json") })
+  return { ...plan, free: openCodeFreeTier() }
 }
 
 function readOpenCodeTotals(dbPath: string): OpenCodeUsage | null {

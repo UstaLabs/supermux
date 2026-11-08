@@ -1,4 +1,5 @@
 import { EventEmitter } from "events"
+import { recordOpenCodeFreeLimit } from "../../usage/opencode-free"
 import type { AgentCommandEntry } from "../../slash-commands/types"
 import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
@@ -353,6 +354,7 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
         const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
         if (data) this.onUsageUpdate?.(data)
       },
+      onOpenCodeFreeLimit: (resetsAt) => recordOpenCodeFreeLimit(resetsAt),
     })
   }
 

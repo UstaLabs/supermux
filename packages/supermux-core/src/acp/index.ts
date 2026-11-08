@@ -8,7 +8,7 @@ import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { acpPermissionDecision, appliedFor, launchPermissions, validatePermissionsSpec } from '../permissions.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
-import { createAcpNormalizer, DRIVER_WARNING_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
+import { createAcpNormalizer, DRIVER_WARNING_METHOD, OPENCODE_FREE_LIMIT_METHOD, SUBAGENT_SESSION_METHOD, SUBAGENT_TURN_METHOD, type AcpNormalizer, type AcpVendor } from './normalize.js'
 import { freeLoopbackPort, isOpenCodeEndpointMissing, newOpenCodeServerInfo, openCodeAskToAcp, openCodeServerClient, readOpenCodeServerInfo, type OpenCodePendingAsk, type OpenCodeServerClient, type OpenCodeServerInfo } from './opencode-server.js'
 import { detachedKeeperHooks, type KeeperFrameEvent } from '../keeper/client.js'
 import { REASON, SUBAGENT_STATE_METHOD } from '../subagent-actions.js'
@@ -692,6 +692,19 @@ export function acp(options: AcpOptions): AgentDriver {
       const reply = chosen === 'once' || chosen === 'always' ? chosen : 'reject'
       await server.reply(ask.id, reply, sideChannelAbort.signal).catch(() => { /* already answered or gone */ })
     }
+    let freeLimitSaid: number | undefined
+    /**
+     * OpenCode 1.x waits out a free-model 429 (FreeUsageLimitError) as a `retry` status until the limit resets,
+     * which ACP never reports: the turn just hangs. Said once per wait. Best effort: no status route = no notice.
+     */
+    async function checkFreeLimit(server: OpenCodeServerClient) {
+      const status = await server.sessionStatus(agentSessionId!, sideChannelAbort.signal).catch(() => undefined)
+      if (status?.type !== 'retry' || status.action?.reason !== 'free_tier_limit') return
+      const next = typeof status.next === 'number' && Number.isFinite(status.next) ? status.next : 0
+      if (freeLimitSaid === next || !session || closed) return
+      freeLimitSaid = next
+      session.onUpdate({ protocol: 'native', value: { method: OPENCODE_FREE_LIMIT_METHOD, params: next ? { resetsAt: new Date(next).toISOString() } : {} } })
+    }
     async function pollSideChannel() {
       if (sideChannelBusy || closed || !runtimeReady || !session || !agentSessionId) return
       if (!workKnown() && childPrompts.size === 0) return
@@ -726,6 +739,7 @@ export function acp(options: AcpOptions): AgentDriver {
           void answerChildAsk(ask, server, gone.signal).catch(() => { if (sideAsks.get(ask.id) === gone) sideAsks.delete(ask.id) })
         }
         sideChannelFailures = 0
+        await checkFreeLimit(server)
       } catch (error) {
         if (closed || sideChannelAbort.signal.aborted) return
         if (isOpenCodeEndpointMissing(error)) { disableSideChannel(REASON.opencodeNoStop); return }

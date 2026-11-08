@@ -57,8 +57,8 @@ test("an OpenCode Go key: the three meters, with percent, limited and reset", as
     },
   })
   expect(calls).toHaveLength(1)
-  expect(calls[0].url).toBe("https://opencode.ai/zen/go/v1/usage")
-  expect(calls[0].headers.authorization).toBe("Bearer oc_sk_go")
+  expect(calls[0]!.url).toBe("https://opencode.ai/zen/go/v1/usage")
+  expect(calls[0]!.headers.authorization).toBe("Bearer oc_sk_go")
 })
 
 test("a Console sign-in is the Go login: its token and workspace, ahead of any key", async () => {
@@ -70,8 +70,8 @@ test("a Console sign-in is the Go login: its token and workspace, ahead of any k
   expect(plan.status).toBe("active")
   expect(plan.via).toBe("console")
   expect(plan.email).toBe("me@x.io")
-  expect(calls[0].headers.authorization).toBe("Bearer console-token")
-  expect(calls[0].headers["x-opencode-org-id"]).toBe("wrk_1")
+  expect(calls[0]!.headers.authorization).toBe("Bearer console-token")
+  expect(calls[0]!.headers["x-opencode-org-id"]).toBe("wrk_1")
 })
 
 test("an expired Console token falls back to a key; with no key it says the sign-in expired", async () => {
@@ -84,7 +84,7 @@ test("an expired Console token falls back to a key; with no key it says the sign
   withAuth(dir, { opencode: { type: "api", key: "oc_sk_zen" } })
   const plan = await fetchOpenCodePlan({ ...paths(dir), fetch: fakeFetch(200, GO_BODY, calls), now: () => NOW })
   expect(plan.status).toBe("active")
-  expect(calls[0].headers.authorization).toBe("Bearer oc_sk_zen")
+  expect(calls[0]!.headers.authorization).toBe("Bearer oc_sk_zen")
 })
 
 test("403 = no Go plan on this login", async () => {
@@ -130,4 +130,24 @@ test("fetchOpenCodeUsage carries the plan beside the local totals, and reports a
   const usage = await fetchOpenCodeUsage(join(dir, "opencode.db"), { plan: async () => plan })
   expect(usage).toMatchObject({ sessions: 0, messages: 0, totalCostUsd: 0, plan })
   expect(await fetchOpenCodeUsage(join(dir, "opencode.db"))).toBeNull()
+})
+
+// ── the free tier: a daily per-network limit nothing exposes; reset at 00:00 UTC, "reached" once a session hit it ──
+import { openCodeFreeTier, recordOpenCodeFreeLimit } from "../src/core/usage/opencode-free"
+
+test("free tier: resets at the next 00:00 UTC; not reached until a session hits the limit", () => {
+  const file = join(dataDir(), "free.json")
+  expect(openCodeFreeTier(NOW, file)).toEqual({ resetsAtIso: "2026-11-09T00:00:00.000Z", reached: false })
+})
+
+test("free tier: a recorded hit is reached until its reset, then forgotten", () => {
+  const file = join(dataDir(), "free.json")
+  recordOpenCodeFreeLimit("2026-11-09T00:00:00.000Z", file, NOW)
+  expect(openCodeFreeTier(NOW + 60_000, file)).toEqual({ resetsAtIso: "2026-11-09T00:00:00.000Z", reached: true, reachedAtIso: "2026-11-08T10:00:00.000Z" })
+  expect(openCodeFreeTier(Date.parse("2026-11-09T00:00:01Z"), file)).toEqual({ resetsAtIso: "2026-11-10T00:00:00.000Z", reached: false })
+  // A reset in the past or garbage is not recorded.
+  const other = join(dataDir(), "free.json")
+  recordOpenCodeFreeLimit("2026-11-08T09:00:00.000Z", other, NOW)
+  recordOpenCodeFreeLimit("not a date", other, NOW)
+  expect(openCodeFreeTier(NOW, other).reached).toBe(false)
 })

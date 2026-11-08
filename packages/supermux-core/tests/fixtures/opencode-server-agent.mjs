@@ -5,6 +5,8 @@
 // FAKE_MISSING=all|abort: like an OpenCode whose API moved, every route (all) or the abort route
 // (abort) is served by the web app (`200 text/html`, what 1.16.2 answers for an unknown route);
 // each HTTP request is then logged as {http: "<METHOD> <path>"}.
+// A prompt "free" stays in OpenCode 1.x's free-limit wait: GET /session/status answers the parent as
+// { type: "retry", action: { reason: "free_tier_limit" }, next } until the turn is cancelled.
 import { createServer } from 'node:http'
 import { appendFileSync } from 'node:fs'
 
@@ -17,6 +19,8 @@ const PARENT = 'ses_parent', CHILD = 'ses_child', TASK = 'call_task'
 let taskRunning = false
 let ask // pending child ask
 let answer // resolves with the reply
+let freeWait // { id, next } while a "free" prompt waits out the free limit
+const FREE_NEXT = Date.parse('2026-11-09T00:00:00.000Z')
 
 const expected = 'Basic ' + Buffer.from(`opencode:${password}`).toString('base64')
 const http = createServer((req, res) => {
@@ -30,6 +34,9 @@ const http = createServer((req, res) => {
     return res.end('<!doctype html><html></html>')
   }
   if (req.method === 'GET' && url.pathname === '/permission') return send(200, ask ? [ask] : [])
+  if (req.method === 'GET' && url.pathname === '/session/status') {
+    return send(200, freeWait ? { [PARENT]: { type: 'retry', attempt: 1, message: 'Free usage exceeded, subscribe to Go', action: { reason: 'free_tier_limit', provider: 'opencode', title: 'Free limit reached', message: 'Subscribe to OpenCode Go', label: 'subscribe', link: 'https://opencode.ai/go' }, next: freeWait.next } } : {})
+  }
   if (req.method === 'GET' && url.pathname === `/session/${PARENT}/message`) {
     const parts = taskRunning ? [{ type: 'tool', tool: 'task', callID: TASK, state: { status: 'running', metadata: { sessionId: CHILD, parentSessionId: PARENT } } }] : []
     return send(200, [{ info: { id: 'msg_1', sessionID: PARENT, role: 'assistant' }, parts }])
@@ -96,7 +103,9 @@ process.stdin.on('data', d => {
     if (msg.method === undefined) continue
     if (msg.method === 'initialize') write({ id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } })
     else if (msg.method === 'session/new') write({ id: msg.id, result: { sessionId: PARENT } })
+    else if (msg.method === 'session/prompt' && msg.params?.prompt?.[0]?.text === 'free') freeWait = { id: msg.id, next: FREE_NEXT }
     else if (msg.method === 'session/prompt') void runTask(msg.id)
+    else if (msg.method === 'session/cancel' && freeWait) { write({ id: freeWait.id, result: { stopReason: 'cancelled' } }); freeWait = undefined }
     else if (msg.method === 'session/cancel') {
       // Like OpenCode: aborting the parent aborts the child, whose pending ask is dropped unanswered.
       if (taskRunning) { log({ cancelled: true }); ask = undefined; answer?.('aborted') }

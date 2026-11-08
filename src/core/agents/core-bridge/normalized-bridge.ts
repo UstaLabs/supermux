@@ -15,6 +15,8 @@ export type NormalizedBridgeOpts = {
   emit: (event: AgentEvent) => void
   onUsage?: (rateLimits: unknown) => void
   onCommands?: (commands: AgentCommandEntry[]) => void
+  /** OpenCode's free models hit today's limit; OpenCode retries at `resetsAt` (ISO). */
+  onOpenCodeFreeLimit?: (resetsAt: string) => void
 }
 
 function rec(value: unknown): Record<string, unknown> | undefined {
@@ -259,6 +261,12 @@ export function createNormalizedBridge(opts: NormalizedBridgeOpts) {
       // the denial is the reply the user sees.
       if (pendingAssistant) emitAssistant(pendingAssistant, takeOpen("reply")[0])
       emitAssistant(event.message)
+      return
+    }
+    if (kind === "warning" && event.code === "opencode_free_limit") {
+      // The turn hangs while OpenCode waits for the reset: say why, as a failure OpenCode recovers from on its own.
+      if (event.resetsAt) opts.onOpenCodeFreeLimit?.(event.resetsAt)
+      opts.emit({ kind: "error", error: new Error(event.message), errorType: "free_limit", recoverable: true })
       return
     }
     if (kind === "usage" && event.rateLimits != null) {

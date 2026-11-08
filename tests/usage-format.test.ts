@@ -246,3 +246,12 @@ test("opencode without a Go plan says so in one line", () => {
   expect(out).toContain("No OpenCode Go plan.")
   expect(out).toContain("$1.50")
 })
+
+test("opencode free models: the daily reset, and 'limit reached' once a session hit it", () => {
+  const now = Date.parse("2026-11-08T22:00:00Z")
+  const base = { claude: null, codex: null, cursor: null, grok: null, errors: {} }
+  const open = formatUsageTelegram({ ...base, opencode: { ...OPENCODE_TOTALS, plan: { status: "none", go: null, free: { resetsAtIso: "2026-11-09T00:00:00.000Z", reached: false } } } }, now)
+  expect(open).toContain("Free models: daily limit · resets in 2h 00m")
+  const hit = formatUsageTelegram({ ...base, opencode: { ...OPENCODE_TOTALS, plan: { status: "signed_out", go: null, free: { resetsAtIso: "2026-11-09T00:00:00.000Z", reached: true } } } }, now)
+  expect(hit).toContain("Free models: limit reached · resets in 2h 00m")
+})

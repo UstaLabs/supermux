@@ -192,6 +192,7 @@ import { discoverAntigravityModels } from "./core/agents/antigravity/model-disco
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
 import { openCodeConsoleFingerprint } from "./core/agents/opencode/console"
+import { onOpenCodeFreeLimit } from "./core/usage/opencode-free"
 import { openCodeDataDir } from "./core/agents/opencode/auth"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { resolveSessionFast, supportsFastMode } from "./core/models/fast-mode"
@@ -3601,6 +3602,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   channels.web = webChannel as Channel
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
+  // A session hit OpenCode's free limit: the usage card says so now, not on its next 5-minute refresh.
+  onOpenCodeFreeLimit(() => { void getUsageStore().refresh(["opencode"], { force: true }) })
 }
 void getUsageStore().seedFromLocal()
 
