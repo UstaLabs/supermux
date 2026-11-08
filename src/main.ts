@@ -4602,7 +4602,7 @@ if (webChannel) {
           },
         })
         // The draft row was restored just above, so the session exists again and the notice has a home.
-        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err))
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err, undefined, draftSnapshot.agent))
         return
       }
     }

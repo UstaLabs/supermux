@@ -5,6 +5,8 @@ import { ensureSharedCursorRuntime } from "./cursor-runtime.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CursorEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { copyFileReplace } from "./write.js"
+import { CoreError } from "../errors.js"
+import { NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 
 const CURSOR_DIR_FILES = ["cli-config.json", "agent-cli-state.json"]
 
@@ -98,7 +100,8 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
     })
 
     if (!existsSync(xdgAuthSrc) && !existsSync(configSrc)) {
-      throw new Error(
+      throw new CoreError(
+        NOT_SIGNED_IN_ERROR,
         `Cursor auth not found at ${xdgAuthSrc} and CURSOR_API_KEY is unset. ` +
         `Run \`cursor-agent login\` first.`,
       )
