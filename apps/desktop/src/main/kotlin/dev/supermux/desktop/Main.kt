@@ -587,10 +587,8 @@ fun main() {
         DisposableEffect(Unit) {
             val updater = dev.supermux.desktop.update.DesktopAppUpdater.shared
             updater.onQuitForInstaller = { javax.swing.SwingUtilities.invokeLater { quitNow() } }
-            updater.stopServiceForInstaller = { supervisor.stopServiceForWindowsUpdate() }
             onDispose {
                 updater.onQuitForInstaller = null
-                updater.stopServiceForInstaller = null
             }
         }
         fun cancelQuit() {

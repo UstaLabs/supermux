@@ -438,25 +438,6 @@ class HostSupervisor(
         }
     }
 
-    /**
-     * Before the in-app update's MSI replaces the app's files (#113): stop the background service's broker in place,
-     * its loop first, then a plain stop. Its agents end too: on Windows every keeper runs from supermux-broker.exe, and
-     * Windows Installer can't replace a running image. The updated app's start runs the service again on the new
-     * broker, and the sessions resume. True when nothing of the service's is left running (or there is no service: a
-     * child broker stops with the app's quit); false when it didn't stop, and then the install mustn't start.
-     */
-    suspend fun stopServiceForWindowsUpdate(): Boolean = try {
-        lock.withLock {
-            if (mode != Mode.SERVICE) return@withLock true
-            log("update: stopping the background service so the installer can replace its files")
-            stopWatch()
-            stopWindowsServiceLocked(_prefs.value.port)
-        }
-    } catch (e: Exception) {
-        log("update: the background service didn't stop: ${e.message ?: e}")
-        false
-    }
-
     /** Tray/Settings "Restart" (and "Try again" when nothing is running). */
     suspend fun restart() = guarded("restart") {
         log("restart (asked)")
@@ -819,7 +800,10 @@ class HostSupervisor(
         if (ourServiceInstalled()) {
             // Our service: restart it the way it runs, whatever prefs.background says.
             // Windows can't replace a running .exe: stop the task's broker first (no elevation; the
-            // install below restarts the task, and only asks for UAC when its definition changed).
+            // install below restarts the task, and only asks for UAC when its definition changed). Announced first
+            // (#113): the keepers run from the broker's copy in desktop-assets, so the agents carry on and the new
+            // broker re-attaches them.
+            if (windows) withContext(io) { expectRestartLocked(prefs0.port) }
             if (windows && !stopWindowsServiceLocked(prefs0.port)) return keepServiceAfterFailedStop(prefs0)
             val bins = binaries()
             if (lastCopyFailed && !windows) return keepRunning(prefs0, Mode.SERVICE)
