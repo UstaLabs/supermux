@@ -16,6 +16,7 @@ import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
 import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
+import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -4362,10 +4363,12 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const browserError = kind === "browser" ? browserStateError(body.state) : undefined
+      if (browserError) return this.json({ error: browserError }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4398,6 +4401,10 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.state !== undefined && this.opts.getWorkspaceView?.(viewId)?.kind === "browser") {
+        const browserError = browserStateError(body.state)
+        if (browserError) return this.json({ error: browserError }, 400)
+      }
       try {
         const view = this.opts.patchWorkspaceView(viewId, {
           title: body.title as string | undefined,
