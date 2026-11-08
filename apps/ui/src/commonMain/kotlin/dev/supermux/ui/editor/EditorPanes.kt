@@ -91,6 +91,7 @@ import dev.supermux.ui.prefs.FILES_REVEAL_ACTIVE_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.fs.FileSystemService
+import dev.supermux.work.DownloadSource
 import dev.supermux.ui.files.FileTreeDialog
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.files.FileTreeHeader
@@ -270,6 +271,12 @@ fun FilePane(
     rawBytes: (suspend (String) -> Result<ByteArray>)? = null,
     /** Keeps an image preview current when the file changes on disk. */
     fileSystem: FileSystemService? = null,
+    /**
+     * A file by ABSOLUTE path as one of the fleet's downloads (#95): with it the binary card's "Save and open…"
+     * downloads in the background, outliving this pane. Null, or null for a path (a host that keeps no downloads):
+     * the card reads [rawBytes], as before.
+     */
+    hostFileDownload: ((String) -> Pair<String, DownloadSource>?)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
@@ -409,7 +416,7 @@ fun FilePane(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (err != null && documents.loadErrorBinary && rawBytes != null && absPath != null) {
-                        BinaryFileCard(absPath, rawBytes)
+                        BinaryFileCard(absPath, rawBytes, download = hostFileDownload)
                     } else if (err != null) {
                         Text(err, color = cs.onSurfaceVariant, fontSize = 13.sp)
                     } else {

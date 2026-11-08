@@ -20,6 +20,7 @@ import dev.supermux.ui.terminal.rememberLazyTerminalClient
 import dev.supermux.ui.terminal.rememberTerminalKeySink
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
+import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -252,6 +253,30 @@ internal class FakeFiles(
     var posterFrames: (Any?) -> ByteArray? = { null }
 
     override fun posterJpeg(preview: Any?): ByteArray? = posterFrames(preview)
+
+    // ── a finished download's FILE (#95) ──────────────────────────────────────────────────────
+    /** Every action, unless a test says what its host lacks (iOS: no Open). */
+    override var fileActions: Set<FileAction> = setOf(FileAction.Open, FileAction.Save, FileAction.Share)
+
+    /** [DownloadedFile.name]s handed to [saveFile] / [openFile] / [shareFile], in call order. */
+    val savedFiles = mutableListOf<String>()
+    val openedFiles = mutableListOf<String>()
+    val sharedFiles = mutableListOf<String>()
+
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        savedFiles.add(file.name)
+        return if (saveResult) SavedFile(file.name, "/fake/${file.name}") else null
+    }
+
+    override suspend fun openFile(file: DownloadedFile): Boolean {
+        openedFiles.add(file.name)
+        return openResult
+    }
+
+    override suspend fun shareFile(file: DownloadedFile): Boolean {
+        sharedFiles.add(file.name)
+        return true
+    }
 }
 
 /** Recording [MicCapture]: drive it through [startResult]/[audio] and assert [events]. */

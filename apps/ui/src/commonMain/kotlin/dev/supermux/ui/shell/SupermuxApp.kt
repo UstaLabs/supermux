@@ -187,6 +187,8 @@ import dev.supermux.ui.widgets.iosSwipeUnderLayer
 import dev.supermux.ui.widgets.iosSwipedLayer
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.ui.widgets.rememberIosBackSwipe
+import dev.supermux.ui.work.ActivityRailIcon
+import dev.supermux.ui.work.LocalDownloads
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
@@ -537,6 +539,12 @@ fun SupermuxApp(
         }
     }
 
+    // A download that finished with nobody waiting for it (#95, decision 2a) opens nothing: it waits in the activity
+    // bar, and a small notice says so.
+    LaunchedEffect(fleet) {
+        fleet.downloads.unclaimedCompletions.collect { notices.show("${it.name} downloaded") }
+    }
+
     // Sessions changed: reconcile the selection against the live set (empty-guarded) and prune
     // stale drafts — a killed session must not keep its text alive for one that reuses the id.
     LaunchedEffect(sessions) {
@@ -785,6 +793,8 @@ fun SupermuxApp(
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
         dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
+        // The fleet's downloads (#95): one a screen starts outlives it, as its retained state does.
+        LocalDownloads provides fleet.downloads,
     ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         ShortcutRoot(shortcuts, Modifier.fillMaxSize()) {
@@ -938,10 +948,6 @@ fun SupermuxApp(
                                 },
                                 footer = run {
                                     {
-                                        // The update card sits on the footer rail, not across the
-                                        // top of the app; it draws nothing until a newer release
-                                        // is found.
-                                        AppUpdateCard(onOpenPage = { ui.openAppUpdate() })
                                         SessionListFooter(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
@@ -968,6 +974,10 @@ fun SupermuxApp(
                                                     onForgetHost = listActions.forgetHost,
                                                 )
                                             },
+                                            // The update card sits on the footer rail, not across the
+                                            // top of the app; it draws nothing until a newer release
+                                            // is found. The downloads' list (#95) stands on both.
+                                            card = { AppUpdateCard(onOpenPage = { ui.openAppUpdate() }) },
                                         )
                                     }
                                 },
@@ -999,6 +1009,8 @@ fun SupermuxApp(
                             onNewSession = onNewSession,
                             onOpenSession = { sid -> ui.selectSession(sid) },
                             onShowSidebar = { ui.sidebarCollapsed = false },
+                            // Downloads (#95): the bottom bar's ring, on the rail's own tone above its sheet.
+                            aboveFooter = { ActivityRailIcon() },
                             footer = {
                                 HostSwitcher(
                                     hosts = hostViews,
@@ -1828,6 +1840,7 @@ private fun WorkspacePanel(
     panesBind.launcherPane = launcherPane
     panesBind.sessionNames = sessionNames
     panesBind.unreadSessions = unreadSessions
+    panesBind.downloads = LocalDownloads.current
     ui.panesBinds[current.id] = panesBind
     androidx.compose.runtime.DisposableEffect(panesBind) {
         panesBind.holders++

@@ -9,6 +9,7 @@ import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.FlowNotices
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.MicTrouble
@@ -16,11 +17,14 @@ import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.TtsEngine
+import dev.supermux.work.DownloadedFile
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
@@ -60,19 +64,44 @@ internal class DesktopClipboardAccess : ClipboardAccess {
  * Headless (CI without an X server) is the case worth naming: constructing a [java.awt.FileDialog]
  * there throws `HeadlessException`, so [saveAs] checks first and returns false — a cancelled save,
  * not a crash. That is also what `caps.saveAs` reports.
+ *
+ * A finished download (#95) is handed over as the FILE it already is — [saveFile] copies it, [openFile] opens it under
+ * its real name — so none of it is read into memory.
  */
 internal class DesktopFileAccess : FileAccess {
 
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
-        if (GraphicsEnvironment.isHeadless()) return null
-        // The dialog is modal on the EDT by AWT contract; the write is not, so it goes to IO.
-        val target = withContext(Dispatchers.Swing) {
-            runCatching { awtSaveFile(safeFileName(name)) }.getOrNull()
-        } ?: return null
+        val target = askWhereToSave(name) ?: return null
+        // The dialog was modal on the EDT; the write is not, so it goes to IO.
         val written = withContext(Dispatchers.IO) {
             runCatching { target.writeBytes(bytes) }.isSuccess
         }
         return if (written) SavedFile(target.name, target.absolutePath) else null
+    }
+
+    /** The dialog and the OS handler are all this host has: no share sheet. */
+    override val fileActions: Set<FileAction> = setOf(FileAction.Open, FileAction.Save)
+
+    /**
+     * The downloaded file itself, copied to where the user chose with a streamed `Files.copy` — a download can be
+     * gigabytes. Null: nothing on disk to copy (a browser handle), cancelled, headless, or the copy failed.
+     */
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        // Before the dialog: with nothing to copy, asking where to put it would be asking for nothing.
+        val stored = file.path ?: return null
+        val target = askWhereToSave(file.name) ?: return null
+        val copied = withContext(Dispatchers.IO) {
+            runCatching {
+                Files.copy(Paths.get(stored), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }.isSuccess
+        }
+        return if (copied) SavedFile(target.name, target.absolutePath) else null
+    }
+
+    /** The downloaded file under its real name ([stageNamed]), handed to the OS handler. */
+    override suspend fun openFile(file: DownloadedFile): Boolean = withContext(Dispatchers.IO) {
+        val staged = stageNamed(file) ?: return@withContext false
+        openLocalFile(staged)
     }
 
     /** Opens the file the user actually chose — no second temp copy. */
@@ -108,6 +137,15 @@ internal class DesktopFileAccess : FileAccess {
         withContext(Dispatchers.IO) {
             writeToTempDir(safeFileName(name), bytes)?.toPath()?.toUri()?.toString()
         }
+
+    /** Where the user wants [name] saved; null when they cancelled, or there is no display to ask on (headless). */
+    private suspend fun askWhereToSave(name: String): File? {
+        if (GraphicsEnvironment.isHeadless()) return null
+        // The dialog is modal on the EDT by AWT contract.
+        return withContext(Dispatchers.Swing) {
+            runCatching { awtSaveFile(safeFileName(name)) }.getOrNull()
+        }
+    }
 }
 
 /**
@@ -139,6 +177,38 @@ private val WINDOWS_DEVICE = Regex("(?i)(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9�
 internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
     File(attachmentsDir, name).also { it.writeBytes(bytes) }
 }.getOrNull()
+
+/**
+ * A finished download under its REAL name, where an OS handler can be given a path to it: `<staging>/<unique>/<name>`.
+ * The media store keeps the file under an id of its own, which would open as "3f9c4d….bin"; `<unique>`, a hash of where
+ * the file is stored, keeps two different `report.pdf`s from overwriting each other.
+ *
+ * What the handler gets is a COPY, never the stored file or a link to it: a viewer that saves in place would otherwise
+ * rewrite the media store's entry (the cache never revalidates a file id), and a link would keep the bytes alive after
+ * Storage › Clear. Nothing is read into memory: [Files.copy] streams the file, and the OS copies or clones it itself where
+ * it can (APFS). A file already staged at the stored one's size is used as it is, so a second Open of a big file does not
+ * copy it again; another size means that path was fetched again since, and the old one is replaced. Null: no file on disk
+ * to stage (a browser handle), or staging failed.
+ *
+ * `internal` because it is the half of [DesktopFileAccess.openFile] a test can run — actually opening would fork a real
+ * viewer on the developer's desktop.
+ */
+internal fun stageNamed(file: DownloadedFile): File? {
+    val stored = file.path ?: return null
+    return runCatching {
+        val source = Paths.get(stored)
+        val staged = File(File(attachmentsDir, stagingFolderName(stored)), safeFileName(file.name))
+        if (staged.isFile && staged.length() == Files.size(source)) return@runCatching staged
+        val target = staged.toPath()
+        Files.createDirectories(target.parent)
+        Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+        staged
+    }.getOrNull()
+}
+
+/** The folder a download is staged in: 16 hex digits of a hash of where it is stored — the same for one file, apart for any two. */
+private fun stagingFolderName(stored: String): String =
+    MessageDigest.getInstance("SHA-256").digest(stored.toByteArray(Charsets.UTF_8)).take(8).joinToString("") { "%02x".format(it) }
 
 /**
  * This process's staging folder, made on first use. [java.nio.file.Files.createTempDirectory] gives it a name no one

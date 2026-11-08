@@ -6,11 +6,24 @@ import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** Where a downloaded attachment landed: an absolute [path] and how many bytes it holds. */
+class StoredFile(val path: String, val size: Long)
+
+/** One file download's progress, shared by everyone waiting on it. [total] is null until the server says. */
+data class TransferProgress(val received: Long, val total: Long?)
 
 /**
  * The client-side cache of chat attachments: memory first, then the [store], then the network.
@@ -35,6 +48,7 @@ class MediaCache(
 
     private val lock = SynchronizedObject()
     private val inflight = HashMap<String, Deferred<*>>()
+    private val fileSlots = HashMap<String, FileSlot>()
 
     // Bumped by Clear (every host) and by forgetting one host, so a write that started before either
     // is dropped when it finishes — without touching another host's downloads.
@@ -77,7 +91,8 @@ class MediaCache(
     /**
      * A file URI the platform's media player can open — the file downloaded into the store first if
      * needed. Null where entries are not files (the web), for a key that cannot be stored, or when the
-     * download fails; the caller then stages bytes the old way.
+     * download fails or is cancelled; the caller then stages bytes the old way. The download is the one
+     * [file] makes, so a clip played in place and the same file saved are a single transfer.
      */
     suspend fun playableUri(host: String, att: Attachment, download: RangeDownload): String? {
         if (!store.hasFiles) return null
@@ -86,14 +101,64 @@ class MediaCache(
             log("[media] ${att.file_id} <- disk (file)")
             return it
         }
-        return shared(memKey(host, att.file_id) + "#file") {
-            if (downloadToStore(key, download, att.size, stamp(host)) == Stored.Yes) {
-                safe("uri", null) { store.uri(key) }?.also { log("[media] ${att.file_id} <- network (file)") }
-            } else {
-                log("[media] ${att.file_id}: download failed")
-                null
+        if (fileSlot(host, key, att, download).result.await() == null) return null
+        return safe("uri", null) { store.uri(key) }
+    }
+
+    /**
+     * [att] as a stored FILE — downloaded first when needed, resumed from a kept partial, never read into
+     * memory (#95: a big file must not run a phone out of memory). Null where entries are not files (the web),
+     * for a key that cannot be stored, or when the download fails or is cancelled ([cancelFile]).
+     *
+     * [onProgress] follows the download from wherever it is when this call comes in — one a clip started
+     * first included — to its end.
+     */
+    suspend fun file(
+        host: String,
+        att: Attachment,
+        download: RangeDownload,
+        onProgress: (received: Long, total: Long?) -> Unit = { _, _ -> },
+    ): StoredFile? {
+        if (!store.hasFiles) return null
+        val key = MediaKey.of(host, att.file_id, att.name, att.mime) ?: return null
+        stored(key)?.let {
+            log("[media] ${att.file_id} <- disk (file)")
+            return it
+        }
+        return follow(fileSlot(host, key, att, download), onProgress)
+    }
+
+    /**
+     * A file that is not an attachment — a host file (#95: Files "Save and open…"), under the synthetic id its [key]
+     * carries — kept in the store like one, so it is not fetched twice and Storage › Clear covers it. Answered at once
+     * when already stored. Else [fill] writes it and answers whether what it appended is whole; nothing is kept when
+     * it is not, nor when a Clear (or a forget of its host) came meanwhile. Null where entries are not files.
+     *
+     * What [fill] or the store throws reaches the caller: here the store is where the file goes, so a failure is
+     * that download's own, not a cache problem the network could stand in for.
+     */
+    internal suspend fun storeFile(key: MediaKey, fill: suspend (append: suspend (ByteArray, Int) -> Unit) -> Boolean): StoredFile? {
+        if (!store.hasFiles) return null
+        stored(key)?.let {
+            log("[media] ${key.fileId} <- disk (file)")
+            return it
+        }
+        val stamp = stamp(key.host)
+        if (!store.writeStream(key, fill) || !keepIfCurrent(key, stamp)) return null
+        log("[media] ${key.fileId} <- network (file)")
+        return stored(key)
+    }
+
+    /** The user's Cancel: stop [fileId]'s file download, keeping what arrived for a retry. */
+    fun cancelFile(host: String, fileId: String) {
+        val transfer = synchronized(lock) {
+            fileSlots[fileSlotName(host, fileId)]?.let { slot ->
+                // A Cancel can come before the slot has begun its transfer: then it never begins.
+                slot.cancelled = true
+                slot.transfer
             }
         }
+        transfer?.cancel()
     }
 
     /**
@@ -202,10 +267,19 @@ class MediaCache(
 
     private enum class Stored { Yes, NetworkFailed, StoreFailed }
 
-    private suspend fun downloadToStore(key: MediaKey, download: RangeDownload, sizeHint: Long?, stamp: Stamp): Stored {
+    private suspend fun downloadToStore(
+        key: MediaKey,
+        download: RangeDownload,
+        sizeHint: Long?,
+        stamp: Stamp,
+        onProgress: (received: Long, total: Long?) -> Unit = { _, _ -> },
+    ): Stored {
         var network: Boolean? = null
         val written = safe("download", false) {
-            store.writeStream(key) { append -> downloadInRanges(download, rangeBytes, sizeHint, append).also { network = it } }
+            store.writeStream(key) { append ->
+                (downloadInRanges(download, rangeBytes, sizeHint, append, onProgress = onProgress) == RangeOutcome.Complete)
+                    .also { network = it }
+            }
         }
         return when {
             written && keepIfCurrent(key, stamp) -> Stored.Yes
@@ -213,6 +287,155 @@ class MediaCache(
             network == false -> Stored.NetworkFailed
             else -> Stored.StoreFailed
         }
+    }
+
+    /**
+     * One file download in flight, shared by [file] and [playableUri]: everyone waits on [result] and may
+     * follow [progress]. [transfer] is the download itself, a child of [result] that [cancelFile] can stop while
+     * [result] still answers — null, so no waiter is failed by someone else's Cancel.
+     */
+    private class FileSlot(val progress: MutableStateFlow<TransferProgress>) {
+        lateinit var result: Deferred<StoredFile?>
+        var transfer: Job? = null
+        var cancelled = false
+    }
+
+    private fun fileSlot(host: String, key: MediaKey, att: Attachment, download: RangeDownload): FileSlot {
+        val name = fileSlotName(host, att.file_id)
+        return synchronized(lock) {
+            fileSlots[name] ?: FileSlot(MutableStateFlow(TransferProgress(0, att.size))).also { slot ->
+                fileSlots[name] = slot
+                slot.result = scope.async { runFileSlot(slot, key, download, att.size) }
+                // The progress goes with the slot: the next download of this file starts a fresh one.
+                slot.result.invokeOnCompletion { synchronized(lock) { if (fileSlots[name] === slot) fileSlots.remove(name) } }
+            }
+        }
+    }
+
+    /**
+     * The slot's body. The cancel of its transfer is caught here, while the slot itself is still active, so
+     * every waiter hears null — never a CancellationException that a `runCatching` caller (the inline video)
+     * would misread.
+     */
+    private suspend fun runFileSlot(slot: FileSlot, key: MediaKey, download: RangeDownload, sizeHint: Long?): StoredFile? =
+        coroutineScope {
+            val stamp = stamp(key.host)
+            val transfer = async(start = CoroutineStart.LAZY) { downloadFile(key, download, sizeHint, stamp, slot.progress) }
+            val go = synchronized(lock) {
+                slot.transfer = transfer
+                !slot.cancelled
+            }
+            if (go) transfer.start() else transfer.cancel()
+            val stored = try {
+                transfer.await()
+            } catch (c: CancellationException) {
+                ensureActive()
+                log("[media] ${key.fileId}: download cancelled")
+                return@coroutineScope null
+            }
+            log(if (stored != null) "[media] ${key.fileId} <- network (file)" else "[media] ${key.fileId}: download failed")
+            stored
+        }
+
+    /**
+     * Download [key] into the store through a resumable write, continuing what an earlier attempt kept, and
+     * say where it landed. Every write it opens is ended on every path: a whole file is committed (and dropped
+     * again by [keepIfCurrent] when a Clear came meanwhile); a failure or a cancel keeps what arrived for a retry
+     * ([keepForRetry]); a kept part longer than the file cannot be its prefix, so it is thrown away and the
+     * download starts once more from nothing.
+     */
+    private suspend fun downloadFile(
+        key: MediaKey,
+        download: RangeDownload,
+        sizeHint: Long?,
+        stamp: Stamp,
+        progress: MutableStateFlow<TransferProgress>,
+    ): StoredFile? {
+        repeat(2) {
+            val write = safe("open", null) { store.openResumable(key) }
+                ?: return wholeFile(key, download, sizeHint, stamp, progress)
+            var total: Long? = null
+            try {
+                val outcome = downloadInRanges(
+                    download, rangeBytes, sizeHint, { buf, n -> write.append(buf, n) }, startAt = write.offset,
+                ) { received, size ->
+                    if (size != null) total = size
+                    progress.advance(received, size)
+                }
+                when (outcome) {
+                    RangeOutcome.Complete -> return withContext(NonCancellable) {
+                        if (write.commit() && keepIfCurrent(key, stamp)) stored(key, total) else null
+                    }
+                    RangeOutcome.Failed -> {
+                        keepForRetry(write, key, stamp)
+                        return null
+                    }
+                    RangeOutcome.Overlong -> {
+                        log("[media] ${key.fileId}: the kept part runs past the file's end: thrown away")
+                        write.abandon()
+                        progress.value = TransferProgress(0, total)
+                    }
+                }
+            } catch (c: CancellationException) {
+                keepForRetry(write, key, stamp)
+                throw c
+            } catch (e: Throwable) {
+                log("[media] ${key.fileId} download failed: $e")
+                keepForRetry(write, key, stamp)
+                return null
+            }
+        }
+        return null
+    }
+
+    /** A store whose entries are files but that cannot keep a partial: the whole download in one go, as [bytes] does. */
+    private suspend fun wholeFile(
+        key: MediaKey,
+        download: RangeDownload,
+        sizeHint: Long?,
+        stamp: Stamp,
+        progress: MutableStateFlow<TransferProgress>,
+    ): StoredFile? {
+        val outcome = downloadToStore(key, download, sizeHint, stamp) { received, total -> progress.advance(received, total) }
+        return if (outcome == Stored.Yes) stored(key) else null
+    }
+
+    /**
+     * End a write that did not finish: keep what arrived for a retry — unless a Clear or a forget of its host
+     * came since [stamp], which a kept part must not outlive either. Out of reach of cancellation: a cancelled
+     * download is exactly the one whose bytes still have to go somewhere.
+     */
+    private suspend fun keepForRetry(write: ResumableWrite, key: MediaKey, stamp: Stamp) {
+        withContext(NonCancellable) {
+            safe("keep", Unit) { if (stamp(key.host) == stamp) write.retain() else write.abandon() }
+        }
+    }
+
+    /** [key]'s entry as a [StoredFile]: [size] when the caller knows it, else what the store counts. Null when there is none. */
+    private suspend fun stored(key: MediaKey, size: Long? = null): StoredFile? {
+        val path = safe("path", null) { store.path(key) } ?: return null
+        return StoredFile(path, size ?: safe("size", null) { store.size(key) } ?: return null)
+    }
+
+    /**
+     * Wait for [slot], passing its progress on as it moves — and its last value once more at the end: the
+     * slot can reach that value just before it ends, while the watcher is still on its way to it.
+     */
+    private suspend fun follow(slot: FileSlot, onProgress: (received: Long, total: Long?) -> Unit): StoredFile? {
+        var heard: TransferProgress? = null
+        val hear = { p: TransferProgress ->
+            if (p != heard) {
+                heard = p
+                onProgress(p.received, p.total)
+            }
+        }
+        val result = coroutineScope {
+            // Undispatched: a caller that joins hears at once where the transfer already is.
+            val watcher = launch(start = CoroutineStart.UNDISPATCHED) { slot.progress.collect { hear(it) } }
+            slot.result.await().also { watcher.cancel() }
+        }
+        hear(slot.progress.value)
+        return result
     }
 
     /** A write that finished after a Clear (or a forget of its host) started must not resurrect it. */
@@ -252,6 +475,8 @@ class MediaCache(
 
     private fun memKey(host: String, fileId: String) = "$host/$fileId"
 
+    private fun fileSlotName(host: String, fileId: String) = memKey(host, fileId) + "#file"
+
     companion object {
         const val DEFAULT_MEMORY_BYTES: Long = 32L * 1024 * 1024
         const val DEFAULT_MEMORY_ENTRY_BYTES: Long = 8L * 1024 * 1024
@@ -261,4 +486,14 @@ class MediaCache(
         /** The largest upload seeded where entries are not files: the browser reads it synchronously. */
         const val SEED_MAX_WITHOUT_FILES: Long = 8L * 1024 * 1024
     }
+}
+
+/**
+ * Move a file download's progress on. A null [total] keeps the size already known (the attachment's own, or
+ * what the server stated). A kept part longer than the file reports more bytes than the file holds just
+ * before it is thrown away: no caller ever sees that.
+ */
+private fun MutableStateFlow<TransferProgress>.advance(received: Long, total: Long?) = update { now ->
+    val size = total ?: now.total
+    if (size != null && received > size) now else TransferProgress(received, size)
 }

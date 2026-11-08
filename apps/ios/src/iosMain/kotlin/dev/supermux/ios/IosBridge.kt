@@ -75,6 +75,28 @@ interface IosBridge {
      */
     fun openExternally(name: String, mime: String, bytes: ByteArray, onResult: (Boolean) -> Unit)
 
+    // ── Finished downloads (#95) ────────────────────────────────────────────────────────────
+    //
+    // A finished download is a FILE already on disk, staged under its real name by `stageNamed`
+    // (an APFS clone), so these take its [path] rather than bytes: a big one never has to fit in
+    // memory, and nothing crosses the boundary but the path.
+
+    /**
+     * Present `UIDocumentPickerViewController(forExporting:asCopy: true)` for the file at [path]:
+     * "Save to Files". [onResult] gets the name the copy was saved under, or null if the user
+     * dismissed the picker.
+     *
+     * The picker and not the share sheet, unlike [saveAs]: a finished download offers Share as an
+     * action of its own, so Save is the file system alone.
+     */
+    fun saveFileAt(path: String, onResult: (String?) -> Unit)
+
+    /**
+     * Present the share sheet for the file at [path] — iOS's "Open in…" is this same sheet.
+     * [onResult] is true if the sheet was PRESENTED, the same contract as [openExternally].
+     */
+    fun shareFileAt(path: String, onResult: (Boolean) -> Unit)
+
     // ── Microphone + dictation (H3) ─────────────────────────────────────────────────────────
 
     /**
@@ -266,6 +288,9 @@ object NoopIosBridge : IosBridge {
 
     override fun openExternally(name: String, mime: String, bytes: ByteArray, onResult: (Boolean) -> Unit) =
         onResult(false)
+
+    override fun saveFileAt(path: String, onResult: (String?) -> Unit) = onResult(null)
+    override fun shareFileAt(path: String, onResult: (Boolean) -> Unit) = onResult(false)
 
     override fun micAvailable(): Boolean = false
     override fun requestMicPermission(onResult: (Boolean) -> Unit) = onResult(false)

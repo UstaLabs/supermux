@@ -7,6 +7,7 @@ package dev.supermux.ui.shell.windows
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,6 +25,7 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.WorkspacePanes
 import dev.supermux.ui.shell.WorkspacePanesBind
 import dev.supermux.ui.shell.addTerminalInWindow
+import dev.supermux.ui.work.LocalDownloads
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
@@ -71,6 +73,9 @@ fun ExtraWindowPanes(
         // A torn-off window has the pane and workspace keys; the window-level ones (new session, settings,
         // sidebar) belong to the main window.
         RegisterCommand(AppCommands.NewTerminal) { addTerminalInWindow(ui, hostId, ws, bind.app, current.id); true }
+        // This window may be a composition of its own, outside the shell's providers: the fleet's downloads come
+        // with the workspace (#95), so one started here outlives the window too.
+        CompositionLocalProvider(LocalDownloads provides (bind.downloads ?: LocalDownloads.current)) {
         WorkspacePanes(
             hostId = hostId,
             layout = hosted,
@@ -92,6 +97,7 @@ fun ExtraWindowPanes(
             onTearOutTab = onTearOutTab,
             stripChrome = stripChrome,
         )
+        }
     }
 }
 

@@ -31,8 +31,16 @@ import dev.supermux.net.BrokerClient
 import dev.supermux.util.PerfTrace
 import dev.supermux.util.perfClientLogs
 import dev.supermux.net.ChunkSource
+import dev.supermux.chat.mimeForFileName
 import dev.supermux.media.AttachmentMedia
+import dev.supermux.media.MediaCache
+import dev.supermux.media.MediaKey
 import dev.supermux.media.RangeDownload
+import dev.supermux.media.StoredFile
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadedFile
+import dev.supermux.work.hostFileId
+import kotlin.random.Random
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorConfig
 import dev.supermux.net.CuratorSettingsResponse
@@ -239,6 +247,8 @@ class HostStore(
     private val apiSpeak by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpSpeak.value) }
     // Attachment downloads (the media cache): one 4 MB range per request, each allowed two minutes,
     // so a slow phone link finishes a long clip instead of hitting CIO's 15 s per-request ceiling.
+    // Host-file downloads (#95) use it too: /fs/raw has no ranges, so a whole file (up to the host's
+    // 64 MB cap) comes in one request.
     private val httpMedia = lazy { deps.httpFactory(MEDIA_TIMEOUT_MS) }
     private val apiMedia by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpMedia.value) }
     // Session starts (card #75): POST /sessions answers once the worktree is made and the agent is up,
@@ -282,6 +292,89 @@ class HostStore(
             val cache = deps.media ?: return null
             val host = mediaHost ?: return null
             return cache.playableUri(host, att, rangeDownload(att.file_id))
+        }
+
+        // #95: to a file through the media cache — the same transfer an inline clip of it plays from — or, on the
+        // web, which has no files, into a Blob the browser fetches and holds itself.
+        override suspend fun download(att: Attachment, progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+            val host = mediaHost ?: return null
+            val name = att.name ?: att.file_id
+            val mime = att.mime ?: "application/octet-stream"
+            deps.browserDownload?.let { browser ->
+                val (blob, size) = browser.fetch(api.fileUrl(att.file_id), api.authHeaders(), progress) ?: return null
+                return DownloadedFile(name, mime, size, path = null, handle = blob)
+            }
+            val stored = deps.media?.file(host, att, rangeDownload(att.file_id), progress) ?: return null
+            return DownloadedFile(name, mime, stored.size, stored.path)
+        }
+
+        override fun cancelDownload(att: Attachment) {
+            val host = mediaHost ?: return
+            deps.media?.cancelFile(host, att.file_id)
+        }
+
+        override fun downloadKey(att: Attachment): String? {
+            if (deps.media == null && deps.browserDownload == null) return null
+            return mediaHost?.let { "att:$it/${att.file_id}" }
+        }
+    }
+
+    /**
+     * A host file for the DownloadCenter (#95: Files / editor "Save and open…"): its key, `fs:<host>:<path>@<version>`
+     * (a fresh one each time when [version] is unknown), and its source. Null where this app keeps no downloads (no
+     * media cache and no browser download) or once this host is closed.
+     *
+     * The file lands in the media store under an id made of its path, mtime and size from `/fs/stat`, so an unchanged
+     * file is not fetched twice and Storage › Clear covers it. It can change between that stat and the read: the write
+     * is kept only when as many bytes came as the stat said and a second stat after the transfer still sees the same
+     * mtime and size; otherwise nothing is kept and the download fails, retryable (`/fs/raw` has no ranges, so a retry
+     * starts over). On the web the browser streams `/fs/raw` into a Blob instead. The transfer runs inside `fetch`, so
+     * cancelling the job stops it: the source needs no `cancel`.
+     */
+    fun hostFileDownload(path: String, version: String?): Pair<String, DownloadSource>? {
+        val host = mediaHost ?: return null
+        val cache = deps.media
+        val browser = deps.browserDownload
+        if (cache == null && browser == null) return null
+        val name = dev.supermux.fs.pathLeaf(path)
+        val mime = mimeForFileName(name) ?: "application/octet-stream"
+        val source = object : DownloadSource {
+            override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+                // Closed since: a closed host starts no download (and builds no client) again.
+                if (mediaHost == null) return null
+                if (browser != null) {
+                    val (blob, size) = browser.fetch(api.hostFsRawUrl(path), api.authHeaders(), progress) ?: return null
+                    return DownloadedFile(name, mime, size, path = null, handle = blob)
+                }
+                val stored = storeHostFile(cache ?: return null, host, path, name, progress) ?: return null
+                return DownloadedFile(name, mime, stored.size, stored.path)
+            }
+        }
+        val at = version ?: Random.nextInt().toUInt().toString(16).padStart(8, '0')
+        return "fs:$host:$path@$at" to source
+    }
+
+    /** [path] into [cache]'s store as the version `/fs/stat` sees now; null when no whole copy of it came (see [hostFileDownload]). */
+    private suspend fun storeHostFile(
+        cache: MediaCache,
+        host: String,
+        path: String,
+        name: String,
+        progress: (received: Long, total: Long?) -> Unit,
+    ): StoredFile? {
+        val stat = apiMedia.hostFsStat(path)
+        val size = stat.size ?: return null
+        val mtime = stat.mtime ?: return null
+        val key = MediaKey.of(host, hostFileId(path, mtime, size), name, null) ?: return null
+        return cache.storeFile(key) { append ->
+            var received = 0L
+            apiMedia.hostFsRawTo(path) { buf, n ->
+                append(buf, n)
+                received += n
+                progress(received, size)
+            }
+            // Whole, and still the version the first stat saw: it did not change while it came.
+            received == size && apiMedia.hostFsStat(path).let { it.mtime == mtime && it.size == size }
         }
     }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }

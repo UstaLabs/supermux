@@ -1870,6 +1870,13 @@ class BrokerApi(
     private fun HttpRequestBuilder.authHeader() = bearer(token)
 
     /**
+     * [authHeader] as plain headers, for a request this client does not make itself: the web's browser download
+     * (#95). Empty for a blank token, as there — the browser sends its own cookie.
+     */
+    internal fun authHeaders(): Map<String, String> =
+        if (token.isNotBlank()) mapOf(HttpHeaders.Authorization to "Bearer $token") else emptyMap()
+
+    /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
      *
      * SKIE bridges each Swift→Kotlin suspend call into its OWN StandaloneCoroutine that has
@@ -3098,11 +3105,14 @@ class BrokerApi(
 
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
-        val resp = http.get("$httpBase/files/${urlEncode(fileId)}") {
+        val resp = http.get(fileUrl(fileId)) {
             authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
+
+    /** Where a stored attachment is served: also what the web's browser download fetches (#95). */
+    internal fun fileUrl(fileId: String): String = "$httpBase/files/${urlEncode(fileId)}"
 
     /**
      * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
@@ -3128,7 +3138,7 @@ class BrokerApi(
         var end = to
         repeat(2) {
             var retryEnd: Long? = null
-            val result = http.prepareGet("$httpBase/files/${urlEncode(fileId)}") {
+            val result = http.prepareGet(fileUrl(fileId)) {
                 authHeader()
                 header(HttpHeaders.Range, "bytes=$from-$end")
             }.execute { resp ->
@@ -3387,7 +3397,7 @@ class BrokerApi(
 
     /** GET /fs/raw?path=<abs> → the file's bytes (image/binary previews). Throws FsException on non-2xx (413 over 64 MB / 404 / 403). */
     suspend fun hostFsRaw(path: String): ByteArray {
-        val resp = http.get("$httpBase/fs/raw?path=${urlEncode(path)}") {
+        val resp = http.get(hostFsRawUrl(path)) {
             authHeader()
         }
         if (!resp.status.isSuccess()) {
@@ -3395,6 +3405,21 @@ class BrokerApi(
         }
         return resp.bodyAsBytes()
     }
+
+    /**
+     * [hostFsRaw] streamed to [sink] as it arrives, for a download to a file (#95): the file is never held in memory
+     * whole. Answers how many bytes came. Throws FsException on non-2xx, as [hostFsRaw] does.
+     */
+    suspend fun hostFsRawTo(path: String, sink: suspend (ByteArray, Int) -> Unit): Long =
+        http.prepareGet(hostFsRawUrl(path)) { authHeader() }.execute { resp ->
+            if (!resp.status.isSuccess()) {
+                throw FsException(resp.status.value, hostFsErrorMessage(resp.bodyAsText()) ?: "read failed (${resp.status.value})")
+            }
+            pump(resp.bodyAsChannel(), sink)
+        }
+
+    /** Where [hostFsRaw] reads [path]: also what the web's browser download fetches (#95). */
+    internal fun hostFsRawUrl(path: String): String = "$httpBase/fs/raw?path=${urlEncode(path)}"
 
     /** A host fs route's `{ error, message }` body as its message (what the editor shows); null when blank. */
     private fun hostFsErrorMessage(body: String): String? {

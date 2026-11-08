@@ -93,6 +93,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.AppUpdater
+import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
@@ -103,6 +104,12 @@ import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadPurpose
+import dev.supermux.work.DownloadSource
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
 import kotlin.math.roundToLong
 import kotlinx.coroutines.launch
 
@@ -253,6 +260,7 @@ private fun AppUpdateBody(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     val update by updater.status.collectAsState()
     val status = update.release
     val loading = update.phase == UpdatePhase.Checking || update.phase == UpdatePhase.Idle
@@ -366,15 +374,15 @@ private fun AppUpdateBody(
                         Button(
                             onClick = {
                                 scope.launch {
-                                    // The seam publishes progress and the failure text on its own
-                                    // status; a refused install (unknown sources off) also raises
-                                    // needsInstallPermission, which jumps to Settings exactly as
+                                    // One of the fleet's downloads (#95): leaving the page no longer
+                                    // cancels it. The seam publishes progress and the failure text on
+                                    // its own status; a refused install (unknown sources off) also
+                                    // raises needsInstallPermission, which jumps to Settings exactly as
                                     // Android's "need-permission" return used to.
-                                    val installer = updater.download { _, _ -> }
-                                    if (installer != null) {
-                                        updater.install(installer)
-                                    } else if (updater.status.value.needsInstallPermission) {
-                                        updater.openInstallPermissionSettings()
+                                    downloadUpdate(downloads, updater, s) {
+                                        if (updater.status.value.needsInstallPermission) {
+                                            updater.openInstallPermissionSettings()
+                                        }
                                     }
                                 }
                             },
@@ -475,6 +483,60 @@ fun installCaption(kind: String?): String = when (kind) {
     else -> "Downloads the latest .$kind and opens it."
 }
 
+// ── The download (#95) ────────────────────────────────────────────────────────
+
+/**
+ * [updater]'s download of [version] as one of the fleet's downloads (#95): the installer's file,
+ * carrying the [DownloadedInstaller] itself as its handle — the activity bar's Install hands that
+ * back to the updater. The updater keeps publishing its own status meanwhile, so the page still
+ * shows its percentage. The transfer runs inside `fetch`, so cancelling the job (the bar's Cancel,
+ * the app closing) stops it and the updater's own `finally` settles its phase: no `cancel` here.
+ */
+internal fun updaterSource(updater: AppUpdater, version: String): DownloadSource = object : DownloadSource {
+    override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+        var size = 0L
+        val installer = updater.download { received, total ->
+            size = received
+            progress(received, total)
+        } ?: return null
+        return DownloadedFile(updateName(version), INSTALLER_MIME, size, installer.location, handle = installer)
+    }
+}
+
+/**
+ * Download [release]'s installer as one of the fleet's [downloads] — or join the one already
+ * running or done, so a finished download is never fetched twice — and, while the caller is still
+ * here when it finishes, hand it to the OS at once, as before (R1). Leaving releases the claim:
+ * the download carries on and waits in the activity bar. [onFailed] hears a download that failed
+ * while the caller waited (the updater's status says why); the bar's Cancel is no failure.
+ */
+internal suspend fun downloadUpdate(
+    downloads: DownloadCenter,
+    updater: AppUpdater,
+    release: ClientUpdateStatus,
+    onFailed: () -> Unit,
+) {
+    // A newer release names its version; the fallback only keeps the key well formed.
+    val version = release.latestVersion ?: "update"
+    val key = "app-update:$version"
+    val source = updaterSource(updater, version)
+    val claim = downloads.start(key, updateName(version), INSTALLER_MIME, DownloadPurpose.Installer, source)
+    try {
+        val installer = claim.await()?.handle as? DownloadedInstaller
+        when {
+            installer != null -> updater.install(installer)
+            downloads.items.value.firstOrNull { it.key == key }?.state is DownloadState.Failed -> onFailed()
+        }
+    } finally {
+        claim.release()
+    }
+}
+
+/** What the activity bar calls an update: "Supermux 1.1.0 is ready to install". */
+private fun updateName(version: String) = "Supermux $version"
+
+private const val INSTALLER_MIME = "application/octet-stream"
+
 // ── Sidebar card ──────────────────────────────────────────────────────────────
 
 /** Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. */
@@ -502,6 +564,9 @@ fun updateCardCaption(kind: String?): String = when (kind) {
  * checks on its own — the shell does, once per launch — because on a phone the sidebar is
  * recomposed every time the list comes back, and each of those would be another poll (and another
  * GitHub API read for the notes).
+ *
+ * Install's download is one of the fleet's (#95): it goes on when the card goes away (a phone opens
+ * a chat over the sidebar) and then waits in the activity bar, whose Install finishes the job.
  *
  * @param onOpenPage where a failed download goes: the card has no room for the error text.
  */
@@ -533,6 +598,7 @@ private fun UpdateCardBody(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     val installing = update.busy
     val canInstall = release.canInstall && release.downloadUrl != null
     val shape = RoundedCornerShape(Radii.md)
@@ -604,14 +670,14 @@ private fun UpdateCardBody(
                     Button(
                         onClick = {
                             scope.launch {
-                                val installer = updater.download { _, _ -> }
-                                val after = updater.status.value
-                                when {
-                                    installer != null -> updater.install(installer)
-                                    after.needsInstallPermission -> updater.openInstallPermissionSettings()
-                                    // The failure text is on the status (and in the status bar on
-                                    // Android); the card has no room for it, so open the page.
-                                    else -> onOpenPage()
+                                downloadUpdate(downloads, updater, release) {
+                                    val after = updater.status.value
+                                    when {
+                                        after.needsInstallPermission -> updater.openInstallPermissionSettings()
+                                        // The failure text is on the status (and in the status bar on
+                                        // Android); the card has no room for it, so open the page.
+                                        else -> onOpenPage()
+                                    }
                                 }
                             }
                         },

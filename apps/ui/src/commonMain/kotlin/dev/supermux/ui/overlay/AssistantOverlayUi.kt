@@ -1099,16 +1099,20 @@ fun OverlayChat(
                         Icon(Icons.Filled.Close, contentDescription = "Close", tint = cs.onSurfaceVariant)
                     }
                 }
-                ChatPanel(
-                    session = agent.session,
-                    state = state,
-                    actions = actions,
-                    draft = draft,
-                    onDraftChange = { draft = it },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    showHeader = false,
-                    composerChips = composerChips,
-                )
+                // The overlay is a composition of its own, outside the shell's providers: the fleet's downloads
+                // (#95), so a file the Agent sent keeps downloading when the overlay closes.
+                androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.work.LocalDownloads provides fleet.downloads) {
+                    ChatPanel(
+                        session = agent.session,
+                        state = state,
+                        actions = actions,
+                        draft = draft,
+                        onDraftChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        showHeader = false,
+                        composerChips = composerChips,
+                    )
+                }
             }
         }
         if (compact) {
