@@ -271,12 +271,20 @@ export type ClaudeStoredLoginRead = () => Promise<string | null>
 /** The system login's: Claude Code run without CLAUDE_CONFIG_DIR. */
 const readSystemStoredLogin: ClaudeStoredLoginRead = () => readClaudeStoredLogin()
 
-/** The access token of a Claude login (`claudeAiOauth`, or the bare oauth object); null when it has none or it expired. */
+/** What the usage card and the account say for a Claude login that must be signed in again (account_expired, #106). */
+export const CLAUDE_SIGN_IN_EXPIRED = "Claude sign-in expired — sign in to Claude again."
+
+/**
+ * The access token of a Claude login (`claudeAiOauth`, or the bare oauth object); null when it has none or it
+ * expired (Claude Code refreshes it on its next run). Expired with no refresh token: the login is dead (account_expired).
+ */
 function claudeLoginToken(login: any): string | null {
   const oauth = login?.claudeAiOauth ?? login
   const expiresAt = oauth?.expiresAt
-  if (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now()) return null
-  if (typeof expiresAt === "number" && expiresAt < Date.now()) return null
+  const expired = (typeof expiresAt === "string" && new Date(expiresAt).getTime() < Date.now())
+    || (typeof expiresAt === "number" && expiresAt < Date.now())
+  if (expired && !(oauth?.refreshToken ?? oauth?.refresh_token)) throw new CoreError(SIGN_IN_EXPIRED, CLAUDE_SIGN_IN_EXPIRED)
+  if (expired) return null
   const token = oauth?.accessToken ?? oauth?.access_token
   return typeof token === "string" && token ? token : null
 }
@@ -286,18 +294,31 @@ function claudeLoginToken(login: any): string | null {
  * Anthropic's `tengu_windows_credman` rollout on, it moves the login into Credential Manager and deletes the file.
  */
 async function readClaudeToken(credsPath: string, readStored: ClaudeStoredLoginRead): Promise<string | null> {
+  let dead: unknown
   if (existsSync(credsPath)) {
-    const token = claudeLoginToken(JSON.parse(readFileSync(credsPath, "utf-8")))
-    if (token) return token
+    try {
+      const token = claudeLoginToken(JSON.parse(readFileSync(credsPath, "utf-8")))
+      if (token) return token
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== SIGN_IN_EXPIRED) throw err
+      dead = err
+    }
   }
+  let stored: string | null
   try {
-    const stored = await readStored()
-    return stored ? claudeLoginToken(JSON.parse(stored)) : null
+    stored = await readStored()
   } catch (err) {
     // The store's own words stay in the broker log; the card gets a sentence.
     log.warn("claude_stored_login_unreadable", { err: String(err) })
     throw new Error("Couldn't read Claude's sign-in from Windows Credential Manager.")
   }
+  if (!stored) { if (dead) throw dead; return null }
+  let login: unknown
+  try { login = JSON.parse(stored) } catch (err) {
+    log.warn("claude_stored_login_unreadable", { err: String(err) })
+    throw new Error("Couldn't read Claude's sign-in from Windows Credential Manager.")
+  }
+  return claudeLoginToken(login)
 }
 
 const RESET_ID = /^[a-z0-9_-]{1,40}$/
@@ -351,6 +372,8 @@ export async function fetchClaudeUsageWithToken(token: string): Promise<ClaudeUs
     headers: claudeHeaders(token),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
+  // 401: the API no longer takes this login (revoked, or refreshed away by another copy of it).
+  if (res.status === 401) throw new CoreError(SIGN_IN_EXPIRED, CLAUDE_SIGN_IN_EXPIRED)
   if (!res.ok) throw new Error(`Claude usage API ${res.status}: ${await res.text()}`)
 
   const data = await res.json() as any

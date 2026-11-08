@@ -226,7 +226,7 @@ test("an expired credentials file gives way to the stored login; a good one is u
 
 test("an expired stored login is no login", async () => {
   globalThis.fetch = (async () => { throw new Error("should not be called") }) as unknown as typeof fetch
-  const expired = JSON.stringify({ claudeAiOauth: { accessToken: "old", expiresAt: Date.now() - 1000 } })
+  const expired = JSON.stringify({ claudeAiOauth: { accessToken: "old", refreshToken: "r", expiresAt: Date.now() - 1000 } })
   expect(await fetchClaudeUsage(join(tmpDir, "nonexistent.json"), async () => expired)).toBeNull()
 })
 
@@ -284,6 +284,22 @@ test("fetchClaudeUsage returns null when token expired", async () => {
 
   const result = await fetchClaudeUsage(credsPath, async () => null)
   expect(result).toBeNull()
+})
+
+test("a Claude login the usage API refuses (401) is account_expired, in plain words (#106)", async () => {
+  const credsPath = join(tmpDir, "revoked.json")
+  writeFileSync(credsPath, JSON.stringify({ claudeAiOauth: { accessToken: "revoked", refreshToken: "r", expiresAt: Date.now() + 3600_000 } }))
+  globalThis.fetch = (async () => new Response(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "OAuth token has been revoked" } }), { status: 401 })) as unknown as typeof fetch
+  const error = await fetchClaudeUsage(credsPath, async () => null).then(() => undefined, (err: unknown) => err as Error & { code?: string })
+  expect(error?.code).toBe("account_expired")
+  expect(error?.message).toBe("Claude sign-in expired — sign in to Claude again.")
+})
+
+test("an expired Claude login with no refresh token is account_expired without asking the API (#106)", async () => {
+  const credsPath = join(tmpDir, "dead.json")
+  writeFileSync(credsPath, JSON.stringify({ claudeAiOauth: { accessToken: "old", expiresAt: Date.now() - 3600_000 } }))
+  globalThis.fetch = (async () => { throw new Error("should not be called") }) as unknown as typeof fetch
+  await expect(fetchClaudeUsage(credsPath, async () => null)).rejects.toMatchObject({ code: "account_expired" })
 })
 
 // ── Codex ──
