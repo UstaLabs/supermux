@@ -49,7 +49,7 @@ export function runAsync(
     const append = (b: Buffer) => { out += b.toString("utf-8"); if (out.length > max) out = out.slice(out.length - max) }
     child.stdout.on("data", append)
     child.stderr.on("data", append)
-    const timer = opts.timeoutMs ? setTimeout(() => { timedOut = true; child.kill("SIGKILL") }, opts.timeoutMs) : undefined
+    const timer = opts.timeoutMs ? setTimeout(() => { timedOut = true; proc.stop(child) }, opts.timeoutMs) : undefined
     child.on("error", (e) => { if (timer) clearTimeout(timer); resolve({ code: -1, output: String(e.message), timedOut }) })
     child.on("close", (code) => { if (timer) clearTimeout(timer); resolve({ code: code ?? -1, output: out, timedOut }) })
   })
