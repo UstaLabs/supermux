@@ -121,7 +121,7 @@ function listUntracked(repoAbs: string, keep: number): Promise<{ paths: string[]
     let done = false
     const child = spawnCommand("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: repoAbs, stdio: ["ignore", "pipe", "ignore"] })
     const take = (p: string) => {
-      if (!p || p.endsWith("/")) return
+      if (!p || p.endsWith("/")) return // platform-ok: a git-listed path (git writes / on every OS; a folder ends in /)
       total++
       if (paths.length < keep) paths.push(p)
     }

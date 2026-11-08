@@ -142,7 +142,7 @@ async function untrackedDiff(repoAbs: string): Promise<DiffEntry[]> {
     return []
   }
   // Skip sub-repo directories (they end with '/'); they are handled as separate repos
-  const files = listing.split("\0").filter((f) => f && !f.endsWith("/"))
+  const files = listing.split("\0").filter((f) => f && !f.endsWith("/")) // platform-ok: a git-listed path (git writes / on every OS; a folder ends in /)
   const perFile = await mapLimit(files, UNTRACKED_CONCURRENCY, async (file) => {
     try {
       // git diff --no-index takes exactly two paths and exits 1 when they differ.

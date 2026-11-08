@@ -127,25 +127,6 @@
     "src/main.ts": 15,
     "src/shared/preflight.ts": 3
   },
-  "path-shape": {
-    "src/channels/web/proxy.ts": 5,
-    "src/core/editor/changes.ts": 1,
-    "src/core/editor/workdir-diff.ts": 1,
-    "src/core/forge/github.ts": 1,
-    "src/core/forge/gitlab.ts": 1,
-    "src/core/local-endpoint.ts": 1,
-    "src/core/lsp/catalog.ts": 1,
-    "src/core/lsp/detect.ts": 1,
-    "src/core/models/discovery.ts": 1,
-    "src/core/perf/perf-log.ts": 1,
-    "src/core/project/paths.ts": 3,
-    "src/core/session-manager/download.ts": 1,
-    "src/core/settings/editor-config.ts": 1,
-    "src/core/telemetry/sanitize.ts": 1,
-    "src/core/terminal/zmx/backend.ts": 2,
-    "src/core/update/apply.ts": 1,
-    "src/core/windows/user-install.ts": 1
-  },
   "signals": {
     "packages/supermux-core/src/accounts/login.ts": 1,
     "packages/supermux-core/src/keeper/client.ts": 3,
