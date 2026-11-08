@@ -10,7 +10,7 @@ import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { CoreEvent, PermissionsSpec } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const agentScript = join(dirname(fileURLToPath(import.meta.url)), "fixtures/opencode-server-agent.mjs")
@@ -32,7 +32,7 @@ async function setup(permissions: AcpPolicy, env: Record<string, string> = {}) {
   writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" ${JSON.stringify(agentScript)} "$@"\n`, { mode: 0o755 })
   const driver = opencode({
     id: "agent", command: shim, inheritEnv: true, mcpServers: [], env: { FAKE_TRACE: trace, ...env },
-    permissions, setupTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    permissions, setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 2000, openCodePollIntervalMs: 40,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
   })
