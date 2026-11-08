@@ -99,6 +99,10 @@ const RATE_LIMIT_MAX = 16
 // raised too. See src/channels/web/serve-idle-timeout.test.ts.
 export const SERVE_IDLE_TIMEOUT_SECONDS = 255
 
+/** What a proxied WebSocket may send before its upstream socket has opened: past either bound the client is closed with 1009. */
+export const PROXY_WS_PENDING_MAX_BYTES = 1024 * 1024
+export const PROXY_WS_PENDING_MAX_MESSAGES = 256
+
 // Only a proxy we actually sit behind may name the peer for us. The relay tunnel and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
@@ -828,6 +832,13 @@ export class WebChannel implements Channel {
               ? new WebSocket(wsUrl, protocols)
               : new WebSocket(wsUrl)
             ;(ws.data as any)._proxyWs = upstream
+            // A client that speaks first sends before this dial has finished; keep those frames and flush them on open.
+            const pending: { frames: Array<string | Buffer>; bytes: number } = { frames: [], bytes: 0 }
+            ;(ws.data as any)._proxyPending = pending
+            upstream.addEventListener("open", () => {
+              for (const frame of pending.frames.splice(0)) { try { upstream.send(frame) } catch {} }
+              pending.bytes = 0
+            })
             upstream.addEventListener("message", (e) => { try { ws.send(e.data) } catch {} })
             upstream.addEventListener("close", () => { try { ws.close() } catch {} })
             upstream.addEventListener("error", () => { try { ws.close() } catch {} })
@@ -845,6 +856,20 @@ export class WebChannel implements Channel {
         message: (ws, msg) => {
           if ((ws.data as any)?._proxyWs) {
             const upstream = (ws.data as any)._proxyWs as WebSocket
+            if (upstream.readyState === WebSocket.CONNECTING) {
+              const pending = (ws.data as any)._proxyPending as { frames: Array<string | Buffer>; bytes: number }
+              const size = typeof msg === "string" ? Buffer.byteLength(msg) : msg.byteLength
+              if (pending.frames.length >= PROXY_WS_PENDING_MAX_MESSAGES || pending.bytes + size > PROXY_WS_PENDING_MAX_BYTES) {
+                pending.frames.length = 0
+                pending.bytes = 0
+                try { upstream.close() } catch {}
+                try { ws.close(1009, "too much sent before the app's socket opened") } catch {}
+                return
+              }
+              pending.frames.push(typeof msg === "string" ? msg : Buffer.from(msg)) // a copy: the socket reuses its buffer
+              pending.bytes += size
+              return
+            }
             try { upstream.send(msg) } catch {}
             return
           }
