@@ -6,12 +6,13 @@ import { chromium, type Browser, type Frame, type Page } from "playwright"
 import { inflateSync } from "node:zlib"
 import { existsSync } from "node:fs"
 import { pagePrelude } from "./page-api"
+import { startProxy } from "./proxy"
 
+/** What stops a card: Ahmet's three. A page that grows with its frame is only a note: the card caps its height. */
 export type Problem =
   | { kind: "script-error"; message: string }
   | { kind: "blank" }
   | { kind: "overflow"; width: number; widest?: string }
-  | { kind: "endless-height" }
 
 export interface CheckResult {
   checked: boolean
@@ -21,6 +22,9 @@ export interface CheckResult {
   heights: { phone: number; desktop: number }
   /** supermux.send calls the page made with no click: the guard refuses them; the evals count them. */
   unpromptedSends: string[]
+  /** The colour the page paints behind itself (html or body), if it isn't transparent. */
+  background?: string
+  endlessHeight?: boolean
   screenshots?: { phone: Buffer; desktop: Buffer }
 }
 
@@ -28,6 +32,9 @@ export const PHONE = { width: 390, height: 844 }
 export const DESKTOP = { width: 720, height: 900 }
 const SETTLE_QUIET_MS = 1000
 const SETTLE_CAP_MS = 4000
+// The spec's cap is 6 s; on a loaded host (the evals' box sits at load 30-60) slowness must not pass for "not checked".
+const CHECK_CAP_MS = Number(process.env.SHOW_HTML_CHECK_CAP_MS ?? 6000)
+const MAX_CHECKS = 2
 const HOST = "https://host.check.invalid/"
 
 const CHROMES = [
@@ -45,14 +52,23 @@ export function findBrowser(): string | undefined {
   return CHROMES.find((p): p is string => !!p && existsSync(p))
 }
 
-export async function launchBrowser(): Promise<Browser | undefined> {
+const proxies = new WeakMap<Browser, Awaited<ReturnType<typeof startProxy>>>()
+
+/** Chrome behind the check's own SOCKS5 proxy, which refuses private addresses after resolving the name. */
+export async function launchBrowser(blockedHosts: string[] = []): Promise<Browser | undefined> {
   const executablePath = findBrowser()
   if (!executablePath) return undefined
-  return chromium.launch({
+  const proxy = await startProxy(blockedHosts)
+  const browser = await chromium.launch({
     executablePath,
     headless: true,
+    env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: "disabled:" },
+    proxy: { server: `socks5://127.0.0.1:${proxy.port}`, bypass: "<-loopback>" },
     args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
   })
+  proxies.set(browser, proxy)
+  browser.on("disconnected", () => proxy.stop())
+  return browser
 }
 
 /** Loopback, private, link-local and CGNAT (Tailscale) addresses: what the host can reach and the page must not. */
@@ -78,7 +94,7 @@ export function cardDocument(html: string, theme: "dark" | "light" = "dark"): st
       `<meta name="viewport" content="width=device-width, initial-scale=1">${prelude}</head><body>${html}</body></html>`
   }
   const rest = doctype ? html.slice(doctype[0].length) : html
-  const head = rest.match(/<head[^>]*>/i)
+  const head = rest.match(/<head(?=[\s>])[^>]*>/i)
   const body = head
     ? rest.slice(0, head.index! + head[0].length) + prelude + rest.slice(head.index! + head[0].length)
     : prelude + rest
@@ -92,12 +108,13 @@ function hostPage(card: string): string {
 html{color-scheme:dark} html,body{margin:0;background:#16181a} iframe{display:block;border:0;width:100%;height:80px}
 </style></head><body><iframe id="card" sandbox="allow-scripts" title="card"></iframe><script>
 window.__sends = [];
-addEventListener("message", (e) => {
-  const card = document.getElementById("card");
-  if (e.source !== card.contentWindow || !e.data || (e.data.sm !== "send" && e.data.sm !== "refused")) return;
-  window.__sends.push(String(e.data.text).slice(0, 2000));
+const card = document.getElementById("card");
+card.addEventListener("load", () => {
+  const ch = new MessageChannel();
+  ch.port1.onmessage = (e) => { if (e.data && (e.data.sm === "send" || e.data.sm === "refused")) window.__sends.push(String(e.data.text).slice(0, 2000)); };
+  card.contentWindow.postMessage({ sm: "port" }, "*", [ch.port2]);
 });
-document.getElementById("card").src = URL.createObjectURL(new Blob([${JSON.stringify(card).replace(/</g, "\\u003c")}], { type: "text/html" }));
+card.src = URL.createObjectURL(new Blob([${JSON.stringify(card).replace(/</g, "\\u003c")}], { type: "text/html" }));
 </script></body></html>`
 }
 
@@ -163,26 +180,45 @@ export function isBlank(png: Buffer): boolean {
   return true
 }
 
-export async function checkPage(html: string, browser: Browser | undefined, o: { screenshots?: boolean } = {}): Promise<CheckResult> {
+let running = 0
+const queue: (() => void)[] = []
+async function slot<T>(fn: () => Promise<T>): Promise<T> {
+  if (running >= MAX_CHECKS) await new Promise<void>((r) => queue.push(r))
+  running++
+  try { return await fn() } finally { running--; queue.shift()?.() }
+}
+
+export function checkPage(html: string, browser: Browser | undefined, o: { screenshots?: boolean } = {}): Promise<CheckResult> {
   const empty = { problems: [], notes: [], heights: { phone: 0, desktop: 0 }, unpromptedSends: [] }
-  if (!browser) return { checked: false, reason: "no Chrome, Edge or Chromium on this machine", ...empty }
-  const context = await browser.newContext({ viewport: PHONE, colorScheme: "dark", deviceScaleFactor: 1 })
+  if (!browser) return Promise.resolve({ checked: false, reason: "no Chrome, Edge or Chromium on this machine", ...empty })
+  return slot(async () => {
+    const context = await browser.newContext({ viewport: PHONE, colorScheme: "dark", reducedMotion: "reduce", deviceScaleFactor: 1 })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const capped = new Promise<CheckResult>((resolve) => {
+      timer = setTimeout(() => resolve({ checked: false, reason: `the check ran out of time (${CHECK_CAP_MS / 1000} s)`, ...empty }), CHECK_CAP_MS)
+    })
+    try {
+      return await Promise.race([measure(context, html, browser, o), capped])
+    } finally {
+      clearTimeout(timer)
+      await context.close().catch(() => {})
+    }
+  })
+}
+
+async function measure(context: import("playwright").BrowserContext, html: string, browser: Browser, o: { screenshots?: boolean }): Promise<CheckResult> {
   const problems: Problem[] = []
   const notes: string[] = []
+  const proxy = proxies.get(browser)
+  const refusedBefore = proxy?.refused.length ?? 0
   try {
-    await context.route("**/*", (route) => {
-      const url = new URL(route.request().url())
-      if (url.href === HOST) return route.fulfill({ contentType: "text/html", body: hostPage(cardDocument(html)) })
-      if (url.protocol === "blob:" || url.protocol === "data:") return route.continue()
-      if (url.protocol === "file:" || isPrivateHost(url.hostname)) return route.abort("blockedbyclient")
-      return route.continue()
-    })
+    await context.route(HOST, (route) => route.fulfill({ contentType: "text/html", body: hostPage(cardDocument(html)) }))
     const page = await context.newPage()
     page.on("pageerror", (e) => problems.push({ kind: "script-error", message: e.message.split("\n")[0]!.slice(0, 300) }))
-    page.on("console", (m) => { if (m.type() === "error" && notes.length < 5) notes.push(`console.error: ${m.text().slice(0, 200)}`) })
+    page.on("console", (m) => { if (m.type() === "error" && notes.length < 5 && !m.text().startsWith("Failed to load resource")) notes.push(`console.error: ${m.text().slice(0, 200)}`) })
     page.on("requestfailed", (r) => {
       const url = r.url()
-      if (url.startsWith("blob:")) return
+      if (url.startsWith("blob:") || url.startsWith("data:")) return
       if (r.resourceType() === "script") problems.push({ kind: "script-error", message: `a script failed to load: ${url.slice(0, 200)}` })
       else notes.push(`failed to load: ${url.slice(0, 200)}`)
     })
@@ -198,14 +234,20 @@ export async function checkPage(html: string, browser: Browser | undefined, o: {
     await frame.waitForLoadState("load", { timeout: SETTLE_CAP_MS }).catch(() => notes.push("the page was still loading after 4 s"))
     const left = SETTLE_CAP_MS - (Date.now() - started)
     if (left > 0) await page.waitForLoadState("networkidle", { timeout: Math.min(left, SETTLE_QUIET_MS * 2) }).catch(() => {})
+    await frame.evaluate(() => Promise.race([
+      document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))),
+      new Promise((r) => setTimeout(r, 500)),
+    ])).catch(() => {})
 
-    // Endless height: the page grows with its frame (vh units, height:100% on html/body).
+    // A page that grows with its frame (vh units, height:100%, a 100vh child): the card would grow to its cap.
+    const bottom = () => frame.evaluate(() => Math.max(document.documentElement.getBoundingClientRect().height,
+      ...Array.from(document.body?.querySelectorAll("*") ?? []).map((e) => e.getBoundingClientRect().bottom)))
     await setFrameHeight(page, 600)
-    const at600 = await rootHeight(frame)
+    const at600 = await bottom()
     await setFrameHeight(page, 1200)
-    const at1200 = await rootHeight(frame)
-    const endless = at600 >= 590 && at1200 >= at600 + 400
-    if (endless) problems.push({ kind: "endless-height" })
+    const at1200 = await bottom()
+    const endless = at600 >= 480 && at1200 >= at600 + 400
+    if (endless) notes.push("the page's height follows its frame (vh units or height:100%): the card stops it at its cap")
 
     const phoneHeight = endless ? PHONE.height : await contentHeight(page, frame)
     const over = await overflow(frame, PHONE.width)
@@ -213,6 +255,12 @@ export async function checkPage(html: string, browser: Browser | undefined, o: {
     await setFrameHeight(page, Math.max(80, Math.min(phoneHeight, 1600)))
     const phoneShot = await page.locator("#card").screenshot()
     if (isBlank(phoneShot)) problems.push({ kind: "blank" })
+    const background = await frame.evaluate(() => {
+      const paint = (el: Element | null) => (el ? getComputedStyle(el).backgroundColor : "")
+      const clear = (c: string) => !c || c === "transparent" || /^rgba\(.*,\s*0\)$/.test(c)
+      const b = [paint(document.documentElement), paint(document.body)].find((c) => !clear(c))
+      return b ?? null
+    })
 
     await page.setViewportSize(DESKTOP)
     await page.waitForTimeout(60)
@@ -220,6 +268,7 @@ export async function checkPage(html: string, browser: Browser | undefined, o: {
     await setFrameHeight(page, Math.max(80, Math.min(desktopHeight, 1600)))
     const desktopShot = o.screenshots ? await page.locator("#card").screenshot() : undefined
 
+    for (const r of proxy?.refused.slice(refusedBefore) ?? []) notes.push(`refused a local address: ${r}`)
     const unpromptedSends = await page.evaluate(() => (window as unknown as { __sends: string[] }).__sends)
     return {
       checked: true,
@@ -227,12 +276,12 @@ export async function checkPage(html: string, browser: Browser | undefined, o: {
       notes: [...new Set(notes)].slice(0, 8),
       heights: { phone: phoneHeight, desktop: desktopHeight },
       unpromptedSends,
+      ...(background ? { background } : {}),
+      ...(endless ? { endlessHeight: true } : {}),
       ...(o.screenshots && desktopShot ? { screenshots: { phone: phoneShot, desktop: desktopShot } } : {}),
     }
   } catch (e) {
-    return { checked: false, reason: `the check failed: ${(e as Error).message.split("\n")[0]}`, ...empty, problems, notes }
-  } finally {
-    await context.close().catch(() => {})
+    return { checked: false, reason: `the check failed: ${(e as Error).message.split("\n")[0]}`, problems, notes, heights: { phone: 0, desktop: 0 }, unpromptedSends: [] }
   }
 }
 
@@ -251,7 +300,6 @@ export function describeProblem(p: Problem): string {
     case "script-error": return `script error: ${p.message}`
     case "blank": return "blank: nothing is visible at phone width"
     case "overflow": return `overflow at phone width: the page is ${p.width} px wide in a ${PHONE.width} px frame${p.widest ? ` (widest: ${p.widest})` : ""}`
-    case "endless-height": return "endless height: the page grows with its frame (vh units or height:100% on html/body), so a card would grow forever"
   }
 }
 

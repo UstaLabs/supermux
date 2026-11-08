@@ -13,21 +13,29 @@ export function clickHost(cards: Record<string, string>): string {
 html{color-scheme:dark} html,body{margin:0;background:#16181a} iframe{display:block;border:0;width:100%;height:320px}
 </style></head><body><button id="composer">app</button>${frames}<script>
 window.__deliveries = [];
-let lastHostInput = -1e9, lastFrameFocus = -1e9;
-for (const t of ["pointerdown", "keydown"]) addEventListener(t, (e) => { if (e.isTrusted) lastHostInput = performance.now(); }, { capture: true });
-addEventListener("blur", () => { setTimeout(() => { if (document.activeElement && document.activeElement.tagName === "IFRAME") lastFrameFocus = performance.now(); }); });
+window.__forged = 0;
+let lastHostInput = 0;
+for (const t of ["pointerdown", "keydown"]) addEventListener(t, (e) => { if (e.isTrusted) lastHostInput = Date.now(); }, { capture: true });
 const cards = ${JSON.stringify(cards).replace(/</g, "\\u003c")};
-for (const [id, html] of Object.entries(cards)) document.getElementById(id).src = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-addEventListener("message", (e) => {
-  const frame = [...document.querySelectorAll("iframe")].find((f) => f.contentWindow === e.source);
-  const m = e.data;
-  if (!frame || !m || (m.sm !== "send" && m.sm !== "refused")) return;
-  if (m.sm === "refused") { window.__deliveries.push({ card: frame.id, text: String(m.text), ok: false, reason: String(m.reason) }); return; }
-  const reason = !navigator.userActivation.isActive ? "no user activation" : document.activeElement !== frame ? "not the card the user touched"
-    : lastHostInput > lastFrameFocus ? "the user touched the app since" : "";
-  window.__deliveries.push({ card: frame.id, text: String(m.text).slice(0, 2000), ok: !reason, ...(reason ? { reason } : {}) });
-  e.source.postMessage({ sm: "sent", id: m.id, ok: !reason, reason }, "*");
-});
+for (const [id, html] of Object.entries(cards)) {
+  const frame = document.getElementById(id);
+  frame.addEventListener("load", () => {
+    // The card's private channel: only the shim holds the other end, so a page can't post a send of its own.
+    const ch = new MessageChannel();
+    ch.port1.onmessage = (e) => {
+      const m = e.data;
+      if (!m || (m.sm !== "send" && m.sm !== "refused")) return;
+      if (m.sm === "refused") { window.__deliveries.push({ card: id, text: String(m.text), ok: false, reason: String(m.reason) }); return; }
+      const reason = lastHostInput > m.clickAt ? "the user touched the app since" : "";
+      window.__deliveries.push({ card: id, text: String(m.text).slice(0, 2000), ok: !reason, ...(reason ? { reason } : {}) });
+      ch.port1.postMessage({ sm: "sent", id: m.id, ok: !reason, reason });
+    };
+    frame.contentWindow.postMessage({ sm: "port" }, "*", [ch.port2]);
+  });
+  frame.src = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+}
+// A page posting to the app's window directly is not the shim: never a send.
+addEventListener("message", (e) => { if (e.data && e.data.sm === "send") window.__forged++; });
 </script></body></html>`
 }
 
@@ -43,13 +51,21 @@ export async function openCards(browser: Browser, pages: Record<string, string>)
 }
 
 export const deliveries = (page: Page) => page.evaluate(() => (window as unknown as { __deliveries: Delivery[] }).__deliveries)
+export const forged = (page: Page) => page.evaluate(() => (window as unknown as { __forged: number }).__forged)
 
 /** Click each control a person would press, one at a time, and collect what the page sends. */
 export async function clickRoundTrip(browser: Browser, html: string): Promise<{ clicked: number; sent: string[]; refused: Delivery[] }> {
   const page = await openCards(browser, { card: html })
   try {
     const frame = page.frames().find((f) => f.url().startsWith("blob:"))!
-    const controls = frame.locator("button, [role=button], input[type=button], input[type=submit], [onclick]")
+    // What a person would press: buttons, and anything the page styles as clickable (swatches with click listeners).
+    await frame.evaluate(() => {
+      for (const el of Array.from(document.querySelectorAll("*"))) {
+        if (el.matches("button, [role=button], input[type=button], input[type=submit], [onclick]") ||
+          (getComputedStyle(el).cursor === "pointer" && !el.parentElement?.closest("[data-sm-press]"))) el.setAttribute("data-sm-press", "")
+      }
+    })
+    const controls = frame.locator("[data-sm-press]")
     const n = Math.min(await controls.count(), 8)
     let clicked = 0
     for (let i = 0; i < n; i++) {
