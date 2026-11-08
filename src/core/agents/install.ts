@@ -11,14 +11,14 @@
 // take their non-interactive branch and can never hang waiting for a prompt.
 // Dependency-injected (spawn + builtin deps + isInstalled) so it unit-tests
 // without real installs.
-import { spawn as defaultSpawn, type ChildProcess } from "child_process"
+import type { ChildProcess } from "child_process"
 import { agentDisplayName, type AgentKind } from "../../shared/agents"
 import { makeLogger } from "../../shared/log"
 import { addToUserPath, windowsPowerShellPath } from "../windows/user-install"
 import { agentBinDirs, withAgentBinDirs, withNodeBinDirs } from "./bin-dirs"
 import { BUILTIN_INSTALLERS, realBuiltinDeps, type BuiltinInstallDeps } from "./install-builtin"
 import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps } from "./install-builtin-linux"
-import { resolveCommand } from "../process/launcher"
+import { resolveCommand, spawnCommand } from "../process/launcher"
 import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
 import { home as userHome } from "../../shared/home"
 import { proc } from "@supermux/platform"
@@ -333,12 +333,13 @@ export function startInstall(kind: AgentKind, deps: InstallDeps): { job: Install
 
     const env = installEnv(baseEnv, home, platform)
     const { cmd, args } = installCommand(recipe, env)
-    const spawnFn = deps.spawn ?? (defaultSpawn as unknown as InstallSpawnFn)
     let child: ChildProcess
     try {
       // stdio[0] = "ignore" → the installer's stdin is NOT a TTY.
       // detached on macOS/Linux: its own process group, so a timeout kills everything it started.
-      child = spawnFn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(platform === "win32" ? {} : { detached: true }) })
+      child = spawnCommand(cmd, args, {
+        env, stdio: ["ignore", "pipe", "pipe"], ...(platform === "win32" ? {} : { detached: true }), platform, spawn: deps.spawn as never,
+      })
       running = child
     } catch (err) {
       const message = `couldn't start ${cmd}: ${err instanceof Error ? err.message : String(err)}`

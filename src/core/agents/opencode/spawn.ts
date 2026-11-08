@@ -1,4 +1,4 @@
-import { spawn as defaultSpawn, ChildProcess } from "child_process"
+import type { ChildProcess } from "child_process"
 import { mkdirSync, writeFileSync } from "fs"
 import { resolve } from "path"
 import { createOpencodeClient } from "@opencode-ai/sdk"
@@ -136,7 +136,6 @@ export async function spawnOpenCodeServer(opts: {
   platform?: NodeJS.Platform
   fileExists?: FileExists
 }): Promise<OpenCodeSpawnHandle> {
-  const spawnFn: SpawnFn = opts.spawn ?? (defaultSpawn as unknown as SpawnFn)
   const port = opts.port ?? (await freePort())
   const baseUrl = `http://127.0.0.1:${port}`
   const configDir = resolve(opts.configHome, "opencode")
@@ -183,7 +182,7 @@ export async function spawnOpenCodeServer(opts: {
   const shouldResolve = !opts.spawn || opts.platform !== undefined || opts.fileExists !== undefined
   const command = shouldResolve ? (resolveCommand(["opencode"], env, platform, { fileExists: opts.fileExists }) ?? "opencode") : "opencode"
   const child = spawnCommand(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
-    platform, fileExists: opts.fileExists, spawn: spawnFn as never,
+    platform, fileExists: opts.fileExists, spawn: opts.spawn as never,
     cwd: opts.workdir,
     env,
     stdio: ["ignore", "pipe", "pipe"],
