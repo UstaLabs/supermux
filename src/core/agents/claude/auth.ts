@@ -19,7 +19,7 @@
  */
 import { spawnCommandSync } from "../../process/launcher"
 import { existsSync } from "fs"
-import { join, win32 } from "path"
+import { paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 import { claudeLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 
@@ -69,7 +69,7 @@ export function claudeCliIsAuthenticated(
 
 /** Absolute path of the credential file `claude login` writes. */
 export function claudeCredentialsPath(opts: { home: string; platform?: NodeJS.Platform }): string {
-  const pathJoin = (opts.platform ?? process.platform) === "win32" ? win32.join : join
+  const pathJoin = paths.flavor(opts.platform ?? process.platform).join
   return pathJoin(opts.home, ".claude", ".credentials.json")
 }
 

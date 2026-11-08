@@ -1,3 +1,4 @@
+// platform-ok: Windows only (the claude.cmd → claude.exe lookup after the platform check), win32 so its tests run anywhere
 import { win32 } from "path"
 import { resolveCommand, type CommandEnvironment, type ResolveCommandDeps } from "../../process/launcher"
 
