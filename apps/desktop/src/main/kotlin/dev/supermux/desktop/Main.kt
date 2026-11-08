@@ -142,6 +142,7 @@ import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
+import dev.supermux.ui.session.LocalAvatarsLive
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DesktopTearOff
@@ -1972,6 +1973,8 @@ fun main() {
                         LocalPairedHostStore provides hostStore,
                         LocalHostingFleet provides fleet,
                         LocalHostingSessions provides fleetFacts.localSessions,
+                        // Card #108: living avatars stand still while nobody can see them.
+                        LocalAvatarsLive provides (windowVisible && !windowState.isMinimized && screenSeen),
                     ) {
                         // Card #54: the Load Timings panel (View ▸ Load Timings) floats over the app.
                         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
