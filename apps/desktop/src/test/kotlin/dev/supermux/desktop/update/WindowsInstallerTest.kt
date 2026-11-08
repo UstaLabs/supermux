@@ -2,6 +2,7 @@ package dev.supermux.desktop.update
 
 import dev.supermux.desktop.platform.DesktopOs
 import java.io.File
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -14,7 +15,8 @@ import kotlin.test.assertTrue
  * app to exit, runs msiexec with a progress bar only into the folder the app runs from, then starts the app again.
  */
 class WindowsInstallerTest {
-    private val msi = File("C:\\Users\\t\\Downloads\\supermux-windows.msi")
+    // A real folder on the host: a `C:\\…` path has no parent on the Linux lane, and the log goes next to the MSI.
+    private val msi = File(createTempDirectory().toFile(), "supermux-windows.msi")
     private val app = "C:\\Program Files\\supermux\\supermux.exe"
 
     private fun update(app: String? = this.app, systemRoot: String? = "C:\\Windows") =
