@@ -312,3 +312,20 @@ test("Auto's background refresh failing is logged, never thrown, and the pick st
   expect(await accounts.autoAccount("grok")).toBe("grok-a")
   await Bun.sleep(0)
 })
+
+test("the limit wait (#92): DELETE /sessions/:id/limit-wait cancels it, POST …/limit-wait/resume resumes now; 404 without one", async () => {
+  const waiting = new Set(["s1", "s2"])
+  const calls: string[] = []
+  const { call, cookieLessPost } = setup({
+    cancelLimitWait: (id) => { calls.push(`cancel ${id}`); return waiting.delete(id) },
+    resumeLimitWait: async (id) => { calls.push(`resume ${id}`); return waiting.delete(id) },
+  })
+  await channel!.start()
+  expect(await call("DELETE", "/sessions/s1/limit-wait")).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("DELETE", "/sessions/s1/limit-wait")).status).toBe(404)
+  expect(await call("POST", "/sessions/s2/limit-wait/resume")).toEqual({ status: 200, body: { ok: true } })
+  expect((await call("POST", "/sessions/s2/limit-wait/resume")).status).toBe(404)
+  expect(calls).toEqual(["cancel s1", "cancel s1", "resume s2", "resume s2"])
+  expect((await cookieLessPost("/sessions/s3/limit-wait/resume", {})).status).toBe(403)
+  expect(calls).toHaveLength(4)
+})

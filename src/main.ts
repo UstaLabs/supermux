@@ -77,6 +77,7 @@ import {
   toApiError,
   type AccountAgent,
 } from "./core/accounts/broker-accounts"
+import { LimitWaits, clockTime, resumeAfterLimit, type LimitWait } from "./core/accounts/limit-wait"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -813,6 +814,38 @@ messageLog.on("append", (sessionId: string, entry: any) => {
 })
 const activityStore = new ActivityStore()
 const agentStateStore = new AgentStateStore()
+// Card #92: a session whose every account is out waits for the first reset, then carries on by itself.
+// Saved under the accounts directory; loaded once the broker is up (end of boot).
+const limitWaits = new LimitWaits({
+  file: join(sharedAccounts().registry.directory, "limit-waits.json"),
+  now: () => Date.now(),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+  enabled: () => accountsSettings().autoResume,
+  changed: (sessionId, wait) => webChannel?.broadcastToAll({ type: "limit_wait", session: sessionId, wait: limitWaitFields(wait) }),
+  onError: (sessionId, err) => log.warn("limit_wait_failed", { session: sessionId, err: String(err) }),
+  resume: (wait) => resumeAfterLimit(wait, {
+    exists: (id) => !!registry.get(id),
+    busy: (id) => { const phase = agentStateStore.get(id).phase; return phase === "thinking" || phase === "running" },
+    account: (id) => { const s = registry.get(id); return s?.account || `${s?.agent ?? "claude"}:system` },
+    registered: async (account) => isSystemAccount(account) || !!(await brokerAccounts.get(account)),
+    switchAccount: async (id, account) => {
+      // A live session reopens on it; a sleeping one wakes on it.
+      if (runtimes.get(id)?.adapter) await setSessionAccount(id, account)
+      else applySessionAccount(id, account)
+    },
+    label: (account) => brokerAccounts.label(account),
+    notify: (id, text) => notifySession(id, text),
+    deliver: async (id, text) => {
+      const sent = await deliverToSession(id, text, { channel: "web", chat_id: "web", message_id: `limit-reset-${Date.now()}` })
+      if (sent.handed) await sent.turn
+    },
+  }),
+})
+/** A session's wait as clients see it (null: none). */
+function limitWaitFields(wait: LimitWait | undefined) {
+  return wait ? { resumeAt: wait.resumeAt, resetsAt: wait.resetsAt ?? null, account: wait.account, accountLabel: brokerAccounts.label(wait.account) } : null
+}
 const bgTaskStore = new BackgroundTaskStore()
 // Survives broker restarts: subagent cards (views + each subagent's conversation) come back.
 const subagentStore = new SubagentStore({ file: join(STATE_DIR, "subagents.json") })
@@ -1435,7 +1468,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => sessionManager.unregister(id)   // also forgets its reply target
+const unregisterSession = (id: string) => { limitWaits.cancel(id); return sessionManager.unregister(id) }   // also forgets its reply target
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -2012,7 +2045,7 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   // pushed to every client and said in the chat; so is an account the API refused, and an
   // auto-switch that found no other account. A refused account's mark (set or cleared) reaches the
   // Accounts screens through accounts_changed.
-  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string }) => {
+  adapter.on("account", (ev: { event: string; from?: string; to?: string; reason?: string; account?: string; resetsAt?: Date; background?: boolean }) => {
     if (ev.event === "switched" && ev.to) {
       applySessionAccount(sessionId, ev.to)
       const why = ev.reason === "limit" ? "usage limit reached"
@@ -2020,8 +2053,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
         : "switched manually"
       void notifySession(sessionId, `Switched to ${brokerAccounts.label(ev.to)} — ${why}`)
     } else if (ev.event === "exhausted") {
+      // A limit with auto-resume on: the "waiting" event that follows says it, with the time.
+      if (ev.reason === "limit" && accountsSettings().autoResume) return
       const what = ev.reason === "unavailable" ? `${brokerAccounts.label(ev.account)} is unavailable` : `Usage limit reached on ${brokerAccounts.label(ev.account)}`
       void notifySession(sessionId, `${what} — no other ${adapter.kind} account is available`)
+    } else if (ev.event === "waiting" && ev.account) {
+      const wait = limitWaits.wait(sessionId, { account: ev.account, resetsAt: ev.resetsAt, background: ev.background === true })
+      const label = brokerAccounts.label(ev.account)
+      if (!wait) void notifySession(sessionId, `Usage limit reached on ${label} — automatic resume is off`)
+      else if (wait.resetsAt) void notifySession(sessionId, `Usage limit reached — resumes automatically on ${label} at ${clockTime(wait.resumeAt)}`)
+      else void notifySession(sessionId, `Usage limit reached — no reset time was given, trying again on ${label} at ${clockTime(wait.resumeAt)}`)
     } else if (ev.event === "unavailable") {
       brokerAccounts.notifyChanged()
       void notifySession(sessionId, `${brokerAccounts.label(ev.account)} is unavailable: ${ev.reason ?? "refused by the API"}. Check it in Settings ▸ Accounts.`)
@@ -2327,6 +2368,7 @@ function sessionAddedPayload(entry: Session) {
     fastMode: sessionFast(entry),
     permissionMode: resolvePermissionMode(entry.agent, entry.permissionMode),
     ...sessionAccountFields(entry),
+    limitWait: limitWaitFields(limitWaits.get(entry.id)),
     repo_root: entry.repo_root || undefined,
     session_branch: entry.session_branch || undefined,
     finish_job: entry.finish_job,
@@ -2789,6 +2831,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         fastMode: sessionFast(s),
         permissionMode: resolvePermissionMode(s.agent, s.permissionMode),
         ...sessionAccountFields(s),
+        limitWait: limitWaitFields(limitWaits.get(s.id)),
         status: s.status,
         session_branch: s.session_branch || undefined,
         repo_root: s.repo_root || undefined,
@@ -3329,11 +3372,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       submitCode: (loginId, code) => brokerAccounts.submitLoginCode(loginId, code),
       cancelLogin: (loginId) => brokerAccounts.cancelLogin(loginId),
       setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
-      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch }),
+      cancelLimitWait: (sessionId) => limitWaits.cancel(sessionId),
+      resumeLimitWait: (sessionId) => limitWaits.resumeNow(sessionId),
+      getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }),
       setSettings: (patch) => {
         if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")
+        if (patch.autoResume !== undefined && typeof patch.autoResume !== "boolean") throw new AccountsApiError(400, "autoResume must be a boolean", "invalid_input")
         if (typeof patch.autoSwitch === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoSwitch: patch.autoSwitch })
-        const next = { autoSwitch: accountsSettings().autoSwitch }
+        if (typeof patch.autoResume === "boolean") settings.set(SETTINGS_KEY_ACCOUNTS, { ...accountsSettings(), autoResume: patch.autoResume })
+        // Turned off: nothing that waits now resumes by itself.
+        if (patch.autoResume === false) for (const wait of limitWaits.list()) limitWaits.cancel(wait.sessionId)
+        const next = { autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }
         webChannel?.broadcastToAll({ type: "accounts_settings", ...next })
         return next
       },
@@ -3752,6 +3801,8 @@ async function deliverInbound(sessionId: string, text: string, meta: any): Promi
  * the wake failed, which the chain reports in the chat once. Nothing is re-sent on its own.
  */
 async function deliverToSession(sessionId: string, text: string, meta: any): Promise<ChainDelivery<InboundDeliveryResult>> {
+  // #92: a message carries the session on now; a limit it hits again makes a new wait.
+  limitWaits.cancel(sessionId)
   // This message's chat is where anything about it goes, a failed wake included.
   if (typeof meta?.chat_id === "string" && meta.chat_id) replyTargets.note(sessionId, meta.chat_id)
   return deliverOnChain(sessionChain, sessionId, () => deliverInbound(sessionId, text, meta))
@@ -4835,6 +4886,7 @@ try {
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
 if (webChannel) await webChannel.start()
+limitWaits.load()
 telemetry.start()
 {
   const t = telemetryState()

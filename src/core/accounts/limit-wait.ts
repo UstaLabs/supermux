@@ -182,7 +182,7 @@ export type ResumeDeps = {
   busy: (sessionId: string) => boolean
   /** The session's account now (its system account when it has none). */
   account: (sessionId: string) => string
-  registered: (account: string) => boolean
+  registered: (account: string) => boolean | Promise<boolean>
   switchAccount: (sessionId: string, account: string) => Promise<void>
   label: (account: string) => string
   /** A broker notice in the chat. */
@@ -196,7 +196,7 @@ export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps): Promi
   const id = wait.sessionId
   if (!deps.exists(id) || deps.busy(id)) return
   let account = deps.account(id)
-  if (wait.account !== account && deps.registered(wait.account)) {
+  if (wait.account !== account && await deps.registered(wait.account)) {
     try {
       await deps.switchAccount(id, wait.account)
       account = wait.account
@@ -206,4 +206,10 @@ export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps): Promi
     ? `Resumed on ${deps.label(account)} — the usage limit reset`
     : `Trying again on ${deps.label(account)} — the usage limit may have reset`)
   await deps.deliver(id, wait.background ? `${LIMIT_RESET_CONTINUE_PROMPT} ${LIMIT_RESET_BACKGROUND_SUFFIX}` : LIMIT_RESET_CONTINUE_PROMPT)
+}
+
+/** "18:13": a wait's time on the host's clock, for the chat notice (the apps show it in their own time zone). */
+export function clockTime(iso: string): string {
+  const at = new Date(iso)
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
 }
