@@ -8,7 +8,8 @@
 // baseline: it only shrinks). Rewrite the baseline from the current tree with:
 //   bun scripts/platform-boundary.ts --write
 // A line that matches but is no OS decision (a URL, a model id) carries `// platform-ok: <why>` on the same line
-// or the line above. The reason is required.
+// or the line above. The reason is required. Developer and CI tooling (DEV_TOOLING, each folder with its reason) is
+// not scanned: it ships to no one.
 import { Glob } from "bun"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -29,6 +30,23 @@ const DESKTOP = "apps/desktop/src/main/kotlin/dev/supermux/desktop"
 const WEBVIEW = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine"
 const LSP_TRANSPORT = "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt"
 const WEBVIEW_HARNESSES = ["apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/"]
+
+/**
+ * Developer and CI tooling, with why it is: it is never part of the broker, the CLI or an app a user runs, so no rule
+ * applies to it and it is not scanned. A file in one of these folders that ships after all is in [SHIPPED_TOOLING].
+ */
+export const DEV_TOOLING: Record<string, string> = {
+  "scripts/": "the repo's build, CI, release and probe scripts, run by its developers and its CI",
+  "packages/supermux-core/scripts/": "the library's live probes against real agents, run by its developers",
+  "packages/supermux-core/examples/": "examples a library user reads and adapts (the package publishes only examples/*.mjs)",
+}
+
+/** In a [DEV_TOOLING] folder, yet shipped: `supermux pair` and `supermux revoke` run them (src/cli.ts). Still scanned. */
+export const SHIPPED_TOOLING: readonly string[] = ["scripts/pair.ts", "scripts/revoke.ts"]
+
+function devTooling(file: string): boolean {
+  return !SHIPPED_TOOLING.includes(file) && Object.keys(DEV_TOOLING).some(folder => file.startsWith(folder))
+}
 
 export const RULES: Rule[] = [
   {
@@ -63,8 +81,10 @@ export const RULES: Rule[] = [
       /from\s*["'](?:node:)?child_process["']/,
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
-    allowed: ["packages/platform/", "src/core/process/launcher.ts"],
-    use: "start processes with spawnCommand (src/core/process/launcher.ts), or Bun.spawn with { ...proc.spawnDefaults() } spread first: without them the child gets the startup env and, on Windows, a console window",
+    // src/core/git/exec.ts is the git family's async runner, every call there starting from proc.spawnDefaults. Its
+    // synchronous twin, exec-sync.ts, goes through the launcher.
+    allowed: ["packages/platform/", "src/core/process/launcher.ts", "src/core/git/exec.ts"],
+    use: "start processes through src/core/process/launcher.ts: spawnProcess / spawnProcessSync (Bun's options) or spawnCommand / spawnCommandSync (node's, with Windows .cmd/.ps1 shims). Git goes through src/core/git/exec.ts (or exec-sync.ts, where a caller cannot await). Both apply proc.spawnDefaults; without them the child gets the startup env and, on Windows, a console window",
   },
   {
     id: "which-path",
@@ -225,7 +245,7 @@ export function sourceFiles(root: string = ROOT): { file: string; lang: Lang }[]
       const file = norm(`${dir}/${path}`)
       const segments = file.split("/")
       if (segments.some(s => s === "node_modules" || s === "dist" || s === "tests" || s === "e2e")) continue
-      if (/\.(?:test|spec)\.ts$|\.d\.ts$/.test(file)) continue
+      if (/\.(?:test|spec)\.ts$|\.d\.ts$/.test(file) || devTooling(file)) continue
       files.push({ file, lang: "ts" })
     }
   }

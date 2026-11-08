@@ -163,4 +163,56 @@ describe("sourceFiles", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  // #29: developer and CI tooling ships to no one, so no rule applies to it; what the CLI runs from scripts/ still does.
+  test("leaves out developer and CI tooling, but not the scripts the CLI ships", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const { dirname, join } = await import("node:path")
+    const { sourceFiles } = await import("./platform-boundary")
+    const root = mkdtempSync(join(tmpdir(), "mux-guard-"))
+    try {
+      for (const file of [
+        "scripts/asset-probe.ts",
+        "scripts/migration-dry-run/03-continuation.ts",
+        "scripts/pair.ts",
+        "scripts/revoke.ts",
+        "packages/supermux-core/scripts/context-probe.ts",
+        "packages/supermux-core/examples/kanban/server.ts",
+        "packages/supermux-core/src/keeper/client.ts",
+        "src/cli.ts",
+      ]) {
+        mkdirSync(join(root, dirname(file)), { recursive: true })
+        writeFileSync(join(root, file), "")
+      }
+      expect(sourceFiles(root).map(f => f.file)).toEqual([
+        "packages/supermux-core/src/keeper/client.ts",
+        "scripts/pair.ts",
+        "scripts/revoke.ts",
+        "src/cli.ts",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("every file of a tooling folder the product imports is one the guard still scans", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { join, normalize } = await import("node:path")
+    const { Glob } = await import("bun")
+    const { DEV_TOOLING, SHIPPED_TOOLING } = await import("./platform-boundary")
+    const root = join(import.meta.dir, "..")
+    const imported = new Set<string>()
+    for (const dir of ["src", "packages/supermux-core/src", "packages/platform/src"]) {
+      for (const path of new Glob("**/*.ts").scanSync({ cwd: join(root, dir) })) {
+        if (/\.(?:test|spec)\.ts$/.test(path)) continue
+        const text = readFileSync(join(root, dir, path), "utf8")
+        for (const match of text.matchAll(/(?:from\s*|import\(\s*)["'](\.{1,2}\/[^"']+)["']/g)) {
+          const target = normalize(join(dir, path, "..", match[1]!)).replace(/\\/g, "/").replace(/(\.ts)?$/, ".ts")
+          if (Object.keys(DEV_TOOLING).some(folder => target.startsWith(folder))) imported.add(target)
+        }
+      }
+    }
+    expect([...imported].sort()).toEqual([...SHIPPED_TOOLING].sort())
+  })
 })

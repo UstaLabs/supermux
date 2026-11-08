@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveCommand, spawnCommand, spawnCommandSync, windowsCmdCommandLine } from "./launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync, spawnProcess, spawnProcessSync, windowsCmdCommandLine } from "./launcher"
 
 const windowsFs = (...files: string[]) => ({
   fileExists: (path: string) => files.some((file) => file.toLowerCase() === path.toLowerCase()),
@@ -148,5 +148,22 @@ describe("spawnCommandSync", () => {
       spawnSync: ((...args: unknown[]) => { calls.push(args); return { status: 0 } }) as never,
     })
     expect(calls).toEqual([["/usr/local/bin/codex", ["plugin", "remove", "mux@mux"], { env: { PATH: "/usr/local/bin" }, windowsHide: true }]])
+  })
+})
+
+// #29: Bun.spawn without `env` passes the environment this process started with, and windowsHide is false by default.
+// spawnProcess is Bun.spawn with this layer's defaults first; the caller's own options still win.
+describe("spawnProcess", () => {
+  test("a child gets the environment as it is now, and the caller's own env wins, sync and async", async () => {
+    const key = `SUPERMUX_LIVE_ENV_${process.pid}`
+    process.env[key] = "now"
+    try {
+      const echo = [process.execPath, "-e", `process.stdout.write(process.env.${key} ?? "unset")`]
+      expect(await new Response(spawnProcess(echo, { stdout: "pipe" }).stdout).text()).toBe("now")
+      expect(spawnProcessSync(echo).stdout.toString()).toBe("now")
+      expect(spawnProcessSync(echo, { env: { PATH: process.env.PATH ?? "" } }).stdout.toString()).toBe("unset")
+    } finally {
+      delete process.env[key]
+    }
   })
 })

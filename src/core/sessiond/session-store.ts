@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { RuntimeTarget, RuntimeViewer, SessionBackend } from "../runtime/session-backend"
 import { createProcessJob, type ProcessJob } from "./job-object"
 import { SessionScreen } from "./screen"
+import { spawnProcess } from "../process/launcher"
 
 export interface SessionTerminal {
   readonly eof: Promise<void>
@@ -203,7 +204,7 @@ function productionProcessFactory(
   let notifyDrain = () => {}
   let resolveEof!: () => void
   const eof = new Promise<void>(resolve => { resolveEof = resolve })
-  const spawned = Bun.spawn(options.argv, {
+  const spawned = spawnProcess(options.argv, {
     cwd: options.cwd,
     env: options.env,
     windowsHide: true,

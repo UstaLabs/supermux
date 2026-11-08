@@ -6,7 +6,7 @@ import { encodeFrame } from "../../shared/frame-codec"
 import { PROTOCOL_VERSION } from "./protocol"
 import { SESSIOND_MAX_BUFFER_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
 import { createOrLoadSessiondSecret } from "./secret"
-import { proc } from "@supermux/platform"
+import { spawnProcess } from "../process/launcher"
 
 type SpawnSessiond = (executable: string, stateDir: string) => void | Promise<void>
 type ConnectSocket = (endpoint: string) => Promise<Socket>
@@ -59,8 +59,7 @@ export function resolveSessiondExecutable(
 }
 
 function defaultSpawn(executable: string, stateDir: string): void {
-  const child = Bun.spawn([executable, "--state-dir", stateDir], {
-    ...proc.spawnDefaults(),
+  const child = spawnProcess([executable, "--state-dir", stateDir], {
     detached: true,
     windowsHide: true,
     stdin: "ignore",

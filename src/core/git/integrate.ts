@@ -1,12 +1,8 @@
 // src/core/git/integrate.ts
-import { execFileSync } from "child_process"
+import { gitSync } from "./exec-sync"
 
 function git(cwd: string, args: string[], timeout = 120_000): { ok: boolean; out: string } {
-  try {
-    return { ok: true, out: execFileSync("git", args, { cwd, encoding: "utf-8", timeout, stdio: ["pipe", "pipe", "pipe"] }).trim() }
-  } catch (e: any) {
-    return { ok: false, out: `${e?.stdout?.toString?.() ?? ""}${e?.stderr?.toString?.() ?? ""}`.trim() }
-  }
+  return gitSync(cwd, args, timeout)
 }
 
 export interface Worktree { path: string; branch?: string }
