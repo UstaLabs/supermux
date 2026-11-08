@@ -922,6 +922,45 @@ class AgentSettingsScreenTest {
         assertTrue(loadCount.get() >= 2)
     }
 
+    /** OpenCode's Console (Go) sign-in: the same device-link flow as Codex/Grok, above the provider steps (#109). */
+    @Test fun opencode_sign_in_runs_the_device_link_flow() = runComposeUiTest {
+        val started = java.util.concurrent.atomic.AtomicBoolean(false)
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
+                    },
+                    agentStartLogin = { kind ->
+                        assertEquals("opencode", kind)
+                        started.set(true)
+                        AgentLoginState(kind = "opencode", phase = "starting")
+                    },
+                    agentPollLogin = {
+                        if (!started.get()) null
+                        else AgentLoginState(
+                            kind = "opencode", phase = "awaiting_user",
+                            url = "https://opencode.ai/console/device?user_code=QLCP-HTDB", code = "QLCP-HTDB",
+                        )
+                    },
+                )()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("opencode_providers_section").assertExists()
+        onNodeWithText("Sign in with OpenCode").assertExists()
+        onNodeWithTag("agent_login_start_opencode").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_login_device_code").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("agent_login_open_url").assertIsDisplayed()
+    }
+
     @Test fun opencode_key_failure_keeps_input_and_shows_error() = runComposeUiTest {
         val seen = AtomicInteger(0)
         val lastKey = AtomicReference<String?>(null)

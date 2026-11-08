@@ -30,6 +30,10 @@ import dev.supermux.net.CodexWindow
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokProductUsage
 import dev.supermux.net.GrokUsage
+import dev.supermux.net.OpenCodeGoMeter
+import dev.supermux.net.OpenCodeGoUsage
+import dev.supermux.net.OpenCodePlan
+import dev.supermux.net.OpenCodeUsage
 import dev.supermux.net.UsageResponse
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -223,6 +227,65 @@ class UsageScreenTest {
         }
         waitForIdle()
         onNodeWithText("GrokBuild").assertDoesNotExist()
+    }
+
+    @Test fun opencode_card_leads_with_the_go_windows_and_keeps_local_spend_secondary() = runComposeUiTest {
+        val now = 1_794_132_000_000L // 2026-11-08T10:00:00Z
+        val opencode = OpenCodeUsage(
+            sessions = 4, messages = 9, totalCostUsd = 86.22,
+            plan = OpenCodePlan(
+                status = "active", via = "console", email = "me@x.io",
+                go = OpenCodeGoUsage(
+                    rolling = OpenCodeGoMeter(3.0, false, "2026-11-08T12:00:00.000Z"),
+                    weekly = OpenCodeGoMeter(100.0, true, "2026-11-09T10:00:00.000Z"),
+                    monthly = OpenCodeGoMeter(41.5, false, "2026-12-01T00:00:00.000Z"),
+                ),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null, now = now)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("OpenCode Go · me@x.io").assertExists()
+        onNodeWithText("5 hours").assertExists()
+        onNodeWithText("Weekly").assertExists()
+        onNodeWithText("Monthly").assertExists()
+        onNodeWithText("3% used").assertExists()
+        onNodeWithText("42% used").assertExists()
+        onNodeWithText("Limit reached", substring = true).assertExists()
+        onNodeWithText("Local spend").assertExists()
+        onNodeWithText("$86.22").assertExists()
+        // Spend is no longer the card's headline badge.
+        onAllNodesWithText("$86.22").assertCountEquals(1)
+    }
+
+    @Test fun opencode_card_says_plainly_when_there_is_no_go_plan() = runComposeUiTest {
+        val opencode = OpenCodeUsage(sessions = 4, totalCostUsd = 1.5, plan = OpenCodePlan(status = "none", via = "api_key"))
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("No OpenCode Go plan.").assertExists()
+        onNodeWithText("5 hours").assertDoesNotExist()
+        onNodeWithText("Local spend").assertExists()
+    }
+
+    @Test fun opencode_card_offers_sign_in_when_signed_out_or_expired() = runComposeUiTest {
+        var signIns = 0
+        val opencode = OpenCodeUsage(sessions = 1, plan = OpenCodePlan(status = "expired", via = "console", email = "me@x.io"))
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OpenCodeUsageCard(opencode = opencode, error = null, onSignIn = { signIns++ })
+            }
+        }
+        waitForIdle()
+        onNodeWithText("OpenCode sign-in expired.").assertExists()
+        onNodeWithTag("usage_sign_in_opencode").performClick()
+        assertEquals(1, signIns)
     }
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {

@@ -72,6 +72,31 @@ class BrokerApiUsageTest {
         assertEquals("", usage.grok?.plan)
     }
 
+    @Test fun opencode_go_plan_decodes_with_its_three_windows() = runTest {
+        val usage = api(
+            """
+            {"opencode": {"sessions": 2, "totalCostUsd": 1.5, "plan": {
+              "status": "active", "via": "console", "email": "me@x.io",
+              "go": {
+                "rolling": {"percent": 3, "limited": false, "resetsAtIso": "2026-11-08T12:00:00.000Z"},
+                "weekly": {"percent": 100, "limited": true, "resetsAtIso": "2026-11-09T00:00:00.000Z"},
+                "monthly": {"percent": 41.5, "limited": false, "resetsAtIso": "2026-12-01T00:00:00.000Z"}
+              }}}}
+            """.trimIndent(),
+        ).usage()
+        val plan = assertNotNull(usage.opencode?.plan)
+        assertEquals("active", plan.status)
+        assertEquals("me@x.io", plan.email)
+        assertEquals(3.0, plan.go?.rolling?.percent)
+        assertEquals(true, plan.go?.weekly?.limited)
+        assertEquals("2026-12-01T00:00:00.000Z", plan.go?.monthly?.resetsAtIso)
+        // An older broker sends no plan; "none" carries no meters.
+        assertNull(api("""{"opencode": {"sessions": 1}}""").usage().opencode?.plan)
+        val none = api("""{"opencode": {"plan": {"status": "none", "go": null}}}""").usage().opencode?.plan
+        assertEquals("none", none?.status)
+        assertNull(none?.go)
+    }
+
     @Test fun a_null_error_string_does_not_abort_the_decode() = runTest {
         val usage = api("""{"errors": {"claude": null, "codex": "no api key"}}""").usage()
         assertNull(usage.errors["claude"])

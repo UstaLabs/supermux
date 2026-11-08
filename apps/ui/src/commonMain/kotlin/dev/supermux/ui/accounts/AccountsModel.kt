@@ -54,7 +54,7 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
     AddAccountOption.ApiKey -> when (agent) {
         "claude" -> "An Anthropic API key, billed per token."
         "codex" -> "An OpenAI API key, billed per token."
-        "opencode" -> "A provider key for OpenCode."
+        "opencode" -> "An OpenCode key from opencode.ai/auth, for Zen and Go."
         "antigravity" -> "A Gemini API key."
         else -> "Billed per token."
     }

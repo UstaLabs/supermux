@@ -725,6 +725,38 @@ data class OpenCodeUsage(
     val outputTokens: Long = 0,
     val cacheReadTokens: Long = 0,
     val cacheWriteTokens: Long = 0,
+    /** The OpenCode Go plan's limits (broker ≥ #109); null from an older broker. */
+    val plan: OpenCodePlan? = null,
+)
+
+/** One OpenCode Go window: how much of its allowance is used, and when it resets. */
+@Serializable
+data class OpenCodeGoMeter(
+    val percent: Double = 0.0,
+    /** Go refuses requests until the window resets. */
+    val limited: Boolean = false,
+    val resetsAtIso: String? = null,
+)
+
+/** OpenCode Go's 5-hour ("rolling"), weekly and monthly windows. */
+@Serializable
+data class OpenCodeGoUsage(
+    val rolling: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val weekly: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val monthly: OpenCodeGoMeter = OpenCodeGoMeter(),
+)
+
+/**
+ * The OpenCode login's plan: `status` active (meters in [go]) · none (no Go plan) · signed_out · expired · unavailable
+ * ([error] says why). [via] console = the OpenCode sign-in, api_key = an OpenCode key.
+ */
+@Serializable
+data class OpenCodePlan(
+    val status: String = "",
+    val go: OpenCodeGoUsage? = null,
+    val via: String? = null,
+    val email: String? = null,
+    val error: String? = null,
 )
 
 /** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
