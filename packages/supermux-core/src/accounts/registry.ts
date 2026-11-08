@@ -102,7 +102,8 @@ export class AccountRegistry {
         const credential = relative(resolve(source), resolve(repair!.credential))
         if (!credential || credential.startsWith("..") || isAbsolute(credential)) throw new CoreError("invalid_input", "The login's credential file must be inside its directory")
         const home = await ensureHome(this.homesDirectory, existing, adapterFor(existing.agent).layout?.(this.roots))
-        await mkdir(dirname(join(home, credential)), { recursive: true, mode: 0o700 })
+        // Inside the account home, which is private (0700) already.
+        await mkdir(dirname(join(home, credential)), { recursive: true })
         await files.replace(join(source, credential), join(home, credential))
         await rm(source, { recursive: true, force: true })
         return structuredClone(existing)
