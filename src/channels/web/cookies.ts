@@ -71,6 +71,34 @@ export function authedViaBearer(req: Request): boolean {
   return !cookieToken(req) && bearerToken(req) !== ""
 }
 
+/**
+ * The one cross-site guard every request passes before it is routed. A request that carries the
+ * app's cookie is the browser acting for the user, so it must come from a page the app trusts.
+ * SameSite=Lax is not that line on its own: WebKit attaches the cookie even from a sandboxed srcdoc
+ * frame inside the app (measured 2026-11-08), and a proxied page on `<slug>.<base>` gets the
+ * `Domain=.<base>` cookie by design. Returns why the request is refused, or undefined.
+ *   - `Origin: null` is an opaque origin: a sandboxed frame or a data: page.
+ *   - `Sec-Fetch-Site: cross-site` is refused unless it is a top-level GET/HEAD navigation (a link).
+ *   - The app's own WebSockets open only from `appOrigins`. A proxied app's sockets (`proxied`) come
+ *     from its own origin, so only the two rules above apply to them.
+ * Bearer clients (the native apps) and requests without the cookie have no ambient session to ride.
+ */
+export function crossSiteRefusal(req: Request, o: { appOrigins: (string | undefined)[]; proxied: boolean }): string | undefined {
+  if (!cookieToken(req)) return undefined
+  const origin = req.headers.get("origin")
+  if (origin?.trim().toLowerCase() === "null") return "opaque origin"
+  if (req.headers.get("sec-fetch-site") === "cross-site" && !isTopLevelNavigation(req)) return "cross-site request"
+  const websocket = req.headers.get("upgrade")?.toLowerCase() === "websocket"
+  if (websocket && !o.proxied && !sameOriginOk(req, ...o.appOrigins)) return "socket from another origin"
+  return undefined
+}
+
+function isTopLevelNavigation(req: Request): boolean {
+  const dest = req.headers.get("sec-fetch-dest")
+  return req.headers.get("sec-fetch-mode") === "navigate" && (dest === null || dest === "document") &&
+    (req.method === "GET" || req.method === "HEAD")
+}
+
 // CSRF guard (defense-in-depth). SameSite=Lax is the primary defense — it stops
 // the browser from attaching cmux_token to a cross-site POST at all, so a forged
 // request arrives with no cookie and fails auth anyway. On top of that: if an
