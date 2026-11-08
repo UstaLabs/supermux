@@ -48,7 +48,7 @@ export function listBranches(workdir: string): BranchList {
   // "origin" depending on git version — drop /HEAD suffixes and slash-less names.
   const remotes = git(workdir, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"])
   const remote = !remotes.ok || !remotes.out ? [] : remotes.out.split("\n").map((s) => s.trim())
-    .filter((n) => n && n.includes("/") && !n.endsWith("/HEAD"))
+    .filter((n) => n && n.includes("/") && !n.endsWith("/HEAD")) // platform-ok: a git ref name, /-separated on every OS
 
   return { repoRoot, current, detachedSha, local, remote }
 }
@@ -108,7 +108,7 @@ export function switchBranch(workdir: string, name: string, opts?: { create?: bo
     return r.ok ? { status: "switched", branch: target } : classifySwitchFailure(r.out, target)
   }
   if (list.remote.includes(target)) {
-    const localName = target.slice(target.indexOf("/") + 1)
+    const localName = target.slice(target.indexOf("/") + 1) // platform-ok: a git ref name, /-separated on every OS
     const r = list.local.some((b) => b.name === localName)
       ? git(workdir, ["switch", localName])
       : git(workdir, ["switch", "-c", localName, "--track", target])
