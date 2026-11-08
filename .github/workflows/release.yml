@@ -87,7 +87,7 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.113"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.13"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -585,7 +585,7 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.113"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.13"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       # ── native artifacts: the client engine AND the host backend ────────────
@@ -782,7 +782,7 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.113"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.13"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - name: Test native Windows broker seams
@@ -925,7 +925,7 @@ jobs:
         id: ver
         working-directory: .
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.113"; fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.17.7-rc.13"; fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       # ── native artifacts: the client engine AND the host backend ────────────
