@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, earliestReset, freesAt, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -412,7 +412,7 @@ export class Core {
      * turn ends. False for a session on an isolated or Cursor account, or with an authProfile.
      */
     willSwitch: (sessionId: string): Promise<boolean> => {
-      const pending = this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId)
+      const pending = this.autoSwitch() && (this.switchQueue.has(sessionId) || this.limitSwitching.has(sessionId))
       const record = this.live.get(sessionId)?.snapshot()
       if (!pending || !record || record.authProfile !== undefined) return Promise.resolve(false)
       return this.operation(async () => {
@@ -639,7 +639,8 @@ export class Core {
       if (limited(windows) && this.inTurn.has(event.sessionId)) this.turnLimited.add(event.sessionId)
       // No turn runs, so background work (a subagent) hit the limit: the work it stopped continues after the switch.
       else if (limited(windows)) { this.lastTurnLimited.add(event.sessionId); this.backgroundLimited.add(event.sessionId) }
-      if (limited(windows) && this.autoSwitch()) {
+      // Queued without autoSwitch too: limitSwitch then only reports the wait for the reset (#92).
+      if (limited(windows)) {
         if (!this.switchQueue.has(event.sessionId)) this.switchQueue.set(event.sessionId, "limit")
         void this.limitSwitch(event.sessionId)
       }
@@ -691,10 +692,8 @@ export class Core {
       if (!limited(this.usage.get(account) ?? [])) {
         this.usage.set(account, [{ name: BALANCE_WINDOW, usedPercent: 100, resetsAt: new Date(Date.now() + BALANCE_RETRY_MS) }])
       }
-      if (this.autoSwitch()) {
-        if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
-        void this.limitSwitch(id)
-      }
+      if (!this.switchQueue.has(id)) this.switchQueue.set(id, "limit")
+      void this.limitSwitch(id)
       return
     }
     const detail = (error as { data?: { message?: unknown } | null }).data?.message
@@ -728,8 +727,9 @@ export class Core {
    */
   private async switchTarget(agent: string, account: string | undefined): Promise<{ from: string; next: Account | undefined } | undefined> {
     const from = account ?? systemAccountId(agent)
+    // A session whose account was removed can still move to a registered one.
     const current = await this.registry.get(from)
-    if (!current || !switchable(current)) return undefined
+    if (current && !switchable(current)) return undefined
     const candidates = (await this.registry.list(agent)).filter(candidate => candidate.id !== from)
     return { from, next: pickAccount(candidates, id => this.usage.get(id), Date.now(), id => this.usage.unavailable(id) !== undefined) }
   }
@@ -752,11 +752,12 @@ export class Core {
       const queued = record.pending > 0
       // Read before the switch reopens the agent, which stops subagents still running.
       const background = this.backgroundLimited.delete(id) || live.subagents().some(sub => sub.status === "running")
-      const target = await this.switchTarget(record.agent, record.account)
-      if (!target) return
-      const { from, next } = target
+      // Without autoSwitch, or on an account that is never switched (isolated, Cursor), there is no target.
+      const target = this.autoSwitch() ? await this.switchTarget(record.agent, record.account) : undefined
+      const next = target?.next
       if (!next) {
-        this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: from, reason })
+        if (target) this.events.emit({ type: "account.exhausted", sessionId: id, agent: record.agent, account: target.from, reason })
+        if (reason === "limit" && this.lastTurnLimited.delete(id)) await this.reportWait(id, record, target !== undefined, background)
         return
       }
       const session = await this.resume(id, { account: next.id }, reason)
@@ -775,6 +776,19 @@ export class Core {
       this.switching.delete(id)
       this.limitSwitching.delete(id)
     }
+  }
+
+  /**
+   * account.waiting for a session stopped on a limit: when switching is allowed, the account of the agent
+   * that frees up first; otherwise its own account. Without a known reset time, its own account, no time.
+   */
+  private async reportWait(id: string, record: SessionRecord, anyAccount: boolean, background: boolean): Promise<void> {
+    const own = record.account ?? systemAccountId(record.agent)
+    const now = Date.now()
+    const first = anyAccount
+      ? earliestReset(await this.registry.list(record.agent), account => this.usage.get(account), now, account => this.usage.unavailable(account) !== undefined)
+      : (at => at && { account: own, at })(freesAt(this.usage.get(own) ?? [], now))
+    this.events.emit({ type: "account.waiting", sessionId: id, agent: record.agent, account: first?.account ?? own, ...(first ? { resetsAt: first.at } : {}), background })
   }
 
   /** Token accounts whose vault can refresh: reopen the session when its token nears expiry (see refreshSession). */
