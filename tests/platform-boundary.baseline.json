@@ -184,10 +184,6 @@
     "packages/supermux-core/src/accounts/login.ts": 1,
     "packages/supermux-core/src/codex/catalog.ts": 1,
     "packages/supermux-core/src/keeper/client.ts": 1,
-    "packages/supermux-core/src/keeper/keeper.ts": 1,
-    "src/core/git/requirement.ts": 1,
-    "src/core/power/keep-awake.ts": 1,
-    "src/core/windows/user-install.ts": 1,
-    "src/main.ts": 2
+    "packages/supermux-core/src/keeper/keeper.ts": 1
   }
 }
