@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore, memoryVault } from "../src/index.js"
+import { UsageStore } from "../src/accounts/index.js"
 import { parseAntigravityLoginUrl, removeAntigravityLoginLeftovers, parseDeviceAuth, parseLoginUrl, ptyCommand, windowsLoginArgv, spawnConptyLogin } from "../src/accounts/index.js"
 import { loginPlan, unlinkLink } from "../src/accounts/login.js"
 import { proc } from "@supermux/platform"
@@ -22,7 +23,7 @@ const driver = (id: string): AgentDriver => ({ id, async open() { throw new Erro
 type Identity = { email?: string; org?: string; accountId?: string }
 const IDENTITY: Identity = { email: "new@x.io", org: "org-new", accountId: "acct-new" }
 
-async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner; schedule?: LoginConfig["schedule"] } = {}) {
+async function setup(options: { behavior?: string; identity?: Identity; timeoutMs?: number; runner?: LoginRunner; schedule?: LoginConfig["schedule"]; usage?: UsageStore } = {}) {
   const base = await mkdtemp(join(tmpdir(), "accounts-login-"))
   dirs.push(base)
   const log = join(base, "cli.log")
@@ -39,7 +40,7 @@ async function setup(options: { behavior?: string; identity?: Identity; timeoutM
   const vault = memoryVault()
   const core = createCore({
     stateDirectory, agents: ["claude", "codex", "grok", "cursor", "opencode", "antigravity"].map(driver), limits: TEST_LIMITS,
-    accounts: { vault, homes: roots, login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}), ...(options.schedule ? { schedule: options.schedule } : {}) } },
+    accounts: { vault, homes: roots, ...(options.usage ? { usage: options.usage } : {}), login: { commands, ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.runner ? { runner: options.runner } : {}), ...(options.schedule ? { schedule: options.schedule } : {}) } },
   })
   cores.push(core)
   const pending = join(stateDirectory, "accounts", "pending")
@@ -429,4 +430,41 @@ test("injectable runner receives the spawn plan; core close cancels running logi
   expect(killed).toBe(true)
   await expect(handle.done).rejects.toMatchObject({ code: "login_cancelled" })
   expect(await empty(pending)).toBe(true)
+})
+
+test("signing in again as an account's identity repairs that account in place: same id, new credential, one home (#106)", async () => {
+  const usageDir = await mkdtemp(join(tmpdir(), "accounts-login-usage-"))
+  dirs.push(usageDir)
+  const usage = new UsageStore(join(usageDir, "usage.json"))
+  const { core, stateDirectory, pending, roots } = await setup({ usage })
+  const first = core.accounts.login({ agent: "claude", id: "cl", label: "Work" })
+  await phase(first, "awaiting_user")
+  first.submitCode("GOOD-CODE")
+  await first.done
+  const home = join(stateDirectory, "accounts", "homes", "claude", "cl")
+  await writeFile(join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "dead", refreshToken: "dead" } }))
+  await writeFile(join(home, "private-note"), "kept")
+  usage.markUnavailable("cl", "OAuth session expired and could not be refreshed", new Date(), "account_expired")
+  const again = core.accounts.login({ agent: "claude" })
+  await phase(again, "awaiting_user")
+  again.submitCode("GOOD-CODE")
+  const repaired = await again.done
+  expect(repaired).toMatchObject({ id: "cl", label: "Work", method: "subscription", identity: { accountId: "acct-new" } })
+  expect((await core.accounts.list("claude")).map(a => a.id)).toEqual(["claude:system", "cl"])
+  expect(JSON.parse(await readFile(join(home, ".credentials.json"), "utf8")).claudeAiOauth.accessToken).not.toBe("dead")
+  expect(await readFile(join(home, "private-note"), "utf8")).toBe("kept")
+  expect(await readlink(join(home, "projects"))).toBe(join(roots.claudeRoot, "projects"))
+  expect(await readdir(join(stateDirectory, "accounts", "homes", "claude"))).toEqual(["cl"])
+  expect(await empty(pending)).toBe(true)
+  expect(core.accounts.unavailable("cl")).toBeUndefined()
+})
+
+test("a token login of a token account's identity replaces its vault secret, same id (#106)", async () => {
+  const { core, vault } = await setup()
+  await core.accounts.login({ agent: "codex", id: "ct", as: "token" }).done
+  await vault.put("ct", JSON.stringify({ ...JSON.parse((await vault.get("ct"))!), refresh_token: "dead" }))
+  const repaired = await core.accounts.login({ agent: "codex", as: "token" }).done
+  expect(repaired.id).toBe("ct")
+  expect(JSON.parse((await vault.get("ct"))!).refresh_token).not.toBe("dead")
+  expect((await core.accounts.list("codex")).map(a => a.id)).toEqual(["codex:system", "ct"])
 })

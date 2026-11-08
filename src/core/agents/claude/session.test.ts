@@ -323,3 +323,25 @@ test("claude: resume of a never-started row starts fresh under the row's account
     expect(child.opens.at(-1)?.resumeId).toBeUndefined()
     await adapter.stop()
 })
+
+// Card #106: a row on the system login (account NULL) names it, so the Core record's old account (removed) never wins.
+test("claude: resume of a row on the system login registers the system account explicitly", async () => {
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const accounts: unknown[] = []
+    const register = host.register.bind(host)
+    host.register = ((r: Parameters<typeof register>[0]) => {
+      accounts.push(r.account)
+      const { account: _skip, ...rest } = r
+      return register(rest)
+    }) as typeof host.register
+    const workdir = mkdtempSync(join(tmpdir(), "mux-claude-sys-"))
+    dirs.push(workdir)
+    const { adapter } = await resume(
+      { sessionEffort: () => undefined, resolveAttachment: async () => "", persistAgentSessionId: () => {}, claudeHost: host },
+      { id: "on-system", workdir, agent_home: join(workdir, ".home"), account: null } as never,
+      "on-system",
+    )
+    expect(accounts).toEqual(["claude:system"])
+    await adapter.stop()
+})

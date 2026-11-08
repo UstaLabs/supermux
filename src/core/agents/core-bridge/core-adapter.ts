@@ -1238,6 +1238,10 @@ export class CoreAdapter extends EventEmitter implements AgentAdapter {
       this.emit("account", { kind: "account", event: "exhausted", account: event.account, reason: event.reason })
       return
     }
+    if (event.type === "account.waiting") {
+      this.emit("account", { kind: "account", event: "waiting", account: event.account, ...(event.resetsAt ? { resetsAt: event.resetsAt } : {}), background: event.background })
+      return
+    }
     if (event.type === "account.unavailable") {
       this.emit("account", { kind: "account", event: "unavailable", account: event.account, reason: event.reason })
       return
