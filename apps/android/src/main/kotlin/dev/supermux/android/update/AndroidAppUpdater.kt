@@ -145,6 +145,12 @@ class AndroidAppUpdater(
             return@withContext null
         }
         DownloadedInstaller(location = apk.absolutePath, kind = "apk")
+        } catch (e: CancellationException) {
+            // Cancelled from the activity bar (the DownloadCenter cancels this job), or the caller went away: the
+            // ongoing progress notification has nothing left to show, and being ongoing it cannot be swiped away.
+            // It must not turn the cancellation into some other failure, hence the runCatching.
+            runCatching { AppUpdateNotifier.cancel(appContext) }
+            throw e
         } finally {
             // Navigating away cancels this coroutine mid-transfer; without this the phase would
             // stay Downloading forever and both CTAs stay disabled behind a frozen percentage.

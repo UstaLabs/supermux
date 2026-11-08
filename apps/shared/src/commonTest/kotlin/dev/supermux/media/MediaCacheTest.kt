@@ -3,10 +3,14 @@ package dev.supermux.media
 import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.proto.Attachment
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -105,6 +109,26 @@ class MediaCacheTest {
         assertEquals(1, fetches)
     }
 
+    // #95: a chat row awaits this from its own scope, and leaving the chat cancels that caller. The
+    // download itself runs on the cache's scope and must finish, so the file is there next time.
+    @Test fun aDownloadOutlivesTheCallerThatStartedIt() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val gate = CompletableDeferred<Unit>()
+        val slow: RangeDownload = { from, to, sink ->
+            gate.await()
+            rangeServer(png)(from, to, sink)
+        }
+        val cache = cache(store)
+        val caller = launch { cache.bytes(host, att(), Network(null).fetch, slow) }
+        runCurrent()
+        caller.cancel()
+        gate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertTrue(caller.isCancelled)
+        assertContentEquals(png, store.entries["$host/$id.png"])
+        assertContentEquals(png, cache.peek(host, att()))
+    }
+
     @Test fun aFailedDownloadIsNullAndKeepsNothing() = runTest {
         val store = FakeMediaStore(hasFiles = true)
         val cache = cache(store)
@@ -188,6 +212,138 @@ class MediaCacheTest {
         val store = FakeMediaStore(hasFiles = true)
         assertNull(cache(store).playableUri(host, att(), { _, _, _ -> null }))
         assertTrue(store.entries.isEmpty())
+    }
+
+    // ── Files for a download that outlives its screen (#95) ─────────────────────────────
+
+    @Test fun aFileDownloadIsStoredWithoutPassingThroughMemory() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val got = assertNotNull(cache.file(host, att(), rangeServer(png)))
+        assertEquals("/cache/$host/$id.png", got.path)
+        assertEquals(5L, got.size)
+        assertNull(cache.peek(host, att()), "never read into the memory tier")
+    }
+
+    @Test fun aStoredFileIsAnsweredWithoutTheNetwork() = runTest {
+        val store = FakeMediaStore(hasFiles = true).apply { entries["$host/$id.png"] = png }
+        val got = assertNotNull(cache(store).file(host, att(), { _, _, _ -> error("no network") }))
+        assertEquals("/cache/$host/$id.png", got.path)
+        assertEquals(5L, got.size)
+    }
+
+    @Test fun aCallerThatJoinsARunningDownloadSeesItsProgress() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val gate = CompletableDeferred<Unit>()
+        val slow: RangeDownload = { from, to, sink ->
+            if (from > 0) gate.await()
+            rangeServer(png)(from, to, sink)
+        }
+        val video = async { cache.playableUri(host, att(), slow) }
+        runCurrent()
+        val seen = mutableListOf<Long>()
+        val file = async { cache.file(host, att(), slow) { r, _ -> seen += r } }
+        runCurrent()
+        gate.complete(Unit)
+        assertNotNull(file.await())
+        assertNotNull(video.await())
+        assertEquals(4L, seen.first(), "a caller that joins hears at once where the transfer already is")
+        assertEquals(5L, seen.last())
+    }
+
+    @Test fun aFailedFileDownloadResumesWhereItStopped() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val calls = mutableListOf<Pair<Long, Long>>()
+        val firstRangeOnly: RangeDownload = { from, to, sink -> if (from == 0L) rangeServer(png, calls)(from, to, sink) else null }
+        assertNull(cache.file(host, att(), firstRangeOnly))
+        assertEquals(4, store.partials["$host/$id.png"]?.size)
+        assertNotNull(cache.file(host, att(), rangeServer(png, calls)))
+        assertEquals(4L, calls.last().first, "the retry asked only for the rest")
+        assertContentEquals(png, store.entries["$host/$id.png"])
+    }
+
+    @Test fun cancelStopsTheDownloadKeepsItsBytesAndWaitersSeeNull() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val gate = CompletableDeferred<Unit>()
+        val stalls: RangeDownload = { from, to, sink ->
+            if (from > 0) gate.await()
+            rangeServer(png)(from, to, sink)
+        }
+        val waiting = async { cache.file(host, att(), stalls) }
+        val video = async { cache.playableUri(host, att(), stalls) }
+        runCurrent()
+        cache.cancelFile(host, id)
+        assertNull(waiting.await())
+        assertEquals(4, store.partials["$host/$id.png"]?.size)
+        assertNull(video.await(), "a clip waiting on the same transfer hears null, not a cancellation")
+    }
+
+    @Test fun aCancelBeforeTheTransferStartsStillStopsIt() = runTest {
+        val cache = cache(FakeMediaStore(hasFiles = true))
+        val calls = mutableListOf<Pair<Long, Long>>()
+        // Undispatched: the call has made the download's slot, whose transfer has not begun yet.
+        val waiting = async(start = CoroutineStart.UNDISPATCHED) { cache.file(host, att(), rangeServer(png, calls)) }
+        cache.cancelFile(host, id)
+        assertNull(waiting.await())
+        assertEquals(emptyList(), calls, "nothing was asked for")
+        assertNotNull(cache.file(host, att(), rangeServer(png)), "a cancelled download can be started again")
+    }
+
+    @Test fun anOverlongPartialIsDiscardedAndDownloadedAgain() = runTest {
+        val store = FakeMediaStore(hasFiles = true).apply { partials["$host/$id.png"] = ByteArray(9) }
+        assertNotNull(cache(store).file(host, att(), rangeServer(png)))
+        assertContentEquals(png, store.entries["$host/$id.png"])
+    }
+
+    @Test fun noCallerSeesMoreBytesThanTheFileHolds() = runTest {
+        // A kept partial of 9 bytes for a 5-byte file: the first answer reports 9 of 5 just before it is thrown away.
+        val store = FakeMediaStore(hasFiles = true).apply { partials["$host/$id.png"] = ByteArray(9) }
+        val cache = cache(store)
+        val seen = mutableListOf<Pair<Long, Long?>>()
+        // Unconfined, so the caller hears every value the download passes through, not only the latest.
+        withContext(UnconfinedTestDispatcher(testScheduler)) {
+            assertNotNull(cache.file(host, att(), rangeServer(png)) { r, t -> seen += r to t })
+        }
+        assertTrue(seen.none { (r, t) -> t != null && r > t }, "seen: $seen")
+        assertEquals(5L to 5L, seen.last())
+    }
+
+    @Test fun aDownloadThatStopsAfterAClearKeepsNothing() = runTest {
+        val store = FakeMediaStore(hasFiles = true)
+        val cache = cache(store)
+        val gate = CompletableDeferred<Unit>()
+        val dropsAfterTheGate: RangeDownload = { from, to, sink ->
+            if (from > 0) {
+                gate.await()
+                null
+            } else {
+                rangeServer(png)(from, to, sink)
+            }
+        }
+        val seen = mutableListOf<Long>()
+        val waiting = async { cache.file(host, att(), dropsAfterTheGate) { r, _ -> seen += r } }
+        runCurrent()
+        assertEquals(4L, seen.lastOrNull(), "the first range arrived before the Clear")
+        cache.clear()
+        gate.complete(Unit)
+        assertNull(waiting.await())
+        assertTrue(store.partials.isEmpty(), "a cleared cache keeps no partial: ${store.partials.keys}")
+    }
+
+    @Test fun aStoreThatCannotKeepAPartialStillGetsTheFile() = runTest {
+        val store = FakeMediaStore(hasFiles = true, resumable = false)
+        val seen = mutableListOf<Long>()
+        val got = assertNotNull(cache(store).file(host, att(), rangeServer(png)) { r, _ -> seen += r })
+        assertEquals(5L, got.size)
+        assertContentEquals(png, store.entries["$host/$id.png"])
+        assertEquals(5L, seen.last())
+    }
+
+    @Test fun theWebHasNoFileDownload() = runTest {
+        assertNull(cache(FakeMediaStore(hasFiles = false)).file(host, att(), rangeServer(png)))
     }
 
     // ── Seeding, clear, forget host, size ───────────────────────────────────────────────

@@ -20,6 +20,12 @@ interface MediaStore {
     /** A URI the platform's media player opens, or null when there is no such entry. */
     suspend fun uri(key: MediaKey): String?
 
+    /** The stored entry's absolute path, or null when there is none or entries are not files. */
+    suspend fun path(key: MediaKey): String? = null
+
+    /** How many bytes the stored entry holds, or null when there is none or entries are not files. */
+    suspend fun size(key: MediaKey): Long? = null
+
     suspend fun write(key: MediaKey, bytes: ByteArray): Boolean
 
     /**
@@ -29,6 +35,9 @@ interface MediaStore {
      */
     suspend fun writeStream(key: MediaKey, fill: suspend (append: suspend (ByteArray, Int) -> Unit) -> Boolean): Boolean
 
+    /** Start, or continue after a [ResumableWrite.retain], a write of [key]. Null where entries are not files. */
+    suspend fun openResumable(key: MediaKey): ResumableWrite? = null
+
     suspend fun delete(key: MediaKey)
 
     suspend fun removeHost(host: String)
@@ -36,6 +45,28 @@ interface MediaStore {
     suspend fun clear()
 
     suspend fun sizeBytes(): Long
+}
+
+/**
+ * One write of a store entry that can stop and continue later (#95's Retry resumes a download where it
+ * stopped). Exactly one of [commit], [retain] or [abandon] ends it; later calls do nothing. What it holds is
+ * never an entry: a reader sees a whole file or none, as with [MediaStore.writeStream].
+ */
+interface ResumableWrite {
+    /** Bytes kept from an earlier attempt, which this write continues after. */
+    val offset: Long
+
+    /** Add the first [n] bytes of [buf]; the caller may reuse the buffer once this returns. */
+    suspend fun append(buf: ByteArray, n: Int)
+
+    /** Move what was written into place as the entry. False when it could not be (nothing is left behind). */
+    suspend fun commit(): Boolean
+
+    /** Keep what was written for the next [MediaStore.openResumable] of the same key. */
+    suspend fun retain()
+
+    /** Delete what was written. */
+    suspend fun abandon()
 }
 
 /** A store that keeps nothing — the memory tier is all there is. */

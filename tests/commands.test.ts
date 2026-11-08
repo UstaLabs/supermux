@@ -351,6 +351,26 @@ describe("proxy commands", () => {
     expect(proxies[0]?.domain).toMatch(/^px-[0-9a-f]{8}$/)
   })
 
+  test("/proxy zoom 3000 5173 refuses a digits-only name: /p/<digits>/ means a port", async () => {
+    const result = await handleSlash({ command: "proxy", rest: "zoom 3000 5173" }, ctx)
+    expect(result.text).toBe("proxy failed: proxy names can't be only digits: /p/5173/ means a port")
+    expect(r.listProxies()).toEqual([])
+  })
+
+  test("/proxy zoom 3000 px-1234 still works: digits plus anything else is a fine name", async () => {
+    const result = await handleSlash({ command: "proxy", rest: "zoom 3000 px-1234" }, ctx)
+    expect(result.text).toContain("proxy created")
+    expect(r.getProxy("px-1234")?.port).toBe(3000)
+  })
+
+  test("/proxy refuses the broker's own port", async () => {
+    r.refuseProxyPort(9898)
+    const result = await handleSlash({ command: "proxy", rest: "zoom 9898 app" }, ctx)
+    expect(result.text).toBe("proxy failed: can't expose port 9898: that is the broker itself")
+    expect(r.listProxies()).toEqual([])
+    expect((await handleSlash({ command: "proxy", rest: "zoom 9899 app" }, ctx)).text).toContain("proxy created")
+  })
+
   test("/proxy nope 3000 rejects unknown session", async () => {
     const result = await handleSlash({ command: "proxy", rest: "nope 3000 myapp" }, ctx)
     expect(result.text).toMatch(/no such session/)

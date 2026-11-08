@@ -12,6 +12,7 @@ import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
 
 /** Slash commands: what the session's grok reported (initialize, available_commands_update), kept on its adapter. */
 export function commandContext(ctx: CommandContextCtx): ReportedCommandsCtx {
@@ -297,6 +298,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onGrokSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       grokHost: ctx.grokHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), agent_session_id: session.agent_session_id, account: session.account ?? systemAccountId("grok"), permissionMode: session.permissionMode ?? undefined },
   )
 }

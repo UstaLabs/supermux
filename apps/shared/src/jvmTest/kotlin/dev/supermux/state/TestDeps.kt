@@ -27,4 +27,5 @@ fun testDeps(
     settings: SettingsStore = FakeSettingsStore(),
     clock: Clock = FixedClock(),
     media: dev.supermux.media.MediaCache? = null,
-) = HostStoreDeps(httpFactory = { http }, settings = settings, clock = clock, media = media)
+    browserDownload: BrowserDownload? = null,
+) = HostStoreDeps(httpFactory = { http }, settings = settings, clock = clock, media = media, browserDownload = browserDownload)

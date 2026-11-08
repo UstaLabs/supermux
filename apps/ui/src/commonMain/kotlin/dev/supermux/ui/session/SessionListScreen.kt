@@ -160,6 +160,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.work.DownloadsBar
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.workspace.ProjectRef
@@ -2398,8 +2399,10 @@ private fun NavItem(label: String, icon: ImageVector, tag: String, onClick: () -
 }
 
 /**
- * The sticky sidebar footer: the host switch on the left; theme / usage / devices / settings on
- * the right.
+ * The sticky sidebar footer — the same bar on a phone's Home and on a desktop: the host switch on
+ * the left; theme / usage / devices / settings on the right, and before them, while anything is
+ * listed, the downloads' ring (#95, design A) and a hairline. [card] stands on the bar, above its
+ * sheet: the update card's place. The list the ring opens stands on both.
  *
  * A slot rather than parameters on the screen — usage is an anchored popover whose body only the
  * shell can build, and so is the host switch ([hostSwitcher]), which reaches the fleet.
@@ -2415,47 +2418,68 @@ fun SessionListFooter(
     onUsageDismiss: () -> Unit = {},
     usageContent: (@Composable () -> Unit)? = null,
     hostSwitcher: (@Composable () -> Unit)? = null,
+    card: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     // The icon shows what you'll switch TO: sun when dark, moon when light.
     val darkNow = appearance != AppearanceMode.LIGHT
     val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
     val themeLabel = if (darkNow) "Switch to light theme" else "Switch to dark theme"
-    // The sidebar's bottom part is a sheet like the panes': the chat's tone, rounded, in the frame's
-    // 6 dp gutter — so its bottom edge lines up with theirs, and no rule sets it off.
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(cs.surfaceContainerLow),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .testTag("sidebar_footer")
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-        ) {
-            if (hostSwitcher != null) {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { hostSwitcher() }
-            }
-            FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
-            Box {
-                FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
-                if (usageContent != null) {
-                    UsagePopover(
-                        expanded = usageOpen,
-                        onDismissRequest = onUsageDismiss,
-                        content = usageContent,
-                    )
+    DownloadsBar { downloads ->
+        Column(Modifier.fillMaxWidth()) {
+            card?.invoke()
+            // The sidebar's bottom part is a sheet like the panes': the chat's tone, rounded, in the
+            // frame's 6 dp gutter — so its bottom edge lines up with theirs, and no rule sets it off.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(cs.surfaceContainerLow),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag("sidebar_footer")
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    if (hostSwitcher != null) {
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { hostSwitcher() }
+                    }
+                    if (downloads != null) {
+                        downloads()
+                        FooterRule()
+                    }
+                    FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
+                    Box {
+                        FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+                        if (usageContent != null) {
+                            UsagePopover(
+                                expanded = usageOpen,
+                                onDismissRequest = onUsageDismiss,
+                                content = usageContent,
+                            )
+                        }
+                    }
+                    FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
+                    FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
                 }
             }
-            FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
-            FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
         }
     }
+}
+
+/** The hairline between the downloads' ring and the bar's own icons. */
+@Composable
+private fun FooterRule() {
+    Box(
+        Modifier
+            .padding(horizontal = 5.dp)
+            .size(width = 1.dp, height = 14.dp)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.85f)),
+    )
 }
 
 @Composable

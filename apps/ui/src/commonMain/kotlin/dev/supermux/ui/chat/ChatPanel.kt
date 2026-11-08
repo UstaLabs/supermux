@@ -138,6 +138,10 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.workingBaseLabel
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.LocalShortcutDispatcher
+import dev.supermux.ui.keys.RegisterCommand
+import dev.supermux.ui.keys.matchesKey
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
@@ -974,16 +978,22 @@ fun ChatPanel(
     // stages into the composer through the same funnel (the card highlights while dragging).
     val dropState = remember(session.id) { ComposerDropState() }
 
+    // ⌘F / Ctrl+F: this chat's find bar, also right after a click in the transcript (which leaves no focus).
+    // Not while another panel is on top (Android's chat tabs keep it composed, hidden): the key is that panel's.
+    RegisterCommand(AppCommands.Find, enabled = active) { find.show(); true }
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
             .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
-            .onPreviewKeyEvent { event ->
-                if (!isFindChord(event)) return@onPreviewKeyEvent false
-                find.show()
-                true
-            }
+            // Hosts without a ShortcutRoot (the assistant overlay) keep the chat's own ⌘F.
+            .then(
+                if (LocalShortcutDispatcher.current == null) {
+                    Modifier.onPreviewKeyEvent { if (AppCommands.Find.matchesKey(it)) { find.show(); true } else false }
+                } else {
+                    Modifier
+                },
+            )
             .externalFileDropTarget(
                 enabled = actions.upload != null,
                 onDragOver = { dropState.dragOver = it },

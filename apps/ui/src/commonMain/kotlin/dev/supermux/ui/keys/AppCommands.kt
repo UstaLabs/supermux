@@ -22,15 +22,17 @@ object AppCommands {
     val NewTerminal = AppCommand("workspace.newTerminal", "New terminal tab", CommandGroup.Workspace)
     val ToggleSidebar = AppCommand("sidebar.toggle", "Show or hide the sidebar", CommandGroup.General)
     val GoToFile = AppCommand("files.goTo", "Go to file", CommandGroup.Files)
-    val FindInChat = AppCommand("chat.find", "Find in chat", CommandGroup.Chat)
+    /** Find in the focused thing: a chat registers its find bar, and any other view (a browser page) its own. */
+    val Find = AppCommand("find", "Find", CommandGroup.General)
     val OpenSettings = AppCommand("settings.open", "Settings", CommandGroup.General)
     val ShowShortcuts = AppCommand("shortcuts.show", "Keyboard shortcuts", CommandGroup.General)
     val PasteImage = AppCommand("composer.pasteImage", "Paste an image into the message", CommandGroup.Chat)
     val SplitRight = AppCommand("workspace.splitRight", "Split right (a new column)", CommandGroup.Workspace)
     val SplitDown = AppCommand("workspace.splitDown", "Split down (a new row)", CommandGroup.Workspace)
+    val CloseTab = AppCommand("tab.close", "Close tab", CommandGroup.Workspace)
 
     val all: List<AppCommand> = listOf(
-        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, FindInChat,
-        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown,
+        NewSession, MoveToNewWindow, NewTerminal, ToggleSidebar, GoToFile, Find,
+        OpenSettings, ShowShortcuts, PasteImage, SplitRight, SplitDown, CloseTab,
     )
 }

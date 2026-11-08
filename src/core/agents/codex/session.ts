@@ -13,6 +13,7 @@ import { STATE_DIR, homeDirName } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
+import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
  * A session uses its own adapter's client; a launcher preview (no session of
@@ -321,6 +322,6 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       onThreadId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
       codexHost: ctx.codexHost,
     },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? undefined, permissionMode: session.permissionMode ?? undefined },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: ctx.sessionEffort(session), fast: ctx.sessionFast?.(session) ?? false, agent_session_id: session.agent_session_id, account: session.account ?? systemAccountId("codex"), permissionMode: session.permissionMode ?? undefined },
   )
 }

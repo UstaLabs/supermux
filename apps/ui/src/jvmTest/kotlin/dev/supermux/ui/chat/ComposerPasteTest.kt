@@ -18,6 +18,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.ui.keys.KeyOs
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.PickedFile
 import java.io.File
@@ -36,13 +37,15 @@ import kotlin.test.assertTrue
  */
 @OptIn(ExperimentalTestApi::class)
 class ComposerPasteTest {
+    private val mod = if (dev.supermux.editor.compose.isApplePlatform) Key.MetaLeft else Key.CtrlLeft
+    private val otherMod = if (dev.supermux.editor.compose.isApplePlatform) Key.CtrlLeft else Key.MetaLeft
 
     // ── pure key predicate — Ctrl and Meta are DISTINCT flags ───────────────────
     @Test fun pasteKey_ctrlV_down_isPaste() {
         assertTrue(
             isComposerPasteKey(
                 Key.V, KeyEventType.KeyDown,
-                ctrlPressed = true, metaPressed = false, shiftPressed = false,
+                ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             ),
         )
     }
@@ -51,7 +54,7 @@ class ComposerPasteTest {
         assertTrue(
             isComposerPasteKey(
                 Key.V, KeyEventType.KeyDown,
-                ctrlPressed = false, metaPressed = true, shiftPressed = false,
+                ctrlPressed = false, metaPressed = true, shiftPressed = false, os = KeyOs.Apple,
             ),
         )
     }
@@ -70,13 +73,13 @@ class ComposerPasteTest {
         assertFalse(
             isComposerPasteKey(
                 Key.V, KeyEventType.KeyDown,
-                ctrlPressed = true, metaPressed = false, shiftPressed = true,
+                ctrlPressed = true, metaPressed = false, shiftPressed = true, os = KeyOs.Other,
             ),
         )
         assertFalse(
             isComposerPasteKey(
                 Key.V, KeyEventType.KeyDown,
-                ctrlPressed = false, metaPressed = true, shiftPressed = true,
+                ctrlPressed = false, metaPressed = true, shiftPressed = true, os = KeyOs.Apple,
             ),
         )
     }
@@ -85,15 +88,21 @@ class ComposerPasteTest {
         assertFalse(
             isComposerPasteKey(
                 Key.C, KeyEventType.KeyDown,
-                ctrlPressed = true, metaPressed = false, shiftPressed = false,
+                ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             ),
         )
         assertFalse(
             isComposerPasteKey(
                 Key.V, KeyEventType.KeyUp,
-                ctrlPressed = true, metaPressed = false, shiftPressed = false,
+                ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             ),
         )
+    }
+
+    @Test fun pasteKey_theOtherFamily_isNotPaste() {
+        // Strict ⌘ on Apple / Ctrl elsewhere (#96): ⌃V on a Mac and Super+V on Linux are not paste-image.
+        assertFalse(isComposerPasteKey(Key.V, KeyEventType.KeyDown, ctrlPressed = true, metaPressed = false, os = KeyOs.Apple))
+        assertFalse(isComposerPasteKey(Key.V, KeyEventType.KeyDown, ctrlPressed = false, metaPressed = true, os = KeyOs.Other))
     }
 
     // ── handler decision: consume + stage only when bound AND the clipboard has an image ──
@@ -101,7 +110,7 @@ class ComposerPasteTest {
         var pasted = 0
         val consumed = handleComposerPasteKey(
             key = Key.V, type = KeyEventType.KeyDown,
-            ctrlPressed = true, metaPressed = false, shiftPressed = false,
+            ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             uploadBound = true, likelyHasImage = { true }, onPasteImage = { pasted++ },
         )
         assertTrue(consumed)
@@ -112,7 +121,7 @@ class ComposerPasteTest {
         var pasted = 0
         val consumed = handleComposerPasteKey(
             key = Key.V, type = KeyEventType.KeyDown,
-            ctrlPressed = false, metaPressed = true, shiftPressed = false,
+            ctrlPressed = false, metaPressed = true, shiftPressed = false, os = KeyOs.Apple,
             uploadBound = true, likelyHasImage = { true }, onPasteImage = { pasted++ },
         )
         assertTrue(consumed)
@@ -123,7 +132,7 @@ class ComposerPasteTest {
         var pasted = 0
         val consumed = handleComposerPasteKey(
             key = Key.V, type = KeyEventType.KeyDown,
-            ctrlPressed = true, metaPressed = false, shiftPressed = false,
+            ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             uploadBound = true, likelyHasImage = { false }, onPasteImage = { pasted++ },
         )
         assertFalse(consumed)
@@ -134,7 +143,7 @@ class ComposerPasteTest {
         var probeCalls = 0
         val consumed = handleComposerPasteKey(
             key = Key.A, type = KeyEventType.KeyDown,
-            ctrlPressed = true, metaPressed = false, shiftPressed = false,
+            ctrlPressed = true, metaPressed = false, shiftPressed = false, os = KeyOs.Other,
             uploadBound = true, likelyHasImage = { probeCalls++; true }, onPasteImage = {},
         )
         assertFalse(consumed)
@@ -169,7 +178,7 @@ class ComposerPasteTest {
         }
         onNodeWithTag("composer-input").performClick()
         onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) {
+            withKeyDown(mod) {
                 withKeyDown(Key.ShiftLeft) { pressKey(Key.V) }
             }
         }
@@ -193,7 +202,7 @@ class ComposerPasteTest {
         }
         onNodeWithTag("composer-input").performClick()
         onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.V) }
+            withKeyDown(mod) { pressKey(Key.V) }
         }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
@@ -201,10 +210,10 @@ class ComposerPasteTest {
         assertEquals(listOf("from-ctrl-v.png"), uploaded)
     }
 
-    /** Real Meta+V (macOS Cmd) — a distinct modifier, the same stage path. */
-    @Test fun metaV_keyEvent_stagesPasteImage() = runComposeUiTest {
+    /** The other modifier family (Super+V on Linux, ⌃V on a Mac) never stages: strict ⌘/Ctrl (#96). */
+    @Test fun theOtherModifier_V_doesNotStage() = runComposeUiTest {
         val uploaded = mutableListOf<String>()
-        val platform = FakePlatform().apply { clipboard.images = listOf(picked("from-meta-v.png")) }
+        val platform = FakePlatform().apply { clipboard.images = listOf(picked("from-other-v.png")) }
         setPlatformContent(platform) {
             Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
@@ -213,13 +222,10 @@ class ComposerPasteTest {
             )
         }
         onNodeWithTag("composer-input").performClick()
-        onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.MetaLeft) { pressKey(Key.V) }
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertEquals(listOf("from-meta-v.png"), uploaded)
+        onNodeWithTag("composer-input").performKeyInput { withKeyDown(otherMod) { pressKey(Key.V) } }
+        waitForIdle()
+        assertTrue(uploaded.isEmpty())
+        assertEquals(0, platform.clipboard.probes)
     }
 
     /**
@@ -239,7 +245,7 @@ class ComposerPasteTest {
         }
         onNodeWithTag("composer-input").performClick()
         onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.V) }
+            withKeyDown(mod) { pressKey(Key.V) }
         }
         waitForIdle()
         assertEquals(0, platform.clipboard.reads, "text-only Ctrl+V must not read clipboard images")

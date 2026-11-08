@@ -39,6 +39,7 @@ class DesktopAppUpdater(
 
     /** Quits the app (set by Main.kt): the Windows MSI upgrade needs our files released. */
     @Volatile var onQuitForInstaller: (() -> Unit)? = null
+
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
 
     /** Desktop packages carry no version CODE (that is Android's monotonic build counter). */

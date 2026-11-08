@@ -116,6 +116,7 @@ import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.work.rememberDownloads
 import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -228,6 +229,7 @@ internal fun ChatMediaViewerContent(
     val platform = LocalPlatform.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
+    val downloads = rememberDownloads()
     val latest by rememberUpdatedState(items)
     val dismiss by rememberUpdatedState(onDismiss)
     val pager = rememberPagerState(initialPage = remember { items.indexOfFirst { it.key == startKey }.coerceAtLeast(0) }) { items.size }
@@ -277,8 +279,12 @@ internal fun ChatMediaViewerContent(
         val item = current
         val handle = resolve(item)
         scope.launch {
+            val couldNot = { platform.notices.show("Couldn't download ${item.name}") }
+            // The FILE, through the fleet's downloads: closing the viewer lets go of it, and it waits in the bar.
+            if (startDownload(downloads, handle.media, handle.att, platform, pointer, onFailed = couldNot)) return@launch
+            // No download here (a host file, a preview): the bytes, as before.
             val bytes = handle.media.peek(handle.att) ?: runCatching { handle.media.bytes(handle.att) }.getOrNull()
-            if (bytes == null) platform.notices.show("Couldn't download ${item.name}")
+            if (bytes == null) couldNot()
             else saveOrOpenAttachment(platform, pointer, item.name, handle.att.mime, bytes)
         }
     }
