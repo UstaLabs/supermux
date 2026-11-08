@@ -4897,7 +4897,7 @@ if (webChannel) {
   await webChannel.start()
   registry.refuseProxyPort(webChannel.boundPort)
 }
-limitWaits.load()
+log.info("limit_waits_loaded", limitWaits.load())
 telemetry.start()
 {
   const t = telemetryState()

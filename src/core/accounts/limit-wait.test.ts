@@ -148,7 +148,7 @@ test("a restart re-arms saved waits; ones already due are spread out, not fired 
   const future = first.waits.wait("later", { account: "work", resetsAt: new Date(T0 + 300 * MIN), background: false })!
   // The broker was down past the reset.
   const after = harness({ file: first.file, now: T0 + 60 * MIN })
-  after.waits.load()
+  expect(after.waits.load()).toEqual({ armed: 1, due: 3 })
   expect(after.waits.list().map((w) => w.sessionId).sort()).toEqual(["a", "b", "c", "later"])
   const due = ["a", "b", "c"].map((id) => Date.parse(after.waits.get(id)!.resumeAt)).sort((x, y) => x - y)
   expect(due[0]).toBeGreaterThanOrEqual(T0 + 60 * MIN)
