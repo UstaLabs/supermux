@@ -60,10 +60,8 @@ src/core/agents/claude/core-host.prompts.test.ts | compares paths: Windows paths
 src/core/agents/claude/session.test.ts | 8.3 short name vs long name (tmpdir() vs realpath); first: "claude core spawn/resume dialect > PA spawn registers before" | #29
 src/core/agents/core-bridge/core-adapter.test.ts | never exits on Windows, killed after 300 s with no failure printed (CI run 41836718761) | #29 | hangs
 src/core/agents/detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "grok cred path is ~/.grok/auth.json" | #29
-src/core/agents/install.test.ts | never exits on Windows, killed by the timeout (run 41849291342) | #29 | hangs
 src/core/agents/instructions.test.ts | expected e/u/.mux/session_inboxes/7c1d2e9a-0000.jsonl" got  to: [\"<session-id>\"], text, interrupt })."; first: "the inbox block names the session id, its inbox file and mes" | #29
 src/core/agents/opencode/core-host.prompts.test.ts | compares paths: Windows paths (C:\…) where the test expects POSIX ones; first: "opencode ask mode writes per-tool ask permissions" | #29
-src/core/agents/opencode/provider-config.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "uses LOCALAPPDATA for native Windows opencode auth without c" | #29
 src/core/editor/changes.test.ts | untracked symlinks are never followed: Windows reports the link's size differently (11 vs 9); hidden until the lane's JUnit parse counted nested describe blocks | #29
 src/core/editor/repo-scanner-async.test.ts | expect(received).toEqual(expected); first: "scanReposAsync finds the same repos as scanRepos" | #29
 src/core/forge/credential-cli.test.ts | file locked or denied (EBUSY); first: "entrypoint: 'bun credential-cli.ts <id> get' prints creds fr" | #29
@@ -107,7 +105,6 @@ src/shared/preflight.test.ts | expected true got false; first: "missing tmux is 
 tests/agent-detect.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "authCredPath builds the per-kind credential paths" | #29
 tests/agent-rpc-internal-column.test.ts | file locked or denied (EBUSY); first: "sessions has an internal column defaulting to 0" | #29
 tests/agent-rpc-internal-hidden.test.ts | file locked or denied (EBUSY); first: "listVisible excludes internal sessions" | #29
-tests/agents/claude-auth.test.ts | expects / where Windows writes \ (or back): a POSIX path in the test or the code; first: "claudeCredentialsPath points at the file `claude login` writ" | #29
 tests/atomic-json.test.ts | asserts POSIX file modes (0600/0700); Windows reports 0666; first: "writeJsonAtomic uses 0o600 perms" | #29
 tests/boot-resumes-only-agents-e2e.test.ts | a Linux-only e2e harness: finds the keepers by reading /proc; first: "after a restart only the Agent runs; a message wakes a worker" | #78
 tests/broker-spawn-bind.test.ts | file locked or denied (EBUSY); first: "spawnSession binds the socket before opening the Core sessio" | #29
