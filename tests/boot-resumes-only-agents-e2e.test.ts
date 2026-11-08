@@ -5,7 +5,7 @@
 // - a restart under systemd, as `supermux setup` installs the broker (#29): its agents run on.
 // After either, only the Agent and a worker whose agent still runs have keepers; the other workers are asleep
 // (suspended) and the first message to one wakes it and gets the answer.
-import { afterAll, expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -19,7 +19,9 @@ const AGENT = "00000000-0000-4000-8000-0000000000a1"
 const WORKER_A = "00000000-0000-4000-8000-0000000000b1"
 const WORKER_B = "00000000-0000-4000-8000-0000000000b2"
 const fixtures: Fixture[] = []
-afterAll(async () => { for (const f of fixtures) await f.dispose() })
+// Each test's brokers, keepers and agents stop when it ends: one test's broker left running while the next one boots
+// competes with it on a small CI runner (a first boot that timed out at 60 s, run 42431421364).
+afterEach(async () => { for (const f of fixtures.splice(0)) await f.dispose() })
 
 function freePort(): number {
   const l = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } })
@@ -202,6 +204,13 @@ class Fixture {
   }
 
   async dispose(): Promise<void> {
+    // A child broker that does not answer when its test ends (it exited, or it never came up) says why, from its log.
+    if (this.broker && (await fetch(`${this.base}/me`).then((r) => r.status).catch(() => 0)) !== 401) {
+      const log = join(this.dir, `broker-${this.boots}.log`)
+      const exited = this.broker.exitCode ?? this.broker.signalCode
+      const tail = existsSync(log) ? readFileSync(log, "utf8").split("\n").slice(-40).join("\n") : "(no log)"
+      console.error(`the broker of ${this.dir} does not answer${exited != null ? ` (it exited: ${exited})` : ""}; the end of ${log}:\n${tail}`)
+    }
     if (this.broker) await this.stop("SIGTERM")
     if (this.unit) Bun.spawnSync(["systemctl", "--user", "stop", this.unit])
     // A unit's keepers (in scopes of their own) and their agents, by the pids their status records, for a test that
