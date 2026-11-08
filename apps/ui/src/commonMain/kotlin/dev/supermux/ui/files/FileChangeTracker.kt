@@ -8,6 +8,8 @@ package dev.supermux.ui.files
 import dev.supermux.fs.DirSnapshot
 import dev.supermux.fs.hostJoin
 import kotlin.time.TimeSource
+import dev.supermux.fs.sameHostPath
+import dev.supermux.fs.trimHostPath
 
 /**
  * Pure bookkeeping behind the workspace stale banner. Paths are ABSOLUTE host paths. Not
@@ -71,11 +73,10 @@ class FileChangeTracker(
      * that changed or disappeared since the last snapshot — each change reported once.
      */
     fun onSnapshot(dir: String, snap: DirSnapshot): List<String> {
-        val folder = if (dir.length > 1) dir.trimEnd('/') else dir
         val byName = snap.entries.associateBy { it.name }
         val out = ArrayList<String>()
         for (abs in tracked.keys.toList()) {
-            if (parentOf(abs) != folder) continue
+            if (parentOf(abs)?.let { sameHostPath(it, dir) } != true) continue
             val entry = byName[displayName(abs)]
             val now: Any = if (entry == null || entry.type == "dir") Missing else Seen(entry.mtime, entry.size)
             val base = tracked[abs]
@@ -99,4 +100,4 @@ private fun defaultClock(): () -> Long {
 }
 
 /** The absolute path of the workdir-relative [rel] (leading slash optional), in the workdir's separator. */
-fun absoluteInWorkdir(workdir: String, rel: String): String = hostJoin(trimEnd(workdir), rel)
+fun absoluteInWorkdir(workdir: String, rel: String): String = hostJoin(trimHostPath(workdir), rel)

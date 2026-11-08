@@ -1,6 +1,7 @@
 package dev.supermux.media
 
 import dev.supermux.chat.mimeFileExtension
+import dev.supermux.fs.fileNameOf
 
 /**
  * Where one cached attachment lives in a [MediaStore]: `<host>/<fileId>.<ext>` under its root.
@@ -44,7 +45,7 @@ private val EXTENSION = Regex("^[a-z0-9]{1,8}$")
  * a real one matters — and it can never carry a separator or a dot.
  */
 fun mediaExtension(name: String?, mime: String?): String {
-    val leaf = name?.substringAfterLast('/')?.substringAfterLast('\\')
+    val leaf = name?.let(::fileNameOf)
     val fromName = leaf?.takeIf { '.' in it }?.substringAfterLast('.')?.lowercase()
     if (fromName != null && EXTENSION.matches(fromName)) return fromName
     val fromMime = mimeFileExtension(mime)?.lowercase()

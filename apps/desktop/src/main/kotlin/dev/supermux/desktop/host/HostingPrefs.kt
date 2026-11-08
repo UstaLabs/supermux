@@ -79,7 +79,7 @@ class HostingPrefsStore(
         /** This user's store: hosting.json beside the app's other data, read from the old place until saved. */
         fun ofThisUser(): HostingPrefsStore = thisUser().let { (now, before) -> HostingPrefsStore(now, oldFile = before) }
 
-        private fun thisUser() = paths(DesktopOs.current, System::getenv, System.getProperty("user.home") ?: ".")
+        private fun thisUser() = paths(DesktopOs.current, System::getenv, SystemOsEnv.home.toString())
 
         /**
          * hosting.json beside the app's other data ([DesktopHostStores.defaultDir]: hosts, tokens, the

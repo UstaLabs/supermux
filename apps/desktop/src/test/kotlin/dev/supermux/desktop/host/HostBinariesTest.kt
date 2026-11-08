@@ -1,7 +1,7 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import dev.supermux.desktop.host.HostBinaries.Binary
-import dev.supermux.desktop.host.HostBinaries.Os
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.Path
@@ -22,36 +22,25 @@ class HostBinariesTest {
 
     private fun tmp(): Path = createTempDirectory("hostbins-test").also { it.toFile().deleteOnExit() }
 
-    // ── detectOs ────────────────────────────────────────────────────────────────────
-
-    @Test fun detectOsFromOsName() {
-        assertEquals(Os.LINUX, HostBinaries.detectOs("Linux"))
-        assertEquals(Os.MAC, HostBinaries.detectOs("Mac OS X"))
-        assertEquals(Os.MAC, HostBinaries.detectOs("Darwin"))
-        assertEquals(Os.WINDOWS, HostBinaries.detectOs("Windows 11"))
-        assertEquals(Os.OTHER, HostBinaries.detectOs("SunOS"))
-        assertEquals(Os.OTHER, HostBinaries.detectOs(null))
-    }
-
     // ── fileName: `.exe` on Windows for the exec'ables; tmux never on Windows ─────────
 
     @Test fun fileNamePerOs() {
-        assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, Os.LINUX))
-        assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, Os.MAC))
-        assertEquals("supermux-broker.exe", HostBinaries.fileName(Binary.Broker, Os.WINDOWS))
-        assertEquals("mux-sessiond.exe", HostBinaries.fileName(Binary.Sessiond, Os.WINDOWS))
-        assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, Os.MAC))
+        assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, DesktopOs.LINUX))
+        assertEquals("supermux-broker", HostBinaries.fileName(Binary.Broker, DesktopOs.MACOS))
+        assertEquals("supermux-broker.exe", HostBinaries.fileName(Binary.Broker, DesktopOs.WINDOWS))
+        assertEquals("mux-sessiond.exe", HostBinaries.fileName(Binary.Sessiond, DesktopOs.WINDOWS))
+        assertEquals("tmux", HostBinaries.fileName(Binary.Tmux, DesktopOs.MACOS))
         // The zmx bundle is staged flat and never suffixed: it exists on POSIX only.
-        assertEquals("zmx", HostBinaries.fileName(Binary.Zmx, Os.LINUX))
-        assertEquals("mux-zmx-helper", HostBinaries.fileName(Binary.ZmxHelper, Os.MAC))
-        assertEquals("zmx-manifest.json", HostBinaries.fileName(Binary.ZmxManifest, Os.LINUX))
+        assertEquals("zmx", HostBinaries.fileName(Binary.Zmx, DesktopOs.LINUX))
+        assertEquals("mux-zmx-helper", HostBinaries.fileName(Binary.ZmxHelper, DesktopOs.MACOS))
+        assertEquals("zmx-manifest.json", HostBinaries.fileName(Binary.ZmxManifest, DesktopOs.LINUX))
     }
 
     // ── isBundled: what each OS's image carries ───────────────────────────────────────
 
     @Test fun bundledSetPerOs() {
         // Linux/macOS host natively: broker, tmux and the zmx bundle ship.
-        for (os in listOf(Os.LINUX, Os.MAC)) {
+        for (os in listOf(DesktopOs.LINUX, DesktopOs.MACOS)) {
             assertTrue(HostBinaries.isBundled(Binary.Broker, os))
             assertTrue(HostBinaries.isBundled(Binary.Tmux, os))
             assertFalse(HostBinaries.isBundled(Binary.Sessiond, os))
@@ -62,15 +51,13 @@ class HostBinariesTest {
         }
         // Windows persistent terminals are sessiond's; a zmx in the MSI would be a second
         // backend claiming the same workspaces.
-        assertFalse(HostBinaries.isBundled(Binary.Zmx, Os.WINDOWS))
-        assertFalse(HostBinaries.isBundled(Binary.ZmxHelper, Os.WINDOWS))
-        assertFalse(HostBinaries.isBundled(Binary.ZmxManifest, Os.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.Zmx, DesktopOs.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxHelper, DesktopOs.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.ZmxManifest, DesktopOs.WINDOWS))
         // Windows: the native broker uses sessiond instead of tmux.
-        assertTrue(HostBinaries.isBundled(Binary.Broker, Os.WINDOWS))
-        assertTrue(HostBinaries.isBundled(Binary.Sessiond, Os.WINDOWS))
-        assertFalse(HostBinaries.isBundled(Binary.Tmux, Os.WINDOWS))
-        // Unknown OS ships nothing.
-        assertFalse(HostBinaries.isBundled(Binary.Broker, Os.OTHER))
+        assertTrue(HostBinaries.isBundled(Binary.Broker, DesktopOs.WINDOWS))
+        assertTrue(HostBinaries.isBundled(Binary.Sessiond, DesktopOs.WINDOWS))
+        assertFalse(HostBinaries.isBundled(Binary.Tmux, DesktopOs.WINDOWS))
     }
 
     // ── packaged detection off the Compose resources-dir system property ─────────────
@@ -99,7 +86,7 @@ class HostBinariesTest {
         val fakePath = mapOf("tmux" to Path.of("/usr/bin/tmux"))
         val bins = HostBinaries.resolve(
             stateDir = tmp(),
-            os = Os.LINUX,
+            os = DesktopOs.LINUX,
             resourcesDir = null,
             onPath = { fakePath[it] },
         )
@@ -116,7 +103,7 @@ class HostBinariesTest {
         Files.writeString(resDir.resolve("tmux"), "tmux-bytes")
         val stateDir = tmp()
 
-        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = DesktopOs.LINUX, resourcesDir = resDir, onPath = { null })
 
         assertNotNull(bins.binDir)
         assertNotNull(bins.brokerPath)
@@ -144,7 +131,7 @@ class HostBinariesTest {
         Files.writeString(binDir.resolve("frpc.exe.stamp"), "1:2")
         Files.writeString(binDir.resolve("frpc"), "old frpc")
 
-        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.WINDOWS, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = DesktopOs.WINDOWS, resourcesDir = resDir, onPath = { null })
 
         assertNotNull(bins.brokerPath)
         assertFalse(Files.exists(binDir.resolve("frpc.exe")))
@@ -159,7 +146,7 @@ class HostBinariesTest {
         Files.writeString(resDir.resolve("supermux-broker.exe"), "broker-win")
         Files.writeString(resDir.resolve("mux-sessiond.exe"), "sessiond-win")
         Files.writeString(resDir.resolve("tmux"), "tmux-win")
-        val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.WINDOWS, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = tmp(), os = DesktopOs.WINDOWS, resourcesDir = resDir, onPath = { null })
 
         assertNotNull(bins.brokerPath)
         assertNotNull(bins.sessiondPath)
@@ -181,7 +168,7 @@ class HostBinariesTest {
         Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1,"abi":1}""")
         val stateDir = tmp()
 
-        val bins = HostBinaries.resolve(stateDir = stateDir, os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = stateDir, os = DesktopOs.LINUX, resourcesDir = resDir, onPath = { null })
 
         val zmxDir = assertNotNull(bins.zmxDir, "a staged bundle must resolve to a directory")
         // Exactly the shape src/core/terminal/zmx/helper.ts reads: bin/<two binaries> + manifest.json.
@@ -205,7 +192,7 @@ class HostBinariesTest {
         Files.writeString(resDir.resolve("zmx"), "zmx-daemon-bytes")
         Files.writeString(resDir.resolve("zmx-manifest.json"), """{"schema":1}""")
         // mux-zmx-helper deliberately absent.
-        val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = tmp(), os = DesktopOs.LINUX, resourcesDir = resDir, onPath = { null })
         assertNull(bins.zmxDir, "two of three files is no bundle")
         assertNotNull(bins.brokerPath, "the rest of the image still resolves")
     }
@@ -216,7 +203,7 @@ class HostBinariesTest {
         val resDir = tmp()
         Files.writeString(resDir.resolve("supermux-broker"), "broker")
         // tmux intentionally absent from the image.
-        val bins = HostBinaries.resolve(stateDir = tmp(), os = Os.LINUX, resourcesDir = resDir, onPath = { null })
+        val bins = HostBinaries.resolve(stateDir = tmp(), os = DesktopOs.LINUX, resourcesDir = resDir, onPath = { null })
         assertNotNull(bins.brokerPath)
         assertNull(bins.tmuxPath, "a missing tmux slot resolves to null, not a crash")
         assertNotNull(bins.binDir, "binDir still exists (broker materialized)")
@@ -229,14 +216,14 @@ class HostBinariesTest {
         val state = Path.of("/Users/a/.mux/state")
         val broker = state.resolve("desktop-assets/bin/supermux-broker")
         val zmx = state.resolve("desktop-assets/zmx")
-        val argv = HostBinaries.quarantineClearArgv(Os.MAC, state, listOf(broker, zmx, Path.of("/Applications/Supermux Desktop.app")))
+        val argv = HostBinaries.quarantineClearArgv(DesktopOs.MACOS, state, listOf(broker, zmx, Path.of("/Applications/Supermux Desktop.app")))
         // -r: the zmx bundle dir is cleared whole, and a copy with no quarantine is no error.
         assertEquals(listOf("/usr/bin/xattr", "-dr", "com.apple.quarantine", broker.toString(), zmx.toString()), argv)
         // Never anything outside desktop-assets, nor the dir itself; nothing to do elsewhere.
-        assertNull(HostBinaries.quarantineClearArgv(Os.MAC, state, listOf(state.resolve("desktop-assets"), state.resolve("desktop-assets/../db.sqlite3"))))
-        assertNull(HostBinaries.quarantineClearArgv(Os.MAC, state, emptyList()))
-        assertNull(HostBinaries.quarantineClearArgv(Os.LINUX, state, listOf(broker)))
-        assertNull(HostBinaries.quarantineClearArgv(Os.WINDOWS, state, listOf(broker)))
+        assertNull(HostBinaries.quarantineClearArgv(DesktopOs.MACOS, state, listOf(state.resolve("desktop-assets"), state.resolve("desktop-assets/../db.sqlite3"))))
+        assertNull(HostBinaries.quarantineClearArgv(DesktopOs.MACOS, state, emptyList()))
+        assertNull(HostBinaries.quarantineClearArgv(DesktopOs.LINUX, state, listOf(broker)))
+        assertNull(HostBinaries.quarantineClearArgv(DesktopOs.WINDOWS, state, listOf(broker)))
     }
 
     @Test fun resolveOnMacClearsQuarantineEveryRunEvenOnTheFastPath() {
@@ -248,15 +235,15 @@ class HostBinariesTest {
         Files.writeString(resDir.resolve("zmx-manifest.json"), "{}")
         val stateDir = tmp()
         val calls = mutableListOf<List<String>>()
-        val first = HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        val first = HostBinaries.resolve(stateDir, DesktopOs.MACOS, resDir, onPath = { null }, clearQuarantine = { calls += it })
         // Already materialized (an install from before the fix): still cleared.
-        HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        HostBinaries.resolve(stateDir, DesktopOs.MACOS, resDir, onPath = { null }, clearQuarantine = { calls += it })
         assertEquals(2, calls.size)
         val expected = listOf(first.brokerPath, first.tmuxPath, first.zmxDir).map { it!!.toAbsolutePath().normalize().toString() }
         assertEquals(listOf("/usr/bin/xattr", "-dr", "com.apple.quarantine") + expected, calls[1])
         // A failing xattr is never fatal; Linux runs nothing.
-        assertNotNull(HostBinaries.resolve(stateDir, Os.MAC, resDir, onPath = { null }, clearQuarantine = { error("boom") }).brokerPath)
-        HostBinaries.resolve(tmp(), Os.LINUX, resDir, onPath = { null }, clearQuarantine = { calls += it })
+        assertNotNull(HostBinaries.resolve(stateDir, DesktopOs.MACOS, resDir, onPath = { null }, clearQuarantine = { error("boom") }).brokerPath)
+        HostBinaries.resolve(tmp(), DesktopOs.LINUX, resDir, onPath = { null }, clearQuarantine = { calls += it })
         assertEquals(2, calls.size)
     }
 

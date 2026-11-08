@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Bar chart</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root { --good: #047857; --goodbg: rgba(16, 185, 129, .13); --bad: #b91c1c; --badbg: rgba(239, 68, 68, .12); }
+  @media (prefers-color-scheme: dark) {
+    :root { --good: #34d399; --goodbg: rgba(52, 211, 153, .15); --bad: #f87171; --badbg: rgba(248, 113, 113, .15); }
+  }
+  main { padding: 16px 16px 10px; }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .title { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--muted);
+    padding: 4px 9px; border-radius: 999px; background: var(--chip); white-space: nowrap; }
+  .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--a1); animation: blink 2s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .head { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; }
+  .big { font-size: 30px; font-weight: 750; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .delta { font-size: 12px; font-weight: 650; padding: 3px 9px; border-radius: 999px; font-variant-numeric: tabular-nums;
+    color: var(--good); background: var(--goodbg); }
+  .delta.bad { color: var(--bad); background: var(--badbg); }
+  svg { display: block; width: 100%; height: 172px; overflow: visible; }
+  .grid line { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+  .grid line.base { stroke-dasharray: none; }
+  .ylab { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .xlab { fill: var(--muted); font-size: 10.5px; }
+  .xlab.hot { fill: var(--fg); font-weight: 650; }
+  .val { fill: var(--fg); font-size: 10.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <div class="top">
+    <div><div class="title" id="title"></div><div class="sub" id="sub"></div></div>
+    <div class="live"><i></i>Live</div>
+  </div>
+  <div class="head"><div class="big" id="big"></div><div class="delta" id="delta"></div></div>
+  <svg id="chart" role="img" aria-label="Bar chart"></svg>
+</main>
+<script>
+(function () {
+  var sum = function (v) { return v.reduce(function (a, b) { return a + b; }, 0); };
+  var P = Kit.pick({
+    users: {
+      title: 'Weekly active users', sub: 'Last 10 weeks · all platforms', a1: '#5b5bf6', a2: '#b18cff',
+      labels: ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10'],
+      base: [28.4, 30.1, 29.6, 33.2, 35.8, 34.9, 38.6, 41.2, 44.7, 48.92],
+      jitter: 0.05, delta: 12.4, goodDown: false, highlight: 'last',
+      headline: function (v) { return Math.round(v[v.length - 1] * 1000).toLocaleString('en-US'); },
+      val: function (x) { return x.toFixed(1) + 'k'; }, tick: function (x) { return x === 0 ? '0' : x + 'k'; }
+    },
+    revenue: {
+      title: 'Revenue by region', sub: 'Q3 · USD · booked', a1: '#0f9488', a2: '#4ade9b',
+      labels: ['NA', 'EU', 'UK', 'DACH', 'NOR', 'APAC', 'LATAM', 'MEA'],
+      base: [812, 604, 318, 402, 176, 289, 141, 98],
+      jitter: 0.08, delta: 8.1, goodDown: false, highlight: 'max',
+      headline: function (v) { return '$' + (sum(v) / 1000).toFixed(2) + 'M'; },
+      val: function (x) { return '$' + Math.round(x) + 'k'; }, tick: function (x) { return x === 0 ? '0' : x >= 1000 ? '$' + (x / 1000) + 'M' : '$' + x + 'k'; }
+    },
+    builds: {
+      title: 'CI build minutes', sub: 'This week · per day', a1: '#f2620f', a2: '#fbbf24',
+      labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      base: [242, 268, 231, 255, 198, 46, 44],
+      jitter: 0.1, delta: -18.6, goodDown: true, highlight: 'max',
+      headline: function (v) { return Math.round(sum(v)).toLocaleString('en-US') + ' min'; },
+      val: function (x) { return String(Math.round(x)); }, tick: function (x) { return String(x); }
+    }
+  }, 'users');
+
+  var root = document.documentElement.style;
+  root.setProperty('--a1', P.a1);
+  root.setProperty('--a2', P.a2);
+  document.getElementById('title').textContent = P.title;
+  document.getElementById('sub').textContent = P.sub;
+  var big = document.getElementById('big'), delta = document.getElementById('delta');
+  var svg = document.getElementById('chart');
+  var NS = 'http://www.w3.org/2000/svg';
+  var n = P.base.length, H = 172, pad = { t: 22, r: 2, b: 22, l: 34 };
+
+  function niceStep(range, count) {
+    var raw = range / count, mag = Math.pow(10, Math.floor(Math.log10(raw))), norm = raw / mag;
+    return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+  }
+  var top = Math.max.apply(null, P.base) * (1 + P.jitter) * 1.06;
+  var step = niceStep(top, 3), yMax = step * Math.ceil(top / step);
+
+  var cur = new Array(n).fill(0), target = P.base.slice();
+  var bars = [], vals = [], xlabs = [], W = 0, slot = 0, bw = 0;
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  function hot() {
+    if (P.highlight === 'last') return n - 1;
+    var best = 0;
+    for (var i = 1; i < n; i++) if (target[i] > target[best]) best = i;
+    return best;
+  }
+
+  function build() {
+    W = svg.clientWidth || 320;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var defs = el('defs', {}, svg);
+    var g1 = el('linearGradient', { id: 'hot', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+    el('stop', { offset: 0, 'stop-color': P.a2 }, g1);
+    el('stop', { offset: 1, 'stop-color': P.a1 }, g1);
+    var g2 = el('linearGradient', { id: 'soft', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+    el('stop', { offset: 0, 'stop-color': P.a2, 'stop-opacity': 0.62 }, g2);
+    el('stop', { offset: 1, 'stop-color': P.a1, 'stop-opacity': 0.4 }, g2);
+    var grid = el('g', { 'class': 'grid' }, svg);
+    var ph = H - pad.t - pad.b;
+    for (var v = 0; v <= yMax + 1e-9; v += step) {
+      var y = pad.t + ph - (v / yMax) * ph;
+      el('line', { x1: pad.l, x2: W - pad.r, y1: y, y2: y, 'class': v === 0 ? 'base' : '' }, grid);
+      var t = el('text', { x: pad.l - 7, y: y + 3.5, 'text-anchor': 'end', 'class': 'ylab' }, svg);
+      t.textContent = P.tick(Math.round(v * 10) / 10);
+    }
+    var pw = W - pad.l - pad.r;
+    slot = pw / n;
+    bw = Math.min(30, slot * 0.6);
+    bars = []; vals = []; xlabs = [];
+    for (var i = 0; i < n; i++) {
+      bars.push(el('path', {}, svg));
+      vals.push(el('text', { 'text-anchor': 'middle', 'class': 'val' }, svg));
+      var xl = el('text', { x: pad.l + slot * (i + 0.5), y: H - 6, 'text-anchor': 'middle', 'class': 'xlab' }, svg);
+      xl.textContent = P.labels[i];
+      xlabs.push(xl);
+    }
+    draw();
+  }
+
+  function barPath(x, y, w, h, r) {
+    if (h < 0.5) return '';
+    r = Math.min(r, w / 2, h);
+    return 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y + 'H' + (x + w - r) +
+      'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (y + h) + 'Z';
+  }
+
+  function draw() {
+    var ph = H - pad.t - pad.b, h0 = hot(), showAll = slot >= 38;
+    for (var i = 0; i < n; i++) {
+      var h = Math.max(0, cur[i] / yMax * ph), x = pad.l + slot * (i + 0.5) - bw / 2, y = pad.t + ph - h;
+      bars[i].setAttribute('d', barPath(x, y, bw, h, 6));
+      bars[i].setAttribute('fill', i === h0 ? 'url(#hot)' : 'url(#soft)');
+      var show = (showAll || i === h0) && h > 2;
+      vals[i].style.opacity = show ? 1 : 0;
+      vals[i].setAttribute('x', x + bw / 2);
+      vals[i].setAttribute('y', y - 6);
+      vals[i].textContent = P.val(cur[i]);
+      xlabs[i].setAttribute('class', i === h0 ? 'xlab hot' : 'xlab');
+      xlabs[i].style.fontSize = slot < 40 ? '9.5px' : '';
+    }
+    big.textContent = P.headline(cur);
+  }
+
+  function setDelta(d) {
+    var good = P.goodDown ? d < 0 : d > 0;
+    delta.textContent = (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%';
+    delta.className = good ? 'delta' : 'delta bad';
+  }
+
+  var raf = 0;
+  function animate(to, dur, stagger, ease) {
+    var from = cur.slice(), t0 = -1;
+    target = to;
+    if (raf) cancelAnimationFrame(raf);
+    function frame(now) {
+      if (t0 < 0) t0 = now;
+      var done = true;
+      for (var i = 0; i < n; i++) {
+        var t = (now - t0 - i * stagger) / dur;
+        if (t < 1) done = false;
+        t = Kit.clamp(t, 0, 1);
+        cur[i] = from[i] + (to[i] - from[i]) * ease(t);
+      }
+      draw();
+      raf = done ? 0 : requestAnimationFrame(frame);
+    }
+    raf = requestAnimationFrame(frame);
+  }
+  var outBack = function (t) { var s = 1.25; t -= 1; return t * t * ((s + 1) * t + s) + 1; };
+  var inOut = function (t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+
+  setDelta(P.delta);
+  Kit.watch(document.querySelector('main'), function () {
+    if (Math.abs((svg.clientWidth || 320) - W) > 0.5) build();
+  });
+  animate(P.base.slice(), 950, 55, outBack);
+
+  var rand = Kit.rng(7);
+  setInterval(function () {
+    if (document.hidden) return;
+    var next = P.base.map(function (b) { return b * (1 + (rand() * 2 - 1) * P.jitter); });
+    setDelta(P.delta + (rand() * 2 - 1) * 1.6);
+    animate(next, 850, 35, inOut);
+  }, 4000);
+})();
+</script>
+</body>
+</html>

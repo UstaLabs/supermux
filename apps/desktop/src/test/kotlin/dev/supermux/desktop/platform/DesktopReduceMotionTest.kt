@@ -29,7 +29,7 @@ class DesktopReduceMotionTest {
     // The query runs through OsEnv, the desktop's one process runner, within 2 s; a query that fails is no answer.
     @Test fun theProbeAsksTheOsThroughOsEnvWithinTwoSeconds() {
         val asked = mutableListOf<Pair<List<String>, Long>>()
-        fun env(exit: Int, out: String) = object : FakeOs(OsEnv.Os.MAC) {
+        fun env(exit: Int, out: String) = object : FakeOs(DesktopOs.MACOS) {
             override fun runResult(argv: List<String>, timeoutMs: Long): OsEnv.RunResult {
                 asked += argv to timeoutMs
                 return OsEnv.RunResult(exit, out, "")

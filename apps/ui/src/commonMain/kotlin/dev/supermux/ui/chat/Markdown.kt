@@ -69,7 +69,6 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -99,6 +98,7 @@ import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.size.Scale
+import dev.supermux.net.isOpenableLink
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
@@ -321,7 +321,7 @@ internal fun AnnotatedString.Builder.appendLinkified(
 @Composable
 fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composable () -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val accent = cs.primary.copy(alpha = 0.4f)
@@ -347,7 +347,7 @@ fun FencedCodeBlock(code: String, lang: String? = null, extraAction: (@Composabl
             extraAction?.invoke()
             IconButton(
                 onClick = {
-                    clipboard.setText(AnnotatedString(code))
+                    platform.copyToClipboard(code)
                     copied = true
                     scope.launch { delay(1500); copied = false }
                 },
@@ -1083,7 +1083,7 @@ internal fun MarkdownImageLinkLine(
     Text(
         text = buildAnnotatedString {
             append("🖼 ")
-            withLink(
+            if (!isOpenableLink(image.url)) append(label) else withLink(
                 LinkAnnotation.Url(
                     image.url,
                     TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),

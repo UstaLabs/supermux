@@ -96,27 +96,51 @@ export function printPairLink(link: { url: string; name: string }, println: Prin
   qrcode.generate(link.url, { small: true })
 }
 
+/** The running broker's local port: [flagPort], else MUX_WEB_PORT in [stateDir]'s .env, else 8787. */
+export function localBrokerPort(stateDir: string, flagPort?: string): string {
+  if (flagPort) return flagPort
+  try {
+    const port = readEnvText(readFileSync(join(stateDir, ".env"), "utf8")).get("MUX_WEB_PORT")?.trim()
+    if (port) return port
+  } catch {
+    /* no .env yet */
+  }
+  return "8787"
+}
+
+/**
+ * What the running broker answered POST /internal/restart: "restarting" (202), "unsupervised" (409: nothing would
+ * bring it back), "unreachable" (no token in the state directory, or no answer), or any other HTTP status.
+ */
+export type BrokerRestartAnswer = "restarting" | "unsupervised" | "unreachable" | number
+
 /**
  * Asks the running broker to restart itself under whatever runs it: systemd, launchd, or the desktop app's unit, agent
  * or Windows task (update/apply.ts restartService knows which; this process does not). Uses its local
- * /internal/restart with the per-boot token in [stateDir]. False, with what to do, when it cannot.
+ * /internal/restart with the per-boot token in [stateDir]. A restart the broker scheduled leaves its agents running.
  */
-export async function restartBroker(stateDir: string, port: string, println: Println, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  const later = "The broker is not running; it picks the new settings up when it starts."
+export async function askBrokerToRestart(stateDir: string, port: string, fetchImpl: typeof fetch = fetch): Promise<BrokerRestartAnswer> {
   let token: string
-  try { token = readFileSync(join(stateDir, STOP_TOKEN_FILE), "utf8").trim() } catch { println(later); return false }
+  try { token = readFileSync(join(stateDir, STOP_TOKEN_FILE), "utf8").trim() } catch { return "unreachable" }
   try {
     const r = await fetchImpl(`http://127.0.0.1:${port}/internal/restart`, { method: "POST", headers: { "x-supermux-stop-token": token } })
-    if (r.status === 202) {
-      println("Restarted the broker ✔")
-      return true
-    }
-    println(r.status === 409
-      ? "The broker does not run under a service manager, so it cannot restart itself: restart it yourself (quit and reopen the supermux app, or run it again)."
-      : `Could not restart the broker (HTTP ${r.status}): restart it yourself.`)
-    return false
+    return r.status === 202 ? "restarting" : r.status === 409 ? "unsupervised" : r.status
   } catch {
-    println(later)
-    return false
+    return "unreachable"
   }
+}
+
+/** [askBrokerToRestart], for `supermux connect --restart`: says what happened, and what to do when it could not. */
+export async function restartBroker(stateDir: string, port: string, println: Println, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const answer = await askBrokerToRestart(stateDir, port, fetchImpl)
+  if (answer === "restarting") {
+    println("Restarted the broker ✔")
+    return true
+  }
+  println(answer === "unreachable"
+    ? "The broker is not running; it picks the new settings up when it starts."
+    : answer === "unsupervised"
+      ? "The broker does not run under a service manager, so it cannot restart itself: restart it yourself (quit and reopen the supermux app, or run it again)."
+      : `Could not restart the broker (HTTP ${answer}): restart it yourself.`)
+  return false
 }

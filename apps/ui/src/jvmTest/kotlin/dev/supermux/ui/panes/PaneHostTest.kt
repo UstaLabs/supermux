@@ -3,6 +3,8 @@ package dev.supermux.ui.panes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
@@ -10,8 +12,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -21,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class PaneHostTest {
@@ -219,5 +224,44 @@ class PaneHostTest {
         // viewport clips it and only the wrapper's green shows through.
         val overflowX = with(density) { 140.dp.roundToPx() }
         assertEquals(Color.Green, pixels[overflowX, y], "expected overflow past the strip to be clipped")
+    }
+
+    @Test
+    fun onlyTheNamedPanesStripCarriesTheEnd() = runComposeUiTest {
+        setContent {
+            PaneHost(
+                layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+                    LayoutNode.Group("g1", listOf("a"), "a"),
+                    LayoutNode.Group("g2", listOf("b"), "b"),
+                )),
+                onLayoutChange = {},
+                stripEnd = PaneStripEnd("g2", 66.dp) { Box(Modifier.size(20.dp).testTag("the-end")) },
+            ) { Text("body") }
+        }
+        onAllNodesWithTag("the-end").assertCountEquals(1)
+    }
+
+    @Test
+    fun aStripsTabsShareOnlyTheRoomItsChromeLeaves() = runComposeUiTest {
+        // Chrome that keeps the strip's last 132 dp clear, as the window's own buttons do.
+        val keepsTheEndClear = object : PaneStripChrome {
+            override fun strip(key: String): Modifier = Modifier.padding(end = 132.dp)
+            override fun tabs(key: String): Modifier = Modifier
+        }
+        setContent {
+            Box(Modifier.size(600.dp, 400.dp)) {
+                PaneHost(
+                    layout = LayoutNode.Group("g1", listOf("a", "b", "c"), "a"),
+                    onLayoutChange = {},
+                    modifier = Modifier.fillMaxSize(),
+                    addSlot = { Box(Modifier.fillMaxSize().testTag("add")) },
+                    chrome = keepsTheEndClear,
+                ) { Text("body") }
+            }
+        }
+        waitForIdle()
+        // The strip runs from 6 to 594 dp, and the chrome leaves its tabs 6 to 462.
+        val plus = onNodeWithTag("add").getUnclippedBoundsInRoot()
+        assertTrue(plus.right.value <= 462.5f, "the + ends at ${plus.right}: scrolled out past the room the chrome leaves")
     }
 }

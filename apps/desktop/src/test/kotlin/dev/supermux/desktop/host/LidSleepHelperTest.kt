@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -222,7 +223,7 @@ class LidSleepHelperTest {
 
     @Test fun install_is_refused_off_a_mac_without_running_anything() {
         val ran = mutableListOf<List<String>>()
-        val linux = object : OsEnv by FakeOs(OsEnv.Os.LINUX) {
+        val linux = object : OsEnv by FakeOs(DesktopOs.LINUX) {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(0, "", "") }
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
@@ -233,7 +234,7 @@ class LidSleepHelperTest {
 
     @Test fun install_runs_one_osascript_with_the_files_inline() {
         val ran = mutableListOf<List<String>>()
-        val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
+        val mac = object : OsEnv by FakeOs(DesktopOs.MACOS) {
             override fun runResult(argv: List<String>): OsEnv.RunResult { ran += argv; return OsEnv.RunResult(1, "", "User canceled. (-128)") }
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
@@ -245,7 +246,7 @@ class LidSleepHelperTest {
     }
 
     @Test fun a_cancelled_uninstall_says_it_is_still_installed() {
-        val mac = object : OsEnv by FakeOs(OsEnv.Os.MAC) {
+        val mac = object : OsEnv by FakeOs(DesktopOs.MACOS) {
             override fun runResult(argv: List<String>) = OsEnv.RunResult(1, "", "User canceled. (-128)")
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }
@@ -377,7 +378,7 @@ class LidSleepHelperTest {
 }
 
 /** A minimal [OsEnv] for tests; override what a test needs. */
-internal open class FakeOs(override val os: OsEnv.Os) : OsEnv {
+internal open class FakeOs(override val os: DesktopOs) : OsEnv {
     override val home: java.nio.file.Path = java.nio.file.Path.of("/home/u")
     override val localAppData: java.nio.file.Path = home
     override val uid: Long? = 501

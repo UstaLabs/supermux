@@ -48,4 +48,5 @@ fun joinPath(dir: String, rel: String): String = hostJoin(dir, rel)
 fun pathToUri(abs: String): String = hostFileUri(abs)
 
 /** Directory URI for a workdir — always trailing-slash. */
+// platform-ok: a file URI
 fun dirUri(workdir: String): String = hostFileUri(workdir).let { if (it.endsWith('/')) it else "$it/" }

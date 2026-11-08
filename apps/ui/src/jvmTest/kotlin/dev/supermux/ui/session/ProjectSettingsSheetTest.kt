@@ -243,6 +243,11 @@ class ProjectSettingsSheetTest {
         val owner = ProjectDto(id = "b", name = "B", locations = listOf(ProjectLocationDto("L", "/p/app")))
         assertEquals("L", locationIdForPath(owner, "/p/app/"))
         assertNull(locationIdForPath(owner, "/p/other"))
+        // A Windows host's location, however the path is spelled.
+        val win = ProjectDto(id = "w", name = "W", locations = listOf(ProjectLocationDto("W", "C:\\src\\app")))
+        assertEquals("W", locationIdForPath(win, "C:\\src\\app\\"))
+        assertEquals("W", locationIdForPath(win, "c:/SRC/app"))
+        assertNull(locationIdForPath(win, "C:\\src\\other"))
         val src = ByteArrayChunkSource(byteArrayOf())
         assertEquals("image/jpeg", projectImageMime(PickedFile("a.JPG", "", src)))
         assertEquals("image/png", projectImageMime(PickedFile("a", "image/png", src)))

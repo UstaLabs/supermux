@@ -128,6 +128,7 @@ import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.rememberDictation
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.MicTrouble
 import dev.supermux.ui.session.AGENT_DOZE_AFTER_MS
 import dev.supermux.ui.session.AgentAvatar
 import dev.supermux.ui.session.AvatarRig
@@ -144,6 +145,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
 /** The default Agent as the overlay shows it. */
@@ -230,8 +232,10 @@ class OverlayUiState {
     var micWaiting by mutableStateOf(false)
     /** Your words were sent and the answer hasn't come yet: the avatar works meanwhile. */
     var thinking by mutableStateOf(false)
-    /** No mic: say so instead of listening. */
-    var micMissing by mutableStateOf(false)
+    /** The mic didn't open: what the bubble says instead of listening, as the OS told why ([micTroubleNote]). */
+    var micNote by mutableStateOf<String?>(null)
+    /** No mic to listen with right now: [micNote] says why. */
+    val micMissing: Boolean get() = micNote != null
     var reply by mutableStateOf<OverlayReply?>(null)
     /** The reply's ink-edge reveal while it is written (#76's, as the chat's live row has): null when it shows as it is. */
     internal var reveal by mutableStateOf<LiveRevealState?>(null)
@@ -395,11 +399,29 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
     // mic until then), and each talk keeps its own picture of the screen.
     val turns = remember { TalkTurns() }
     var talkShot by remember { mutableStateOf<OverlayShot?>(null) }
+    // Asking the OS why the mic didn't open may take it a moment (a desktop asks its sound system): not on a frame.
+    val asking = rememberCoroutineScope()
+    /**
+     * The mic didn't open: it stops listening (no ring, no voice to follow) and says why, as the OS tells it, never
+     * asking to allow what can't be allowed.
+     */
+    fun tellMicTrouble(denied: Boolean) {
+        ui.listening = false
+        ui.finishing = false
+        asking.launch {
+            val trouble = if (denied) MicTrouble.NOT_ALLOWED else mic.trouble()
+            ui.micNote = micTroubleNote(trouble, fleet.sessions.value.firstOrNull { it.id == agentId }?.name ?: "your Agent")
+        }
+    }
     fun listen() {
         latest = ""
         ui.heard = ""
         // There is no permission prompt over other apps: the mic is allowed in supermux.
-        if (mic.available) dictation.startMic() else ui.micMissing = true
+        if (!mic.available) return tellMicTrouble(denied = false)
+        dictation.startMic()
+        // Read now, not by an effect: a try that fails as the last one did leaves the flag as it was, and no effect
+        // would see it rise.
+        if (dictation.micUnavailable) tellMicTrouble(denied = false)
     }
     LaunchedEffect(mic, ui.listening) {
         if (!ui.listening) { ui.levelTarget = 0f; return@LaunchedEffect }
@@ -453,8 +475,8 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
         // An answer that never comes (a failed send, a reply with no text) must not leave it working.
         if (ui.thinking) { delay(THINKING_MAX_MS); ui.thinking = false }
     }
-    LaunchedEffect(ui.micMissing) {
-        if (ui.micMissing) { delay(3_500); ui.micMissing = false }
+    LaunchedEffect(ui.micNote) {
+        if (ui.micNote != null) { delay(3_500); ui.micNote = null }
     }
     DisposableEffect(dictation) {
         ui.voice = OverlayVoiceControl(
@@ -482,12 +504,8 @@ fun OverlayVoice(fleet: FleetStore, agentId: String, ui: OverlayUiState) {
         )
         onDispose { ui.voice = null }
     }
-    LaunchedEffect(dictation.micDenied, dictation.micUnavailable) {
-        if (dictation.micDenied || dictation.micUnavailable) {
-            ui.micMissing = true
-            ui.listening = false
-            ui.finishing = false
-        }
+    LaunchedEffect(dictation.micDenied) {
+        if (dictation.micDenied) tellMicTrouble(denied = true)
     }
 }
 
@@ -691,7 +709,7 @@ fun OverlayBubble(
         )
         when {
             ui.micMissing -> BubbleBox(shape, cs.surfaceContainerHigh) {
-                Text("Allow the microphone in supermux to talk to it here.", color = cs.onSurface, style = MaterialTheme.typography.bodyMedium)
+                Text(ui.micNote.orEmpty(), color = cs.onSurface, style = MaterialTheme.typography.bodyMedium)
             }
             ui.listening -> {
                 BubbleBox(shape, cs.primaryContainer) {

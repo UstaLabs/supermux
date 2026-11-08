@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.AccountUsage
+import dev.supermux.net.AntigravityUsage
 import dev.supermux.net.ClaudeResetResult
 import dev.supermux.net.ClaudeResets
 import dev.supermux.net.ClaudeUsage
@@ -794,6 +795,46 @@ fun GrokUsageCard(
     }
 }
 
+/**
+ * Antigravity's limits, one bar per bucket agy reports, under the broker's "<group> · <window>" label. agy reports no
+ * plan, so the subtitle says "unknown", as Codex's and Grok's do without one. The system login's only: an added
+ * account's card is [NoQuotaAccountCard].
+ */
+@Composable
+fun AntigravityUsageCard(
+    antigravity: AntigravityUsage?,
+    error: String?,
+    asOf: String? = null,
+    refreshing: Boolean = false,
+    now: Long = nowMs(),
+    account: String? = null,
+    errorCode: String? = null,
+    onSignIn: (() -> Unit)? = null,
+) {
+    UsageCard(
+        title = accountCardTitle("Antigravity", account),
+        subtitle = "unknown",
+        enabled = antigravity != null,
+        modifier = Modifier.testTag("usage_card_antigravity"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_antigravity",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_antigravity",
+    ) {
+        if (antigravity == null) {
+            UsageUnavailable("Antigravity", error, errorCode, onSignIn, "usage_sign_in_antigravity")
+        } else {
+            if (antigravity.windows.isEmpty()) {
+                Text("Antigravity reported no usage limits for this account.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+            antigravity.windows.forEach { w ->
+                UsageWindowRow(w.label.ifBlank { "Usage window" }, w.used, formatResetIso(w.resetsAt, now))
+            }
+            SignInExpiredNotice("Antigravity", errorCode, onSignIn, "usage_sign_in_antigravity")
+        }
+    }
+}
+
 // ─── Actions holder ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1128,6 +1169,17 @@ private fun UsageBody(
                         onSignIn = signInFor("grok"),
                     )
                     AccountUsageCards(usage, "grok", now, onSignIn)
+                    AntigravityUsageCard(
+                        usage?.antigravity,
+                        usage?.errors?.get("antigravity"),
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("antigravity"), now),
+                        refreshing = usage?.refreshing?.contains("antigravity") == true,
+                        now = now,
+                        account = systemCardLabel(usage, "antigravity"),
+                        errorCode = usage?.errorCodes?.get("antigravity"),
+                        onSignIn = signInFor("antigravity"),
+                    )
+                    AccountUsageCards(usage, "antigravity", now, onSignIn)
                 }
             }
         }
@@ -1154,16 +1206,29 @@ private fun AccountUsageCards(usage: UsageResponse?, agent: String, now: Long, o
     }
 }
 
-/** An account with no quota to show (an API key, billed per token). */
+/**
+ * An account with no quota to show: an API key, billed per token, or an added Antigravity sign-in, whose usage is not
+ * read (agy may answer for the system login's keyring sign-in instead).
+ */
 @Composable
 private fun NoQuotaAccountCard(account: AccountUsage) {
+    val apiKey = account.method == "api_key"
+    val systemOnly = account.agent == "antigravity" && !apiKey
     UsageCard(
         title = accountCardTitle(agentTitle(account.agent), account.label),
-        subtitle = if (account.method == "api_key") "API key" else "No usage limits",
+        subtitle = when {
+            apiKey -> "API key"
+            systemOnly -> "Google account"
+            else -> "No usage limits"
+        },
         enabled = true,
         modifier = Modifier.testTag(accountCardTag("usage_card_${account.agent}", account.id)),
     ) {
-        Text("Billed per token, so there is no usage limit to show.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        Text(
+            if (systemOnly) "Usage shows for the system login only." else "Billed per token, so there is no usage limit to show.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+        )
     }
 }
 

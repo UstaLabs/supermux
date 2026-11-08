@@ -1,0 +1,252 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Book a demo</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root {
+    --accent: #059669;
+    --btn1: #059669;
+    --btn2: #0f766e;
+    --field: #ffffff;
+    --field-line: #d9dce6;
+    --danger: #e5484d;
+    --ok: #12a150;
+    --page: #f3f4f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #34d399;
+      --field: #1d2029;
+      --field-line: #333846;
+      --danger: #ff6b70;
+      --ok: #3fd47f;
+      --page: #15171d;
+    }
+  }
+  html, body { background: var(--page); }
+  main { padding: 14px 16px 16px; }
+  .head { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .badge {
+    width: 40px; height: 40px; border-radius: 12px; flex: none; display: grid; place-items: center; color: #fff;
+    background: linear-gradient(135deg, #10b981, #0d9488);
+    box-shadow: 0 6px 16px -6px #10b981;
+  }
+  .badge svg { width: 22px; height: 22px; }
+  h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+  .lead { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 460px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .field label { display: block; font-size: 12px; font-weight: 650; color: var(--muted); margin: 0 0 5px 2px; }
+  input[type=text], input[type=email], select, textarea {
+    width: 100%; font: 16px/1.35 var(--font); color: var(--fg);
+    background: var(--field); border: 1.5px solid var(--field-line); border-radius: 12px;
+    padding: 10px 13px; outline: none; -webkit-appearance: none; appearance: none;
+  }
+  input[type=text], input[type=email], select { height: 44px; }
+  textarea { resize: none; min-height: 66px; overflow: hidden; display: block; }
+  input::placeholder, textarea::placeholder { color: var(--muted); opacity: .7; }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  select {
+    padding-right: 38px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%238a90a2' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 14px center;
+  }
+  .field .error { display: none; color: var(--danger); font-size: 12px; margin: 5px 0 0 2px; }
+  .field.invalid input { border-color: var(--danger); }
+  .field.invalid input:focus { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 18%, transparent); }
+  .field.invalid .error { display: block; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px; cursor: pointer; }
+  .toggle span { font-size: 14px; }
+  .toggle small { display: block; color: var(--muted); font-size: 12px; }
+  .switch { position: relative; width: 50px; height: 30px; flex: none; }
+  .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .switch i { position: absolute; inset: 0; border-radius: 999px; background: var(--field-line); pointer-events: none; }
+  .switch i::before {
+    content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--btn1);
+    opacity: 0; transition: opacity .2s ease;
+  }
+  .switch i::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .22s cubic-bezier(.3, 1.4, .5, 1);
+  }
+  .switch input:checked + i::before { opacity: 1; }
+  .switch input:checked + i::after { transform: translateX(20px); }
+  .submit {
+    width: 100%; height: 48px; border: 0; border-radius: 14px; cursor: pointer; margin-top: 2px;
+    font-size: 15.5px; font-weight: 700; color: #fff; letter-spacing: .01em;
+    background: linear-gradient(135deg, var(--btn1), var(--btn2));
+    box-shadow: 0 10px 22px -12px var(--btn1);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: transform .12s ease, opacity .12s ease;
+  }
+  .submit:active { transform: scale(.98); opacity: .9; }
+  .submit svg { width: 18px; height: 18px; }
+  .done { display: none; text-align: center; padding: 18px 8px 10px; }
+  .sent .done { display: block; }
+  .sent form, .sent .head { display: none; }
+  .check { display: block; width: 64px; height: 64px; margin: 0 auto 12px; opacity: 0; transform: scale(.5); }
+  .check circle { fill: color-mix(in srgb, var(--ok) 16%, transparent); stroke: var(--ok); stroke-width: 2.5; }
+  .check path { fill: none; stroke: var(--ok); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+  .sent .check { animation: pop .55s cubic-bezier(.2, 1.5, .45, 1) .05s forwards; }
+  @keyframes pop { to { opacity: 1; transform: none; } }
+  .done h2 { margin: 0 0 4px; font-size: 18px; }
+  .done p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+  .again {
+    border: 0; background: var(--chip); color: var(--fg); font-weight: 650; font-size: 14px;
+    height: 40px; padding: 0 16px; border-radius: 12px; cursor: pointer;
+  }
+</style>
+</head>
+<body class="wrap">
+<main id="root">
+  <div class="head">
+    <div class="badge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9 14.5l2 2 4-4"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Book a demo</h1>
+      <p class="lead">We'll get back to you within a day.</p>
+    </div>
+  </div>
+  <form id="form" novalidate autocomplete="on">
+    <div class="grid">
+      <div class="grid two">
+        <div class="field" id="f-name">
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" autocomplete="name" placeholder="Ada Lovelace" enterkeyhint="next">
+          <div class="error">Tell us your name</div>
+        </div>
+        <div class="field" id="f-email">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="ada@example.com" enterkeyhint="next">
+          <div class="error">That doesn't look like an email</div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="topic">Topic</label>
+        <select id="topic" name="topic">
+          <option>Pricing</option>
+          <option>Integrations</option>
+          <option>Security</option>
+          <option>Something else</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="message">Message</label>
+        <textarea id="message" name="message" rows="2" placeholder="What would you like to see?"></textarea>
+      </div>
+      <label class="toggle" for="updates">
+        <span>Send me product updates<small>About once a month, no spam</small></span>
+        <span class="switch"><input id="updates" type="checkbox" role="switch" checked><i></i></span>
+      </label>
+      <button class="submit" type="submit">
+        Send request
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+  </form>
+  <div class="done">
+    <svg class="check" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/><path d="M19 33l9 9 17-18"/></svg>
+    <h2 id="thanks">Thanks!</h2>
+    <p id="receipt">The app got your request.</p>
+    <button class="again" id="again" type="button">Send another</button>
+  </div>
+</main>
+<script>
+(function () {
+  var root = document.getElementById('root');
+  var form = document.getElementById('form');
+  var fields = {
+    name: document.getElementById('name'),
+    email: document.getElementById('email'),
+    topic: document.getElementById('topic'),
+    message: document.getElementById('message'),
+    updates: document.getElementById('updates'),
+  };
+  var sent = null;
+
+  // The message grows with what is typed, from 2 lines to 4 (then scrolls): the view in the chat follows the page's
+  // height, and the whole form stays under the app's 560 px cap for a wrap-content view.
+  function grow() {
+    var t = fields.message;
+    t.style.height = 'auto';
+    var max = 4 * 21.6 + 23;
+    t.style.height = Math.min(t.scrollHeight + 3, max) + 'px';
+    t.style.overflowY = t.scrollHeight + 3 > max ? 'auto' : 'hidden';
+  }
+  fields.message.addEventListener('input', grow);
+
+  function validEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim()); }
+  function mark(id, bad) { document.getElementById(id).classList.toggle('invalid', bad); }
+  fields.name.addEventListener('input', function () { if (fields.name.value.trim()) mark('f-name', false); });
+  fields.email.addEventListener('input', function () { if (validEmail(fields.email.value)) mark('f-email', false); });
+  fields.name.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); fields.email.focus(); } });
+  fields.email.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); fields.message.focus(); } });
+
+  function showSent(entry, posted) {
+    sent = entry;
+    var first = entry.name.split(/\s+/)[0];
+    document.getElementById('thanks').textContent = 'Thanks, ' + first + '!';
+    document.getElementById('receipt').textContent = posted
+      ? 'The app got your note about ' + entry.topic.toLowerCase() + '.'
+      : 'Opened by hand: there was no app to send it to.';
+    root.classList.add('sent');
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var badName = !fields.name.value.trim(), badEmail = !validEmail(fields.email.value);
+    mark('f-name', badName);
+    mark('f-email', badEmail);
+    if (badName) { fields.name.focus(); return; }
+    if (badEmail) { fields.email.focus(); return; }
+    var entry = {
+      name: fields.name.value.trim(),
+      email: fields.email.value.trim(),
+      topic: fields.topic.value,
+      message: fields.message.value.trim(),
+      updates: fields.updates.checked,
+    };
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    var posted = Kit.post('form.submit', entry);
+    showSent(entry, posted);
+  });
+
+  document.getElementById('again').addEventListener('click', function () {
+    sent = null;
+    form.reset();
+    fields.message.value = '';
+    grow();
+    root.classList.remove('sent');
+  });
+
+  // The draft, and what was sent, outlive the engine: a view that comes back gets them again.
+  Kit.keep(function () {
+    return {
+      name: fields.name.value, email: fields.email.value, topic: fields.topic.value,
+      message: fields.message.value, updates: fields.updates.checked, sent: sent,
+    };
+  }, function (saved) {
+    if (typeof saved.name === 'string') fields.name.value = saved.name;
+    if (typeof saved.email === 'string') fields.email.value = saved.email;
+    if (typeof saved.topic === 'string') fields.topic.value = saved.topic;
+    if (typeof saved.message === 'string') fields.message.value = saved.message;
+    if (typeof saved.updates === 'boolean') fields.updates.checked = saved.updates;
+    grow();
+    if (saved.sent && saved.sent.name) showSent(saved.sent, true);
+  });
+
+  grow();
+})();
+</script>
+</body>
+</html>

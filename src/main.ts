@@ -92,7 +92,7 @@ import { encodeWav16 } from "./core/transcription/wav"
 import { codexAdapter } from "./core/agent-api/adapters/codex"
 import { runTtsStream, selectTts, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { TtsAudioStreams } from "./core/tts/audio-stream"
-import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes } from "./core/plugins"
+import { ensureOpenCodePluginScopes, ensureGrokPluginScopes, ensureAntigravityPluginScopes, migrateOverridesToSessionIds } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
 import type { CodexAdapter } from "./core/agents/codex/adapter"
 import { getUsageStore, isUsageProvider, type UsageFailed, type UsageFetched } from "./core/usage/store"
@@ -128,8 +128,11 @@ import { openDb, runMigrations } from "./core/storage/db"
 import { MIGRATIONS } from "./core/storage/migrations"
 import { checkSchemaStamp, writeSchemaStamp } from "./core/storage/schema-stamp"
 import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
-import { BUILD_VERSION, BUILD_COMMIT, versionString } from "./shared/build-info"
-import { captureWindowsTaskFlag, restartService } from "./core/update/apply"
+import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
+import { createCheckoutWatch } from "./core/checkout-watch"
+import { gitAsync } from "./core/git/exec"
+import { runSyncOrThrow } from "./core/git/exec-sync"
+import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
 import { ClaimStore } from "./channels/web/pair-claim"
@@ -162,9 +165,9 @@ import { readEnvText } from "./shared/env-file"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
 import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
-import { spawn as nodeSpawn, execFileSync } from "child_process"
+import type { ChildProcess } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { startFailureNotice, wakeFailureNotice } from "./core/agents/start-failure"
@@ -175,7 +178,6 @@ import {
   GitInstaller, GitRequirementMonitor, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
-import { spawnSync as spawnSyncForGit } from "child_process"
 import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -232,6 +234,7 @@ import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { conptyLoginProc } from "./core/agents/login/conpty"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { antigravityKeyringLogin } from "./core/agents/antigravity/keyring"
+import { claudeStoredLoginPresent } from "./core/agents/claude/stored-login"
 import { getRepoInfo } from "./core/git/repo-info"
 import { buildAgentModels } from "./core/models/agent-models"
 import { createSessionBranch, createWorktree, ensureWorktreeAt, existingBranchNames, removeWorktree, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
@@ -300,7 +303,7 @@ const gitRequirement = new GitRequirementMonitor({
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
     try {
-      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+      return spawnCommandSync("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
     } catch {
       return 1
     }
@@ -584,6 +587,14 @@ const keepAwake = new KeepAwake({
   log: (event, data) => keepAwakeLog.info(event, data),
 }, settings.getKeepAwake(process.env))
 keepAwake.start()
+// A broker run from its checkout keeps the code it started with, while keepers and sessions load the files on disk: when
+// the checkout moves under it, say so (log, /host), never refuse (the keeper-error card). Compiled releases carry their code.
+const checkoutWatch = IS_COMPILED ? undefined : createCheckoutWatch({
+  readHead: () => gitAsync(join(import.meta.dir, ".."), ["rev-parse", "HEAD"], { timeoutMs: 10_000 }).catch(() => null),
+  log: (event, fields) => log.warn(event, fields),
+  intervalMs: 60_000,
+})
+void checkoutWatch?.start()
 // Wall-clock gap detection: after a sleep the relay, clients and idle timers are refreshed (below).
 const wakeDetector = new WakeDetector({ log: (event, data) => log.info(event, data) })
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
@@ -940,8 +951,8 @@ function bgOpenCount(sessionId: string): number {
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
-    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
-    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    const gitDir = runSyncOrThrow("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, timeoutMs: 10_000 })
+    const raw = runSyncOrThrow("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, timeoutMs: 10_000 })
     return { gitDir, commonDir: isAbsolute(raw) ? raw : resolve(workdir, raw) }
   } catch { return null }
 }
@@ -1407,7 +1418,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
       workdir: s.workdir,
       repoRoot: s.repo_root ?? undefined,
       muted: !!s.mute,
-      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, sessionId: s.id, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -2426,7 +2437,7 @@ function spawnLoginProc(kind: string) {
   }
   // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
   if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
-  let child: ReturnType<typeof nodeSpawn>
+  let child: ChildProcess
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
@@ -2668,6 +2679,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       gitAvailable: gitRequirement.ok,
       requirements: gitRequirement.requirements(),
       keepAwake: keepAwake.state(),
+      checkoutMoved: checkoutWatch?.current(),
     }),
     getHostRequirements: () => gitRequirement.requirements(),
     installGit: () => gitInstaller.install(),
@@ -2706,6 +2718,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     onStopRequest: () => { void gracefulShutdown("stop-request") },
     // `supermux connect --restart`: under whatever runs this broker (systemd, launchd, the desktop app's task).
     onRestartRequest: () => restartService(),
+    // The desktop app's Restart (it restarts this broker itself): its stop, coming next, leaves the agents running.
+    onExpectRestart: () => expectRestart(),
     getCuratorSettings: () => ({ config: settings.getCurator(), nextRun: curatorScheduler?.nextRun()?.toISOString() ?? null }),
     setCuratorSettings: (cfg) => {
       const c = parseCuratorConfig(cfg, settings.getCurator())
@@ -3564,10 +3578,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     // codex/cursor API key short-circuits the login flow the same way a CLI
     // cred file does. Claude adds the darwin Keychain probe: `claude login`
     // can finish without ever writing the credential file this manager polls.
-    // Antigravity adds Windows' Credential Manager: agy keeps its login there
-    // and writes no token file at all.
+    // Claude and Antigravity add Windows' Credential Manager: agy keeps its login
+    // there and writes no token file at all, and Claude Code does too when
+    // Anthropic's tengu_windows_credman rollout is on (#101).
     hasCredential: (kind) =>
-      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated())
+      agentHasCredential(kind) || (kind === AgentKind.Claude && (claudeCliIsAuthenticated() || claudeStoredLoginPresent()))
         || (kind === AgentKind.Antigravity && antigravityKeyringLogin()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
@@ -4587,7 +4602,7 @@ if (webChannel) {
           },
         })
         // The draft row was restored just above, so the session exists again and the notice has a home.
-        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err))
+        await notifySession(draftSnapshot.id, startFailureNotice("start", draftSnapshot.name, err, undefined, draftSnapshot.agent))
         return
       }
     }
@@ -4688,6 +4703,10 @@ if (!IS_TEST_BROKER) {
     }
     if (ensureAntigravityPluginScopes()) {
       log.info("antigravity_plugin_scopes_synced")
+    }
+    // Overrides are keyed by session id since #102: re-key the ones written by name, once.
+    if (migrateOverridesToSessionIds([...registry.list(), ...registry.listArchived()].map((s) => ({ id: s.id, name: s.name })))) {
+      log.info("plugin_overrides_keyed_by_id")
     }
   } catch (err: any) {
     log.warn("mux_core_skill_sync_failed", { err: err?.message ?? String(err) })
@@ -4911,6 +4930,12 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
   }
 }
 
+// The graceful shutdown's listeners, before the channels start: Telegram's long poll below never returns until
+// shutdown, and listeners registered after it were never registered at all (#29). A broker with Telegram on then
+// died at every SIGTERM without its graceful shutdown, and stopped or restarted alike.
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+process.on("SIGINT",  () => gracefulShutdown("SIGINT"))
+
 // Telegram long-polling (grammy bot.start()) does not resolve until shutdown, so it
 // MUST be the last awaited call at boot — anything awaited after it never runs.
 // WhatsApp's start() is quick (bind webhook + one status probe), so start it BEFORE
@@ -4921,7 +4946,10 @@ if (telegram) await telegram.start()
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return
   shuttingDown = true
-  log.info("graceful_shutdown", { signal })
+  // A restart (one this broker scheduled, or one the desktop app announced before restarting it) leaves the agents to
+  // the broker that comes back; a plain stop shuts them down.
+  const agents = agentsCloseMode()
+  log.info("graceful_shutdown", { signal, agents })
   try {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
@@ -4957,22 +4985,22 @@ async function gracefulShutdown(signal: string) {
     brokerAccounts.close()
   } catch (err: any) { log.warn("accounts_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeGrokCoreHost()
+    await closeGrokCoreHost(agents)
   } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeAntigravityCoreHost()
+    await closeAntigravityCoreHost(agents)
   } catch (err: any) { log.warn("antigravity_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCodexCoreHost()
+    await closeCodexCoreHost(agents)
   } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeOpenCodeCoreHost()
+    await closeOpenCodeCoreHost(agents)
   } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeCursorCoreHost()
+    await closeCursorCoreHost(agents)
   } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
-    await closeClaudeCoreHost()
+    await closeClaudeCoreHost(agents)
   } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
@@ -4989,5 +5017,3 @@ async function gracefulShutdown(signal: string) {
   } catch (err: any) { log.warn("db_close_failed", { err: err?.message ?? String(err) }) }
   process.exit(0)
 }
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
-process.on("SIGINT",  () => gracefulShutdown("SIGINT"))

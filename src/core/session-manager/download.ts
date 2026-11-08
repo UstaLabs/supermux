@@ -35,7 +35,13 @@ export async function resolveDownloadAttachment(opts: {
   return { path, via: "telegram" }
 }
 
-const TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot"
+/**
+ * The Telegram Bot API server the bot talks to and fetches its files from: MUX_TELEGRAM_API_ROOT (a self-hosted Bot
+ * API server, a test's stub), else Telegram's own.
+ */
+export function telegramApiRoot(env: Record<string, string | undefined> = process.env): string {
+  return env.MUX_TELEGRAM_API_ROOT?.trim().replace(/\/+$/, "") || "https://api.telegram.org"
+}
 
 export async function downloadAttachment(api: DownloadableApi, file_id: string, inboxDir: string): Promise<string> {
   const meta = await api.getFile(file_id)
@@ -53,7 +59,7 @@ export async function downloadAttachment(api: DownloadableApi, file_id: string, 
     bytes = await api.fetchFile(fp)
   } else {
     if (!api.token) throw new Error("downloadAttachment: no token and no fetchFile")
-    const url = `${TELEGRAM_FILE_BASE}${api.token}/${fp}`
+    const url = `${telegramApiRoot()}/file/bot${api.token}/${fp}`
     const res = await fetch(url)
     if (!res.ok) throw new Error(`telegram file fetch failed: ${res.status} ${res.statusText}`)
     bytes = Buffer.from(await res.arrayBuffer())

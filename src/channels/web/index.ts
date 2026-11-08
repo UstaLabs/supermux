@@ -15,7 +15,8 @@ import { join, resolve, sep } from "path"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie } from "./proxy"
-import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOriginOk } from "./cookies"
+import { AUTH_COOKIE, authToken, authedViaBearer, buildAuthCookie, buildClearCookie, crossSiteRefusal, sameOriginOk } from "./cookies"
+import { browserStateError } from "../../core/workspace/browser-state"
 import { FileSystemService } from "../../core/fs/file-system-service"
 import { toFsError } from "../../core/fs/errors"
 import { WorkdirFs } from "../../core/fs/legacy"
@@ -499,6 +500,12 @@ export interface WebChannelOpts {
    * restartService), for `supermux connect --restart`. False when nothing would bring it back (answered 409).
    */
   onRestartRequest?: () => boolean
+  /**
+   * With [stopToken]: POST /internal/expect-restart says the broker's next stop is a restart (update/apply.ts
+   * expectRestart), so its graceful shutdown leaves the agents running. The desktop app's Restart sends it before it
+   * restarts the broker itself.
+   */
+  onExpectRestart?: () => void
   getCuratorSettings?: () => { config: unknown; nextRun: string | null }
   setCuratorSettings?: (cfg: unknown) => { config: unknown; nextRun: string | null }
   runCuratorNow?: () => Promise<void>
@@ -1063,25 +1070,28 @@ export class WebChannel implements Channel {
   private async routeRequestOrUpgrade(req: Request, server: import("bun").Server<WSData>): Promise<Response | undefined> {
     this.classifyPeer(req, server)
     const url = new URL(req.url)
-    if (this.opts.proxyBaseDomain) {
-      const host = req.headers.get("host") ?? ""
-      const sub = extractSubdomain(host, this.opts.proxyBaseDomain, this.opts.proxyMainHost)
-      if (sub) {
-        return this.handleProxyRoute(req, sub, server)
+    const sub = this.opts.proxyBaseDomain
+      ? extractSubdomain(req.headers.get("host") ?? "", this.opts.proxyBaseDomain, this.opts.proxyMainHost)
+      : undefined
+    // Path-based proxy (active only when no base domain is configured).
+    const pm = !this.opts.proxyBaseDomain && this.opts.proxyLookup ? matchProxyPath(url.pathname) : undefined
+    // Before any route, so a new route can't miss it (cookies.ts explains the rules).
+    const appOrigins = [this.opts.publicUrl, this.getRelayUrl?.(), hostOrigin(req)]
+    if (crossSiteRefusal(req, { appOrigins, proxied: Boolean(sub || pm) })) {
+      return new Response("bad origin", { status: 403 })
+    }
+    if (sub) {
+      return this.handleProxyRoute(req, sub, server)
+    }
+    if (pm) {
+      if (pm.rest === null) {
+        // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
+        return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
       }
-    } else if (this.opts.proxyLookup) {
-      // Path-based proxy (active only when no base domain is configured).
-      const pm = matchProxyPath(url.pathname)
-      if (pm) {
-        if (pm.rest === null) {
-          // bare /p/<slug> → 301 so the browser anchors relative URLs correctly
-          return new Response(null, { status: 301, headers: { location: `/p/${pm.slug}/${url.search}` } })
-        }
-        return this.handleProxyRoute(req, pm.slug, server, {
-          prefix: `/p/${pm.slug}`,
-          upstreamPath: pm.rest + url.search,
-        })
-      }
+      return this.handleProxyRoute(req, pm.slug, server, {
+        prefix: `/p/${pm.slug}`,
+        upstreamPath: pm.rest + url.search,
+      })
     }
     if (url.pathname === "/ws") {
       const authStart = performance.now()
@@ -2499,7 +2509,7 @@ export class WebChannel implements Channel {
       return upgraded ? undefined : new Response("ws upgrade failed", { status: 500 })
     }
 
-    return handleProxyRequest(req, upstream, pathOpts)
+    return handleProxyRequest(req, upstream, pathOpts, { cookies: [AUTH_COOKIE], isOwnBearer: (t) => !!this.store.verify(t) })
   }
 
   private async routeRequest(req: Request): Promise<Response> {
@@ -2556,7 +2566,8 @@ export class WebChannel implements Channel {
     }
 
     // Machine-to-machine: the desktop app or the CLI (same user) read the token from the state directory. Nothing else
-    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it.
+    // knows it. /internal/stop stops the broker gracefully; /internal/restart restarts it under what runs it;
+    // /internal/expect-restart says the stop coming next is a restart.
     const stopTokenGiven = (kind: string): boolean => {
       const given = req.headers.get("x-supermux-stop-token") ?? ""
       const expected = this.opts.stopToken ?? ""
@@ -2579,6 +2590,13 @@ export class WebChannel implements Channel {
       if (!this.opts.onRestartRequest()) return new Response("not under a service manager", { status: 409 })
       log.info("restart_request_accepted")
       return new Response("restarting", { status: 202 })
+    }
+    if (path === "/internal/expect-restart" && this.opts.stopToken && this.opts.onExpectRestart) {
+      if (method !== "POST") return new Response("method not allowed", { status: 405 })
+      if (!stopTokenGiven("expect_restart")) return new Response("forbidden", { status: 403 })
+      this.opts.onExpectRestart()
+      log.info("restart_expected")
+      return new Response(null, { status: 204 })
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {
@@ -4345,10 +4363,12 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(path.split("/")[2]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const kind = body.kind as string | undefined
-      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+      if (!kind || !["chat", "terminal", "editor", "display", "browser"].includes(kind)) {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const browserError = kind === "browser" ? browserStateError(body.state) : undefined
+      if (browserError) return this.json({ error: browserError }, 400)
       const rawId = body.id
       if (rawId !== undefined && typeof rawId !== "string") {
         return this.json({ error: "id must be a string" }, 400)
@@ -4381,6 +4401,10 @@ export class WebChannel implements Channel {
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      if (body.state !== undefined && this.opts.getWorkspaceView?.(viewId)?.kind === "browser") {
+        const browserError = browserStateError(body.state)
+        if (browserError) return this.json({ error: browserError }, 400)
+      }
       try {
         const view = this.opts.patchWorkspaceView(viewId, {
           title: body.title as string | undefined,
@@ -4982,14 +5006,30 @@ function projectErrorResponse(err: unknown): Response {
   return json({ error: err instanceof Error ? err.message : String(err) }, 400)
 }
 
+/**
+ * Whether a browser opening this type would run it as a page or a script: HTML, any XML (SVG included)
+ * and JavaScript. Matched on the essence, so case and parameters don't hide it.
+ */
+function isActiveMime(mime: string | undefined): boolean {
+  const essence = mime?.split(";")[0]!.trim().toLowerCase() ?? ""
+  return essence === "text/html" || essence === "text/xml" || essence === "application/xml" || essence.endsWith("+xml") ||
+    /(java|ecma)script|jscript|livescript/.test(essence)
+}
+
 async function serveFile(req: Request, meta: { path: string; mime?: string; name?: string; size: number }): Promise<Response> {
   const file = Bun.file(meta.path)
   const headers: Record<string, string> = {
     "content-type": meta.mime ?? "application/octet-stream",
     "cache-control": "private, max-age=31536000, immutable",
     "accept-ranges": "bytes",
+    // These bytes are served on the app's own origin: the browser may not guess another type, and
+    // anything opened as a page gets no script and no origin.
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox",
   }
-  if (meta.name) headers["content-disposition"] = `inline; filename="${meta.name.replace(/"/g, "")}"`
+  const filename = meta.name ? `; filename="${meta.name.replace(/"/g, "")}"` : ""
+  if (isActiveMime(meta.mime)) headers["content-disposition"] = `attachment${filename}`
+  else if (meta.name) headers["content-disposition"] = `inline${filename}`
 
   const rangeHeader = req.headers.get("range")
   if (rangeHeader) {

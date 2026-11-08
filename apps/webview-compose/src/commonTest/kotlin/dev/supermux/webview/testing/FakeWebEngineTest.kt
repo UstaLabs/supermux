@@ -1,0 +1,795 @@
+package dev.supermux.webview.testing
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import dev.supermux.webview.DialogResult
+import dev.supermux.webview.DownloadRequest
+import dev.supermux.webview.FileChooserRequest
+import dev.supermux.webview.NavigationDecision
+import dev.supermux.webview.NavigationRequest
+import dev.supermux.webview.NewWindowDecision
+import dev.supermux.webview.NewWindowRequest
+import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.UnavailableReason
+import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebDialog
+import dev.supermux.webview.WebOrigin
+import dev.supermux.webview.WebProfile
+import dev.supermux.webview.WebSettings
+import dev.supermux.webview.bridge.BridgeCodec
+import dev.supermux.webview.bridge.BridgeMessage
+import dev.supermux.webview.bridge.Envelope
+import dev.supermux.webview.bridge.WebBridge
+import dev.supermux.webview.engine.EngineClient
+import dev.supermux.webview.engine.EngineConfig
+import dev.supermux.webview.engine.EngineEvent
+import dev.supermux.webview.engine.WebEngineFactory
+import dev.supermux.webview.engine.WebEngineResult
+import dev.supermux.webview.engine.pageSetup
+import dev.supermux.webview.runtime.OverlayCutouts
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class FakeWebEngineTest {
+    private val demo = WebContent.Html("<p/>", WebOrigin("demo"))
+
+    /** A lease's setup that gives [demo]'s documents the shim. */
+    private val setup = WebSettings.Default.pageSetup(dark = false, bridgeOrigins = setOf(demo.origin.origin))
+
+    private val hello = BridgeCodec.encode(BridgeMessage.Event("\$hello"))
+
+    private val anyClient = object : EngineClient {
+        override fun onNavigation(request: NavigationRequest) = NavigationDecision.Block
+        override suspend fun onDialog(dialog: WebDialog): DialogResult = DialogResult.Dismissed
+        override suspend fun onFileChooser(request: FileChooserRequest): List<String>? = null
+        override suspend fun onPermission(request: PermissionRequest) = false
+        override suspend fun onDownload(request: DownloadRequest) = false
+        override fun onNewWindow(request: NewWindowRequest) = NewWindowDecision.Block
+    }
+
+    private fun isReady(event: EngineEvent) =
+        event is EngineEvent.PageMessage && (BridgeCodec.decode(event.json) as? BridgeMessage.Event)?.name == "\$ready"
+
+    private suspend fun FakeWebEngineFactory.engine(config: EngineConfig = EngineConfig(WebProfile.Default)): FakeWebEngine =
+        (create(config) as WebEngineResult.Created).engine as FakeWebEngine
+
+    @Test fun loadingReportsTheDocumentAndPaints() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        assertEquals(
+            listOf(
+                EngineEvent.UrlChanged("https://demo.invalid/"),
+                EngineEvent.HistoryChanged(canGoBack = false, canGoForward = false),
+                EngineEvent.Progress(0.5f),
+                EngineEvent.PageMessage(
+                    "https://demo.invalid",
+                    BridgeCodec.encode(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "fake-1-1") }), from = "fake-1-1"),
+                ),
+                EngineEvent.Progress(null),
+                EngineEvent.FirstPaint,
+            ),
+            events,
+        )
+        assertEquals(listOf("configure", "load:${demo.key}"), engine.calls)
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun aPageWithSaveStateAnnouncesItAndAnswersSaveState() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState"), to = "fake-1-1"), demo.origin.origin)
+        runCurrent()
+        val messages = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decode(it.json) }
+        assertTrue(messages.contains(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true))))
+        assertTrue(messages.contains(BridgeMessage.Reply(3, JsonPrimitive(5))))
+        job.cancel()
+    }
+
+    @Test fun resetForgetsTheDocumentAndTheClient() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.client = anyClient
+        engine.configure(setup)
+        engine.load(demo)
+        assertTrue(engine.reset())
+        assertEquals(listOf("configure", "load:${demo.key}", "reset"), engine.calls)
+        assertNull(engine.client)
+        assertNull(engine.lastSetup)
+        engine.postMessage(hello, demo.origin.origin)
+        assertTrue(engine.calls.last().startsWith("post-dropped:"))
+    }
+
+    @Test fun aResetThatCannotGuaranteeIsolationSaysSo() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(resetSucceeds = false))
+        engine.configure(setup)
+        engine.load(demo)
+        assertFalse(engine.reset())
+    }
+
+    @Test fun aResetCanBeHeldOpen() = runTest {
+        val engine = FakeWebEngine(1)
+        val gate = CompletableDeferred<Unit>()
+        engine.resetGate = gate
+        val r = async { engine.reset() }
+        runCurrent()
+        assertFalse(r.isCompleted)
+        gate.complete(Unit)
+        assertTrue(r.await())
+    }
+
+    @Test fun aSaveCanBeHeldOpen() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        val gate = CompletableDeferred<Unit>()
+        engine.saveStateGate = gate
+        val saved = async { engine.saveState() }
+        runCurrent()
+        assertFalse(saved.isCompleted)
+        gate.complete(Unit)
+        assertEquals("fake:${demo.key}", saved.await()?.decodeToString())
+        assertEquals(emptyList(), engine.violations)
+    }
+
+    @Test fun aCrashOrAReleaseMakesTheEngineUnusable() = runTest {
+        val crashed = FakeWebEngine(1)
+        assertTrue(crashed.isUsable)
+        crashed.emit(EngineEvent.Crashed)
+        assertFalse(crashed.isUsable)
+        val released = FakeWebEngine(2)
+        assertTrue(released.isUsable)
+        released.release()
+        assertFalse(released.isUsable)
+    }
+
+    @Test fun aLoadPaintsBeforeItReportsItsSize() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(contentHeight = { 300f }))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        val ready = events.indexOfFirst(::isReady)
+        val paint = events.indexOf(EngineEvent.FirstPaint)
+        val size = events.indexOfFirst { it is EngineEvent.ContentSize }
+        assertTrue(ready >= 0 && paint > ready, "\$ready ($ready) comes before FirstPaint ($paint): $events")
+        assertTrue(size > paint, "FirstPaint ($paint) comes before ContentSize ($size): $events")
+        job.cancel()
+    }
+
+    @Test fun restoringUnknownStateSaysSo() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        assertFalse(engine.restoreState("fake:nope".encodeToByteArray(), demo))
+        runCurrent()
+        assertTrue(events.isEmpty())
+        job.cancel()
+    }
+
+    @Test fun aDetachedEngineTakesNoSnapshot() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        assertNull(engine.snapshot())
+    }
+
+    @Test fun theFactoryNumbersEnginesAndCanBeMadeUnavailable() = runTest {
+        val factory = FakeWebEngineFactory()
+        val config = EngineConfig(WebProfile.Default)
+        val first = factory.create(config) as WebEngineResult.Created
+        assertEquals(1, (first.engine as FakeWebEngine).id)
+        factory.unavailable = UnavailableReason.NotImplemented
+        assertEquals(WebEngineResult.Unavailable(UnavailableReason.NotImplemented, "fake"), factory.create(config))
+    }
+
+    @Test fun theFactoryCanBeHeldOpenAndCanFail() = runTest {
+        val factory = FakeWebEngineFactory()
+        val config = EngineConfig(WebProfile.Default)
+        val gate = CompletableDeferred<Unit>()
+        factory.createGate = gate
+        val held = async { factory.create(config) }
+        runCurrent()
+        assertFalse(held.isCompleted)
+        gate.complete(Unit)
+        assertTrue(held.await() is WebEngineResult.Created)
+        factory.failCreate = true
+        assertFailsWith<IllegalStateException> { factory.create(config) }
+        factory.failCreate = false
+        factory.unavailable = UnavailableReason.NoWebViewProvider
+        assertEquals(WebEngineResult.Unavailable(UnavailableReason.NoWebViewProvider, "fake"), factory.create(config))
+    }
+
+    @Test fun aFactoryCanBeWrittenAsALambda() = runTest {
+        val seen = mutableListOf<EngineConfig>()
+        val factory = WebEngineFactory { config ->
+            seen += config
+            WebEngineResult.Unavailable(UnavailableReason.NotImplemented, "lambda")
+        }
+        val config = EngineConfig(WebProfile.Named("x"), mediaPlaybackRequiresGesture = false)
+        assertEquals(WebEngineResult.Unavailable(UnavailableReason.NotImplemented, "lambda"), factory.create(config))
+        assertEquals(listOf(config), seen)
+    }
+
+    @Test fun callsAreBounded() = runTest {
+        val engine = FakeWebEngine(1)
+        repeat(2_500) { engine.applyOverlays(OverlayCutouts.Hidden) }
+        assertEquals(2_000, engine.calls.size)
+        assertTrue(engine.calls.last().startsWith("overlays:"))
+    }
+
+    @Test fun configureAndTheHooksAreRecorded() = runTest {
+        val engine = FakeWebEngine(1)
+        val dark = WebSettings.Default.pageSetup(dark = true, bridgeOrigins = setOf(demo.origin.origin))
+        engine.configure(dark)
+        engine.setVisible(false)
+        engine.requestFocus()
+        assertEquals(dark, engine.lastSetup)
+        assertEquals(listOf("configure", "visible:false", "focus"), engine.calls)
+    }
+
+    @Test fun messagesForAnotherOriginAreDropped() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")), "https://elsewhere.invalid")
+        runCurrent()
+        assertTrue(events.filterIsInstance<EngineEvent.PageMessage>().none { BridgeCodec.decode(it.json) is BridgeMessage.Reply })
+        assertTrue(engine.calls.last().startsWith("post-dropped:"))
+        job.cancel()
+    }
+
+    @Test fun anEngineWithNoDocumentSavesNothing() = runTest {
+        assertEquals(null, FakeWebEngine(1).saveState())
+    }
+
+    @Test fun aHelloGetsTheCurrentNonceBack() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.postMessage(hello, demo.origin.origin)
+        runCurrent()
+        val readies = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decode(it.json) }
+            .filter { it is BridgeMessage.Event && it.name == "\$ready" }
+        assertEquals(2, readies.size)
+        assertEquals(readies[0], readies[1])
+        job.cancel()
+    }
+
+    // SPI v2.1: the shim only where a real engine would install it.
+
+    @Test fun noShimWithoutConfigure() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.load(demo)
+        engine.postMessage(hello, demo.origin.origin)
+        runCurrent()
+        assertTrue(events.none { it is EngineEvent.PageMessage }, "$events")
+        assertTrue(EngineEvent.FirstPaint in events)
+        assertEquals(listOf("load without configure"), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun noShimForAnOriginOutsideTheBridgeOrigins() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(WebSettings.Default.pageSetup(dark = false, bridgeOrigins = setOf("https://other.invalid")))
+        engine.load(demo)
+        engine.postMessage(hello, demo.origin.origin)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")), demo.origin.origin)
+        runCurrent()
+        assertTrue(events.none { it is EngineEvent.PageMessage }, "$events")
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun noShimWithJavaScriptOff() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(WebSettings(javaScriptEnabled = false).pageSetup(dark = false, bridgeOrigins = setOf(demo.origin.origin)))
+        engine.load(demo)
+        engine.postMessage(hello, demo.origin.origin)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState")), demo.origin.origin)
+        runCurrent()
+        assertTrue(events.none { it is EngineEvent.PageMessage }, "$events")
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun aConfiguredLoadHasTheShimAndNoViolations() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        assertTrue(events.any(::isReady), "$events")
+        val messages = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decode(it.json) }
+        assertTrue(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true)) in messages)
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun aRestoreWithoutConfigureIsAViolation() = runTest {
+        val first = FakeWebEngine(1)
+        first.configure(setup)
+        first.load(demo)
+        val saved = assertNotNull(first.saveState())
+        val second = FakeWebEngine(2)
+        second.restoreState(saved, demo)
+        assertEquals(listOf("load without configure"), second.violations)
+    }
+
+    @Test fun aResetAsksForAnotherConfigure() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        assertTrue(engine.reset())
+        engine.load(demo)
+        assertEquals(listOf("load without configure"), engine.violations)
+    }
+
+    @Test fun restoringNeedsTheSameContent() = runTest {
+        val factory = FakeWebEngineFactory()
+        val first = factory.engine()
+        first.configure(setup)
+        first.load(demo)
+        val saved = assertNotNull(first.saveState())
+        val second = factory.engine()
+        second.configure(setup)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { second.events.collect { events += it } }
+
+        assertFalse(second.restoreState(saved, WebContent.Html("<p>another</p>", demo.origin)))
+        runCurrent()
+        assertTrue(events.isEmpty(), "$events")
+
+        assertTrue(second.restoreState(saved, demo))
+        runCurrent()
+        assertEquals(EngineEvent.UrlChanged(demo.origin.url), events.first())
+        assertTrue(events.any(::isReady), "$events")
+        assertTrue(EngineEvent.FirstPaint in events)
+        assertEquals(emptyList(), second.violations)
+        job.cancel()
+    }
+
+    @Test fun aReleasedEngineCannotBeReset() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        engine.release()
+        assertFalse(engine.reset())
+    }
+
+    @Test fun anEngineReleasedDuringAResetCannotBeReset() = runTest {
+        val engine = FakeWebEngine(1)
+        val gate = CompletableDeferred<Unit>()
+        engine.resetGate = gate
+        val r = async { engine.reset() }
+        runCurrent()
+        engine.release()
+        gate.complete(Unit)
+        assertFalse(r.await())
+    }
+
+    @Test fun payloadsAreCut() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        val big = BridgeCodec.encode(BridgeMessage.Event("big", JsonPrimitive("x".repeat(10_000))), to = "fake-1-1")
+        engine.postMessage(big, demo.origin.origin)
+        engine.postMessage(big, "https://elsewhere.invalid")
+        engine.evaluate(big)
+        assertEquals(listOf("post:", "post-dropped:", "eval:").map { it + big.take(200) }, engine.calls.takeLast(3))
+    }
+
+    @Test fun theFactoryGivesEachEngineItsConfig() = runTest {
+        val factory = FakeWebEngineFactory()
+        val ephemeral = EngineConfig(WebProfile.Ephemeral)
+        val named = EngineConfig(WebProfile.Named("x"), mediaPlaybackRequiresGesture = false)
+        assertEquals(ephemeral, factory.engine(ephemeral).config)
+        assertEquals(named, factory.engine(named).config)
+    }
+
+    /**
+     * Paint holding: between documents the surface keeps showing the previous one until the next paints, as Android
+     * WebView and WKWebView do. Only the first document after creation or a reset starts unpainted.
+     */
+    @Test fun aNewDocumentKeepsShowingThePreviousOneUntilItPaints() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false))
+        engine.configure(setup)
+        engine.load(demo)
+        assertFalse(engine.painted)
+        engine.emit(EngineEvent.FirstPaint)
+        assertTrue(engine.painted)
+        engine.reload()
+        assertTrue(engine.painted)
+        engine.load(WebContent.Html("<p>next</p>", demo.origin))
+        assertTrue(engine.painted)
+        assertTrue(engine.reset())
+        assertFalse(engine.painted)
+    }
+
+    /** Task 15b: each content paints a colour of its own, so a screenshot shows which snapshot covers which view. */
+    @Test fun eachContentHasAColourOfItsOwnUnlessOneIsSet() {
+        fun pages() = List(20) { WebContent.Url("https://example.com/articles/$it") } + demo
+        val colours = pages().map(FakeEngineBehavior()::colorOf)
+        assertEquals(colours.size, colours.toSet().size, "every content its own colour: $colours")
+        assertEquals(colours, pages().map(FakeEngineBehavior()::colorOf), "the same content, the same colour")
+        colours.forEach {
+            assertNotEquals(Color.White, it, "white is an unpainted page")
+            assertEquals(1f, it.alpha)
+            assertEquals(it, Color(it.toArgb()), "$it: exact in 8 bits a channel, as screenshots read it back")
+        }
+        val red = FakeEngineBehavior(color = Color.Red)
+        assertEquals(listOf(Color.Red), pages().map(red::colorOf).distinct())
+    }
+
+    // The fake obeys addressing and release, and allows no lease calls during or after a failed reset.
+
+    private fun ready(nonce: String) = BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", nonce) })
+
+    @Test fun aMisaddressedMessageIsDropped() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        // What the page sends says which document sent it, as with the real shim.
+        val announced = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decodeEnvelope(it.json) }
+        assertEquals(
+            listOf(Envelope(ready("fake-1-1"), from = "fake-1-1"), Envelope(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true)), from = "fake-1-1")),
+            announced,
+        )
+        events.clear()
+        // For another document, or for none: dropped, as the shim drops them.
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(3, "\$saveState"), to = "some-other-document"), demo.origin.origin)
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(4, "\$saveState")), demo.origin.origin)
+        runCurrent()
+        assertTrue(events.isEmpty(), "$events")
+        assertEquals(2, engine.calls.count { it.startsWith("post-misaddressed:") })
+        // For this document: answered. A $hello needs no address, and its answer tells of the save provider again.
+        engine.postMessage(BridgeCodec.encode(BridgeMessage.Call(5, "\$saveState"), to = "fake-1-1"), demo.origin.origin)
+        engine.postMessage(hello, demo.origin.origin)
+        runCurrent()
+        assertEquals(
+            listOf(
+                Envelope(BridgeMessage.Reply(5, JsonPrimitive(5)), from = "fake-1-1"),
+                Envelope(ready("fake-1-1"), from = "fake-1-1"),
+                Envelope(BridgeMessage.Event("\$saveStateProvider", JsonPrimitive(true)), from = "fake-1-1"),
+            ),
+            events.map { BridgeCodec.decodeEnvelope((it as EngineEvent.PageMessage).json) },
+        )
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    @Test fun nothingWorksAfterRelease() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(pageState = JsonPrimitive(5)))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        val saved = assertNotNull(engine.saveState())
+        engine.release()
+        runCurrent()
+        events.clear()
+        engine.load(demo)
+        engine.configure(setup)
+        engine.postMessage(hello, demo.origin.origin)
+        assertNull(engine.snapshot())
+        assertFalse(engine.reset())
+        engine.reload()
+        engine.goBack()
+        engine.goForward()
+        engine.stop()
+        assertNull(engine.evaluate("1"))
+        assertNull(engine.saveState())
+        assertFalse(engine.restoreState(saved, demo))
+        engine.setVisible(true)
+        engine.requestFocus()
+        engine.applyOverlays(OverlayCutouts.Hidden)
+        engine.replayState()
+        engine.release()
+        runCurrent()
+        assertTrue(events.isEmpty(), "$events")
+        val members = listOf(
+            "load", "configure", "postMessage", "snapshot", "reset", "reload", "goBack", "goForward", "stop", "evaluate",
+            "saveState", "restoreState", "setVisible", "requestFocus", "applyOverlays", "replayState", "release",
+        )
+        assertEquals(members.map { "$it after release" }, engine.violations)
+        assertNull(engine.cutouts)
+        job.cancel()
+    }
+
+    @Test fun aConfigureDuringAHeldResetIsAViolation() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        val saved = assertNotNull(engine.saveState())
+        val gate = CompletableDeferred<Unit>()
+        engine.resetGate = gate
+        val reset = async { engine.reset() }
+        runCurrent()
+        // The lease ended when the reset started.
+        assertNull(engine.lastSetup)
+        events.clear()
+        engine.configure(setup)
+        engine.load(demo)
+        engine.restoreState(saved, demo)
+        engine.postMessage(hello, demo.origin.origin)
+        runCurrent()
+        assertTrue(events.isEmpty(), "$events")
+        assertEquals(listOf("configure", "load", "restoreState", "postMessage").map { "$it during reset" }, engine.violations)
+        gate.complete(Unit)
+        assertTrue(reset.await())
+        // Nothing set during the reset survives it, and the next lease starts as any lease does.
+        assertNull(engine.lastSetup)
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        assertTrue(events.any(::isReady), "$events")
+        assertEquals(4, engine.violations.size)
+        job.cancel()
+    }
+
+    @Test fun aLoadAfterAFailedResetIsAViolation() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(resetSucceeds = false))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        val saved = assertNotNull(engine.saveState())
+        assertFalse(engine.reset())
+        assertNull(engine.lastSetup)
+        runCurrent()
+        events.clear()
+        engine.load(demo)
+        engine.configure(setup)
+        engine.restoreState(saved, demo)
+        engine.postMessage(hello, demo.origin.origin)
+        runCurrent()
+        assertTrue(events.isEmpty(), "$events")
+        assertEquals(listOf("load", "configure", "restoreState", "postMessage").map { "$it after a failed reset" }, engine.violations)
+        // The pool destroys it, which is no violation.
+        engine.release()
+        assertEquals(4, engine.violations.size)
+        job.cancel()
+    }
+
+    /** Task 16b: once a navigation returns, nothing an earlier document left buffered is delivered; a crash still is. */
+    @Test fun aNavigationDropsWhatAnEarlierDocumentLeftBuffered() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.emit(EngineEvent.TitleChanged("first"))
+        // The subscriber hasn't caught up when the next document starts.
+        engine.load(WebContent.Html("<p>next</p>", demo.origin))
+        engine.emit(EngineEvent.TitleChanged("next"))
+        runCurrent()
+        assertEquals(listOf(EngineEvent.TitleChanged("next")), events.filterIsInstance<EngineEvent.TitleChanged>())
+        assertEquals(1, events.count(::isReady))
+        assertEquals(1, events.count { it == EngineEvent.FirstPaint })
+        // So does a reload, a restore and a reset.
+        for (navigate in listOf<() -> Unit>(
+            { engine.reload() },
+            { assertTrue(engine.restoreState("fake:${demo.key}".encodeToByteArray(), demo)) },
+        )) {
+            events.clear()
+            engine.emit(EngineEvent.TitleChanged("before"))
+            navigate()
+            runCurrent()
+            assertTrue(events.none { it is EngineEvent.TitleChanged } && events.count(::isReady) == 1, "$events")
+        }
+        events.clear()
+        engine.emit(EngineEvent.TitleChanged("before the reset"))
+        assertTrue(engine.reset())
+        runCurrent()
+        assertEquals(emptyList(), events)
+        // A crash is the engine's, not a document's.
+        engine.emit(EngineEvent.Crashed)
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        assertTrue(EngineEvent.Crashed in events)
+        assertEquals(emptyList(), engine.violations)
+        job.cancel()
+    }
+
+    /**
+     * As every real engine does, the fake keeps what its page became while nobody subscribed (a parked page) for the next
+     * subscriber, and drops what it said: that reached no one.
+     */
+    @Test fun whatThePageBecameWhileNobodySubscribedReachesTheNextSubscriberButNotWhatItSaid() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        first.cancel()
+        runCurrent()
+        events.clear()
+        // Parked: the page moves on with no subscriber.
+        engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
+        assertTrue(engine.postFromPage("progress", JsonPrimitive(2)))
+        val next = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        assertEquals(listOf<EngineEvent>(EngineEvent.UrlChanged("https://demo.invalid/#step-2")), events)
+        next.cancel()
+    }
+
+    /**
+     * A parked page that floods its bridge holds nothing of it: the fake drops what it says as it comes, as every engine
+     * does, and stays usable, so the next view of the page adopts it. Only its `$ready` waits for that view.
+     */
+    @Test fun aParkedPageThatFloodsItsBridgeStaysUsable() = runTest {
+        val engine = FakeWebEngine(1)
+        var told = 0
+        engine.onUnusable = { told++ }
+        engine.configure(setup)
+        engine.load(demo)
+        repeat(5_000) { assertTrue(engine.postFromPage("tick", JsonPrimitive(it))) }
+        assertTrue(engine.isUsable, "a chatty parked page was crashed")
+        assertEquals(0, told)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        val said = events.filterIsInstance<EngineEvent.PageMessage>().map { BridgeCodec.decodeEnvelope(it.json)?.message }
+        assertEquals(listOf<BridgeMessage?>(BridgeMessage.Event("\$ready", buildJsonObject { put("nonce", "fake-1-1") })), said)
+        job.cancel()
+    }
+
+    /** As the shim does, its page answers a `$hello` with its `$ready` and, if it has one, its save provider again. */
+    @Test fun aHelloMakesThePageTellOfItsSaveProviderAgainAsTheShimDoes() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        runCurrent()
+        fun answer(): List<String> {
+            events.clear()
+            engine.postMessage(WebBridge.HELLO, demo.origin.origin)
+            runCurrent()
+            return events.filterIsInstance<EngineEvent.PageMessage>().map { (BridgeCodec.decode(it.json) as BridgeMessage.Event).name }
+        }
+        assertEquals(listOf("\$ready"), answer())
+        // The page registers a provider later: while parked, say, where what it posts reaches no one.
+        engine.behavior = engine.behavior.copy(pageState = JsonPrimitive("draft"))
+        assertEquals(listOf("\$ready", "\$saveStateProvider"), answer())
+        job.cancel()
+    }
+
+    /** Its renderer dying tells [FakeWebEngine.onUnusable], once, after the crash it queues; its own release doesn't. */
+    @Test fun aCrashTellsWhoeverListensForItsDeathOnce() = runTest {
+        val engine = FakeWebEngine(1)
+        val told = mutableListOf<Boolean>()
+        engine.onUnusable = { told += engine.isUsable }
+        engine.emit(EngineEvent.Crashed)
+        engine.emit(EngineEvent.Crashed)
+        assertEquals(listOf(false), told, "told once, once unusable")
+        val released = FakeWebEngine(2)
+        released.onUnusable = { told += true }
+        released.release()
+        released.emit(EngineEvent.Crashed)
+        assertEquals(listOf(false), told, "a release isn't a death to tell of")
+    }
+
+    @Test fun thePageCanPostToTheHostThroughItsShim() = runTest {
+        val engine = FakeWebEngine(1)
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        assertFalse(engine.postFromPage("clicked"), "no document yet")
+        engine.configure(setup)
+        engine.load(demo)
+        assertTrue(engine.postFromPage("clicked", JsonPrimitive(1)))
+        runCurrent()
+        assertEquals(
+            Envelope(BridgeMessage.Event("clicked", JsonPrimitive(1)), from = "fake-1-1"),
+            BridgeCodec.decodeEnvelope((events.last() as EngineEvent.PageMessage).json),
+        )
+        // A document without the shim has no hostBridge to post with.
+        val bare = FakeWebEngine(2)
+        bare.configure(WebSettings(javaScriptEnabled = false).pageSetup(dark = false, bridgeOrigins = setOf(demo.origin.origin)))
+        bare.load(demo)
+        assertFalse(bare.postFromPage("clicked"))
+        job.cancel()
+    }
+
+    @Test fun whetherThePageSitsAboveComposeIsConfigurable() {
+        assertTrue(FakeWebEngine(1).needsCutouts)
+        assertFalse(FakeWebEngine(2, behavior = FakeEngineBehavior(needsCutouts = false)).needsCutouts)
+    }
+
+    @Test fun resetClearsThePaintAndTheCutouts() = runTest {
+        val engine = FakeWebEngine(1)
+        engine.configure(setup)
+        engine.load(demo)
+        engine.applyOverlays(OverlayCutouts.Hidden)
+        assertTrue(engine.painted)
+        assertNotNull(engine.cutouts)
+        assertTrue(engine.reset())
+        assertFalse(engine.painted)
+        assertNull(engine.cutouts)
+    }
+
+    /**
+     * A view that adopts a parked page subscribes anew: the engine replays the current document to it, as it is now (its
+     * commit, history, title and latest size), and its first paint once it has painted. The page sees nothing of it.
+     */
+    @Test fun replayStateRepeatsTheCurrentPage() = runTest {
+        val engine = FakeWebEngine(1, behavior = FakeEngineBehavior(paintsOnLoad = false, contentHeight = { 300f }))
+        val events = mutableListOf<EngineEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { engine.events.collect { events += it } }
+        engine.configure(setup)
+        engine.load(demo)
+        engine.emit(EngineEvent.TitleChanged("Demo"))
+        engine.emit(EngineEvent.UrlChanged("https://demo.invalid/#step-2"))
+        engine.emit(EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false))
+        // The page as the subscriber heard it happen; the replay then tells it again, as it is now.
+        runCurrent()
+        events.clear()
+        engine.replayState()
+        runCurrent()
+        val page = listOf(
+            EngineEvent.UrlChanged("https://demo.invalid/#step-2"),
+            EngineEvent.HistoryChanged(canGoBack = true, canGoForward = false),
+            EngineEvent.TitleChanged("Demo"),
+            EngineEvent.ContentSize(100f, 300f),
+        )
+        assertEquals(page, events, "not painted yet: no FirstPaint")
+        events.clear()
+        engine.emit(EngineEvent.FirstPaint)
+        runCurrent()
+        events.clear()
+        engine.replayState()
+        runCurrent()
+        assertEquals(page + EngineEvent.FirstPaint, events)
+        assertEquals(1, engine.documentsStarted, "the replay started no document")
+        assertTrue("replay" in engine.calls)
+        assertEquals(emptyList(), engine.violations)
+        // An engine with no document replays nothing.
+        val blank = FakeWebEngine(2)
+        val heard = mutableListOf<EngineEvent>()
+        val other = launch(start = CoroutineStart.UNDISPATCHED) { blank.events.collect { heard += it } }
+        blank.replayState()
+        runCurrent()
+        assertTrue(heard.isEmpty(), "$heard")
+        job.cancel()
+        other.cancel()
+    }
+}

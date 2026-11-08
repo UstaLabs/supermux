@@ -1,0 +1,51 @@
+/*
+ * The chat demo's preview kit: what every preview page shares. The app serves these files from its own resources
+ * (a WebContent.Bundle on https://previews.invalid), so the pages work offline.
+ *
+ * Two kinds of page:
+ * - "fixed" (<body class="fixed">): the app gives the view a height, and the page fills it.
+ * - "wrap" (<body class="wrap">): the view follows the page's height. Nothing in it may use vh units, and its content
+ *   sits in <main>, which clips what its animations move, so the reported height never jitters.
+ */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #14161c;
+  --muted: #5d6475;
+  --line: rgba(20, 22, 28, .10);
+  --card: #f4f5f9;
+  --chip: rgba(20, 22, 28, .06);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171d;
+    --fg: #eef0f6;
+    --muted: #9aa3b5;
+    --line: rgba(255, 255, 255, .10);
+    --card: #1d2029;
+    --chip: rgba(255, 255, 255, .08);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+html { background: var(--bg); }
+body {
+  font: 14px/1.45 var(--font);
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+body.fixed, html.fixed { height: 100%; overflow: hidden; }
+body.fixed { position: relative; }
+body.wrap > main { position: relative; overflow: hidden; }
+canvas { display: block; }
+button { font: inherit; color: inherit; }
+.nosel { -webkit-user-select: none; user-select: none; }
+.fill { position: absolute; inset: 0; }
+.mono { font-family: var(--mono); }

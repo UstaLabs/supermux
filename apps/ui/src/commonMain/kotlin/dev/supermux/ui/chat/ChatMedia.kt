@@ -25,6 +25,7 @@ import dev.supermux.ui.editor.filePreviewKind
 import dev.supermux.ui.editor.formatFileSize
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.parseMarkdownBlocks
+import dev.supermux.fs.pathLeaf
 
 /** Whether [att] paints as a picture, plays as a clip, or neither (a file chip). */
 fun attachmentMediaKind(att: Attachment): FilePreviewKind? {
@@ -63,7 +64,7 @@ sealed interface ChatMediaItem {
         override val kind: FilePreviewKind,
     ) : ChatMediaItem {
         override val key: String get() = markdownMediaKey(entryId, absPath)
-        override val name: String get() = absPath.substringAfterLast('/')
+        override val name: String get() = pathLeaf(absPath)
     }
 }
 

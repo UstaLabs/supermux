@@ -389,6 +389,7 @@ class DocumentStore(
         changedPaths = changedPaths - normPath(doc.path)
     }
 
+    // platform-ok: an editor key is workdir-relative, always /
     private fun normPath(p: String): String = p.removePrefix("/")
 
     /**

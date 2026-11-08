@@ -5,6 +5,7 @@ import { resolveCommand, spawnCommand } from "../process/launcher"
 import { home } from "../../shared/home"
 import { join } from "path"
 import { claudeModelSupportsFast, CODEX_FAST_SERVICE_TIER } from "./fast-mode"
+import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 
 /**
  * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
@@ -44,6 +45,8 @@ export async function discoverClaudeModels(opts?: {
   fetch?: typeof globalThis.fetch
   env?: Record<string, string | undefined>
   readCredentialFile?: () => string | undefined
+  /** The login Claude Code keeps in the OS credential store for a CLAUDE_CONFIG_DIR (unset = the system login). */
+  readStoredLogin?: (configDir?: string) => Promise<string | null>
   launch?: DiscoveryLaunch
 }): Promise<ModelInfo[]> {
   const fetchFn = opts?.fetch ?? globalThis.fetch
@@ -56,9 +59,18 @@ export async function discoverClaudeModels(opts?: {
   const readCredentialFile = opts?.readCredentialFile
     ?? (() => credentialsPath ? readFileOrUndefined(credentialsPath) : undefined)
 
+  const fileToken = oauthTokenFromCredential(readCredentialFile() ?? "")
+  // Without a file, Claude Code on Windows may keep the login in Credential Manager (#101). A token-only account has
+  // neither, and stands alone.
+  const storedDir = launch?.env.CLAUDE_CONFIG_DIR
+  const readStoredLogin = opts?.readStoredLogin ?? ((configDir?: string) => readClaudeStoredLogin(configDir))
+  const storedToken = !fileToken && (!launch || storedDir)
+    ? oauthTokenFromCredential((await readStoredLogin(storedDir).catch(() => null)) ?? "")
+    : undefined
   const oauthTokens = [
     env.CLAUDE_CODE_OAUTH_TOKEN,
-    oauthTokenFromCredential(readCredentialFile() ?? ""),
+    fileToken,
+    storedToken,
   ].filter((token, i, all): token is string => Boolean(token) && all.indexOf(token) === i)
 
   const authHeaders: Record<string, string>[] = [

@@ -67,6 +67,13 @@ test("antigravity on Windows: agy's login in Credential Manager counts as authed
   expect(detectAgent("antigravity", { ...probes, antigravityKeyring: () => false }, win).authed).toBe(false)
 })
 
+test("claude on Windows: its login in Credential Manager counts as authed with no credential file (#101)", () => {
+  const win = { home: "C:\\Users\\u", platform: "win32" as const }
+  const probes = { hasBinary: (b: string) => b === "claude", fileExists: () => false, claudeStoredLogin: () => true }
+  expect(detectAgent("claude", probes, win).authed).toBe(true)
+  expect(detectAgent("claude", { ...probes, claudeStoredLogin: () => false }, win).authed).toBe(false)
+})
+
 test("detectAgent always carries kind-derived auth capabilities", () => {
   const probes = { hasBinary: () => false, fileExists: () => false }
   expect(detectAgent("opencode", probes, paths).capabilities).toEqual({

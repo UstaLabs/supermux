@@ -1001,6 +1001,7 @@ internal fun isValidForgeHostUrl(raw: String): Boolean {
     val lower = t.lowercase()
     if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) return false
     val withoutScheme = t.replace(Regex("^https?://", RegexOption.IGNORE_CASE), "")
+    // platform-ok: a URL
     if (withoutScheme.isEmpty() || withoutScheme.startsWith("/")) return false
     val hostPort = withoutScheme.substringBefore("/")
     if (hostPort.isEmpty()) return false

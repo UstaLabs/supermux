@@ -30,12 +30,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.util.PerfReport
 import dev.supermux.util.PerfTrace
 import kotlinx.coroutines.delay
@@ -63,7 +62,7 @@ fun PerfPanel(onClose: () -> Unit, modifier: Modifier = Modifier) {
             delay(500)
         }
     }
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     Surface(
         modifier = modifier.width(640.dp).fillMaxHeight(0.85f),
         shape = RoundedCornerShape(10.dp),
@@ -74,7 +73,7 @@ fun PerfPanel(onClose: () -> Unit, modifier: Modifier = Modifier) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Load timings · ${PerfTrace.launchId}", color = Color(0xFFE6E8EB), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Row {
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(PerfReport.all())) }) { Text("Copy", fontSize = 12.sp) }
+                    TextButton(onClick = { platform.copyToClipboard(PerfReport.all()) }) { Text("Copy", fontSize = 12.sp) }
                     TextButton(onClick = onClose) { Text("Close", fontSize = 12.sp) }
                 }
             }

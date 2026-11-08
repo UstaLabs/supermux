@@ -321,7 +321,7 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
       files,
     }
   } else if (agent === "grok" || agent === "cursor") {
-    const adapter = agent === "grok" ? grokContext((options.mcpServers as never) ?? []) : cursorContext((options.mcpServers as never) ?? [])
+    const adapter = agent === "grok" ? grokContext((options.mcpServers as never) ?? []) : cursorContext((options.mcpServers as never) ?? [], { homeSkills: options.homeSkills === true })
     const launch = sc ? adapter.launch(sc, options.env as Record<string, string>) : undefined
     const commandArgs = [...(options.commandArgs as string[]), ...(launch?.args ?? [])]
     const pluginDirs = takeFlag(commandArgs, "--plugin-dir")
@@ -331,6 +331,11 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
     const configToml = files["<home>/.grok/config.toml"] ?? ""
     const tomlSkills = /\[skills\]\npaths = (\[.*\])/.exec(configToml)
     if (tomlSkills) skills.push(...JSON.parse(tomlSkills[1]!))
+    // Cursor (#102): each skill folder the launch linked into the session HOME's .cursor/skills.
+    const homeSkills = join(c.sessionHome, ".cursor", "skills")
+    if (agent === "cursor" && existsSync(homeSkills)) {
+      for (const name of readdirSync(homeSkills).sort()) if (lstatSync(join(homeSkills, name)).isSymbolicLink()) skills.push(realpathSync(join(homeSkills, name)))
+    }
     const fileMcp = agent === "cursor" && files["<home>/.cursor/mcp.json"] ? mcpFromJson(join(c.sessionHome, ".cursor", "mcp.json")) : mcpFromToml(configToml)
     const acp = ([...((options.mcpServers as never[]) ?? []), ...(launch?.mcpServers ?? [])] as Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>).map((server) => ({
       name: server.name, command: server.command, args: server.args, env: Object.fromEntries(server.env.map(e => [e.name, e.value])),
@@ -384,8 +389,11 @@ export async function effectiveLaunch(agent: Agent, role: Role, s: Scratch): Pro
 }
 
 /** Paths (dot-joined) where two launches differ. */
-/** What changed for Cursor relative to the C3a launch since the C0 cursor cells (2026-10-05). */
-export const CURSOR_C3 = ["files.<work>/.cursor/rules/mux.mdc", "files.<work>/.git/info/exclude", "instructions.channel", "instructions.text", "plugins"]
+/**
+ * What changed for Cursor relative to the C3a launch since the C0 cursor cells (2026-10-05), and since #102 its
+ * plugins' skill folders linked into the session HOME's .cursor/skills (`skills`).
+ */
+export const CURSOR_C3 = ["files.<work>/.cursor/rules/mux.mdc", "files.<work>/.git/info/exclude", "instructions.channel", "instructions.text", "plugins", "skills"]
 /** The body of the old repo rule (`.cursor/rules/mux.mdc` without its front matter). */
 export function cursorRuleBody(mdc: string): string {
   return mdc.replace(/^---\ndescription: supermux session rules\nalwaysApply: true\n---\n\n/, "")

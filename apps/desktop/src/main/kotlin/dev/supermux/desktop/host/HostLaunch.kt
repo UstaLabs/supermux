@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -124,12 +125,7 @@ internal suspend fun HostSupervisor.binaries(): HostBinaries.SidecarBinaries {
     val bins = withContext(io) { materialize() }
     lastCopyFailed = bins.brokerPath == null && packaged()
     if (!lastCopyFailed) return bins
-    val os = when (osEnv.os) {
-        OsEnv.Os.MAC -> HostBinaries.Os.MAC
-        OsEnv.Os.LINUX -> HostBinaries.Os.LINUX
-        OsEnv.Os.WINDOWS -> HostBinaries.Os.WINDOWS
-        OsEnv.Os.OTHER -> HostBinaries.Os.OTHER
-    }
+    val os = osEnv.os
     val previous = stateDir.resolve(HostBinaries.BIN_SUBDIR).resolve(HostBinaries.fileName(HostBinaries.Binary.Broker, os))
     if (!Files.isRegularFile(previous)) {
         log("couldn't copy the broker out of the app")
@@ -274,10 +270,10 @@ private suspend fun HostSupervisor.childEnv(prefs: HostingPrefs, bins: HostBinar
  * ignores case, and Java's ProcessBuilder hands the child both `Path` and `PATH` when both are in its map, so which one
  * the broker read was undefined: one key stays, with [base]'s spelling and our value (#29).
  */
-internal fun childEnvironment(base: Map<String, String>, ours: Map<String, String>, os: OsEnv.Os): Map<String, String> {
+internal fun childEnvironment(base: Map<String, String>, ours: Map<String, String>, os: DesktopOs): Map<String, String> {
     val out = LinkedHashMap<String, String>()
     for ((k, v) in base) if (!isInheritedServiceKey(k)) out[k] = v
-    if (os != OsEnv.Os.WINDOWS) {
+    if (os != DesktopOs.WINDOWS) {
         out.putAll(ours)
         return out
     }

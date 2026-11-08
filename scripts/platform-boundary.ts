@@ -8,7 +8,8 @@
 // baseline: it only shrinks). Rewrite the baseline from the current tree with:
 //   bun scripts/platform-boundary.ts --write
 // A line that matches but is no OS decision (a URL, a model id) carries `// platform-ok: <why>` on the same line
-// or the line above. The reason is required.
+// or the line above. The reason is required. Developer and CI tooling (DEV_TOOLING, each folder with its reason) is
+// not scanned: it ships to no one.
 import { Glob } from "bun"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -23,6 +24,29 @@ export type Drift = { rose: Change[]; fell: Change[] }
 const ROOT = resolve(import.meta.dir, "..")
 export const BASELINE = join(ROOT, "tests", "platform-boundary.baseline.json")
 const DESKTOP = "apps/desktop/src/main/kotlin/dev/supermux/desktop"
+// The webview library ships on its own, without the desktop's OsEnv or folder helper: its native loaders and engine
+// runtimes are its OS seams, each allowed under the one rule it needs (never os-check-kt: it asks Skiko's hostOs). Its
+// sample and feasibility labs are harnesses that drive the OS on purpose (xdotool, PowerShell, temp folders).
+const WEBVIEW = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine"
+const LSP_TRANSPORT = "apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt"
+const WEBVIEW_HARNESSES = ["apps/webview-sample/", "apps/webview-wpetest/", "apps/webview-wintest/"]
+
+/**
+ * Developer and CI tooling, with why it is: it is never part of the broker, the CLI or an app a user runs, so no rule
+ * applies to it and it is not scanned. A file in one of these folders that ships after all is in [SHIPPED_TOOLING].
+ */
+export const DEV_TOOLING: Record<string, string> = {
+  "scripts/": "the repo's build, CI, release and probe scripts, run by its developers and its CI",
+  "packages/supermux-core/scripts/": "the library's live probes against real agents, run by its developers",
+  "packages/supermux-core/examples/": "examples a library user reads and adapts (the package publishes only examples/*.mjs)",
+}
+
+/** In a [DEV_TOOLING] folder, yet shipped: `supermux pair` and `supermux revoke` run them (src/cli.ts). Still scanned. */
+export const SHIPPED_TOOLING: readonly string[] = ["scripts/pair.ts", "scripts/revoke.ts"]
+
+function devTooling(file: string): boolean {
+  return !SHIPPED_TOOLING.includes(file) && Object.keys(DEV_TOOLING).some(folder => file.startsWith(folder))
+}
 
 export const RULES: Rule[] = [
   {
@@ -54,11 +78,14 @@ export const RULES: Rule[] = [
     patterns: [
       /\bBun\.spawn(?:Sync)?\(/,
       /\bBun\.\$`/,
-      /from\s*["'](?:node:)?child_process["']/,
+      // Not a type-only import or export: a type starts no process.
+      /^(?!\s*(?:import|export)\s+type\b).*from\s*["'](?:node:)?child_process["']/,
       /require\(\s*["'](?:node:)?child_process["']\s*\)/,
     ],
-    allowed: ["packages/platform/", "src/core/process/launcher.ts"],
-    use: "start processes with spawnCommand (src/core/process/launcher.ts), or Bun.spawn with { ...proc.spawnDefaults() } spread first: without them the child gets the startup env and, on Windows, a console window",
+    // src/core/git/exec.ts is the git family's async runner, every call there starting from proc.spawnDefaults. Its
+    // synchronous twin, exec-sync.ts, goes through the launcher.
+    allowed: ["packages/platform/", "src/core/process/launcher.ts", "src/core/git/exec.ts"],
+    use: "start processes through src/core/process/launcher.ts: spawnProcess / spawnProcessSync (Bun's options) or spawnCommand / spawnCommandSync (node's, with Windows .cmd/.ps1 shims). Git goes through src/core/git/exec.ts (or exec-sync.ts, where a caller cannot await). Both apply proc.spawnDefaults; without them the child gets the startup env and, on Windows, a console window",
   },
   {
     id: "which-path",
@@ -126,8 +153,25 @@ export const RULES: Rule[] = [
     id: "spawn-kt",
     lang: "kt",
     patterns: [/\bProcessBuilder\(/, /Runtime\.getRuntime\(\)\.exec\(/],
-    allowed: [`${DESKTOP}/host/OsEnv.kt`, `${DESKTOP}/platform/DesktopOs.kt`],
+    allowed: [
+      `${DESKTOP}/host/OsEnv.kt`,
+      `${DESKTOP}/platform/DesktopOs.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      `${WEBVIEW}/linux/WpeExtractor.kt`,
+      ...WEBVIEW_HARNESSES,
+      // The editor library's own LSP transport, for its sample and tests: the product's language servers run on the broker.
+      LSP_TRANSPORT,
+    ],
     use: "run OS commands through OsEnv",
+  },
+  {
+    id: "platform-seam-kt",
+    lang: "kt",
+    // Compose's own clipboard and link opener: AWT's on the desktop, an Intent on Android that throws when nothing
+    // takes the link. The libraries below :ui have no Platform: they use Compose's, which an app can provide.
+    patterns: [/\bLocalClipboardManager\b/, /\bLocalUriHandler\b/],
+    allowed: ["apps/terminal-compose/", "apps/editor-compose/", "apps/webview-compose/"],
+    use: "copy and open links through LocalPlatform.current (copyToClipboard, openUrl): one implementation per app, and neither throws",
   },
   {
     id: "env-dirs-kt",
@@ -138,7 +182,19 @@ export const RULES: Rule[] = [
       /System\.getenv\(\s*"(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|XDG_[A-Z_]*(?:_HOME|_DIRS?))"\s*\)/,
       /\bFile\.createTempFile\(/,
     ],
-    allowed: [],
+    allowed: [
+      // The desktop's one reader of home, the app-data folder and XDG_RUNTIME_DIR.
+      `${DESKTOP}/host/OsEnv.kt`,
+      // The native-library cache root's call sites; the shared block itself takes them as parameters.
+      "apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt",
+      "apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt",
+      LSP_TRANSPORT,
+      `${WEBVIEW}/windows/WinNativeLoader.kt`,
+      `${WEBVIEW}/windows/Wv2Runtime.kt`,
+      `${WEBVIEW}/mac/MacNativeLibrary.kt`,
+      `${WEBVIEW}/linux/WpeRuntime.kt`,
+      ...WEBVIEW_HARNESSES,
+    ],
     use: "folders: the desktop dirs helper (platform step 9); temp files: Files.createTempFile / createTempDirectory",
   },
 ]
@@ -190,7 +246,7 @@ export function sourceFiles(root: string = ROOT): { file: string; lang: Lang }[]
       const file = norm(`${dir}/${path}`)
       const segments = file.split("/")
       if (segments.some(s => s === "node_modules" || s === "dist" || s === "tests" || s === "e2e")) continue
-      if (/\.(?:test|spec)\.ts$|\.d\.ts$/.test(file)) continue
+      if (/\.(?:test|spec)\.ts$|\.d\.ts$/.test(file) || devTooling(file)) continue
       files.push({ file, lang: "ts" })
     }
   }

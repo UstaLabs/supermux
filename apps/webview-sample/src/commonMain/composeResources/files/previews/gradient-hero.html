@@ -1,0 +1,211 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Gradient hero</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* A stage page: its own vivid colours in both themes. The script sets the variant's palette. */
+  :root {
+    color-scheme: dark;
+    --base: #0a0f2e; --ink: #141947; --shade: 5, 8, 34;
+    /* A blob's size follows the card's shorter side more than its width, so wide cards keep several blobs. */
+    --s: min(96vw, 150vh);
+  }
+  html.fixed, body.fixed { background: var(--base); }
+  body { color: #fff; }
+
+  /* The mesh: big soft radial blobs drifting on transforms only. */
+  .mesh { position: absolute; inset: 0; overflow: hidden; }
+  .blob {
+    position: absolute; left: var(--x); top: var(--y);
+    width: calc(var(--s) * var(--w)); height: calc(var(--s) * var(--h));
+    margin-left: calc(var(--s) * var(--w) / -2); margin-top: calc(var(--s) * var(--h) / -2);
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(var(--c), .92), rgba(var(--c), .64) 32%, rgba(var(--c), .27) 64%, rgba(var(--c), 0));
+    opacity: var(--o);
+    will-change: transform;
+  }
+  .b1 { animation: m1 14s ease-in-out -5s infinite alternate; }
+  .b2 { animation: m2 18s ease-in-out -9s infinite alternate; }
+  .b3 { animation: m3 16s ease-in-out -3s infinite alternate; }
+  .b4 { animation: m4 12s ease-in-out -7s infinite alternate; }
+  @keyframes m1 { from { transform: translate(-10%, -6%) rotate(-12deg) scale(1); } to { transform: translate(16%, 12%) rotate(22deg) scale(1.16); } }
+  @keyframes m2 { from { transform: translate(12%, 8%) rotate(18deg) scale(1.08); } to { transform: translate(-14%, -10%) rotate(-16deg) scale(.94); } }
+  @keyframes m3 { from { transform: translate(-8%, 10%) rotate(0deg) scale(.96); } to { transform: translate(18%, -10%) rotate(38deg) scale(1.14); } }
+  @keyframes m4 { from { transform: translate(10%, -8%) rotate(-28deg) scale(1.06); } to { transform: translate(-16%, 12%) rotate(14deg) scale(.9); } }
+
+  /* Still layers over the blobs: a light from above, depth below the buttons, and a fine grain against banding. */
+  .light { position: absolute; inset: 0;
+    background: radial-gradient(110% 70% at 50% -12%, rgba(255, 255, 255, .17), rgba(255, 255, 255, 0) 62%),
+      radial-gradient(130% 80% at 50% 118%, rgba(var(--shade), .38), rgba(var(--shade), 0) 62%); }
+  .grain { position: absolute; inset: 0; opacity: .1; background-size: 180px 180px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1.7 0 0 0 -.6'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)'/%3E%3C/svg%3E"); }
+
+  /* The copy. */
+  .hero { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px 18px; }
+  .stack { display: flex; flex-direction: column; align-items: center; text-align: center; max-width: 560px; }
+  .stack > * { animation: rise .9s cubic-bezier(.2, .8, .2, 1) both; }
+  .stack > :nth-child(2) { animation-delay: .07s; }
+  .stack > :nth-child(3) { animation-delay: .14s; }
+  .stack > :nth-child(4) { animation-delay: .21s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px 0 3px; border-radius: 999px;
+    background: rgba(255, 255, 255, .14); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .24);
+    font-size: 11.5px; font-weight: 600; color: rgba(255, 255, 255, .95); white-space: nowrap;
+  }
+  .pill b {
+    height: 20px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px;
+    background: #fff; color: var(--ink); font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .pill svg { width: 12px; height: 12px; margin-left: -3px; opacity: .75; }
+  h1 {
+    margin: 11px 0 0; font-size: clamp(23px, 4.4vw + 9px, 38px); line-height: 1.07; font-weight: 800;
+    letter-spacing: -.032em; text-wrap: balance; text-shadow: 0 2px 22px rgba(var(--shade), .32);
+  }
+  .sub {
+    margin: 7px 0 0; max-width: 30em; font-size: clamp(12.5px, .9vw + 9.5px, 15px); line-height: 1.42;
+    color: rgba(255, 255, 255, .86); text-wrap: balance; text-shadow: 0 1px 14px rgba(var(--shade), .34);
+  }
+  .ctas { display: flex; gap: 8px; margin-top: 15px; }
+  .btn {
+    height: 40px; padding: 0 16px; border: 0; border-radius: 999px; display: inline-flex; align-items: center; gap: 7px;
+    font-size: 13.5px; font-weight: 650; letter-spacing: -.005em; white-space: nowrap; cursor: pointer;
+    transition: transform .16s cubic-bezier(.3, .7, .4, 1);
+  }
+  .btn:active { transform: scale(.95); }
+  .btn svg { width: 15px; height: 15px; flex: none; }
+  .solid { background: #fff; color: var(--ink); box-shadow: 0 10px 26px -10px rgba(var(--shade), .6); }
+  .glass {
+    background: rgba(255, 255, 255, .15); color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .34), inset 0 1px 0 rgba(255, 255, 255, .2);
+  }
+  .glass svg { margin-left: -3px; }
+  .proof { display: flex; align-items: center; gap: 9px; margin-top: 14px; font-size: 11.5px; font-weight: 550; color: rgba(255, 255, 255, .78); }
+  .proof[hidden] { display: none; }
+  .faces { display: flex; }
+  .faces i {
+    width: 22px; height: 22px; border-radius: 50%; margin-left: -5px; display: grid; place-items: center;
+    font-size: 8px; font-style: normal; font-weight: 800; letter-spacing: .02em; color: #fff;
+    box-shadow: 0 0 0 2px var(--base);
+  }
+  .faces i:first-child { margin-left: 0; }
+  .stars { color: #ffd166; letter-spacing: 1px; font-size: 11px; }
+  /* Copy taller than the card: tighten the gaps, then drop the proof row, then the subline. */
+  .tight h1 { margin-top: 8px; }
+  .tight .sub { margin-top: 4px; }
+  .tight .ctas { margin-top: 11px; }
+  .tight .proof { margin-top: 10px; }
+  .tighter .proof { display: none; }
+  .tightest .sub { display: none; }
+</style>
+</head>
+<body class="fixed nosel">
+<div class="mesh" aria-hidden="true">
+  <i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i><i class="blob b4"></i>
+  <i class="fill light"></i><i class="fill grain"></i>
+</div>
+<div class="hero" id="hero">
+  <div class="stack" id="stack">
+    <div class="pill"><b>New</b><span id="pill"></span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </div>
+    <h1 id="title"></h1>
+    <p class="sub" id="sub"></p>
+    <div class="ctas">
+      <button class="btn solid" type="button"><span id="primary"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+      <button class="btn glass" type="button" id="secondary"></button>
+    </div>
+    <div class="proof" id="proof" hidden>
+      <span class="faces"><i style="background:linear-gradient(135deg,#67e8f9,#0e7490)">AK</i><i style="background:linear-gradient(135deg,#a5b4fc,#4f46e5)">ML</i><i style="background:linear-gradient(135deg,#7dd3fc,#1d4ed8)">JS</i></span>
+      <span><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span>&nbsp; Loved by 12,000 data teams</span>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var ICONS = {
+    play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/>' +
+      '<path d="M10.2 8.8v6.4l5.2-3.2z" fill="currentColor" stroke-linejoin="round"/></svg>',
+    doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M6.5 3.5h7.5l4 4v13h-11.5z"/><path d="M13.5 3.5v4.5h4.5M9.5 13h5M9.5 16.5h5"/></svg>'
+  };
+  // Blobs: [r, g, b], centre x / y in % of the card, width / height in units of --s, opacity.
+  var P = Kit.pick({
+    aurora: {
+      base: '#0a0f2e', ink: '#141947', shade: '5, 8, 34',
+      blobs: [
+        ['45, 226, 196', '12%', '6%', 1.0, .78, .95],
+        ['132, 86, 255', '92%', '96%', 1.1, .84, .95],
+        ['36, 99, 235', '22%', '106%', .96, .72, .9],
+        ['168, 115, 255', '86%', '-8%', .74, .56, .75]
+      ],
+      pill: 'Aurora 2.0 is here', title: 'Design at the speed of thought',
+      sub: 'Sketch, preview and ship from one calm canvas, together.',
+      primary: 'Get started', secondary: 'Watch demo', icon: 'play'
+    },
+    sunrise: {
+      base: '#e44a68', ink: '#7a1d3a', shade: '112, 18, 52',
+      blobs: [
+        ['255, 203, 92', '12%', '90%', 1.12, .84, 1],
+        ['255, 128, 52', '60%', '98%', 1.06, .76, .95],
+        ['255, 70, 145', '92%', '2%', 1.0, .78, .9],
+        ['150, 36, 130', '2%', '-14%', .9, .7, .62]
+      ],
+      pill: 'Morning digest', title: 'Wake up to what matters',
+      sub: 'Your whole day, summed up by 7 a.m.',
+      primary: 'Start free', secondary: 'How it works', icon: 'play'
+    },
+    ocean: {
+      base: '#05173f', ink: '#0b2a5e', shade: '2, 10, 36',
+      blobs: [
+        ['34, 211, 238', '86%', '8%', 1.0, .76, .9],
+        ['37, 99, 255', '14%', '96%', 1.1, .84, .95],
+        ['79, 70, 229', '96%', '104%', .94, .72, .9],
+        ['56, 189, 248', '6%', '-2%', .7, .54, .65]
+      ],
+      pill: 'Realtime sync is in beta', title: 'Dive deeper into your data',
+      sub: 'Query billions of rows in milliseconds. No servers, no waiting.',
+      primary: 'Try it free', secondary: 'Read the docs', icon: 'doc', proof: true
+    }
+  }, 'aurora');
+
+  var root = document.documentElement.style;
+  root.setProperty('--base', P.base);
+  root.setProperty('--ink', P.ink);
+  root.setProperty('--shade', P.shade);
+  var blobs = document.querySelectorAll('.blob');
+  P.blobs.forEach(function (b, i) {
+    var s = blobs[i].style;
+    s.setProperty('--c', b[0]);
+    s.setProperty('--x', b[1]);
+    s.setProperty('--y', b[2]);
+    s.setProperty('--w', b[3]);
+    s.setProperty('--h', b[4]);
+    s.setProperty('--o', b[5]);
+  });
+  document.getElementById('pill').textContent = P.pill;
+  document.getElementById('title').textContent = P.title;
+  document.getElementById('sub').textContent = P.sub;
+  document.getElementById('primary').textContent = P.primary;
+  document.getElementById('secondary').innerHTML = ICONS[P.icon] + '<span></span>';
+  document.querySelector('#secondary span').textContent = P.secondary;
+  document.getElementById('proof').hidden = !P.proof;
+
+  // The copy must fit the card's height whatever the width and the system font.
+  var hero = document.getElementById('hero'), stack = document.getElementById('stack');
+  var LEVELS = ['tight', 'tighter', 'tightest'];
+  Kit.watch(document.body, function () {
+    LEVELS.forEach(function (c) { hero.classList.remove(c); });
+    var room = hero.clientHeight - 14;
+    for (var i = 0; i < LEVELS.length && stack.offsetHeight > room; i++) hero.classList.add(LEVELS[i]);
+  });
+})();
+</script>
+</body>
+</html>

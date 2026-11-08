@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { downloadAttachment } from "../src/core/session-manager/download"
+import { downloadAttachment, telegramApiRoot } from "../src/core/session-manager/download"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "agentmux-dl-")) })
@@ -47,4 +47,28 @@ test("propagates getFile errors as exceptions", async () => {
 test("rejects path traversal in telegram file_path", async () => {
   const api = makeFakeApi({ file_path: "../../etc/passwd", bytes: Buffer.from("nope") })
   await expect(downloadAttachment(api as any, "F", dir)).rejects.toThrow(/invalid file_path/)
+})
+
+// #29: a self-hosted Bot API server (or a test's stub) serves the bot's calls and its files under one root.
+test("the Bot API root is Telegram's unless MUX_TELEGRAM_API_ROOT names another", () => {
+  expect(telegramApiRoot({})).toBe("https://api.telegram.org")
+  expect(telegramApiRoot({ MUX_TELEGRAM_API_ROOT: "  " })).toBe("https://api.telegram.org")
+  expect(telegramApiRoot({ MUX_TELEGRAM_API_ROOT: "http://127.0.0.1:8081/" })).toBe("http://127.0.0.1:8081")
+})
+
+test("a file is fetched from the Bot API root's /file path", async () => {
+  const seen: string[] = []
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) { seen.push(new URL(req.url).pathname); return new Response("bytes") } })
+  const saved = process.env.MUX_TELEGRAM_API_ROOT
+  process.env.MUX_TELEGRAM_API_ROOT = `http://127.0.0.1:${server.port}`
+  try {
+    const api = { token: "123:tok", getFile: async () => ({ file_path: "photos/a.jpg" }) }
+    const path = await downloadAttachment(api as never, "f1", dir)
+    expect(readFileSync(path, "utf8")).toBe("bytes")
+    expect(seen).toEqual(["/file/bot123:tok/photos/a.jpg"])
+  } finally {
+    if (saved === undefined) delete process.env.MUX_TELEGRAM_API_ROOT
+    else process.env.MUX_TELEGRAM_API_ROOT = saved
+    server.stop(true)
+  }
 })

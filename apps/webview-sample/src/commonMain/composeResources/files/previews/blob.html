@@ -1,0 +1,207 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Morphing blob</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* A stage: the same light pastel in both themes. */
+  html.fixed { background: var(--bg2, #f6efff); }
+  body {
+    color: var(--ink);
+    background:
+      radial-gradient(70% 90% at 12% 8%, var(--glow) 0%, transparent 70%),
+      linear-gradient(155deg, var(--bg1) 0%, var(--bg2) 100%);
+  }
+  #art { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .copy {
+    position: absolute; inset: 0; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+    padding: 0 18px 4px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    padding: 4px 10px 4px 8px; border-radius: 999px; margin-bottom: 8px;
+    background: rgba(255, 255, 255, .72); color: var(--ink);
+    box-shadow: 0 1px 2px rgba(40, 10, 60, .08), 0 4px 14px -6px rgba(40, 10, 60, .25);
+  }
+  .pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--dot); }
+  h1 {
+    margin: 0; font-size: clamp(27px, 8.6vw, 42px); line-height: .98; font-weight: 800; letter-spacing: -0.04em;
+    color: var(--ink);
+  }
+  .foot {
+    position: absolute; left: 12px; right: 12px; bottom: 9px; display: flex; justify-content: space-between;
+    font: 500 10px/1 var(--mono); color: var(--ink); opacity: .5; pointer-events: none; white-space: nowrap;
+  }
+</style>
+</head>
+<body class="fixed nosel">
+<svg id="art" aria-hidden="true">
+  <defs>
+    <linearGradient id="paint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" id="s0"/><stop offset=".52" id="s1"/><stop offset="1" id="s2"/>
+    </linearGradient>
+    <linearGradient id="haze" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" id="h0"/><stop offset="1" id="h1"/>
+    </linearGradient>
+    <radialGradient id="gloss" cx=".36" cy=".26" r=".62">
+      <stop offset="0" stop-color="#fff" stop-opacity=".62"/>
+      <stop offset=".45" stop-color="#fff" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="shade" cx=".62" cy=".86" r=".7">
+      <stop offset="0" stop-color="#000" stop-opacity=".13"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- The soft blob behind: one shape, drawn three times a little larger and fainter each time, for a soft edge
+       without a blur filter. -->
+  <use href="#back" id="halo2" opacity=".2"/>
+  <use href="#back" id="halo1" opacity=".38"/>
+  <path id="back" fill="url(#haze)" opacity=".85"/>
+  <path id="front" fill="url(#paint)"/>
+  <path id="frontShade" fill="url(#shade)"/>
+  <path id="frontGloss" fill="url(#gloss)"/>
+  <g id="bubbles"></g>
+</svg>
+<div class="copy">
+  <div class="pill"><i></i><span id="kicker"></span></div>
+  <h1 id="title"></h1>
+</div>
+<div class="foot"><span id="foot"></span><span>tap to wobble</span></div>
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    candy: {
+      bg: ['#fff3f8', '#f4ecff'], glow: '#ffe0ee', ink: '#3a0c39', dot: '#ff4f9a',
+      // Hue, saturation, lightness of the front blob's three stops, in one direction round the hue circle (no muddy
+      // middle); the hues drift around these.
+      paint: [[24, 100, 68], [334, 96, 71], [268, 92, 75]],
+      haze: [[335, 100, 86], [276, 90, 87]],
+      kicker: 'Live SVG', title: 'Feeling<br>bubbly'
+    },
+    lagoon: {
+      bg: ['#ebfbf8', '#e6eeff'], glow: '#d4f7ef', ink: '#05283d', dot: '#0fb5a6',
+      paint: [[168, 74, 56], [194, 90, 60], [226, 86, 68]],
+      haze: [[170, 70, 83], [212, 90, 87]],
+      kicker: 'Live SVG', title: 'Go with<br>the flow'
+    }
+  }, 'candy');
+
+  var root = document.documentElement.style;
+  root.setProperty('--bg1', P.bg[0]);
+  root.setProperty('--bg2', P.bg[1]);
+  root.setProperty('--glow', P.glow);
+  root.setProperty('--ink', P.ink);
+  root.setProperty('--dot', P.dot);
+  document.getElementById('kicker').textContent = P.kicker;
+  document.getElementById('title').innerHTML = P.title;
+  document.getElementById('foot').textContent = '8 points · simplex noise';
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var $ = function (id) { return document.getElementById(id); };
+  var front = $('front'), frontShade = $('frontShade'), frontGloss = $('frontGloss'), back = $('back');
+  var halo1 = $('halo1'), halo2 = $('halo2'), paint = $('paint');
+  var stops = [$('s0'), $('s1'), $('s2')];
+  var hsl = function (c, dh) { return 'hsl(' + (c[0] + dh).toFixed(1) + ',' + c[1] + '%,' + c[2] + '%)'; };
+  $('h0').setAttribute('stop-color', hsl(P.haze[0], 0));
+  $('h1').setAttribute('stop-color', hsl(P.haze[1], 0));
+
+  // Three small bubbles beside the blob, in the same paint.
+  var bubbles = [], BUB = [[-1.28, -0.5, 0.13], [1.24, 0.56, 0.085], [1.02, -0.86, 0.06]];
+  BUB.forEach(function () {
+    var g = document.createElementNS(NS, 'g');
+    var body = document.createElementNS(NS, 'circle');
+    body.setAttribute('fill', 'url(#paint)');
+    var shine = document.createElementNS(NS, 'circle');
+    shine.setAttribute('fill', 'url(#gloss)');
+    g.appendChild(body);
+    g.appendChild(shine);
+    $('bubbles').appendChild(g);
+    bubbles.push([body, shine]);
+  });
+
+  var W = 1, H = 1, cx = 0, cy = 0, bx = 0, by = 0, R = 1, sx = 1;
+  var px = new Float32Array(12), py = new Float32Array(12);
+  var f1 = function (v) { return v.toFixed(1); };
+
+  // A smooth closed curve through n points whose radii follow simplex noise over time: a closed Catmull-Rom spline
+  // written as cubic Béziers, its tangents scaled so that equal radii give a true circle (ellipse).
+  function shape(n, ox, oy, r0, stretch, seed, tau, amp, turn) {
+    var k = (4 / 3) * Math.tan(Math.PI / (2 * n)) / (2 * Math.sin(2 * Math.PI / n));
+    for (var i = 0; i < n; i++) {
+      var a = turn + i / n * Math.PI * 2;
+      var r = r0 * (1 + amp * Kit.noise2(seed + i * 1.37, tau));
+      px[i] = ox + Math.cos(a) * r * stretch;
+      py[i] = oy + Math.sin(a) * r;
+    }
+    var d = 'M' + f1(px[0]) + ',' + f1(py[0]);
+    for (i = 0; i < n; i++) {
+      var i0 = (i + n - 1) % n, i2 = (i + 1) % n, i3 = (i + 2) % n;
+      d += 'C' + f1(px[i] + (px[i2] - px[i0]) * k) + ',' + f1(py[i] + (py[i2] - py[i0]) * k) + ' ' +
+        f1(px[i2] - (px[i3] - px[i]) * k) + ',' + f1(py[i2] - (py[i3] - py[i]) * k) + ' ' +
+        f1(px[i2]) + ',' + f1(py[i2]);
+    }
+    return d + 'Z';
+  }
+
+  function layout() {
+    W = document.body.clientWidth || 1;
+    H = document.body.clientHeight || 1;
+    // Wide cards stretch the blob a little, so it doesn't sit lost in the middle.
+    sx = Kit.clamp(W / H * 0.6, 1, 1.45);
+    R = Math.min(W * 0.31 / sx, H * 0.37);
+    cx = W / 2;
+    cy = H / 2;
+    bx = cx + R * 0.34 * sx;
+    by = cy + R * 0.1;
+    var around = function (s) {
+      return 'translate(' + f1(bx) + ' ' + f1(by) + ') scale(' + s + ') translate(' + f1(-bx) + ' ' + f1(-by) + ')';
+    };
+    halo1.setAttribute('transform', around(1.07));
+    halo2.setAttribute('transform', around(1.15));
+    draw(0);
+  }
+
+  var tau = 0, turn = 0, kick = 0, clock = 0;
+  function draw(dt) {
+    clock += dt;
+    kick *= Math.exp(-dt * 1.7);
+    tau += dt * (0.4 + kick * 1.5);
+    turn += dt * 0.06;
+    var amp = 0.15 + kick * 0.11;
+    var breathe = 1 + 0.025 * Math.sin(clock * 1.1) + kick * 0.05 * Math.sin(clock * 13);
+    var d = shape(8, cx, cy, R * breathe, sx, 0, tau, amp, turn);
+    front.setAttribute('d', d);
+    frontShade.setAttribute('d', d);
+    frontGloss.setAttribute('d', d);
+    back.setAttribute('d', shape(7, bx, by, R * 1.1, sx, 40, tau * 0.7, amp * 1.25, -turn * 0.8));
+    // The paint's hues drift, and the gradient turns slowly.
+    for (var s = 0; s < 3; s++) stops[s].setAttribute('stop-color', hsl(P.paint[s], 16 * Math.sin(clock * 0.23 + s * 2.1)));
+    paint.setAttribute('gradientTransform', 'rotate(' + f1((clock * 9) % 360) + ' .5 .5)');
+    for (var b = 0; b < bubbles.length; b++) {
+      var q = BUB[b], r = R * q[2] * (1 + 0.08 * Math.sin(clock * 1.7 + b));
+      var x = cx + q[0] * R * sx + 7 * Kit.noise2(b * 7.1, tau * 0.6);
+      var y = cy + q[1] * R + 9 * Kit.noise2(b * 3.3 + 50, tau * 0.6);
+      for (var e = 0; e < 2; e++) {
+        bubbles[b][e].setAttribute('cx', f1(x));
+        bubbles[b][e].setAttribute('cy', f1(y));
+        bubbles[b][e].setAttribute('r', f1(r));
+      }
+    }
+  }
+
+  // A tap makes it wobble (no preventDefault: the chat still scrolls).
+  document.body.addEventListener('pointerdown', function () { kick = 1; });
+
+  Kit.watch(document.body, layout);
+  Kit.loop(function (dt) { draw(dt); });
+})();
+</script>
+</body>
+</html>

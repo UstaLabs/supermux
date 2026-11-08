@@ -1,7 +1,7 @@
 import { makeLogger } from "../../../shared/log"
 import { allocateFreePort, allocateDisplayNumber } from "../ports"
 import type { DisplayProvider, DisplayInstance, ProvisionOpts } from "../types"
-import { proc } from "@supermux/platform"
+import { spawnProcess } from "../../process/launcher"
 
 const log = makeLogger("display.linux-xvfb")
 
@@ -35,8 +35,7 @@ export class LinuxXvfbProvider implements DisplayProvider {
     const display = `:${dispNum}`
     const vncPort = await allocateFreePort()
 
-    const xvfb = Bun.spawn(["Xvfb", display, "-screen", "0", `${width}x${height}x24`, "-nolisten", "tcp"], {
-      ...proc.spawnDefaults(),
+    const xvfb = spawnProcess(["Xvfb", display, "-screen", "0", `${width}x${height}x24`, "-nolisten", "tcp"], {
       stdout: "ignore",
       stderr: "pipe",
     })
@@ -53,11 +52,11 @@ export class LinuxXvfbProvider implements DisplayProvider {
       // never accepts), and it leaves an IPv6 wildcard `[::]` socket open.
       // Explicit `-listen`/`-listen6` reliably serves AND keeps the bind
       // loopback-only (no 0.0.0.0 / [::] wildcard).
-      x11vnc = Bun.spawn(
+      x11vnc = spawnProcess(
         ["x11vnc", "-display", display, "-rfbport", String(vncPort),
          "-listen", "127.0.0.1", "-listen6", "::1",
          "-forever", "-shared", "-nopw", "-quiet", "-noxdamage"],
-        { ...proc.spawnDefaults(), stdout: "ignore", stderr: "pipe" },
+        { stdout: "ignore", stderr: "pipe" },
       )
     } catch (err) {
       try { xvfb.kill() } catch {}

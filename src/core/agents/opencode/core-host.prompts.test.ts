@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "fs"
+import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import type { AgentDriver, AgentRuntime } from "../../../../packages/supermux-core/src/index.js"
@@ -86,4 +86,27 @@ test("opencode may read the session inbox in every mode: its external_directory 
     await handle.stop({ mode: "shutdown" })
     await host.close({ agents: "shutdown" })
   }
+})
+
+test("a new session's config folder is linked to the shared plugin install of OpenCode's version (#102)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "oc-host-"))
+  const store = mkdtempSync(join(tmpdir(), "oc-store-"))
+  dirs.push(dir, store)
+  const install = join(store, "9.9.9")
+  mkdirSync(join(install, "node_modules", "@opencode-ai", "plugin"), { recursive: true })
+  writeFileSync(join(install, "package.json"), JSON.stringify({ dependencies: { "@opencode-ai/plugin": "9.9.9" } }))
+  writeFileSync(join(install, "package-lock.json"), "{}")
+  writeFileSync(join(install, "node_modules", ".package-lock.json"), "{}")
+  writeFileSync(join(install, "node_modules", "@opencode-ai", "plugin", "package.json"), JSON.stringify({ version: "9.9.9" }))
+  const work = workdir()
+  const host = createOpenCodeCoreHost({
+    stateDirectory: dir,
+    driverFactory: () => fakeDriver(),
+    pluginDeps: { store, version: () => "9.9.9", candidates: () => [] },
+  })
+  const handle = host.register({ id: "id9", env: {}, extra: { sessionHome: dir, sessionName: "s", sessionId: "id9", workdir: work, cwd: work } })
+  await handle.start({ cwd: work })
+  expect(readlinkSync(join(dir, "config", "opencode", "node_modules"))).toBe(join(install, "node_modules"))
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
 })

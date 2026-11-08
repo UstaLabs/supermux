@@ -21,3 +21,16 @@ fun slowExecutable(seconds: Int): Path =
             Files.writeString(it, "@echo off\r\nping -n ${seconds + 1} 127.0.0.1 >nul\r\n")
         }
     }
+
+/**
+ * True once [p]'s tree holds the command [slowExecutable]'s script waits in (`sleep`, or `ping` on Windows): from then
+ * on, killing the tree reaches everything that holds its stdout. Any descendant is not enough on Windows, where a
+ * console script's first descendant is its conhost.exe, there before the script has started anything; a `ping` it
+ * starts after a kill's snapshot outlives the kill and keeps the pipe open.
+ */
+fun hasSlowChild(p: Process): Boolean {
+    val slow = if (posixHost) "sleep" else "ping"
+    return p.descendants().anyMatch { d ->
+        d.info().command().map { c -> Path.of(c).fileName.toString().lowercase().substringBefore('.') == slow }.orElse(false)
+    }
+}

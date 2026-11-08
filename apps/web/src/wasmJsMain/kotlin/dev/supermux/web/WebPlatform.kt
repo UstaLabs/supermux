@@ -1,5 +1,7 @@
 package dev.supermux.web
 
+import dev.supermux.net.isOpenableLink
+import dev.supermux.net.linkScheme
 import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
@@ -77,7 +79,11 @@ class WebPlatform(
     override val mediaCache: dev.supermux.media.MediaCache get() = dev.supermux.web.seams.WebMedia.cache
     /** Gesture-bound: `window.open` off the gesture's own tick is popup-blocked silently (see
      *  [dev.supermux.web.seams.WebFiles]), so never await anything before calling this. */
-    override fun openUrl(url: String) { window.open(url, "_blank", "noopener") }
+    override fun openUrl(url: String) {
+        // A blob:, data: or javascript: URL would run as this page: only links that leave the app open.
+        if (!isOpenableLink(url)) { println("[links] not opening a ${linkScheme(url) ?: "relative"} link"); return }
+        window.open(url, "_blank", "noopener")
+    }
     override fun copyToClipboard(text: String) { copyTextJs(text) }
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> = pickFilesViaInput(kind)
     override suspend fun scanQr(): String? = null

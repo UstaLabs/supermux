@@ -38,6 +38,7 @@ object PerfReport {
     private fun ms(v: Any?): String = dbl(v)?.let { if (it < 10) "${(it * 10).roundToInt() / 10.0} ms" else "${it.roundToInt()} ms" } ?: "?"
 
     /** A request path with its ids folded to `:id` (mirrors the broker's `perfPath`). */
+    // platform-ok: a URL's route
     fun route(path: String): String = path.split('/').joinToString("/") { seg ->
         val idLike = seg.isNotEmpty() && (seg.all { it.isDigit() } ||
             (seg.length >= 12 && seg.any { it.isDigit() } && seg.all { it.isLetterOrDigit() || it == '-' || it == '_' }))

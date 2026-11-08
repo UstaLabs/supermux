@@ -338,10 +338,10 @@ class BrokerApiSettingsTest {
         assertTrue(b.contains("\"kind\":\"gitlab\""), "body=$b")
         assertTrue(b.contains("\"token\":\"glpat\""), "body=$b")
         assertTrue(b.contains("\"host\":\"gl.example.com\""), "body=$b")
-        // encodeDefaults=false: source/transport at their defaults are OMITTED.
-        // The broker re-applies source:"pat", transport:"https" for missing fields.
-        assertFalse(b.contains("\"source\""), "body=$b")
-        assertFalse(b.contains("\"transport\""), "body=$b")
+        // Card #97: fields at their defaults are sent too (encodeDefaults=true), so the broker
+        // never has to guess them back.
+        assertTrue(b.contains("\"source\":\"pat\""), "body=$b")
+        assertTrue(b.contains("\"transport\":\"https\""), "body=$b")
     }
 
     @Test fun add_forge_sends_non_default_transport() = runTest {

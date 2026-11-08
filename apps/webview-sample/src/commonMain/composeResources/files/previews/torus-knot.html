@@ -1,0 +1,152 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Torus knot</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: radial-gradient(110% 95% at 50% 40%, var(--bg1), var(--bg2)); }
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { width: 100%; height: 100%; }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; color: #fff9; font-size: 13px; }
+  body.no-webgl .nogl { display: grid; }
+</style>
+</head>
+<body class="fixed nosel">
+<div id="stage"></div>
+<div class="nogl">WebGL is off on this device</div>
+<script type="module">
+import * as THREE from './lib/three.module.min.js';
+
+const P = Kit.pick({
+  gold: {
+    knot: '#e8b35a', metalness: 0.92, roughness: 0.24, p: 2, q: 3, radius: 1.0, tube: 0.3,
+    lights: ['#ff7a3d', '#ffd56e', '#ff4f6d'], power: 26,
+    env: { top: '#ffd9a6', bottom: '#120a05', boxes: ['#ffb070', '#fff0d0', '#ff7050'] },
+    bg: ['#3a1f0e', '#080403'],
+  },
+  neon: {
+    knot: '#c6f6ff', metalness: 0.62, roughness: 0.16, p: 3, q: 5, radius: 1.08, tube: 0.21,
+    lights: ['#ff3df0', '#2ef5d0', '#7a5cff'], power: 30,
+    env: { top: '#9db8ff', bottom: '#07051a', boxes: ['#ff60f0', '#60fff0', '#8a70ff'] },
+    bg: ['#1d1650', '#03020c'],
+  },
+}, 'gold');
+document.body.style.setProperty('--bg1', P.bg[0]);
+document.body.style.setProperty('--bg2', P.bg[1]);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.body.classList.add('no-webgl');
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Kit.dpr(2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  const stage = document.getElementById('stage');
+  stage.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+
+  // Reflections: a small studio of a gradient dome and three soft boxes, blurred into an environment map once.
+  function studio(env) {
+    const room = new THREE.Scene();
+    const dome = new THREE.SphereGeometry(10, 32, 16);
+    const pos = dome.attributes.position;
+    const colours = new Float32Array(pos.count * 3);
+    const top = new THREE.Color(env.top), bottom = new THREE.Color(env.bottom), c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      c.copy(bottom).lerp(top, Kit.smooth((pos.getY(i) / 10 + 1) / 2));
+      colours.set([c.r, c.g, c.b], i * 3);
+    }
+    dome.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    room.add(new THREE.Mesh(dome, new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true })));
+    const spots = [[-5, 4, 3, 4], [5, 2, 4, 3], [0, -3, -6, 5]];
+    env.boxes.forEach((colour, i) => {
+      const [x, y, z, s] = spots[i];
+      const box = new THREE.Mesh(new THREE.PlaneGeometry(s, s),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(colour).multiplyScalar(3.2), side: THREE.DoubleSide }));
+      box.position.set(x, y, z);
+      box.lookAt(0, 0, 0);
+      room.add(box);
+    });
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const texture = pmrem.fromScene(room, 0.04).texture;
+    pmrem.dispose();
+    return texture;
+  }
+  scene.environment = studio(P.env);
+
+  const knot = new THREE.Mesh(
+    new THREE.TorusKnotGeometry(P.radius, P.tube, 220, 24, P.p, P.q),
+    new THREE.MeshStandardMaterial({ color: P.knot, metalness: P.metalness, roughness: P.roughness, envMapIntensity: 0.9 }),
+  );
+  scene.add(knot);
+
+  function glow(colour) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.2, colour);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    const texture = new THREE.CanvasTexture(c);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  // Three coloured lights circling the knot, each marked by a small white-hot bead (outside the tone mapping, so it is the
+  // brightest point of its halo rather than a darker dot in it) and its coloured halo.
+  const white = new THREE.Color('#ffffff');
+  const lights = P.lights.map((colour, i) => {
+    const light = new THREE.PointLight(colour, P.power, 0, 2);
+    const bead = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 8),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(colour).lerp(white, 0.7), toneMapped: false }));
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glow(colour), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    halo.scale.set(0.7, 0.7, 1);
+    light.add(bead, halo);
+    scene.add(light);
+    return { light, speed: 0.55 + i * 0.22, phase: i * Math.PI * 2 / 3, tilt: 0.5 + i * 0.35, radius: 2.35 + i * 0.18 };
+  });
+  scene.add(new THREE.HemisphereLight(P.env.top, P.env.bottom, 0.25));
+
+  Kit.watch(document.body, () => {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // The knot's height fills the card; a wide card keeps the same distance, a narrow one steps back so the lights'
+    // orbits (about 2.9 out, with their halos) stay in view.
+    const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    camera.position.set(0, 0, Math.max(6.2, 2.9 / (tan * camera.aspect)));
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+  });
+
+  let time = 0;
+  Kit.loop((dt) => {
+    time += dt;
+    knot.rotation.x += dt * 0.22;
+    knot.rotation.y += dt * 0.31;
+    for (const l of lights) {
+      const a = time * l.speed + l.phase;
+      l.light.position.set(Math.cos(a) * l.radius, Math.sin(a * 0.8 + l.tilt) * 1.25, Math.sin(a) * l.radius);
+    }
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

@@ -64,13 +64,15 @@ test("header includes the working directory for scope", () => {
   expect(worker()).toContain("/srv/app")
 })
 
-test("skills rule is per agent: Skill tool, skill tool, SKILL.md, or none for cursor", () => {
+test("skills rule is per agent: Skill tool, skill tool, SKILL.md", () => {
   expect(worker(AgentKind.Claude)).toContain("Skill tool")
   expect(worker(AgentKind.OpenCode)).toContain("native `skill` tool")
   expect(worker(AgentKind.Codex)).toContain("SKILL.md")
   expect(worker(AgentKind.Codex)).toContain("<plugin>:<name>")
   expect(worker(AgentKind.Codex).toLowerCase()).toContain("never claim")
-  expect(worker(AgentKind.Cursor)).not.toContain("SKILLS:")
+  // #102: Cursor reads plugin skills from its session HOME's .cursor/skills.
+  expect(worker(AgentKind.Cursor)).toContain("SKILLS:")
+  expect(worker(AgentKind.Cursor)).toContain("SKILL.md")
 })
 
 test("worker header keeps scope and naming, and never mentions personal/ or agent memory", () => {

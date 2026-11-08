@@ -32,7 +32,10 @@ export interface Plugin {
   source: PluginSource
   enabled: boolean
   scopes: CliScope[]
-  /** Keyed by session name. A session listed with enabled:false skips this plugin. */
+  /**
+   * Keyed by session id (#102: by its name before, which a session's own rename broke). A session listed with
+   * enabled:false skips this plugin.
+   */
   perSessionOverrides?: Record<string, PerSessionOverride>
   /**
    * Resolved absolute path to the plugin root on disk. Computed at load time:
@@ -44,6 +47,11 @@ export interface Plugin {
 
 export interface PluginsRegistry {
   version: number
+  /**
+   * The one-time boot migrations already applied to this registry (e.g. `scope:opencode`), so a later boot never
+   * re-applies one over the user's own edits. Names this broker does not know are kept as they are.
+   */
+  migrations?: string[]
   plugins: Plugin[]
 }
 
@@ -55,11 +63,11 @@ export const PLUGIN_SOURCE_TYPES: readonly PluginSourceType[] = ["local", "git",
  * Checks enabled flag, CLI scope, and any per-session override. Compatibility
  * (manifest presence) is checked separately (plugins/index.ts isPluginCompatible).
  */
-export function isActiveForCli(plugin: Plugin, cli: CliScope, sessionName?: string): boolean {
+export function isActiveForCli(plugin: Plugin, cli: CliScope, sessionId?: string): boolean {
   if (!plugin.enabled) return false
   if (!plugin.scopes.includes(cli)) return false
-  if (sessionName) {
-    const override = plugin.perSessionOverrides?.[sessionName]
+  if (sessionId) {
+    const override = plugin.perSessionOverrides?.[sessionId]
     if (override?.enabled === false) return false
   }
   return true

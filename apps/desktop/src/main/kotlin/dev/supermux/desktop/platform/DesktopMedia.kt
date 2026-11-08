@@ -13,7 +13,7 @@ import java.nio.file.attribute.PosixFilePermissions
 object DesktopMedia {
     val cache: MediaCache by lazy {
         val os = DesktopOs.current
-        val base = mediaCacheBase(os, System::getenv, System.getProperty("user.home").orEmpty())
+        val base = mediaCacheBase(os, System::getenv, dev.supermux.desktop.host.SystemOsEnv.home.toString())
         val root = if (os == DesktopOs.WINDOWS) {
             Path.of(base, "supermux-desktop", "cache", "media")
         } else {

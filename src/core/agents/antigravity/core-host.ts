@@ -118,7 +118,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
         env: prepared.env,
         context: {
           instructions: sessionInstructions({ agent: "antigravity", sessionName: extra.sessionName, workdir: extra.workdir, sessionId: registration.id }),
-          plugins: sessionPlugins("antigravity", extra.sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
+          plugins: sessionPlugins("antigravity", registration.id, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) }),
           mcpServers: [muxShimContextServer("antigravity", extra.sessionId, extra.sessionName)],
         },
       }

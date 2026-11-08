@@ -171,6 +171,13 @@ interface MicCapture {
     val available: Boolean
 
     /**
+     * Why the mic won't open, asked once [start] said no (or there is no [available] backend): no microphone at all,
+     * one the OS keeps from this app, or neither known. A host that can't tell says [MicTrouble.DIDNT_OPEN], so a
+     * mic is never called missing, or refused, on a guess. It may ask the OS's sound system, so it suspends.
+     */
+    suspend fun trouble(): MicTrouble = MicTrouble.DIDNT_OPEN
+
+    /**
      * Input loudness while capturing, 0..1 (RMS of the latest frames, roughly linear), updated at
      * least every 50 ms. The dictation controller watches it for the user's pauses, which is when
      * a live partial pass goes to the broker. Null = this host cannot meter, so no live passes.

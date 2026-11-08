@@ -17,7 +17,13 @@ class WaylandKeyNoteTest {
         waylandKeyNote(WaylandHotKey.Outcome.DECLINED),
     )
 
-    // The portal answered but couldn't hand the key over: its backend failed, or its dialog went unanswered.
+    // The desktop's dialog is up, for as long as the user takes: no failure meanwhile.
+    @Test fun whileTheDesktopAsksItSaysWhatItWaitsFor() = assertEquals(
+        "Waiting for you to approve the shortcut…",
+        waylandKeyNote(WaylandHotKey.Outcome.ASKING),
+    )
+
+    // The portal answered but couldn't hand the key over: its backend failed.
     @Test fun aPortalThatCouldNotBindTheKeySaysSo() = assertEquals(
         "The desktop couldn't give supermux this key; hold your Agent to talk, or pick it again here to try again.",
         waylandKeyNote(WaylandHotKey.Outcome.FAILED),

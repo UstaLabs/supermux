@@ -1,0 +1,507 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Drag to rotate</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  html, body { touch-action: none; overscroll-behavior: none; }
+  body { background: radial-gradient(120% 100% at 50% 42%, var(--bg1), var(--bg2)); }
+  #stage { position: absolute; inset: 0; touch-action: none; }
+  #stage canvas { width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #stage canvas.grabbing { cursor: grabbing; }
+  .hint {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    padding: 7px 13px; border-radius: 999px; white-space: nowrap; pointer-events: none;
+    background: rgba(8, 10, 24, .58); border: 1px solid rgba(255, 255, 255, .16);
+    color: #fff; font: 600 12px/1 var(--font); letter-spacing: .01em;
+    display: flex; align-items: center; gap: 7px;
+    transition: opacity .7s ease, transform .7s ease;
+  }
+  .hint svg { width: 14px; height: 14px; flex: none; }
+  .hint.gone { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  .nogl { position: absolute; inset: 0; display: none; place-items: center; color: #fff9; font-size: 13px; }
+  body.no-webgl .nogl { display: grid; }
+</style>
+</head>
+<body class="fixed nosel">
+<div id="stage"></div>
+<div id="hint" class="hint">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>
+  </svg>
+  Drag to rotate · pinch to zoom
+</div>
+<div class="nogl">WebGL is off on this device</div>
+<script type="module">
+import * as THREE from './lib/three.module.min.js';
+
+// reach: the half width and half height (scene units) the framing keeps in view at zoom 1; lift: how far the object
+// sits above the middle, clear of the hint. pitch: how far the object's axis leans toward you at first; tilt: its fixed
+// sideways lean.
+const P = Kit.pick({
+  planet: { kind: 'planet', bg: ['#14264f', '#02040c'], fov: 36, reach: [2.9, 1.95], lift: 0.12, yaw: -0.7, pitch: 0.42, tilt: -0.3, pitchRange: [-1.3, 1.3] },
+  crystal: { kind: 'crystal', bg: ['#37185c', '#070310'], fov: 36, reach: [1.62, 1.58], lift: 0.16, yaw: -0.5, pitch: 0.3, tilt: 0, pitchRange: [-0.9, 1.3] },
+}, 'planet');
+document.body.style.setProperty('--bg1', P.bg[0]);
+document.body.style.setProperty('--bg2', P.bg[1]);
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.body.classList.add('no-webgl');
+  document.getElementById('hint').classList.add('gone');
+}
+
+/** 0..1 from an integer, stable (a face's colour jitter). */
+function hash(n) {
+  n = Math.imul(n ^ (n >>> 16), 0x45d9f3b);
+  n = Math.imul(n ^ (n >>> 16), 0x45d9f3b);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function glowTexture(stops, size = 128) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [at, colour] of stops) grad.addColorStop(at, colour);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(c);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** A soft studio blurred into an environment map: a gradient dome and a few coloured soft boxes. */
+function studio(top, bottom, boxes) {
+  const room = new THREE.Scene();
+  const dome = new THREE.SphereGeometry(10, 32, 16);
+  const pos = dome.attributes.position;
+  const colours = new Float32Array(pos.count * 3);
+  const t = new THREE.Color(top), b = new THREE.Color(bottom), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    c.copy(b).lerp(t, Kit.smooth((pos.getY(i) / 10 + 1) / 2));
+    c.toArray(colours, i * 3);
+  }
+  dome.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  room.add(new THREE.Mesh(dome, new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true })));
+  for (const [colour, x, y, z, s] of boxes) {
+    const box = new THREE.Mesh(new THREE.PlaneGeometry(s, s),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(colour).multiplyScalar(3), side: THREE.DoubleSide }));
+    box.position.set(x, y, z);
+    box.lookAt(0, 0, 0);
+    room.add(box);
+  }
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const texture = pmrem.fromScene(room, 0.04).texture;
+  pmrem.dispose();
+  return texture;
+}
+
+function stars(scene, count, colour, seed) {
+  const rand = Kit.rng(seed);
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const u = rand() * 2 - 1, a = rand() * Math.PI * 2, d = 26 + rand() * 14, s = Math.sqrt(1 - u * u);
+    positions[i * 3] = Math.cos(a) * s * d;
+    positions[i * 3 + 1] = u * d;
+    positions[i * 3 + 2] = Math.sin(a) * s * d;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const dot = glowTexture([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,255,255,.8)'], [1, 'rgba(255,255,255,0)']], 32);
+  scene.add(new THREE.Points(geometry, new THREE.PointsMaterial({
+    size: 0.16, map: dot, color: colour, transparent: true, opacity: 0.8, depthWrite: false,
+  })));
+}
+
+/** A low-poly planet: an icosphere pushed out by noise, one colour a face, with a ring and a moon. */
+function planet(scene, pivot) {
+  const RADIUS = 1.1, SEA = 0.06, RING_IN = 1.5, RING_OUT = 2.15, MOON_ORBIT = 2.55;
+  const geometry = new THREE.IcosahedronGeometry(1, 6);
+  const pos = geometry.attributes.position;
+  const v = new THREE.Vector3();
+  const elevation = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).normalize();
+    const e = 0.62 * Kit.noise3(v.x * 1.15 + 4.3, v.y * 1.15 + 1.1, v.z * 1.15 - 2.7)
+      + 0.26 * Kit.noise3(v.x * 2.6 - 1.9, v.y * 2.6 + 5.2, v.z * 2.6 + 0.4)
+      + 0.12 * Kit.noise3(v.x * 5.5 + 7.1, v.y * 5.5 - 3.3, v.z * 5.5 + 2.2);
+    elevation[i] = e;
+    v.multiplyScalar(e > SEA ? 1 + (e - SEA) * 0.2 : 1);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  const C = (hex) => new THREE.Color(hex);
+  const palette = {
+    deep: C('#17428f'), shallow: C('#2a83cc'), ice: C('#e9f1fb'), beach: C('#e6d29a'),
+    low: [C('#62b45a'), C('#53a44f')], forest: C('#3c8747'), high: C('#8d7b5a'), rock: C('#9c958c'), snow: C('#f5f8fc'),
+  };
+  const colours = new Float32Array(pos.count * 3);
+  const c = new THREE.Color(), centre = new THREE.Vector3();
+  for (let f = 0; f < pos.count; f += 3) {
+    const e0 = elevation[f], e1 = elevation[f + 1], e2 = elevation[f + 2];
+    const mean = (e0 + e1 + e2) / 3;
+    centre.set(pos.getX(f) + pos.getX(f + 1) + pos.getX(f + 2), pos.getY(f) + pos.getY(f + 1) + pos.getY(f + 2),
+      pos.getZ(f) + pos.getZ(f + 1) + pos.getZ(f + 2)).normalize();
+    const j = hash(f + 17);
+    const lat = Math.abs(centre.y) + (j - 0.5) * 0.06;
+    // A face mostly under the sea is sea (a shallow shelf at the coast); only a thin band above it is beach.
+    if (lat > 0.95) c.copy(palette.ice);
+    else if (mean <= SEA) c.copy(mean > SEA - 0.11 ? palette.shallow : palette.deep);
+    else if (lat > 0.87) c.copy(palette.snow);
+    else if (mean < SEA + 0.02) c.copy(palette.beach);
+    else if (mean < SEA + 0.17) c.copy(palette.low[j < 0.5 ? 0 : 1]);
+    else if (mean < SEA + 0.26) c.copy(palette.forest);
+    else if (mean < SEA + 0.34) c.copy(palette.high);
+    else if (mean < SEA + 0.42) c.copy(palette.rock);
+    else c.copy(palette.snow);
+    c.multiplyScalar(0.93 + j * 0.12);
+    for (let k = 0; k < 3; k++) c.toArray(colours, (f + k) * 3);
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  const body = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.82 }));
+  body.scale.setScalar(RADIUS);
+  pivot.add(body);
+
+  // The atmosphere: a thin halo just outside the limb, behind the globe.
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture([[0, 'rgba(110,170,255,0)'], [0.4, 'rgba(110,170,255,0)'], [0.47, 'rgba(140,196,255,.6)'],
+      [0.57, 'rgba(90,150,255,.18)'], [1, 'rgba(60,100,255,0)']]),
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  halo.scale.setScalar(RADIUS * 4.3);
+  halo.renderOrder = -1;
+  scene.add(halo);
+
+  // The ring, in the planet's equator: bands painted once (a bright inner ring, a gap, a fainter outer one).
+  const size = 512, canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  const inner = RING_IN / RING_OUT * size / 2, outer = size / 2;
+  const c0 = Kit.rgb('#f1e3c8'), c1 = Kit.rgb('#c49f7a');
+  const rand = Kit.rng(7);
+  g.lineWidth = 1.6;
+  for (let r = inner; r < outer; r += 1) {
+    const t = (r - inner) / (outer - inner);
+    let a;
+    if (t < 0.1) a = 0.1 + t * 2.4;
+    else if (t < 0.56) a = 0.6 + 0.16 * Math.sin(t * 61) + rand() * 0.12;
+    else if (t < 0.63) a = 0.05;
+    else if (t < 0.93) a = 0.4 + 0.12 * Math.sin(t * 47 + 1) + rand() * 0.1;
+    else a = 0.4 * (1 - (t - 0.93) / 0.07);
+    const mix = (k) => Math.round(Kit.lerp(c0[k], c1[k], t));
+    g.strokeStyle = `rgba(${mix(0)},${mix(1)},${mix(2)},${Kit.clamp(a, 0, 1).toFixed(3)})`;
+    g.beginPath();
+    g.arc(size / 2, size / 2, r + 0.5, 0, Math.PI * 2);
+    g.stroke();
+  }
+  const bands = new THREE.CanvasTexture(canvas);
+  bands.colorSpace = THREE.SRGBColorSpace;
+  bands.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const ring = new THREE.Mesh(new THREE.RingGeometry(RING_IN, RING_OUT, 160, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
+    map: bands, transparent: true, side: THREE.DoubleSide, depthWrite: false,
+  }));
+  pivot.add(ring);
+
+  // The moon: outside the ring, on an orbit tipped off the ring's plane.
+  const moonOrbit = new THREE.Group();
+  moonOrbit.rotation.x = 0.34;
+  pivot.add(moonOrbit);
+  const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(0.15, 1),
+    new THREE.MeshStandardMaterial({ color: '#d6cdc2', flatShading: true, roughness: 0.95 }));
+  moon.position.set(MOON_ORBIT, 0, 0);
+  moonOrbit.add(moon);
+
+  scene.add(new THREE.HemisphereLight('#a9c6ff', '#0a1024', 0.55));
+  const sun = new THREE.DirectionalLight('#fff3e0', 3.0);
+  sun.position.set(-3, 2.4, 3.4);
+  const rim = new THREE.DirectionalLight('#5aa9ff', 1.8);
+  rim.position.set(3.4, 1.0, -4);
+  scene.add(sun, rim);
+  stars(scene, 1100, '#cfe0ff', 3);
+
+  return (dt) => {
+    moonOrbit.rotation.y += dt * 0.42;
+    moon.rotation.y += dt * 0.5;
+  };
+}
+
+/** A cluster of faceted crystals on a dark rock, reflecting a coloured studio, with rim lights and rising sparkles. */
+function crystals(scene, pivot) {
+  scene.environment = studio('#cdb8ff', '#0a0614', [['#ff6ad5', -5, 3, 2, 4], ['#5fe3ff', 5, 2, 3, 4], ['#ffffff', 0, 6, -3, 3]]);
+
+  // A violet glow behind the cluster, so the gems stand out from the dark.
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTexture([[0, 'rgba(190,140,255,.5)'], [0.35, 'rgba(160,110,255,.2)'], [1, 'rgba(120,80,255,0)']]),
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  glow.scale.setScalar(4.4);
+  glow.position.set(0, 0.05, -1.7);
+  glow.renderOrder = -1;
+  scene.add(glow);
+
+  // Everything sits in a group whose middle is the pivot: the rock's foot at about -1.2, the tallest tip at about 1.2.
+  const cluster = new THREE.Group();
+  cluster.position.y = -0.62;
+  pivot.add(cluster);
+
+  const rockGeometry = new THREE.DodecahedronGeometry(1, 1);
+  {
+    const pos = rockGeometry.attributes.position, v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      v.multiplyScalar(1 + 0.14 * Kit.noise3(v.x * 1.9 + 3, v.y * 1.9, v.z * 1.9 - 1));
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+  }
+  const rock = new THREE.Mesh(rockGeometry,
+    new THREE.MeshStandardMaterial({ color: '#2d2539', flatShading: true, roughness: 0.8, metalness: 0.1, envMapIntensity: 0.7 }));
+  rock.scale.set(1.2, 0.4, 1.0);
+  rock.position.y = -0.14;
+  cluster.add(rock);
+
+  const tints = ['#c7a0ff', '#8fd8ff', '#ff9ad5', '#b2a0ff', '#9ff2ff', '#e6b9ff'];
+  const edges = new THREE.LineBasicMaterial({
+    color: '#f6efff', transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const rand = Kit.rng(11);
+  const up = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3(), turn = new THREE.Quaternion();
+  for (let i = 0; i < 9; i++) {
+    const main = i === 0;
+    const h = main ? 1.82 : 0.68 + rand() * 0.72;
+    const r = main ? 0.27 : 0.11 + rand() * 0.12;
+    const tip = r * 1.8;
+    // A hexagonal prism with a pointed end, its foot buried in the rock; darker at the foot, bright at the tip.
+    const geometry = new THREE.LatheGeometry([new THREE.Vector2(0, -0.3), new THREE.Vector2(r * 0.9, -0.24),
+      new THREE.Vector2(r, h - tip), new THREE.Vector2(0, h)], 6);
+    const pos = geometry.attributes.position;
+    const shade = new Float32Array(pos.count * 3);
+    for (let k = 0; k < pos.count; k++) shade.fill(0.36 + 0.64 * Kit.smooth((pos.getY(k) + 0.3) / (h + 0.3)), k * 3, k * 3 + 3);
+    geometry.setAttribute('color', new THREE.BufferAttribute(shade, 3));
+    const tint = tints[i % tints.length];
+    // The faces sit a hair behind their own edges (polygon offset), so the edge lines never flicker into dashes.
+    const gem = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: tint, vertexColors: true, emissive: tint, emissiveIntensity: 0.16,
+      metalness: 0.25, roughness: 0.1, flatShading: true, envMapIntensity: 1.7,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+    }));
+    gem.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 20), edges));
+    const a = main ? 0 : (i / 8) * Math.PI * 2 + rand() * 0.5;
+    const lean = main ? 0.05 : 0.26 + rand() * 0.34;
+    dir.set(Math.cos(a) * Math.sin(lean), Math.cos(lean), Math.sin(a) * Math.sin(lean));
+    gem.quaternion.setFromUnitVectors(up, dir).multiply(turn.setFromAxisAngle(up, rand() * Math.PI));
+    const out = main ? 0 : 0.24 + rand() * 0.34;
+    gem.position.set(Math.cos(a) * out, 0.06, Math.sin(a) * out * 0.85);
+    cluster.add(gem);
+  }
+
+  // Rim lights stay put behind the cluster, so facets flash pink and cyan as they turn past.
+  const pink = new THREE.PointLight('#ff5fd2', 16, 0, 2);
+  pink.position.set(-2.3, 1.3, -1.4);
+  const cyan = new THREE.PointLight('#58e6ff', 16, 0, 2);
+  cyan.position.set(2.3, 0.5, -1.2);
+  const key = new THREE.DirectionalLight('#ffffff', 1.3);
+  key.position.set(1, 3, 4);
+  scene.add(pink, cyan, key, new THREE.HemisphereLight('#c9b6ff', '#120a20', 0.45));
+
+  // Sparkles rising slowly around the cluster, each twinkling at its own pace.
+  const COUNT = 80, BOTTOM = -1.5, TOP = 1.8;
+  const positions = new Float32Array(COUNT * 3), colours = new Float32Array(COUNT * 3);
+  const speed = new Float32Array(COUNT), phase = new Float32Array(COUNT);
+  for (let i = 0; i < COUNT; i++) {
+    positions[i * 3] = (rand() - 0.5) * 4.2;
+    positions[i * 3 + 1] = BOTTOM + rand() * (TOP - BOTTOM);
+    positions[i * 3 + 2] = (rand() - 0.5) * 2.8;
+    speed[i] = rand();
+    phase[i] = rand() * Math.PI * 2;
+  }
+  const sparkleGeometry = new THREE.BufferGeometry();
+  sparkleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+  sparkleGeometry.setAttribute('color', new THREE.BufferAttribute(colours, 3).setUsage(THREE.DynamicDrawUsage));
+  scene.add(new THREE.Points(sparkleGeometry, new THREE.PointsMaterial({
+    size: 0.1, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    map: glowTexture([[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,255,255,.7)'], [1, 'rgba(255,255,255,0)']], 32),
+  })));
+  stars(scene, 500, '#e6d8ff', 5);
+
+  return (dt, time) => {
+    for (let i = 0; i < COUNT; i++) {
+      let y = positions[i * 3 + 1] + dt * (0.1 + speed[i] * 0.18);
+      if (y > TOP) y = BOTTOM;
+      positions[i * 3 + 1] = y;
+      const edge = Kit.smooth((y - BOTTOM) / 0.5) * Kit.smooth((TOP - y) / 0.5);
+      const b = edge * (0.25 + 0.75 * Math.max(0, Math.sin(time * (1.4 + speed[i] * 2.4) + phase[i])));
+      colours[i * 3] = 0.96 * b;
+      colours[i * 3 + 1] = 0.9 * b;
+      colours[i * 3 + 2] = b;
+    }
+    sparkleGeometry.attributes.position.needsUpdate = true;
+    sparkleGeometry.attributes.color.needsUpdate = true;
+  };
+}
+
+if (renderer) {
+  renderer.setPixelRatio(Kit.dpr(2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  const stage = document.getElementById('stage');
+  const canvas = renderer.domElement;
+  stage.appendChild(canvas);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(P.fov, 1, 0.1, 100);
+  const pivot = new THREE.Group();
+  scene.add(pivot);
+  const animate = P.kind === 'crystal' ? crystals(scene, pivot) : planet(scene, pivot);
+
+  // The view: yaw spins the object about its own axis, pitch leans that axis toward you or away, zoom scales the
+  // camera's distance. One finger (or the mouse) turns it with inertia; two fingers, the wheel or a trackpad pinch zoom.
+  // Every gesture on the page is its own (touch-action: none), so the chat never scrolls under a drag.
+  const [PITCH_MIN, PITCH_MAX] = P.pitchRange;
+  const TURN = 0.0085, AUTO = 0.24, MIN_ZOOM = 0.6, MAX_ZOOM = 1.55, IDLE = 2.5;
+  let yaw = P.yaw, pitch = P.pitch, zoom = 1, zoomTarget = 1;
+  let vYaw = 0, vPitch = 0, spin = AUTO;
+  let lastTouch = -1e9, lastMove = 0, travel = 0, pinchFrom = 0, zoomFrom = 1, hintGone = false;
+  const pointers = new Map();
+  const hint = document.getElementById('hint');
+  const now = () => performance.now();
+  const dropHint = () => {
+    if (hintGone) return;
+    hintGone = true;
+    hint.classList.add('gone');
+  };
+  const spread = () => {
+    let a = null, b = null;
+    for (const p of pointers.values()) { if (!a) a = p; else if (!b) b = p; }
+    return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+  };
+  const regrip = () => {
+    pinchFrom = pointers.size === 2 ? spread() : 0;
+    zoomFrom = zoomTarget;
+  };
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* the pointer is already gone */ }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    regrip();
+    vYaw = vPitch = spin = 0;
+    travel = 0;
+    lastMove = e.timeStamp;
+    lastTouch = now();
+    canvas.classList.add('grabbing');
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (pointers.size === 1) {
+      yaw += dx * TURN;
+      pitch = Kit.clamp(pitch + dy * TURN, PITCH_MIN, PITCH_MAX);
+      const gap = Math.max(8, e.timeStamp - lastMove) / 1000;
+      vYaw = Kit.lerp(vYaw, dx * TURN / gap, 0.5);
+      vPitch = Kit.lerp(vPitch, dy * TURN / gap, 0.5);
+      lastMove = e.timeStamp;
+      travel += Math.abs(dx) + Math.abs(dy);
+      if (travel > 6) dropHint();
+    } else if (pointers.size === 2 && pinchFrom > 0) {
+      zoomTarget = Kit.clamp(zoomFrom * pinchFrom / spread(), MIN_ZOOM, MAX_ZOOM);
+      dropHint();
+    }
+    lastTouch = now();
+    e.preventDefault();
+  });
+  const release = (e) => {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size === 0) {
+      // A finger that rested before lifting throws nothing.
+      if (e.timeStamp - lastMove > 90) vYaw = vPitch = 0;
+      vYaw = Kit.clamp(vYaw, -7, 7);
+      vPitch = Kit.clamp(vPitch, -5, 5);
+      canvas.classList.remove('grabbing');
+    } else {
+      // Down to one finger after a pinch: it turns on from where it is, without a throw or a jump.
+      vYaw = vPitch = 0;
+      lastMove = e.timeStamp;
+    }
+    regrip();
+    lastTouch = now();
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 18 : e.deltaMode === 2 ? 240 : 1;
+    // A trackpad pinch in Chromium arrives as a wheel with ctrlKey and small deltas.
+    zoomTarget = Kit.clamp(zoomTarget * Math.exp(e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.0015)), MIN_ZOOM, MAX_ZOOM);
+    lastTouch = now();
+    dropHint();
+  }, { passive: false });
+  // WebKit: a trackpad pinch on the Mac arrives as gesture events (a touch screen's pinch is already handled above).
+  let gestureFrom = 1;
+  canvas.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureFrom = zoomTarget; }, { passive: false });
+  canvas.addEventListener('gesturechange', (e) => {
+    e.preventDefault();
+    if (pointers.size >= 2 || !e.scale) return;
+    zoomTarget = Kit.clamp(gestureFrom / e.scale, MIN_ZOOM, MAX_ZOOM);
+    lastTouch = now();
+    dropHint();
+  }, { passive: false });
+  canvas.addEventListener('gestureend', (e) => e.preventDefault(), { passive: false });
+  // And for engines that would still pan or bounce a touch-action: none page: no touch on it reaches a scroller.
+  const hold = (e) => { if (e.cancelable) e.preventDefault(); };
+  document.addEventListener('touchstart', hold, { passive: false });
+  document.addEventListener('touchmove', hold, { passive: false });
+
+  // The view the user left survives the page's engine being lent to another preview.
+  Kit.keep(() => ({ yaw, pitch, zoom: zoomTarget, hintGone }), (saved) => {
+    if (typeof saved.yaw === 'number' && isFinite(saved.yaw)) yaw = saved.yaw % (Math.PI * 2);
+    if (typeof saved.pitch === 'number') pitch = Kit.clamp(saved.pitch, PITCH_MIN, PITCH_MAX);
+    if (typeof saved.zoom === 'number') zoom = zoomTarget = Kit.clamp(saved.zoom, MIN_ZOOM, MAX_ZOOM);
+    if (saved.hintGone) dropHint();
+  });
+
+  // The camera's distance at zoom 1: the nearest that keeps the reach in view, whatever the card's shape.
+  let fit = 8;
+  Kit.watch(document.body, () => {
+    const w = stage.clientWidth || 1, h = stage.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    const tan = Math.tan(THREE.MathUtils.degToRad(P.fov / 2));
+    fit = Math.max((P.reach[1] + P.lift) / tan, P.reach[0] / (tan * camera.aspect));
+  });
+
+  let time = 0;
+  Kit.loop((dt) => {
+    time += dt;
+    if (pointers.size === 0) {
+      const decay = Math.exp(-dt * 2.2);
+      vYaw *= decay;
+      vPitch *= decay;
+      // The idle spin fades out while you play and comes back a little after you let go.
+      const idle = (now() - lastTouch) / 1000 > IDLE;
+      spin += ((idle ? AUTO : 0) - spin) * Math.min(1, dt * 0.9);
+      yaw += (vYaw + spin) * dt;
+      const next = pitch + vPitch * dt;
+      pitch = Kit.clamp(next, PITCH_MIN, PITCH_MAX);
+      if (pitch !== next) vPitch = 0;
+    }
+    pivot.rotation.set(pitch, yaw, P.tilt, 'XZY');
+    zoom += (zoomTarget - zoom) * Math.min(1, dt * 10);
+    camera.position.set(0, -P.lift, fit * zoom);
+    camera.lookAt(0, -P.lift, 0);
+    animate(dt, time);
+    renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

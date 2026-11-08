@@ -9,6 +9,7 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -312,6 +313,42 @@ class AgentSettingsScreenTest {
         assertTrue(startCalls.get() >= 1)
         onNodeWithTag("agent_login_device_code").assertIsDisplayed()
         onNodeWithTag("agent_login_cancel").assertIsDisplayed()
+    }
+
+    /** The sign-in link's Copy goes through the app's [dev.supermux.ui.platform.Platform], like its Open does. */
+    @Test fun login_copy_puts_the_sign_in_link_on_the_platform_clipboard() = runComposeUiTest {
+        val platform = FakePlatform()
+        val started = AtomicBoolean(false)
+        agentContent(platform = platform) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
+                    },
+                    agentStartLogin = {
+                        started.set(true)
+                        AgentLoginState(kind = "claude", phase = "starting")
+                    },
+                    agentPollLogin = {
+                        if (!started.get()) null
+                        else AgentLoginState(kind = "claude", phase = "awaiting_user", url = "https://example.com/device")
+                    },
+                )()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("agent_login_start_claude").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_login_open_url").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithContentDescription("Copy").performClick()
+        waitForIdle()
+        assertEquals(listOf("https://example.com/device"), platform.copied)
     }
 
     @Test fun login_pending_to_done_reloads_statuses() = runComposeUiTest {

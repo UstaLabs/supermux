@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs'
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, type Stats } from 'node:fs'
 import { rm, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
@@ -143,6 +143,51 @@ function keeperEntry(): SelfEntry {
   return selfEntry(import.meta.url, 'keeper', CORE_SUBCOMMANDS.keeper)
 }
 
+const SYSTEMD_SCOPE = ['--user', '--scope', '--quiet', '--collect', '--']
+
+/**
+ * @internal How a keeper is started: [scoped], through `systemd-run --user --scope`, in a scope of its own beside the
+ * service that runs this process. systemd-run execs the keeper in place, so the pid spawned is still the keeper's.
+ */
+export function keeperLaunch<E extends { command: string; args: string[] }>(entry: E, scoped: boolean): E {
+  return scoped ? { ...entry, command: 'systemd-run', args: [...SYSTEMD_SCOPE, entry.command, ...entry.args] } : entry
+}
+
+let scopeProbe: Promise<boolean> | undefined
+
+/**
+ * @internal Whether keepers start in a systemd scope of their own (#29). Under a systemd service (INVOCATION_ID: the
+ * broker's unit, so Linux), a keeper started as a plain child stays in the unit's cgroup, and a stop or restart of the
+ * unit (its default KillMode=control-group) kills every process there: the keepers, their agents and any turn in flight,
+ * whatever the broker asked for. tmux's server leaves that cgroup the same way. Asked once: where systemd-run is missing
+ * or cannot reach this user's service manager (a container, CI), keepers start as before.
+ */
+export function keepersScoped(env: NodeJS.ProcessEnv = process.env, probe: () => Promise<boolean> = probeSystemdScope): Promise<boolean> {
+  if (!env.INVOCATION_ID) return Promise.resolve(false)
+  return scopeProbe ??= probe()
+}
+
+/** @internal */
+export function resetKeepersScopedForTests(): void {
+  scopeProbe = undefined
+}
+
+/** True when `systemd-run --user --scope` runs a command here (an empty one, `true`) within 5 s. */
+function probeSystemdScope(): Promise<boolean> {
+  return new Promise(resolve => {
+    let child: ChildProcess
+    try {
+      child = proc.spawnCommand('systemd-run', [...SYSTEMD_SCOPE, 'true'], { stdio: 'ignore' })
+    } catch {
+      resolve(false)
+      return
+    }
+    const timer = setTimeout(() => { if (child.pid) proc.killTree(child.pid); resolve(false) }, 5_000)
+    child.on('error', () => { clearTimeout(timer); resolve(false) })
+    child.on('exit', code => { clearTimeout(timer); resolve(code === 0) })
+  })
+}
+
 /** Owned by this user (anything is, where there are no uids). */
 function mine(info: Stats): boolean {
   return typeof process.getuid !== 'function' || info.uid === process.getuid()
@@ -283,10 +328,11 @@ async function retireKeeper(dir: string, status: KeeperStatus, limits: StopKeepe
     try { process.kill(status.keeperPid, 'SIGKILL') } catch { /* */ }
     await waitPidDead(status.keeperPid, 2000)
   }
+  // The recorded agent pid is the root of the agent's tree: a .cmd agent's is cmd.exe's on Windows.
   if (alive(status.agentPid)) {
-    try { process.kill(status.agentPid, 'SIGTERM') } catch { /* */ }
+    proc.killTree(status.agentPid, { signal: 'SIGTERM' })
     await waitPidDead(status.agentPid, limits.shutdownTimeoutMs)
-    if (alive(status.agentPid)) { try { process.kill(status.agentPid, 'SIGKILL') } catch { /* */ } await waitPidDead(status.agentPid, 2000) }
+    if (alive(status.agentPid)) { proc.killTree(status.agentPid, { signal: 'SIGKILL' }); await waitPidDead(status.agentPid, 2000) }
   }
   if (alive(status.keeperPid) || alive(status.agentPid)) throw new Error(`keeper ${status.keeperPid} or its agent ${status.agentPid} did not stop`)
 }
@@ -394,15 +440,28 @@ export function detachedKeeperHooks(stateDirectory: string, limits: StopKeeperLi
 }
 
 /** Waits for the new keeper's socket: a socket of this user's at `sockPath` (never connected to through a link). */
-async function waitForSocket(dir: string, sockPath: string, pid: number, timeoutMs: number) {
+async function waitForSocket(dir: string, sockPath: string, pid: number, timeoutMs: number, errPath: string) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     if (trustedSocket(dir, sockPath)) return
-    // One that exited (its agent did not start, say) never makes it.
-    if (!alive(pid)) throw new Error('keeper exited before its socket appeared')
+    // One that exited (an import its checkout cannot resolve, say) never makes it: say what it wrote.
+    if (!alive(pid)) throw new Error('keeper exited before its socket appeared' + keeperSaid(errPath))
     await sleep(20)
   }
-  throw new Error('keeper socket did not appear')
+  throw new Error('keeper socket did not appear' + keeperSaid(errPath))
+}
+
+/** The keeper's own stderr, kept next to its status: a start that failed quotes it. */
+const KEEPER_STDERR = 'keeper.err'
+
+/** The last lines a keeper wrote to its stderr file, as `: line | line`; "" when it wrote none. */
+function keeperSaid(errPath: string): string {
+  try {
+    const lines = readFileSync(errPath, 'utf8').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    return lines.length ? ': ' + lines.slice(-5).join(' | ').slice(-800) : ''
+  } catch {
+    return ''
+  }
 }
 
 function connectSock(sockPath: string): Promise<Socket> {
@@ -450,7 +509,7 @@ async function connectLocked(options: {
   const fingerprintPath = join(dir, 'fingerprint')
 
   let spawnedPid: number | undefined
-  let spawnedChild: ReturnType<typeof spawn> | undefined
+  let spawnedChild: ChildProcess | undefined
   let status = await readStatus(statusPath)
   // The socket of the keeper the status describes; one started below listens on newSocketPath(dir).
   // Only a trusted socket is ever connected to (it is sent the session's token).
@@ -490,37 +549,48 @@ async function connectLocked(options: {
     if (status && status.keeperPid && !alive(status.keeperPid)) await reap(dir, status, statusPath, sockPath)
     sockPath = newSocketPath(dir)
     const token = randomBytes(32).toString('hex')
-    const entry = keeperEntry()
+    const entry = keeperLaunch(keeperEntry(), await keepersScoped())
+    // Its stderr goes to a private file next to its status: a keeper that dies before its socket (an import that does
+    // not resolve, say) is otherwise silent, and its start could only say that it died. So is systemd-run's, scoped.
+    const errPath = join(dir, KEEPER_STDERR)
+    writeKeeperFile(dir, errPath, '')
+    const errFd = openSync(errPath, 'a')
     const spawnStarted = performance.now()
-    const child = spawn(entry.command, entry.args, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-      cwd: entry.cwd,
-      env: {
-        ...process.env,
-        [KEEPER_ENV.sessionDir]: dir,
-        [KEEPER_ENV.command]: options.spec.command,
-        [KEEPER_ENV.args]: JSON.stringify(options.spec.args),
-        [KEEPER_ENV.cwd]: options.spec.cwd,
-        [KEEPER_ENV.agentEnv]: JSON.stringify(options.spec.env),
-        [KEEPER_ENV.token]: token,
-        [KEEPER_ENV.limits]: JSON.stringify(options.limits),
-        [KEEPER_ENV.frameShape]: options.spec.frameShape,
-        [KEEPER_ENV.captureStderr]: String(options.spec.captureStderr),
-        [KEEPER_ENV.socket]: sockPath,
-        ...(options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS
-          ? { SUPERMUX_KEEPER_SKIP_STATUS: options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS }
-          : {}),
-      },
-    })
+    let child: ChildProcess
+    try {
+      child = proc.spawnCommand(entry.command, entry.args, {
+        detached: true,
+        stdio: ['ignore', 'ignore', errFd],
+        windowsHide: true,
+        cwd: entry.cwd,
+        env: {
+          ...process.env,
+          [KEEPER_ENV.sessionDir]: dir,
+          [KEEPER_ENV.command]: options.spec.command,
+          [KEEPER_ENV.args]: JSON.stringify(options.spec.args),
+          [KEEPER_ENV.cwd]: options.spec.cwd,
+          [KEEPER_ENV.agentEnv]: JSON.stringify(options.spec.env),
+          [KEEPER_ENV.token]: token,
+          [KEEPER_ENV.limits]: JSON.stringify(options.limits),
+          [KEEPER_ENV.frameShape]: options.spec.frameShape,
+          [KEEPER_ENV.captureStderr]: String(options.spec.captureStderr),
+          [KEEPER_ENV.socket]: sockPath,
+          ...(options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS
+            ? { SUPERMUX_KEEPER_SKIP_STATUS: options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS }
+            : {}),
+        },
+      })
+    } finally {
+      // The keeper holds its own handle to the file; this process needs none.
+      closeSync(errFd)
+    }
     spawnedPid = child.pid
     spawnedChild = child
     if (!spawnedPid) throw new Error('keeper spawn produced no pid')
     try {
       if (options.spec.fingerprint !== undefined) writeKeeperFile(dir, fingerprintPath, options.spec.fingerprint + '\n')
       else await unlink(fingerprintPath).catch(() => {})
-      await waitForSocket(dir, sockPath, spawnedPid, options.limits.connectTimeoutMs)
+      await waitForSocket(dir, sockPath, spawnedPid, options.limits.connectTimeoutMs, errPath)
       // The keeper creates the socket before it writes status.json; wait for the status
       // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
       const started = Date.now()

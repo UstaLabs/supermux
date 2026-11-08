@@ -15,7 +15,7 @@
 // the Native tab silently starts streaming someone else's terminal. A dedicated
 // single-window session has no neighbor to fall to: when the window dies the
 // session empties and is destroyed, so the viewer cleanly exits instead.
-import { spawn } from "child_process"
+import { spawnCommand } from "../process/launcher"
 
 export type TmuxResult = { code: number; stdout: string; stderr: string }
 export type TmuxRunner = (args: string[]) => Promise<TmuxResult>
@@ -96,11 +96,11 @@ export function attachArgv(opts: { device: string; agentTarget: string }): strin
 function makeRunner(): TmuxRunner {
   return (args: string[]) =>
     new Promise<TmuxResult>((resolve, reject) => {
-      const proc = spawn("tmux", args, { stdio: ["ignore", "pipe", "pipe"] })
+      const proc = spawnCommand("tmux", args, { stdio: ["ignore", "pipe", "pipe"] })
       let stdout = ""
       let stderr = ""
-      proc.stdout.on("data", (d) => { stdout += d })
-      proc.stderr.on("data", (d) => { stderr += d })
+      proc.stdout!.on("data", (d) => { stdout += d })
+      proc.stderr!.on("data", (d) => { stderr += d })
       proc.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }))
       proc.on("error", reject)
     })

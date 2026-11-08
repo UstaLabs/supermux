@@ -1,5 +1,6 @@
 import { join } from "path"
 import { createHostProvider } from "../../../../packages/supermux-core/src/index.js"
+import type { CloseMode } from "../../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../../shared/paths"
 import { brokerAccountsOptions } from "../../accounts/broker-accounts"
 import { createAntigravityCoreHost, type AntigravityCoreHost } from "./core-host"
@@ -20,8 +21,9 @@ export function getAntigravityCoreHost(): AntigravityCoreHost {
 
 /** Await the current host (if any) and forbid creating another in this process.
  *  The live handle is kept until close confirms so a failed close can be retried. */
-export async function closeAntigravityCoreHost(): Promise<void> {
-  await provider.close({ agents: "shutdown" })
+/** [agents]: "detach" leaves the keepers running for the next broker (a restart); "shutdown" stops them (a stop). */
+export async function closeAntigravityCoreHost(agents: CloseMode = "shutdown"): Promise<void> {
+  await provider.close({ agents })
 }
 
 export function antigravityCoreHostIsShutdown(): boolean {

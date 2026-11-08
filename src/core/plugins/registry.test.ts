@@ -126,6 +126,12 @@ test("grok is a valid scope and round-trips through serialize", () => {
   expect(reparsed.plugins[0]!.scopes).toEqual(["grok"])
 })
 
+test("migrations (the one-time boot migrations already applied) round-trip, unknown names kept", () => {
+  const reg = parsePluginsRegistry(JSON.stringify({ version: 1, migrations: ["scope:opencode", "from-a-newer-broker"], plugins: [] }), "/p")
+  expect(reg.migrations).toEqual(["scope:opencode", "from-a-newer-broker"])
+  expect(JSON.parse(serializePluginsRegistry(reg)).migrations).toEqual(["scope:opencode", "from-a-newer-broker"])
+})
+
 test("loadPluginsRegistry returns an empty registry when the file is absent", () => {
   const reg = loadPluginsRegistry({ file: "/no/such/plugins.json", pluginsDir: PLUGINS_DIR })
   expect(reg).toEqual({ version: 1, plugins: [] })

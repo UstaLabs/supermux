@@ -97,8 +97,8 @@ export function claudeInboxShellRules(file: string): string[] {
   ]
 }
 
-function pluginsFor(sessionName: string): string[] {
-  return sessionPlugins("claude", sessionName, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
+function pluginsFor(sessionId: string): string[] {
+  return sessionPlugins("claude", sessionId, { onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
 }
 
 function parseRpcMcpServers(path: string): ExternalMcpServer[] {
@@ -210,7 +210,7 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
       const extra = asPrepareExtra(registration)
       // Card #75: where the prepare step's time goes, for a session start being traced.
       const laps = lapTimer()
-      const plugins = pluginsFor(extra.sessionName)
+      const plugins = pluginsFor(registration.id)
       laps.lap("plugins")
       // ONE instructions value (a PA's used to be several appended files, of which Claude kept
       // only the last). Fixed when the session is created; an existing session keeps its own.

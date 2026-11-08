@@ -114,6 +114,12 @@ class SessionPreviewTextTest {
         assertEquals(emptyList(), plain.links)
     }
 
+    @Test fun aLinkThatWouldNotOpenKeepsOnlyItsLabel() {
+        val plain = messagePlainLinked("see [docs](javascript:void) and [site](https://x.y/1)")
+        assertEquals("see docs and site", plain.text)
+        assertEquals(listOf("site" to "https://x.y/1"), plain.links.map { plain.text.substring(it.start, it.end) to it.url })
+    }
+
     // The marks it keeps links with can't be faked by the text itself.
     @Test fun aMessageHoldingItsOwnMarksStillReads() {
         val plain = messagePlainLinked("odd  marks  and [a link](https://x.y/1)")

@@ -74,6 +74,21 @@ test("the credential file authenticates claude", () => {
   expect(seen).toEqual(["/home/u/.claude/.credentials.json"])
 })
 
+// #101: with Anthropic's tengu_windows_credman rollout on, Claude Code on Windows keeps its login in Credential Manager
+// and deletes the credential file. That login is signed in: Settings must not offer "Start authorization" for it.
+test("Claude's login in Windows Credential Manager authenticates claude when there is no credential file", () => {
+  const win = { ...base, home: "C:\\Users\\u", platform: "win32" as const }
+  expect(claudeAuthMode({ ...win, storedLogin: () => true })).toBe("credential_manager")
+  expect(claudeAuthMode({ ...win, storedLogin: () => false })).toBe("none")
+})
+
+test("the credential file still answers first, and the store is not asked then", () => {
+  let asked = false
+  const mode = claudeAuthMode({ ...base, fileExists: () => true, storedLogin: () => { asked = true; return true } })
+  expect(mode).toBe("credentials_file")
+  expect(asked).toBe(false)
+})
+
 test("on darwin the CLI status command answers when no file exists", () => {
   const calls: string[][] = []
   const mode = claudeAuthMode({

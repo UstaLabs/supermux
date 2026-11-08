@@ -24,6 +24,7 @@ import dev.supermux.ui.MdBlock
 import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.editor.filePreviewKind
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.fs.isAbsoluteHostPath
 
 /**
  * Where a markdown surface may read host files from. [baseDir] (absolute) resolves a relative
@@ -57,8 +58,8 @@ fun resolveMarkdownMediaPath(url: String, baseDir: String?): String? {
     val path = percentDecode(u.substringBefore('#').substringBefore('?'))
     if (path.isEmpty()) return null
     val joined = when {
-        path.startsWith("/") || isWindowsHostPath(path) -> path
-        baseDir.isNullOrEmpty() || !(baseDir.startsWith("/") || isWindowsHostPath(baseDir)) -> return null
+        isAbsoluteHostPath(path) -> path
+        baseDir.isNullOrEmpty() || !isAbsoluteHostPath(baseDir) -> return null
         else -> hostJoin(baseDir, path)
     }
     return normalizeHostPath(joined)

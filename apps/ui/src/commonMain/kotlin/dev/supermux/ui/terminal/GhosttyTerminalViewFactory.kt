@@ -15,7 +15,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,6 +43,7 @@ import dev.supermux.net.SpecialKey
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalEvent
 import dev.supermux.net.CursorPos
+import dev.supermux.net.isOpenableLink
 import dev.supermux.terminal.OutputOrigin
 import dev.supermux.terminal.TerminalCursor
 import dev.supermux.terminal.TerminalEffect
@@ -67,6 +67,7 @@ import dev.supermux.ui.keys.KeyContext
 import dev.supermux.ui.keys.ProvideKeyScope
 import dev.supermux.ui.keys.keyScope
 import dev.supermux.ui.keys.rememberKeyScope
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefsOrNull
 import dev.supermux.ui.prefs.UiPrefs
@@ -514,9 +515,9 @@ private class GhosttyTerminalSurface(
  * any link can be copied.
  */
 @Composable
-private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
-    val openable = isOpenableTerminalLink(uri)
+internal fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    val platform = LocalPlatform.current
+    val openable = isOpenableLink(uri)
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag("terminal_link_dialog"),
@@ -526,7 +527,7 @@ private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () ->
             if (openable) {
                 TextButton(
                     onClick = {
-                        runCatching { uriHandler.openUri(uri) }
+                        platform.openUrl(uri)
                         onDismiss()
                     },
                     modifier = Modifier.testTag("terminal_link_open"),
@@ -542,12 +543,6 @@ private fun TerminalLinkDialog(uri: String, onCopy: () -> Unit, onDismiss: () ->
             }
         },
     )
-}
-
-/** Web and mail links open on this device; anything else (file://, ssh://, a custom scheme) is copy-only. */
-internal fun isOpenableTerminalLink(uri: String): Boolean {
-    val scheme = uri.substringBefore(':', missingDelimiterValue = "").lowercase()
-    return scheme == "http" || scheme == "https" || scheme == "mailto"
 }
 
 private const val BELL_FLASH_ALPHA = 0.14f

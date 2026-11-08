@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toAwtImage
@@ -98,7 +99,7 @@ class TrayIconsTest {
     /** The theme was read once, on the UI thread, by a reg.exe with no time limit; it now goes through OsEnv's limit. */
     @Test fun theTaskbarThemeIsReadThroughOsEnvWithATimeLimit() {
         val asked = mutableListOf<Pair<List<String>, Long>>()
-        val os = object : OsEnv by FakeOs(OsEnv.Os.WINDOWS) {
+        val os = object : OsEnv by FakeOs(DesktopOs.WINDOWS) {
             override fun runResult(argv: List<String>) = runResult(argv, -1)
             override fun runResult(argv: List<String>, timeoutMs: Long): OsEnv.RunResult {
                 asked += argv to timeoutMs
@@ -108,7 +109,7 @@ class TrayIconsTest {
         assertEquals(true, TrayIcons.windowsTaskbarIsLight(os))
         assertEquals("reg", asked.single().first[0])
         assertTrue(asked.single().second in 1..10_000, "a time limit: ${asked.single().second}")
-        val failing = object : OsEnv by FakeOs(OsEnv.Os.WINDOWS) {
+        val failing = object : OsEnv by FakeOs(DesktopOs.WINDOWS) {
             override fun runResult(argv: List<String>) = OsEnv.RunResult(-1, "", "timed out")
             override fun runResult(argv: List<String>, timeoutMs: Long) = runResult(argv)
         }

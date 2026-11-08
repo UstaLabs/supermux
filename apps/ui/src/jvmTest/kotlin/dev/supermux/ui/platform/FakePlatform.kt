@@ -261,8 +261,12 @@ internal class FakeMic(
     var startResult: Boolean = true,
     var audio: CapturedAudio? = CapturedAudio(byteArrayOf(1, 2, 3), "d.wav", "audio/wav"),
     var permission: Boolean = true,
+    /** What it says when asked why it didn't open. */
+    var whyNot: MicTrouble = MicTrouble.DIDNT_OPEN,
 ) : MicCapture {
     val events = mutableListOf<String>()
+
+    override suspend fun trouble(): MicTrouble = whyNot
 
     override fun start(): Boolean {
         events.add("start")

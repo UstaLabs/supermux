@@ -1,0 +1,309 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Card flip</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  /* The page follows the theme; the credit card is the same object in both, the pass's paper turns dark. */
+  :root {
+    --paper: #ffffff; --paper-ink: #151826; --paper-muted: #69708a; --paper-line: rgba(21, 24, 38, .16);
+    --edge: rgba(20, 22, 28, .1);
+    --lift: 0 1px 2px rgba(20, 22, 40, .08), 0 16px 34px -16px rgba(20, 22, 40, .38);
+    --glow: 109, 74, 255; --glow-a: .13;
+    --brand: #f0473a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #1f2331; --paper-ink: #eef0f6; --paper-muted: #9aa3b5; --paper-line: rgba(255, 255, 255, .16);
+      --edge: rgba(255, 255, 255, .09);
+      --lift: 0 1px 2px rgba(0, 0, 0, .35), 0 18px 38px -16px rgba(0, 0, 0, .8);
+      --glow-a: .2;
+      --brand: #ff6a4d;
+    }
+  }
+  main { padding: 22px 0 14px; }
+  .glow { position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(46% 58% at 50% 44%, rgba(var(--glow), var(--glow-a)), rgba(var(--glow), 0)); }
+
+  /* The card: sizes inside it are in --u, a hundredth of its width, so it scales as one object. */
+  .scene {
+    --u: 3.08px;
+    position: relative; width: min(100% - 32px, 360px); margin: 0 auto; aspect-ratio: var(--ratio, 1.586);
+    perspective: 1500px; cursor: pointer; outline: none;
+  }
+  .card { position: absolute; inset: 0; transform-style: preserve-3d; -webkit-transform-style: preserve-3d; will-change: transform; }
+  .face {
+    position: absolute; inset: 0; overflow: hidden; border-radius: calc(var(--u) * 4.4);
+    -webkit-backface-visibility: hidden; backface-visibility: hidden;
+  }
+  .back { transform: rotateY(180deg); }
+  .sheen { position: absolute; top: -10%; bottom: -10%; left: -10%; width: 120%; pointer-events: none;
+    background: linear-gradient(105deg, rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, .13) 46%, rgba(255, 255, 255, 0) 62%); }
+  .hint { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 18px; font-size: 12px; font-weight: 500; color: var(--muted); }
+  .hint svg { width: 13px; height: 13px; flex: none; }
+
+  /* Credit card. */
+  .cc { color: #fff;
+    background:
+      radial-gradient(85% 120% at 100% 0%, rgba(255, 96, 178, .62), rgba(255, 96, 178, 0) 58%),
+      radial-gradient(75% 110% at 0% 100%, rgba(56, 216, 255, .5), rgba(56, 216, 255, 0) 62%),
+      linear-gradient(135deg, #24165e 0%, #4a2bd0 50%, #7b3dff 100%);
+    box-shadow: 0 1px 2px rgba(30, 10, 80, .2), 0 18px 36px -16px rgba(76, 40, 200, .6); }
+  .cc-tex { position: absolute; inset: 0;
+    background: repeating-radial-gradient(circle at 112% 128%, rgba(255, 255, 255, 0) 0, rgba(255, 255, 255, 0) calc(var(--u) * 2.2),
+      rgba(255, 255, 255, .07) calc(var(--u) * 2.2), rgba(255, 255, 255, .07) calc(var(--u) * 2.5)); }
+  .cc small { display: block; font-size: calc(var(--u) * 2.1); font-weight: 650; letter-spacing: .16em; text-transform: uppercase; opacity: .68; line-height: 1.2; }
+  .cc-in { position: absolute; inset: 0; padding: calc(var(--u) * 5.6) calc(var(--u) * 6.2); display: flex; flex-direction: column; }
+  .cc-top { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: calc(var(--u) * 1.3); font-size: calc(var(--u) * 5); font-weight: 800; letter-spacing: -.035em; line-height: 1; }
+  .brand svg { width: calc(var(--u) * 5.2); height: calc(var(--u) * 5.2); }
+  .nfc { width: calc(var(--u) * 5.8); height: calc(var(--u) * 5.8); opacity: .9; }
+  .chip { display: block; width: calc(var(--u) * 11.6); height: calc(var(--u) * 8.8); margin-top: calc(var(--u) * 7.2); }
+  .cc-num { margin-top: calc(var(--u) * 4.6); font-family: var(--mono); font-size: calc(var(--u) * 5.6); font-weight: 600; letter-spacing: .16em; line-height: 1.1; text-shadow: 0 1px 1px rgba(0, 0, 0, .25); white-space: nowrap; }
+  .cc-bottom { margin-top: auto; display: flex; align-items: flex-end; gap: calc(var(--u) * 7); }
+  .cc-bottom b { display: block; margin-top: calc(var(--u) * .7); font-size: calc(var(--u) * 3.4); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; line-height: 1.1; white-space: nowrap; }
+  .net { margin-left: auto; font-size: calc(var(--u) * 5.6); font-weight: 900; font-style: italic; letter-spacing: -.04em; line-height: .9; }
+  .strip { position: absolute; left: 0; right: 0; top: calc(var(--u) * 6.4); height: calc(var(--u) * 11.5); background: linear-gradient(180deg, #1c1a27, #0b0a10 55%, #1e1c29); }
+  .sig-row { position: absolute; left: calc(var(--u) * 6.2); right: calc(var(--u) * 6.2); top: calc(var(--u) * 23); height: calc(var(--u) * 9.6); display: flex; gap: calc(var(--u) * 2.2); }
+  .sig {
+    flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 calc(var(--u) * 3); border-radius: calc(var(--u) * 1); overflow: hidden;
+    background: repeating-linear-gradient(-45deg, #f7f2e7 0, #f7f2e7 calc(var(--u) * .9), #ece3cf calc(var(--u) * .9), #ece3cf calc(var(--u) * 1.8));
+    color: #213079; font: italic 500 calc(var(--u) * 4.8)/1 "Snell Roundhand", "Segoe Script", "Bradley Hand", "Savoye LET", cursive;
+  }
+  .sig span { display: inline-block; white-space: nowrap; transform: rotate(-4deg); }
+  .cvc { flex: none; width: calc(var(--u) * 15); border-radius: calc(var(--u) * 1); background: #fff; color: #14161c; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .cvc small { color: #6b7183; opacity: 1; font-size: calc(var(--u) * 1.9); }
+  .cvc b { font: italic 700 calc(var(--u) * 4)/1.15 var(--mono); letter-spacing: .06em; }
+  .fine { position: absolute; left: calc(var(--u) * 6.2); right: calc(var(--u) * 6.2); top: calc(var(--u) * 36); margin: 0; font-size: calc(var(--u) * 2.35); line-height: 1.5; color: rgba(255, 255, 255, .74); }
+  .cc-foot { position: absolute; left: calc(var(--u) * 6.2); right: calc(var(--u) * 6.2); bottom: calc(var(--u) * 5.4); display: flex; align-items: center; justify-content: space-between; }
+  .mini { font-size: calc(var(--u) * 3.8); font-weight: 800; letter-spacing: -.03em; opacity: .92; }
+  .holo { width: calc(var(--u) * 12.5); height: calc(var(--u) * 8); border-radius: calc(var(--u) * 1.3); opacity: .92;
+    background: linear-gradient(135deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 60%),
+      conic-gradient(from 210deg at 40% 60%, #9ff3ff, #c9a8ff, #ffb0e1, #fff1a1, #a6ffd0, #9ff3ff);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .45); }
+
+  /* Boarding pass. */
+  .pass { background: var(--paper); color: var(--paper-ink); box-shadow: var(--lift), inset 0 0 0 1px var(--edge); }
+  .pass small { display: block; font-size: calc(var(--u) * 2.1); font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--paper-muted); line-height: 1.2; }
+  .p-head {
+    height: calc(var(--u) * 14); padding: 0 calc(var(--u) * 5.6); display: flex; align-items: center; justify-content: space-between; color: #fff;
+    background: linear-gradient(110deg, #df2f52, #f24d3a 55%, #ff8a3a);
+  }
+  .p-head.slim { height: calc(var(--u) * 11.5); }
+  .air { display: flex; align-items: center; gap: calc(var(--u) * 1.8); font-size: calc(var(--u) * 4.4); font-weight: 800; letter-spacing: -.025em; }
+  .air i { width: calc(var(--u) * 6.6); height: calc(var(--u) * 6.6); border-radius: 50%; background: rgba(255, 255, 255, .22); display: grid; place-items: center; }
+  .air svg { width: calc(var(--u) * 4); height: calc(var(--u) * 4); transform: rotate(45deg); }
+  .p-kind { text-align: right; }
+  .p-head small { color: #fff; opacity: .82; letter-spacing: .18em; }
+  .p-kind b { display: block; margin-top: calc(var(--u) * .5); font-size: calc(var(--u) * 3.4); font-weight: 700; line-height: 1.15; }
+  .p-route { display: flex; align-items: center; padding: calc(var(--u) * 3.8) calc(var(--u) * 5.6) 0; }
+  .ap b { display: block; font-size: calc(var(--u) * 9.8); line-height: 1; font-weight: 800; letter-spacing: -.035em; }
+  .ap span { display: block; margin-top: calc(var(--u) * .9); font-size: calc(var(--u) * 2.7); font-weight: 550; color: var(--paper-muted); white-space: nowrap; }
+  .ap.r { text-align: right; }
+  .p-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; padding: 0 calc(var(--u) * 2.6) calc(var(--u) * 3); }
+  .p-line { position: relative; width: 100%; height: calc(var(--u) * 6.4); display: grid; place-items: center; }
+  .p-line::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: calc(var(--u) * .45) dashed var(--paper-line); }
+  .p-line i { position: relative; width: calc(var(--u) * 7); height: calc(var(--u) * 6.4); display: grid; place-items: center; background: var(--paper); }
+  .p-line svg { width: calc(var(--u) * 4.8); height: calc(var(--u) * 4.8); color: var(--brand); transform: rotate(90deg); }
+  .p-mid span { font-size: calc(var(--u) * 2.3); font-weight: 600; color: var(--paper-muted); white-space: nowrap; }
+  .p-info { display: grid; grid-template-columns: 1.2fr 1fr .8fr .7fr; gap: calc(var(--u) * 2); padding: calc(var(--u) * 3.2) calc(var(--u) * 5.6) 0; }
+  .p-info b { display: block; margin-top: calc(var(--u) * .5); font-size: calc(var(--u) * 3.9); font-weight: 750; letter-spacing: -.01em; white-space: nowrap; line-height: 1.2; }
+  .p-info .hot b { color: var(--brand); }
+  .p-perf { position: relative; margin: calc(var(--u) * 3.6) calc(var(--u) * 4.4) 0; border-top: calc(var(--u) * .45) dashed var(--paper-line); }
+  .notch { position: absolute; top: calc(var(--u) * -2.8); width: calc(var(--u) * 5.2); height: calc(var(--u) * 5.2); border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1px var(--edge); }
+  .notch.l { left: calc(var(--u) * -7); }
+  .notch.r { right: calc(var(--u) * -7); }
+  .p-stub { display: flex; align-items: center; gap: calc(var(--u) * 4); padding: calc(var(--u) * 3.4) calc(var(--u) * 5.6) 0; }
+  .barcode { flex: 1; min-width: 0; height: calc(var(--u) * 10); display: flex; padding: calc(var(--u) * 1.3) calc(var(--u) * 1.8); border-radius: calc(var(--u) * 1.2); background: #fff; }
+  .barcode b { background: #14161c; }
+  .board { text-align: right; }
+  .board b { display: block; font-size: calc(var(--u) * 4.8); font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+  .pb { display: flex; flex-direction: column; }
+  .pb-body { flex: 1; min-height: 0; display: flex; gap: calc(var(--u) * 4); padding: calc(var(--u) * 3.8) calc(var(--u) * 5.6) 0; }
+  .terms { flex: 1; min-width: 0; }
+  .terms h3 { margin: calc(var(--u) * .4) 0 0; font-size: calc(var(--u) * 3.6); font-weight: 750; letter-spacing: -.01em; line-height: 1.2; }
+  .terms ul { margin: calc(var(--u) * 1.2) 0 0; padding: 0; list-style: none; }
+  .terms li { position: relative; margin-top: calc(var(--u) * 1.1); padding-left: calc(var(--u) * 3); font-size: calc(var(--u) * 2.55); line-height: 1.4; color: var(--paper-muted); }
+  .terms li::before { content: ''; position: absolute; left: 0; top: calc(var(--u) * 1.15); width: calc(var(--u) * 1.3); height: calc(var(--u) * 1.3); border-radius: 50%; background: var(--brand); }
+  .qr { flex: none; width: calc(var(--u) * 26); text-align: center; }
+  .qr .box { padding: calc(var(--u) * 2); border-radius: calc(var(--u) * 2); background: #fff; box-shadow: inset 0 0 0 1px var(--paper-line); }
+  .qr svg { display: block; width: 100%; height: auto; shape-rendering: crispEdges; }
+  .qr small { margin-top: calc(var(--u) * 1.4); }
+  .pb-foot {
+    display: flex; justify-content: space-between; gap: calc(var(--u) * 2); margin: 0 calc(var(--u) * 4.4);
+    padding: calc(var(--u) * 2.6) calc(var(--u) * 1.2) calc(var(--u) * 4.2); border-top: calc(var(--u) * .45) dashed var(--paper-line);
+    font-size: calc(var(--u) * 2.25); font-weight: 600; color: var(--paper-muted); white-space: nowrap;
+  }
+</style>
+</head>
+<body class="wrap nosel">
+<main>
+  <div class="glow"></div>
+  <div class="scene" id="scene" role="button" tabindex="0" aria-label="Flip the card">
+    <div class="card" id="card"></div>
+  </div>
+  <div class="hint" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 3.5V8h4.5"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20.5V16h-4.5"/>
+    </svg><span id="hintText">Tap to flip</span>
+  </div>
+</main>
+<script>
+(function () {
+  var CHIP = '<svg class="chip" viewBox="0 0 50 38"><defs><linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">' +
+    '<stop offset="0" stop-color="#f8e6a8"/><stop offset=".45" stop-color="#d6ab52"/><stop offset=".6" stop-color="#ecce80"/><stop offset="1" stop-color="#b88a33"/></linearGradient></defs>' +
+    '<rect x=".6" y=".6" width="48.8" height="36.8" rx="7" fill="url(#gold)" stroke="#8d6826" stroke-opacity=".5" stroke-width="1.2"/>' +
+    '<g fill="none" stroke="#7d5a1e" stroke-opacity=".55" stroke-width="1.3"><path d="M0 13h16M0 25h16M34 13h16M34 25h16M16 0v9M34 0v9M16 29v9M34 29v9"/>' +
+    '<rect x="16" y="9" width="18" height="20" rx="4"/></g></svg>';
+  var NFC = '<svg class="nfc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<path d="M6.5 9.5a3.5 3.5 0 0 1 0 5"/><path d="M10 7a7 7 0 0 1 0 10"/><path d="M13.5 4.5a10.5 10.5 0 0 1 0 15"/><path d="M17 2a14 14 0 0 1 0 20"/></svg>';
+  var PLANE = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2c.8 0 1.5.9 1.5 2v5.2l7.5 4.3v2l-7.5-2.2v4.6l2.2 1.6v1.6L12 20.2l-3.7.9v-1.6l2.2-1.6v-4.6L3 15.5v-2l7.5-4.3V4c0-1.1.7-2 1.5-2z"/></svg>';
+  var LOGO = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="2.8"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/></svg>';
+  var HEAD = '<div class="air"><i>' + PLANE + '</i>Meridian</div>';
+
+  var P = Kit.pick({
+    card: {
+      ratio: 1.586, glow: '109, 74, 255',
+      front:
+        '<div class="face front cc"><div class="cc-tex"></div><div class="sheen"></div><div class="cc-in">' +
+          '<div class="cc-top"><div class="brand">' + LOGO + 'halo</div>' + NFC + '</div>' +
+          CHIP +
+          '<div class="cc-num">•••• 4821</div>' +
+          '<div class="cc-bottom"><div><small>Card holder</small><b>Jordan Lee</b></div><div><small>Expires</small><b>09/29</b></div><div class="net">nova</div></div>' +
+        '</div></div>',
+      back:
+        '<div class="face back cc"><div class="cc-tex"></div><div class="sheen"></div><div class="strip"></div>' +
+          '<div class="sig-row"><div class="sig"><span>Jordan Lee</span></div><div class="cvc"><small>CVC</small><b>382</b></div></div>' +
+          '<p class="fine">Authorised signature, not valid unless signed. This card is issued by Halo Bank and remains its property. If found, please call +1 (800) 555 0142.</p>' +
+          '<div class="cc-foot"><span class="mini">halo</span><span class="holo"></span></div>' +
+        '</div>'
+    },
+    pass: {
+      ratio: 1.5, glow: '255, 96, 64', pass: true,
+      front:
+        '<div class="face front pass">' +
+          '<div class="p-head">' + HEAD + '<div class="p-kind"><small>Boarding pass</small><b>Jordan Lee</b></div></div>' +
+          '<div class="p-route"><div class="ap"><b>IST</b><span>Istanbul</span></div>' +
+            '<div class="p-mid"><div class="p-line"><i>' + PLANE + '</i></div><span>13h 05m · Nonstop</span></div>' +
+            '<div class="ap r"><b>SFO</b><span>San Francisco</span></div></div>' +
+          '<div class="p-info"><div><small>Flight</small><b>MR 078</b></div><div><small>Date</small><b>14 Nov</b></div>' +
+            '<div class="hot"><small>Gate</small><b>B12</b></div><div><small>Seat</small><b>14A</b></div></div>' +
+          '<div class="p-perf"><i class="notch l"></i><i class="notch r"></i></div>' +
+          '<div class="p-stub"><div class="barcode" id="barcode"></div><div class="board"><small>Boards</small><b>08:35</b></div></div>' +
+        '</div>',
+      back:
+        '<div class="face back pass pb">' +
+          '<div class="p-head slim">' + HEAD + '<div class="p-kind"><small>Booking</small><b>K7Q2XP</b></div></div>' +
+          '<div class="pb-body"><div class="terms"><h3>Before you fly</h3><ul>' +
+            '<li>Gate closes 20 min before departure.</li><li>One cabin bag up to 8 kg, plus a personal item.</li>' +
+            '<li>Have your photo ID ready at the gate.</li><li>All times shown are local.</li></ul></div>' +
+            '<div class="qr"><div class="box"><svg id="qr"></svg></div><small>Scan at gate</small></div></div>' +
+          '<div class="pb-foot"><span>E-ticket 235 2190 4471 03</span><span>Have a lovely flight</span></div>' +
+        '</div>'
+    }
+  }, 'card');
+
+  var scene = document.getElementById('scene'), card = document.getElementById('card');
+  var hintText = document.getElementById('hintText');
+  scene.style.setProperty('--ratio', P.ratio);
+  document.documentElement.style.setProperty('--glow', P.glow);
+  card.innerHTML = P.front + P.back;
+  if (P.pass) { barcode(document.getElementById('barcode')); qr(document.getElementById('qr')); }
+
+  // A barcode of divs: seeded bar and gap widths between guard bars.
+  function barcode(el) {
+    var r = Kit.rng(48210), h = '<b style="flex:1 0 0"></b><i style="flex:1 0 0"></i><b style="flex:1 0 0"></b><i style="flex:2 0 0"></i>';
+    for (var k = 0; k < 38; k++) {
+      h += '<b style="flex:' + (1 + Math.floor(r() * 3)) + ' 0 0"></b><i style="flex:' + (1 + Math.floor(r() * 2.4)) + ' 0 0"></i>';
+    }
+    el.innerHTML = h + '<b style="flex:1 0 0"></b><i style="flex:1 0 0"></i><b style="flex:1 0 0"></b>';
+  }
+  // A QR-like grid: three finder squares, an alignment square, seeded modules, as one even-odd path.
+  function qr(svg) {
+    var N = 25, r = Kit.rng(2190), d = '';
+    function square(x, y, n) { d += 'M' + x + ' ' + y + 'h' + n + 'v' + n + 'h-' + n + 'z'; }
+    function finder(x, y) { square(x, y, 7); d += 'M' + (x + 1) + ' ' + (y + 1) + 'v5h5v-5z'; square(x + 2, y + 2, 3); }
+    finder(0, 0); finder(N - 7, 0); finder(0, N - 7);
+    square(16, 16, 5); d += 'M17 17v3h3v-3z'; square(18, 18, 1);
+    for (var y = 0; y < N; y++) {
+      for (var x = 0; x < N; x++) {
+        if ((x < 8 && y < 8) || (x >= N - 8 && y < 8) || (x < 8 && y >= N - 8) || (x >= 15 && x <= 21 && y >= 15 && y <= 21)) continue;
+        if (r() < 0.47) square(x, y, 1);
+      }
+    }
+    svg.setAttribute('viewBox', '0 0 ' + N + ' ' + N);
+    svg.innerHTML = '<path fill="#14161c" fill-rule="evenodd" d="' + d + '"/>';
+  }
+
+  // Sizes in --u; a browser without aspect-ratio gets the height too.
+  var noAspect = !(window.CSS && CSS.supports && CSS.supports('aspect-ratio', '1 / 1'));
+  Kit.watch(scene, function () {
+    var w = scene.clientWidth || 300;
+    scene.style.setProperty('--u', (w / 100).toFixed(3) + 'px');
+    if (noAspect) scene.style.height = (w / P.ratio).toFixed(1) + 'px';
+  });
+
+  // The flip is a damped spring on the angle: it overshoots a little and settles, and a tap mid-flip turns it round.
+  var front = card.querySelector('.front'), back = card.querySelector('.back'), sheens = card.querySelectorAll('.sheen');
+  var angle = 0, vel = 0, target = 0, flipped = false, touched = false, frontShown = true;
+  var K = 125, D = 2 * 0.66 * Math.sqrt(K);
+  function render() {
+    var rad = angle * Math.PI / 180, lift = Math.abs(Math.sin(rad));
+    card.style.transform = 'rotateY(' + angle.toFixed(2) + 'deg) scale(' + (1 + 0.03 * lift).toFixed(4) + ')';
+    // Only the face turned towards the viewer is drawn, whatever the engine does with backface-visibility.
+    var showFront = Math.cos(rad) > 0;
+    if (showFront !== frontShown) {
+      frontShown = showFront;
+      front.style.visibility = showFront ? '' : 'hidden';
+      back.style.visibility = showFront ? 'hidden' : '';
+    }
+    for (var i = 0; i < sheens.length; i++) sheens[i].style.transform = 'translateX(' + (Math.sin(rad) * 40).toFixed(1) + '%)';
+  }
+  var loop = Kit.loop(function (dt) {
+    var n = Math.max(1, Math.ceil(dt * 240)), h = dt / n;
+    for (var i = 0; i < n; i++) {
+      vel += (-K * (angle - target) - D * vel) * h;
+      angle += vel * h;
+    }
+    if (Math.abs(angle - target) < 0.05 && Math.abs(vel) < 0.5) { angle = target; vel = 0; loop.stop(); }
+    render();
+  });
+  loop.stop();
+
+  function setHint() { hintText.textContent = flipped ? 'Tap to flip back' : 'Tap to flip'; }
+  function flip() {
+    touched = true;
+    flipped = !flipped;
+    target = flipped ? 180 : 0;
+    setHint();
+    loop.start();
+  }
+  scene.addEventListener('click', flip);
+  scene.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); }
+  });
+
+  // Opened by hand, ?side=back shows the back.
+  if (/[?&]side=back(&|$)/.test(location.search)) { flipped = touched = true; angle = target = 180; setHint(); }
+  back.style.visibility = 'hidden';
+  frontShown = true;
+  render();
+
+  // A small nudge after it appears, so it reads as something to touch.
+  setTimeout(function () { if (!touched) { vel = -240; loop.start(); } }, 900);
+
+  Kit.keep(function () { return { flipped: flipped }; }, function (s) {
+    flipped = !!s.flipped;
+    touched = true;
+    angle = target = flipped ? 180 : 0;
+    vel = 0;
+    setHint();
+    render();
+  });
+})();
+</script>
+</body>
+</html>

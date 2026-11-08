@@ -36,6 +36,15 @@ class DesktopHostingSettingsTest {
         assertFalse(state(status = HostingStatus.CantStart("x"), git = missing).gitMissing)
     }
 
+    @Test fun a_checkout_that_moved_shows_while_the_broker_runs() {
+        fun moved(status: HostingStatus) = desktopHostingUiState(
+            status = status, prefs = prefs, sessions = 0, build = null, localUrl = null, relayUrl = null,
+            logTail = emptyList(), canPair = true, backgroundError = null, gitRequirement = null, checkoutMoved = "This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.",
+        ).checkoutMoved
+        assertEquals("This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.", moved(running))
+        assertNull(moved(HostingStatus.Starting))
+    }
+
     @Test fun running_maps_status_line_url_and_buttons() {
         val s = state()
         assertEquals("Running · 2 sessions · v1.5.0", s.statusText)

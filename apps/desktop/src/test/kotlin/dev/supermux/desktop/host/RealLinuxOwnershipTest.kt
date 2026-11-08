@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -35,7 +36,7 @@ class RealLinuxOwnershipTest {
 
     /** Every command runs as the container's user, against its systemd user manager. */
     private inner class ContainerOsEnv(override val home: Path) : OsEnv {
-        override val os = OsEnv.Os.LINUX
+        override val os = DesktopOs.LINUX
         override val localAppData: Path = home.resolve(".local/share")
         override val uid: Long = 1000
         override val xdgRuntimeDir = "/run/user/1000"
@@ -240,7 +241,7 @@ http.server.HTTPServer(("127.0.0.1", int(os.environ["MUX_WEB_PORT"])), H).serve_
             }
             val bins = HostBinaries.SidecarBinaries(bin.resolve("supermux-broker"), bin, null, null, null)
             val spec = BrokerService.Spec(
-                bins.brokerPath!!, brokerEnv(prefs, bins, emptyMap(), state, "linux-user", "/usr/bin:/bin", home.toString(), OsEnv.Os.LINUX),
+                bins.brokerPath!!, brokerEnv(prefs, bins, emptyMap(), state, "linux-user", "/usr/bin:/bin", home.toString(), DesktopOs.LINUX),
                 state.resolve("desktop-broker.log"),
             )
             BrokerService.writePrivate(unit, BrokerService.systemdUnit(spec))

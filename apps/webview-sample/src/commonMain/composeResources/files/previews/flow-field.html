@@ -1,0 +1,117 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Flow field</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  body { background: radial-gradient(140% 120% at 25% 15%, var(--bg1), var(--bg2) 70%); }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 100% at 50% 50%, transparent 55%, rgba(0, 0, 0, .35));
+  }
+</style>
+</head>
+<body class="fixed nosel">
+<canvas id="c"></canvas>
+<div class="vignette"></div>
+<script>
+(function () {
+  'use strict';
+  // Each variant: the sky behind, four ink colours (one stroke each per frame), how fast the ink fades, how fine the
+  // field is, and how fast the particles drift (CSS px a second).
+  var P = Kit.pick({
+    ocean: {
+      bg: ['#0c3557', '#020b17'], colours: ['#3fc8ff', '#8cf0ff', '#2b6fff', '#e0fcff'],
+      widths: [1.5, 1.1, 1.9, 0.8], alpha: 0.42, fade: 0.075, scale: 0.0042, speed: 92, swirl: 2.1,
+    },
+    ember: {
+      bg: ['#3d1207', '#0b0302'], colours: ['#ff6a2b', '#ffae3d', '#ff3b30', '#ffe7a3'],
+      widths: [1.6, 1.2, 1.9, 0.8], alpha: 0.4, fade: 0.08, scale: 0.0055, speed: 100, swirl: 2.4,
+    },
+    neon: {
+      bg: ['#24104f', '#05020f'], colours: ['#ff3df0', '#3dffd8', '#8a5cff', '#fff36b'],
+      widths: [1.5, 1.4, 1.9, 0.9], alpha: 0.45, fade: 0.07, scale: 0.0048, speed: 104, swirl: 2.2,
+    },
+  }, 'ocean');
+  document.body.style.setProperty('--bg1', P.bg[0]);
+  document.body.style.setProperty('--bg2', P.bg[1]);
+
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var B = P.colours.length;
+  var rand = Kit.rng(20261031);
+  var W = 1, H = 1, N = 0;
+  var xs, ys, ages, lives;
+
+  function spawn(i) {
+    xs[i] = rand() * W;
+    ys[i] = rand() * H;
+    ages[i] = 0;
+    lives[i] = 2.5 + rand() * 5.5;
+  }
+
+  function setup() {
+    var f = Kit.fit(canvas);
+    W = f.cw;
+    H = f.ch;
+    ctx.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+    ctx.lineCap = 'round';
+    // About one particle per 60 CSS px², within 900..1600 whatever the card's size.
+    var want = Math.round(Kit.clamp(W * H / 60, 900, 1600));
+    if (want !== N) {
+      N = want;
+      xs = new Float32Array(N);
+      ys = new Float32Array(N);
+      ages = new Float32Array(N);
+      lives = new Float32Array(N);
+      for (var i = 0; i < N; i++) {
+        spawn(i);
+        ages[i] = rand() * lives[i];
+      }
+    } else {
+      for (var j = 0; j < N; j++) if (xs[j] > W || ys[j] > H) spawn(j);
+    }
+    // A resize clears the canvas: the trails start afresh.
+    ctx.clearRect(0, 0, W, H);
+  }
+  Kit.watch(document.body, setup);
+
+  var t = rand() * 100;
+  Kit.loop(function (dt) {
+    t += dt;
+    // Fade what was drawn: the trails are the ink of the frames before, thinning out.
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0,0,0,' + P.fade + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = P.alpha;
+    var step = P.speed * dt, z = t * 0.06, s = P.scale, swirl = Math.PI * P.swirl;
+    for (var b = 0; b < B; b++) {
+      ctx.beginPath();
+      for (var i = b; i < N; i += B) {
+        var x = xs[i], y = ys[i];
+        var a = Kit.noise3(x * s, y * s, z) * swirl;
+        var nx = x + Math.cos(a) * step, ny = y + Math.sin(a) * step;
+        ctx.moveTo(x, y);
+        ctx.lineTo(nx, ny);
+        xs[i] = nx;
+        ys[i] = ny;
+        ages[i] += dt;
+        if (nx < -4 || ny < -4 || nx > W + 4 || ny > H + 4 || ages[i] > lives[i]) spawn(i);
+      }
+      ctx.strokeStyle = P.colours[b];
+      ctx.lineWidth = P.widths[b];
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  });
+})();
+</script>
+</body>
+</html>

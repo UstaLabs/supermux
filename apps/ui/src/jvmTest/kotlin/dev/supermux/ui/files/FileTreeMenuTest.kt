@@ -102,10 +102,10 @@ class FileTreeMenuValidationTest {
 class FileTreeMenuTest {
     // The DIALOG path: a touch-only device (no hardware keyboard). The in-place path is
     // FileTreeInlineEditTest.
-    private fun host(content: @Composable () -> Unit): @Composable () -> Unit = {
+    private fun host(platform: FakePlatform = FakePlatform(), content: @Composable () -> Unit): @Composable () -> Unit = {
         CompositionLocalProvider(
             LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
-            LocalPlatform provides FakePlatform(),
+            LocalPlatform provides platform,
             LocalHardwareKeyboard provides false,
         ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
@@ -301,6 +301,27 @@ class FileTreeMenuTest {
 
         onNodeWithTag("tree_menu_rename").assertExists()
         assertEquals(emptyList<String>(), opened)
+    }
+
+    @Test fun copyPathAndCopyRelativePathGoThroughThePlatform() = runComposeUiTest {
+        val fs = Fs()
+        val view = TreeViewState("/w")
+        val platform = FakePlatform()
+        setContent(host(platform) { FileTreeWithActions(fs.service, view, onOpenFile = {}) })
+        waitForIdle()
+        fs.list(FsEntry(name = "a.kt", type = "file"))
+        waitForIdle()
+
+        onNodeWithTag("tree_row:a.kt").performMouseInput { rightClick(center) }
+        waitForIdle()
+        onNodeWithTag("tree_menu_copy_path").performClick()
+        waitForIdle()
+        onNodeWithTag("tree_row:a.kt").performMouseInput { rightClick(center) }
+        waitForIdle()
+        onNodeWithTag("tree_menu_copy_relative_path").performClick()
+        waitForIdle()
+
+        assertEquals(listOf("/w/a.kt", "a.kt"), platform.copied)
     }
 
     @Test fun theMenuClosesForGoodWhenItsRowScrollsOutOfView() = runComposeUiTest {

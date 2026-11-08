@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "fs"
 import { dirname, join } from "path"
 import { PLUGINS_DIR } from "../../shared/paths"
 import { loadPluginsRegistry, savePluginsRegistry } from "./registry"
@@ -10,28 +10,6 @@ const MANIFEST = {
   author: { name: "mux" },
   keywords: ["mux", "browser", "bootstrap"],
 }
-
-const MUX_OPENCODE_PLUGIN = `/**
- * mux-core plugin for OpenCode.ai — registers mux-core skills via skills.paths.
- */
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-export const MuxPlugin = async () => {
-  const muxSkillsDir = path.resolve(__dirname, '../../skills');
-  return {
-    config: async (config) => {
-      config.skills = config.skills || {};
-      config.skills.paths = config.skills.paths || [];
-      if (!config.skills.paths.includes(muxSkillsDir)) {
-        config.skills.paths.push(muxSkillsDir);
-      }
-    },
-  };
-};
-`
 
 function json(obj: unknown): string {
   return JSON.stringify(obj, null, 2) + "\n"
@@ -50,7 +28,6 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
   changed = writeIfChanged(join(pluginDir, ".claude-plugin", "plugin.json"), json(MANIFEST)) || changed
   changed = writeIfChanged(join(pluginDir, ".codex-plugin", "plugin.json"), json({ ...MANIFEST, skills: "./skills/" })) || changed
   changed = writeIfChanged(join(pluginDir, ".cursor-plugin", "plugin.json"), json({ ...MANIFEST, displayName: "mux", skills: "./skills/" })) || changed
-  changed = writeIfChanged(join(pluginDir, ".opencode", "plugins", "mux.js"), MUX_OPENCODE_PLUGIN) || changed
   // The manifests point at ./skills/, so the directory must exist even with no first-party skill in it.
   mkdirSync(join(pluginDir, "skills"), { recursive: true })
   // Instructions (incl. the reply rule) now reach every agent through the Core session
@@ -64,6 +41,17 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
     join(pluginDir, "skills", "new-personal-agent"),
   ]) {
     if (existsSync(stale)) { rmSync(stale, { recursive: true, force: true }); changed = true }
+  }
+  // No OpenCode JS plugin (#102): it only added skills/ to OpenCode's skills.paths, which the core already does, and
+  // any `plugin` entry makes OpenCode install @opencode-ai/plugin into the session's config folder before it answers
+  // (44–82 s per new session, measured). Only the file this broker wrote goes; the folders go when left empty.
+  const muxJs = join(pluginDir, ".opencode", "plugins", "mux.js")
+  if (existsSync(muxJs)) {
+    rmSync(muxJs, { force: true })
+    for (const dir of [join(pluginDir, ".opencode", "plugins"), join(pluginDir, ".opencode")]) {
+      try { if (readdirSync(dir).length === 0) rmdirSync(dir) } catch { /* gone, or not ours to empty */ }
+    }
+    changed = true
   }
   return changed
 }

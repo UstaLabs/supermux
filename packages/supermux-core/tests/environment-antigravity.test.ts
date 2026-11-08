@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -237,5 +237,37 @@ test("where this host cannot link files, a small file is copied into the shadow 
     expect(readlinkSync(join(u.shadow, ".ssh"))).toBe(join(u.user, ".ssh"))
   } finally {
     antigravityLinks.linkFile = saved
+  }
+})
+
+// Windows keeps the signed-in user's ntuser.dat.LOG1 / LOG2 locked, and they sit in every HOME under 1 MB, so their copy
+// threw EBUSY and took the whole shadow home with it: every Antigravity session, model list and usage read on a Windows
+// host without Developer Mode (#103). A file that can't be copied stays out, as a big one does, and is said once.
+test("a file the host can neither link nor copy (Windows' locked ntuser.dat.LOG1) stays out, said once; the shadow home is still made", async () => {
+  const savedLink = antigravityLinks.linkFile
+  const savedCopy = antigravityLinks.copyFile
+  antigravityLinks.linkFile = () => { throw new Unsupported("files.linkFile", "no file links here") }
+  antigravityLinks.copyFile = (target, path) => {
+    if (target.endsWith("ntuser.dat.LOG1")) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, copyfile '${target}' -> '${path}'`), { code: "EBUSY" })
+    }
+    savedCopy(target, path)
+  }
+  const warn = spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    const u = fakeUser()
+    writeFileSync(join(u.user, "ntuser.dat.LOG1"), "hive log")
+    await prepareAntigravityEnvironment(spec(u))
+    await prepareAntigravityEnvironment(spec(u))
+    expect(existsSync(join(u.shadow, "ntuser.dat.LOG1"))).toBe(false)
+    expect(readFileSync(join(u.shadow, ".gitconfig"), "utf8")).toBe("[user]\nname=x\n")
+    expect(readlinkSync(join(u.shadow, ".gemini", "antigravity-cli"))).toBe(join(u.user, ".gemini", "antigravity-cli"))
+    const said = warn.mock.calls.map((c) => c.join(" ")).filter((line) => line.includes("ntuser.dat.LOG1"))
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain("EBUSY")
+  } finally {
+    antigravityLinks.linkFile = savedLink
+    antigravityLinks.copyFile = savedCopy
+    warn.mockRestore()
   }
 })

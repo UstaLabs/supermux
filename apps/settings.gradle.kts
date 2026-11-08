@@ -73,3 +73,13 @@ include(":editor-plugins:lsp")
 include(":editor-plugins:diff")
 // The in-process toy language server the LSP plugin's tests and the sample run against (never a production host's).
 include(":editor-plugins:lsp-fake")
+include(":webview-compose")
+// What apps and tests test web views with, kept out of :webview-compose's own artifact: the fake engine and the macOS
+// engine's driver for checks in a real window. Depends on :webview-compose only.
+include(":webview-compose-testing")
+// The standalone sample and perf lab for :webview-compose: depends on it, its testing module and NOTHING else here.
+include(":webview-sample")
+// The Windows capture + focus feasibility test for :webview-compose (throwaway; its native half builds on the VM).
+include(":webview-wintest")
+// The Linux WPE feasibility test for :webview-compose (throwaway; its native half builds in the lab container).
+include(":webview-wpetest")

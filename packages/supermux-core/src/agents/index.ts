@@ -5,7 +5,7 @@ import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '..
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration, PermissionsSpec } from '../types.js'
 import { requireCloseMode } from '../types.js'
-import { cursorContext, grokContext, opencodeContext } from '../context/agents.js'
+import { cursorContext, grokContext, opencodeContext, type CursorContextOptions } from '../context/agents.js'
 import { detachedKeeperHooks } from '../keeper/client.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
@@ -419,7 +419,7 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
 
 const CURSOR_MODES = new Set(['agent', 'plan', 'ask'])
 
-export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & {
+export type CursorOptions = Omit<AcpOptions, 'args' | 'sessionConfig' | 'captureStderr'> & CursorContextOptions & {
   /** Prefix argv before Cursor global flags and `acp` (fixture path, `--plugin-dir`). */
   commandArgs: string[]
   model?: string
@@ -445,12 +445,13 @@ export function cursor(options: CursorOptions): AgentDriver {
   if (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string')) throw new TypeError('Cursor commandArgs is required')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Cursor model must be a nonempty string')
   if (options.mode !== undefined && !CURSOR_MODES.has(options.mode)) throw new TypeError('Cursor mode must be agent, plan, or ask')
-  const { model: _model, mode: _mode, commandArgs, ...rest } = options
+  if (options.homeSkills !== undefined && typeof options.homeSkills !== 'boolean') throw new TypeError('Cursor homeSkills must be a boolean')
+  const { model: _model, mode: _mode, homeSkills, commandArgs, ...rest } = options
   const sessionConfig = cursorSessionConfig(options)
   return acp({
     ...rest,
     vendor: 'cursor',
-    contextAdapter: cursorContext(rest.mcpServers),
+    contextAdapter: cursorContext(rest.mcpServers, homeSkills ? { homeSkills } : {}),
     args: [...commandArgs, 'acp'],
     captureStderr: true,
     ...(sessionConfig ? { sessionConfig } : {}),

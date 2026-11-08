@@ -42,6 +42,7 @@ import dev.supermux.fs.hostParent
 import dev.supermux.fs.hostRoot
 import dev.supermux.fs.inferHomeDir
 import dev.supermux.fs.sameHostPath
+import dev.supermux.fs.trimHostPath
 
 /** One breadcrumb: its label and the folder it roots the tree at. */
 data class Crumb(val label: String, val path: String)
@@ -58,7 +59,7 @@ fun breadcrumbsOf(rootPath: String, home: String?, max: Int = 3): Breadcrumbs {
     val all = ArrayList<Crumb>()
     val base: String
     if (home != null && hostParent(home) != null && isWithin(home, rootPath)) {
-        base = trimEnd(home)
+        base = trimHostPath(home)
         all += Crumb("~", base)
     } else {
         base = hostRoot(rootPath) ?: "/"
@@ -67,6 +68,7 @@ fun breadcrumbsOf(rootPath: String, home: String?, max: Int = 3): Breadcrumbs {
     val rel = relativeToWorkdir(base, rootPath)
     if (rel != null && rel != ".") {
         var cur = base
+        // platform-ok: a workdir-relative path, always /
         for (seg in rel.split('/').filter { it.isNotEmpty() }) {
             cur = childOf(cur, seg)
             all += Crumb(seg, cur)

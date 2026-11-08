@@ -1,0 +1,148 @@
+public final class dev/supermux/webview/testing/Copied {
+	public static final field $stable I
+	public fun <init> (II[B)V
+	public final fun getHeight ()I
+	public final fun getRgba ()[B
+	public final fun getWidth ()I
+}
+
+public final class dev/supermux/webview/testing/FakeEngineBehavior {
+	public static final field $stable I
+	public synthetic fun <init> (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun colorOf-vNxB06k (Ldev/supermux/webview/WebContent;)J
+	public final fun component1 ()Z
+	public final fun component2 ()Lkotlin/jvm/functions/Function1;
+	public final fun component3 ()Lkotlin/jvm/functions/Function2;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component5-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun component8 ()Z
+	public final fun copy-M8YrEPQ (ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZ)Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public static synthetic fun copy-M8YrEPQ$default (Ldev/supermux/webview/testing/FakeEngineBehavior;ZLkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function2;Lkotlinx/serialization/json/JsonElement;Landroidx/compose/ui/graphics/Color;ZZZILjava/lang/Object;)Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getColor-QN2ZGVo ()Landroidx/compose/ui/graphics/Color;
+	public final fun getContentHeight ()Lkotlin/jvm/functions/Function1;
+	public final fun getContentHeightInViewport ()Lkotlin/jvm/functions/Function2;
+	public final fun getNeedsCutouts ()Z
+	public final fun getPageState ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getPaintsOnLoad ()Z
+	public final fun getReplayPaintsAtOnce ()Z
+	public final fun getResetSucceeds ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/webview/engine/WebEngine {
+	public static final field $stable I
+	public fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;)V
+	public synthetic fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
+	public fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public fun configure (Ldev/supermux/webview/engine/PageSetup;)V
+	public final fun emit (Ldev/supermux/webview/engine/EngineEvent;)V
+	public fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public final fun getCalls ()Ljava/util/List;
+	public fun getClient ()Ldev/supermux/webview/engine/EngineClient;
+	public final fun getConfig ()Ldev/supermux/webview/engine/EngineConfig;
+	public final fun getCutouts ()Ldev/supermux/webview/runtime/OverlayCutouts;
+	public final fun getDocumentsStarted ()I
+	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getId ()I
+	public final fun getLastSetup ()Ldev/supermux/webview/engine/PageSetup;
+	public fun getMode ()Ldev/supermux/webview/engine/EmbeddingMode;
+	public fun getNeedsCutouts ()Z
+	public fun getOnUnusable ()Lkotlin/jvm/functions/Function0;
+	public final fun getPainted ()Z
+	public final fun getReleased ()Z
+	public final fun getResetGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getSaveStateGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getSurfaceSize-YbymL2g ()J
+	public final fun getViolations ()Ljava/util/List;
+	public fun goBack ()V
+	public fun goForward ()V
+	public fun isUsable ()Z
+	public fun load (Ldev/supermux/webview/WebContent;)V
+	public fun overlaysAtSnapshot (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public final fun postFromPage (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Z
+	public static synthetic fun postFromPage$default (Ldev/supermux/webview/testing/FakeWebEngine;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Z
+	public fun postMessage (Ljava/lang/String;Ljava/lang/String;)V
+	public fun release ()V
+	public fun reload ()V
+	public fun replayState ()V
+	public fun requestFocus ()V
+	public fun reset (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun restoreState ([BLdev/supermux/webview/WebContent;)Z
+	public fun saveState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setBehavior (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public fun setClient (Ldev/supermux/webview/engine/EngineClient;)V
+	public fun setOnUnusable (Lkotlin/jvm/functions/Function0;)V
+	public final fun setResetGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public final fun setSaveStateGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public fun setVisible (Z)V
+	public fun snapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stop ()V
+}
+
+public final class dev/supermux/webview/testing/FakeWebEngineFactory : dev/supermux/webview/engine/WebEngineFactory {
+	public static final field $stable I
+	public fun <init> ()V
+	public fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public synthetic fun <init> (Ldev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public synthetic fun <init> (Ldev/supermux/webview/testing/FakeEngineBehavior;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun create (Ldev/supermux/webview/engine/EngineConfig;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
+	public final fun getCreateGate ()Lkotlinx/coroutines/CompletableDeferred;
+	public final fun getCreated ()Ljava/util/List;
+	public final fun getFailCreate ()Z
+	public fun getNamedProfilesPersist ()Z
+	public final fun getUnavailable ()Ldev/supermux/webview/UnavailableReason;
+	public final fun setBehavior (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
+	public final fun setCreateGate (Lkotlinx/coroutines/CompletableDeferred;)V
+	public final fun setFailCreate (Z)V
+	public final fun setUnavailable (Ldev/supermux/webview/UnavailableReason;)V
+}
+
+public final class dev/supermux/webview/testing/MacEngineTesting {
+	public static final field $stable I
+	public static final field INSTANCE Ldev/supermux/webview/testing/MacEngineTesting;
+	public final fun accessibilityReachesPage (Ljava/awt/Window;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun activate (Ljava/awt/Window;)Z
+	public final fun click (Ljava/awt/Window;FF)V
+	public final fun command (Ljava/awt/Window;C)V
+	public final fun copy (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
+	public final fun copyPoints (Ljava/awt/Window;FFFF)Ldev/supermux/webview/testing/Copied;
+	public final fun describePage (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun firstResponder (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun frameSyncState (Ljava/awt/Window;)Ljava/lang/String;
+	public final fun getBackdrop ()Z
+	public final fun getFrameSync ()Z
+	public final fun getMotionCover ()Z
+	public final fun getMotionCoverDraws ()I
+	public final fun isAvailable ()Z
+	public final fun paintBacking (Ljava/awt/Window;I)V
+	public final fun routes (Ljava/awt/Window;FFZ)Ljava/lang/String;
+	public final fun scroll (Ljava/awt/Window;FFFII)V
+	public final fun setBackdrop (Z)V
+	public final fun setFrameSync (Z)V
+	public final fun setMotionCover (Z)V
+	public final fun simulateMemoryPressure ()V
+	public final fun type (Ljava/awt/Window;Ljava/lang/String;)V
+	public final fun windowNumber (Ljava/awt/Window;)J
+}
+
+public final class dev/supermux/webview/testing/ScrollPhase {
+	public static final field $stable I
+	public static final field BEGAN I
+	public static final field CHANGED I
+	public static final field ENDED I
+	public static final field INSTANCE Ldev/supermux/webview/testing/ScrollPhase;
+	public static final field MOMENTUM_BEGIN I
+	public static final field MOMENTUM_CONTINUE I
+	public static final field MOMENTUM_END I
+	public static final field NONE I
+}
+

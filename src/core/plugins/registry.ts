@@ -116,7 +116,8 @@ export function parsePluginsRegistry(text: string, pluginsDir: string = PLUGINS_
     throw new Error("plugins.json: plugins must be an array")
   }
   const plugins = ((root.plugins as unknown[]) ?? []).map((p) => parsePlugin(p, pluginsDir))
-  return { version, plugins }
+  const migrations = Array.isArray(root.migrations) ? root.migrations.filter((m): m is string => typeof m === "string") : undefined
+  return { version, ...(migrations ? { migrations } : {}), plugins }
 }
 
 /** Read + parse the registry file. Missing file → empty registry. Throws on invalid content. */
@@ -135,6 +136,7 @@ export function loadPluginsRegistry(opts?: { file?: string; pluginsDir?: string 
 export function serializePluginsRegistry(reg: PluginsRegistry): string {
   const out = {
     version: reg.version,
+    ...(reg.migrations ? { migrations: reg.migrations } : {}),
     plugins: reg.plugins.map((p) => {
       const entry: Record<string, unknown> = { name: p.name }
       if (p.version !== undefined) entry.version = p.version

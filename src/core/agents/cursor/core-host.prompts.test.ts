@@ -96,3 +96,27 @@ test("cursor ask mode is ask/agent", async () => {
   await handle.stop({ mode: "shutdown" })
   await host.close({ agents: "shutdown" })
 })
+
+test("cursor sessions get their plugin skills: homeSkills is on and the host keeps skills and plugins (#102)", async () => {
+  const captured: CursorOptions[] = []
+  const dir = mkdtempSync(join(tmpdir(), "cur-host-"))
+  dirs.push(dir)
+  const work = workdir()
+  const host = createCursorCoreHost({
+    stateDirectory: dir,
+    driverFactory: (options) => {
+      captured.push(options)
+      return fakeDriver()
+    },
+    smoke: async () => {},
+    sharedRuntime: null,
+  })
+  const extra = { sessionHome: dir, sessionName: "s", sessionId: "id9", workdir: work, cwd: work }
+  const handle = host.register({ id: "id9", env: {}, extra })
+  await handle.start({ cwd: work })
+  expect(captured[0]?.homeSkills).toBe(true)
+  expect(host.core.capabilities("cursor").context.skills.support).toBe("supported")
+  expect(host.core.capabilities("cursor").context.plugins.support).toBe("supported")
+  await handle.stop({ mode: "shutdown" })
+  await host.close({ agents: "shutdown" })
+})

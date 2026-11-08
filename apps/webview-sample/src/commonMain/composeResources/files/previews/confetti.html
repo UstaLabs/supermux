@@ -1,0 +1,237 @@
+<!doctype html>
+<html class="fixed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Confetti</title>
+<link rel="stylesheet" href="lib/kit.css">
+<script src="lib/kit.js"></script>
+<style>
+  :root { --s1: #fffafd; --s2: #f7f1ff; --s3: #ebf0ff; --cap: #6c6487; }
+  @media (prefers-color-scheme: dark) {
+    :root { --s1: #2d2245; --s2: #1d1a33; --s3: #121423; --cap: #a59ebf; }
+  }
+  html.fixed { background: var(--s2); }
+  body { background: radial-gradient(125% 135% at 50% 0%, var(--s1) 0%, var(--s2) 55%, var(--s3) 100%); }
+  .stage {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 13px; padding-top: 4px;
+  }
+  .cta {
+    position: relative; overflow: hidden; height: 58px; padding: 0 30px; border: 0; border-radius: 999px; cursor: pointer;
+    font-size: 19px; font-weight: 750; letter-spacing: -0.01em; color: #fff; white-space: nowrap;
+    background: linear-gradient(115deg, #7b5cff 0%, #ff4fa3 52%, #ff9a3c 100%);
+    box-shadow: 0 14px 30px -14px rgba(255, 60, 140, .85), 0 4px 10px -4px rgba(123, 92, 255, .45),
+      inset 0 1px 0 rgba(255, 255, 255, .38), inset 0 -2px 0 rgba(60, 0, 40, .1);
+    text-shadow: 0 1px 1px rgba(90, 0, 50, .22);
+    transition: transform .2s cubic-bezier(.3, 1.6, .5, 1);
+    touch-action: manipulation;
+  }
+  .cta:active { transform: scale(.95); }
+  .cta.pop { animation: pop .5s cubic-bezier(.3, 1.6, .5, 1); }
+  @keyframes pop { 0% { transform: scale(.9); } 100% { transform: none; } }
+  .label { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+  .emoji { display: inline-block; font-size: 1.1em; text-shadow: none; }
+  .cta.pop .emoji { animation: wiggle .7s ease; }
+  @keyframes wiggle {
+    20% { transform: rotate(-18deg) scale(1.25); }
+    45% { transform: rotate(14deg) scale(1.15); }
+    70% { transform: rotate(-6deg) scale(1.05); }
+  }
+  /* A sheen crossing the button now and then. */
+  .shine {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 55%;
+    background: linear-gradient(100deg, rgba(255, 255, 255, 0) 15%, rgba(255, 255, 255, .42) 50%, rgba(255, 255, 255, 0) 85%);
+    transform: translateX(-130%); animation: shine 5.5s ease-in-out 1.2s infinite;
+  }
+  @keyframes shine { 0%, 62% { transform: translateX(-130%); } 88%, 100% { transform: translateX(260%); } }
+  .cap { font-size: 12px; font-weight: 550; color: var(--cap); letter-spacing: .01em; }
+  .spark { position: absolute; width: 14px; height: 14px; animation: twinkle 2.8s ease-in-out infinite; pointer-events: none; }
+  @keyframes twinkle {
+    0%, 100% { transform: scale(.55) rotate(0deg); opacity: .35; }
+    50% { transform: scale(1) rotate(25deg); opacity: 1; }
+  }
+  #fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+</style>
+</head>
+<body class="fixed nosel">
+<svg class="spark" style="left:calc(50% - 134px);top:calc(50% - 50px);color:#ffbf2e" viewBox="0 0 24 24"><path id="star" fill="currentColor" d="M12 0c.9 6.6 4.4 10.4 12 12-7.6 1.6-11.1 5.4-12 12-.9-6.6-4.4-10.4-12-12C7.6 10.4 11.1 6.6 12 0z"/></svg>
+<svg class="spark" style="left:calc(50% + 116px);top:calc(50% - 58px);width:10px;height:10px;color:#ff5fa8;animation-delay:-.9s" viewBox="0 0 24 24"><use href="#star"/></svg>
+<svg class="spark" style="left:calc(50% - 112px);top:calc(50% + 36px);width:9px;height:9px;color:#8a6bff;animation-delay:-1.7s" viewBox="0 0 24 24"><use href="#star"/></svg>
+<svg class="spark" style="left:calc(50% + 128px);top:calc(50% + 22px);color:#36c3ff;animation-delay:-2.3s" viewBox="0 0 24 24"><use href="#star"/></svg>
+<div class="stage">
+  <button class="cta" id="cta" type="button"><span class="shine"></span><span class="label">Celebrate <span class="emoji">🎉</span></span></button>
+  <div class="cap">Tap for confetti · it bursts every 6 s</div>
+</div>
+<canvas id="fx"></canvas>
+<script>
+(function () {
+  'use strict';
+  var P = Kit.pick({
+    default: {
+      colours: ['#ff4d6d', '#ffc23d', '#3ec5ff', '#7b5cff', '#2ee6a6', '#ff8a3d', '#ff5fd2'],
+      every: 6, burst: 170
+    }
+  }, 'default');
+
+  var canvas = document.getElementById('fx'), g = canvas.getContext('2d'), btn = document.getElementById('cta');
+  var rand = Kit.rng(20261031);
+
+  // The pieces, in flat arrays (kept packed: a piece that leaves is replaced by the last one).
+  var MAX = 480, n = 0;
+  var px = new Float32Array(MAX), py = new Float32Array(MAX), vx = new Float32Array(MAX), vy = new Float32Array(MAX);
+  var ang = new Float32Array(MAX), spin = new Float32Array(MAX), tilt = new Float32Array(MAX), tiltV = new Float32Array(MAX);
+  var wob = new Float32Array(MAX), wobV = new Float32Array(MAX), wobA = new Float32Array(MAX), drag = new Float32Array(MAX);
+  var hw = new Float32Array(MAX), hh = new Float32Array(MAX), flip = new Float32Array(MAX);
+  var col = new Uint8Array(MAX), round = new Uint8Array(MAX);
+  var FIELDS = [px, py, vx, vy, ang, spin, tilt, tiltV, wob, wobV, wobA, drag, hw, hh, flip, col, round];
+
+  // Each colour has a front and a darker back: a piece flipping over shows both.
+  var shades = [];
+  P.colours.forEach(function (c) { shades.push(c, Kit.mix(c, '#1b1033', 0.18)); });
+
+  var W = 1, H = 1, dpr = 1, SX = 1, SY = 1, GRAVITY = 560;
+
+  function add(x, y, angle, speed) {
+    if (n >= MAX) return -1;
+    var i = n++, size = 0.85 + rand() * 0.5;
+    px[i] = x;
+    py[i] = y;
+    vx[i] = Math.cos(angle) * speed * SX;
+    vy[i] = Math.sin(angle) * speed * SY;
+    round[i] = rand() < 0.28 ? 1 : 0;
+    hw[i] = 2.7 * size;
+    hh[i] = round[i] ? hw[i] : (4.2 + rand() * 2.8) * size;
+    ang[i] = rand() * Math.PI * 2;
+    spin[i] = (rand() - 0.5) * 12;
+    tilt[i] = rand() * Math.PI * 2;
+    tiltV[i] = 5 + rand() * 8;
+    wob[i] = rand() * Math.PI * 2;
+    wobV[i] = 3 + rand() * 4;
+    wobA[i] = 16 + rand() * 40;
+    // Air drag: paper strips flutter down slowly, dots a little faster.
+    drag[i] = round[i] ? 2.4 + rand() * 0.8 : 3 + rand() * 1.6;
+    col[i] = Math.floor(rand() * P.colours.length);
+    return i;
+  }
+
+  // A fan thrown up from the button.
+  function pop() {
+    var r = btn.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height * 0.4;
+    for (var k = 0; k < P.burst; k++) {
+      add(cx + (rand() - 0.5) * r.width * 0.7, cy + (rand() - 0.5) * 10,
+        -Math.PI / 2 + (rand() - 0.5) * 2.1, 340 + Math.pow(rand(), 0.6) * 540);
+    }
+    btn.classList.remove('pop');
+    void btn.offsetWidth; // restarts the animation
+    btn.classList.add('pop');
+  }
+  // Two cannons in the bottom corners, crossing.
+  function cannons() {
+    for (var k = 0; k < P.burst; k++) {
+      var left = k % 2 === 0;
+      add(left ? -6 : W + 6, H + 6, -Math.PI / 2 + (left ? 0.45 : -0.45) + (rand() - 0.5) * 0.5, 640 + rand() * 520);
+    }
+  }
+  // All round a tap on the background, leaning up.
+  function spray(x, y) {
+    for (var k = 0; k < 110; k++) {
+      var i = add(x, y, rand() * Math.PI * 2, 140 + rand() * 420);
+      if (i >= 0) vy[i] -= 200 * SY;
+    }
+  }
+
+  function step(dt) {
+    for (var i = 0; i < n; i++) {
+      var k = Math.exp(-drag[i] * dt);
+      vx[i] *= k;
+      vy[i] = vy[i] * k + GRAVITY * dt;
+      wob[i] += wobV[i] * dt;
+      px[i] += (vx[i] + Math.sin(wob[i]) * wobA[i]) * dt;
+      py[i] += vy[i] * dt;
+      ang[i] += spin[i] * dt;
+      tilt[i] += tiltV[i] * dt;
+      flip[i] = Math.cos(tilt[i]);
+      // Gone below the bottom, or far off a side: removed (above the top they still fall back in).
+      if (py[i] > H + 24 || px[i] < -70 || px[i] > W + 70) {
+        var j = --n;
+        for (var f = 0; f < FIELDS.length; f++) FIELDS[f][i] = FIELDS[f][j];
+        i--;
+      }
+    }
+  }
+
+  // One path a colour and side: 14 fills a frame, whatever the count.
+  function draw() {
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    for (var b = 0; b < shades.length; b++) {
+      var c = b >> 1, back = b & 1, any = false;
+      g.beginPath();
+      for (var i = 0; i < n; i++) {
+        if (col[i] !== c || (flip[i] < 0 ? 1 : 0) !== back) continue;
+        var x = px[i], y = py[i], ca = Math.cos(ang[i]), sa = Math.sin(ang[i]);
+        var squash = Math.abs(flip[i]) * 0.85 + 0.15;
+        if (round[i]) {
+          var r = hw[i];
+          g.moveTo(x + ca * r, y + sa * r);
+          g.ellipse(x, y, r, r * squash, ang[i], 0, Math.PI * 2);
+        } else {
+          var ax = ca * hw[i], ay = sa * hw[i], bx = -sa * hh[i] * squash, by = ca * hh[i] * squash;
+          g.moveTo(x + ax + bx, y + ay + by);
+          g.lineTo(x - ax + bx, y - ay + by);
+          g.lineTo(x - ax - bx, y - ay - by);
+          g.lineTo(x + ax - bx, y + ay - by);
+          g.closePath();
+        }
+        any = true;
+      }
+      if (any) {
+        g.fillStyle = shades[b];
+        g.fill();
+      }
+    }
+  }
+
+  Kit.watch(document.body, function () {
+    var f = Kit.fit(canvas);
+    W = f.cw;
+    H = f.ch;
+    dpr = f.dpr;
+    // Throws reach about as far, relative to the card, on a wide or tall one.
+    SX = Kit.clamp(W / 340, 0.85, 1.8);
+    SY = Kit.clamp(H / 200, 0.85, 1.5);
+    draw();
+  });
+
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    pop();
+    next = P.every;
+  });
+  document.body.addEventListener('click', function (e) {
+    spray(e.clientX, e.clientY);
+    next = Math.max(next, 3);
+  });
+
+  // A first burst on the first frame, so the preview never shows up empty, then one every few seconds: the button's
+  // fan, then the cannons.
+  var next = 0, turn = 0, drawn = false;
+  Kit.loop(function (dt) {
+    next -= dt;
+    if (next <= 0) {
+      if (turn++ % 2 === 0) pop(); else cannons();
+      next = P.every;
+    }
+    if (n === 0) {
+      if (drawn) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, canvas.width, canvas.height); drawn = false; }
+      return;
+    }
+    step(dt);
+    draw();
+    drawn = true;
+  });
+})();
+</script>
+</body>
+</html>

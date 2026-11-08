@@ -77,7 +77,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
@@ -391,7 +390,7 @@ fun ChatScreen(
                 // Exposed proxy links (iOS sessionLinksMenu parity) — also in the phone header.
                 if (sessionLinks.isNotEmpty()) {
                     var showLinks by remember { mutableStateOf(false) }
-                    val uriHandler = LocalUriHandler.current
+                    val platform = LocalPlatform.current
                     Box {
                         Icon(
                             painter = painterResource(R.drawable.ic_globe),
@@ -413,7 +412,7 @@ fun ChatScreen(
                                             modifier = Modifier.size(18.dp),
                                         )
                                     },
-                                    onClick = { showLinks = false; uriHandler.openUri(proxyUrl(p)) },
+                                    onClick = { showLinks = false; platform.openUrl(proxyUrl(p)) },
                                 )
                             }
                         }

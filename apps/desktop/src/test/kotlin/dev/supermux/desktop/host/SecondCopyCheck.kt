@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -84,10 +85,10 @@ fun main(args: Array<String>) = runBlocking {
 
 /** What the service manager says about the first copy's service (read only). */
 private fun firstCopy(env: OsEnv): String = when (env.os) {
-    OsEnv.Os.WINDOWS -> env.runCapture(listOf("schtasks", "/Query", "/TN", BrokerService.WINDOWS_TASK_NAME, "/FO", "LIST", "/V"))
+    DesktopOs.WINDOWS -> env.runCapture(listOf("schtasks", "/Query", "/TN", BrokerService.WINDOWS_TASK_NAME, "/FO", "LIST", "/V"))
         ?.lines()?.filter { it.startsWith("Status:") || it.startsWith("Last Run Time:") || it.startsWith("Last Result:") }
         ?.joinToString(" | ") { it.replace(Regex("\\s+"), " ").trim() } ?: "no task"
-    OsEnv.Os.MAC -> env.runResult(listOf("launchctl", "print", "gui/${env.uid}/${BrokerService.LAUNCHD_LABEL}")).let { r ->
+    DesktopOs.MACOS -> env.runResult(listOf("launchctl", "print", "gui/${env.uid}/${BrokerService.LAUNCHD_LABEL}")).let { r ->
         if (r.exit != 0) "not loaded" else r.out.lines().filter { "state =" in it || "pid =" in it }.joinToString(" | ") { it.trim() }
     }
     else -> env.runCapture(listOf("systemctl", "--user", "is-active", BrokerService.SYSTEMD_NAME))?.trim() ?: "inactive"

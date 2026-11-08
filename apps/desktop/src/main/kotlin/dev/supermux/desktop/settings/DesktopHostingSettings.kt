@@ -1,6 +1,7 @@
 // Desktop's Settings ▸ Hosting: builds the shared page's state from the app-wide HostSupervisor.
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.platform.DesktopOs
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -147,6 +148,7 @@ internal fun desktopHostingUiState(
     backgroundError: String?,
     gitRequirement: GitRequirement?,
     power: HostingPowerUi? = null,
+    checkoutMoved: String? = null,
 ): HostingUiState {
     val readOnly = DesktopHostBootstrap.isReadOnly(status)
     val running = status is HostingStatus.Running
@@ -168,6 +170,7 @@ internal fun desktopHostingUiState(
         backgroundError = backgroundError,
         gitRequirement = gitRequirement.takeIf { running },
         power = power?.let { p -> if (running) p else p.copy(keepAwake = null) },
+        checkoutMoved = checkoutMoved.takeIf { running },
     )
 }
 
@@ -260,7 +263,7 @@ internal suspend fun installGitOnThisComputer(
     wizardToken = wizardToken,
     log = sup.log,
 ).also { started ->
-    if (started && SystemOsEnv.os == OsEnv.Os.MAC) {
+    if (started && SystemOsEnv.os == DesktopOs.MACOS) {
         hostingScope.launch(Dispatchers.IO) {
             if (!AppleInstaller.bringToFront()) sup.log("install git: Apple's installer didn't come up to bring to the front")
         }
@@ -307,6 +310,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
     val build by sup.build.collectAsState()
     val backgroundError by sup.backgroundError.collectAsState()
     val gitRequirement by sup.gitRequirement.collectAsState()
+    val checkoutMoved by sup.checkoutMoved.collectAsState()
     val wizard by HostingTurnOn.model.collectAsState()
     val power = LocalKeepAwakeControls.current
     val powerUi = power?.let { c ->
@@ -350,6 +354,7 @@ fun DesktopHostingSettings(onBack: () -> Unit, topBarShown: Boolean) {
         backgroundError = backgroundError,
         gitRequirement = gitRequirement,
         power = powerUi,
+        checkoutMoved = checkoutMoved,
     )
     val actions = remember(sup, hostStore, power) {
         object : HostingActions {

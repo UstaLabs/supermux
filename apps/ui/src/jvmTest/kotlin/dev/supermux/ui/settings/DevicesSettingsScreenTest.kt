@@ -1,13 +1,10 @@
 package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -18,7 +15,6 @@ import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.text.AnnotatedString
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.RGBLuminanceSource
@@ -71,10 +67,11 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 class DevicesSettingsScreenTest {
 
     private fun ComposeUiTest.devicesContent(
+        platform: FakePlatform = FakePlatform(),
         pointer: Boolean = true,
         widthClass: WindowWidthClass = WindowWidthClass.Expanded,
         content: @Composable () -> Unit,
-    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+    ) = setPlatformContent(platform = platform, pointer = pointer, widthClass = widthClass) {
         content()
     }
 
@@ -394,22 +391,13 @@ class DevicesSettingsScreenTest {
 
     @Test fun copy_link_writes_pairing_url_to_clipboard() = runComposeUiTest {
         val url = "https://pair.example/clipboard-token"
-        val copied = AtomicReference<String?>(null)
-        val fakeClipboard = object : ClipboardManager {
-            override fun setText(annotatedString: AnnotatedString) {
-                copied.set(annotatedString.text)
-            }
-            override fun getText(): AnnotatedString? = copied.get()?.let { AnnotatedString(it) }
-            override fun hasText(): Boolean = copied.get() != null
-        }
-        devicesContent {
+        val platform = FakePlatform()
+        devicesContent(platform = platform) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                CompositionLocalProvider(LocalClipboardManager provides fakeClipboard) {
-                    screen(
-                        devicesLoad = { emptyList() },
-                        deviceAdd = { AddDeviceResponse(url = url, name = it) },
-                    )()
-                }
+                screen(
+                    devicesLoad = { emptyList() },
+                    deviceAdd = { AddDeviceResponse(url = url, name = it) },
+                )()
             }
         }
         waitForIdle()
@@ -427,7 +415,7 @@ class DevicesSettingsScreenTest {
         }
         onNodeWithTag("devices_add_copy").performClick()
         waitForIdle()
-        assertEquals(url, copied.get())
+        assertEquals(listOf(url), platform.copied)
         onNodeWithText("Copied").assertIsDisplayed()
     }
 

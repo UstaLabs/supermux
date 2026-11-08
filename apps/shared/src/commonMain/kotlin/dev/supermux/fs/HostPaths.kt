@@ -62,7 +62,21 @@ fun hostRelativePath(root: String, path: String): String? {
 /** Whether [path] is [root] or inside it, on the host's rules. */
 fun hostIsInside(path: String, root: String): Boolean = hostRelativePath(root, path) != null
 
-private fun isAbsoluteHostPath(path: String): Boolean = path.startsWith('/') || isWindowsHostPath(path)
+/** An absolute path on either kind of host: POSIX (`/…`) or Windows (`C:\…`, `\\server\share`). */
+fun isAbsoluteHostPath(path: String): Boolean = path.startsWith('/') || isWindowsHostPath(path)
+
+/**
+ * A file's own name from a name or path any host may have written: what follows its last `/` or `\`. For an
+ * attachment's or a download's name, whose host is unknown; [pathLeaf] is for a path of a known host.
+ */
+fun fileNameOf(name: String): String = name.substringAfterLast('/').substringAfterLast('\\')
+
+/** [path] without its trailing separators, but a root as it is: `/`, `C:\`, `C:/` (`C:` alone is the drive's current folder). */
+fun trimHostPath(path: String): String {
+    if (path.startsWith('/')) return path.trimEnd('/').ifEmpty { "/" }
+    val t = path.trimEnd('/', '\\')
+    return if (t.length == 2 && isDriveSegment(t) && path.length > 2) path.substring(0, 3) else t
+}
 
 /** The last segment of [path]: `/a/b` and `C:\a\b` both give `b` (separators as in [hostPathSegments]). */
 fun pathLeaf(path: String): String {

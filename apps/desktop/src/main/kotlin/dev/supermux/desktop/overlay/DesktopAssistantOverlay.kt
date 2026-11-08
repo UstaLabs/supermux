@@ -470,9 +470,10 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
                     // A bus thread: everything goes on to the overlay's.
                     onPress = { scope.launch { comboDown() } },
                     onRelease = { scope.launch { comboUp() } },
+                    onOutcome = { TalkKeyStatus.wayland.value = it },
                 ).also { waylandHotKey = it }
                 val name = agent?.name ?: "your Agent"
-                TalkKeyStatus.wayland.value = withContext(Dispatchers.IO) { wayland.register(combo, "Hold to talk to $name") }
+                withContext(Dispatchers.IO) { wayland.register(combo, "Hold to talk to $name") }
                 return
             }
             val x11 = x11HotKey ?: X11HotKey(
@@ -516,8 +517,9 @@ private class DesktopOverlay(private val scope: CoroutineScope) {
 
     // The combo talks from the moment it's down: nothing to tell apart from typing, so no wait.
     private fun comboDown() {
-        println("[OverlayKey] $comboLabel down")
+        // GNOME says Activated again for every key repeat while it's held: only the first one is news.
         if (ui.listening) return
+        println("[OverlayKey] $comboLabel down")
         comboFrom = System.currentTimeMillis()
         handle(listOf(CompanionGesture.Intent.ListenStart))
     }

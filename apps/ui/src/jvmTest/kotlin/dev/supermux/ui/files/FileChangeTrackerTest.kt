@@ -36,6 +36,14 @@ class FileChangeTrackerTest {
         assertEquals(listOf("/w/src/a.kt"), t.onSnapshot("/w/src", snap("a.kt" to (3L to 12L))))
     }
 
+    @Test fun aWindowsFolderMatchesHoweverItWasSubscribed() {
+        val t = tracker()
+        t.track("C:\\w\\src\\a.kt")
+        t.onSnapshot("C:\\w\\src\\", snap("a.kt" to (1L to 10L), dir = "C:\\w\\src\\"))
+        assertEquals(listOf("C:\\w\\src\\a.kt"), t.onSnapshot("C:\\w\\src\\", snap("a.kt" to (2L to 10L), dir = "C:\\w\\src\\")))
+        assertEquals(listOf("C:\\w\\src\\a.kt"), t.onSnapshot("c:/w/SRC", snap("a.kt" to (3L to 10L), dir = "c:/w/SRC")))
+    }
+
     @Test fun aChangedSizeAloneReports() {
         val t = tracker()
         t.track("/w/src/a.kt")

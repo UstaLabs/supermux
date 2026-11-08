@@ -190,6 +190,58 @@ class DesktopUsageTest {
         assertEquals("2026-01-02T03:04:05.000Z", app.usageSnapshot.value?.fetchedAt?.get("claude"))
     }
 
+    // ── an answer a usage_updated frame overtook (card #101) ──────────────────
+
+    /**
+     * HostStore whose broker pushes [frame] while the request is still in flight, then answers [body]: what a
+     * broker does when every fetch of the refresh it just started settles at once (no sign-in found). Measured
+     * on Windows 3 runs of 3: the last `usage_updated` (nothing refreshing) lands 250–450 ms before the answer,
+     * which was snapshotted as the refresh started (everything refreshing).
+     */
+    private fun appOvertaken(frame: UsageResponse, body: String): HostStore {
+        lateinit var app: HostStore
+        val engine = MockEngine {
+            app.reduce(ServerFrame.UsageUpdated(frame))
+            respond(ByteReadChannel(body), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        app = HostStore(
+            baseUrl = "ws://test:9898",
+            token = "t",
+            scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
+            connectOnInit = false,
+            apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
+        )
+        return app
+    }
+
+    private val settled = UsageResponse(
+        errors = mapOf("claude" to "credentials not found or token expired", "codex" to "credentials not found"),
+        refreshing = emptyList(),
+    )
+    private val startedBody =
+        """{"errors":{"claude":"credentials not found or token expired","codex":"credentials not found"},"refreshing":["claude","codex"]}"""
+
+    @Test fun a_usage_answer_a_usage_updated_frame_overtook_does_not_bring_the_spinners_back() = runTest {
+        val app = appOvertaken(settled, startedBody)
+
+        val result = app.usage()
+
+        assertEquals(settled, app.usageSnapshot.value)
+        assertEquals(emptyList(), app.usageSnapshot.value?.refreshing)
+        assertEquals(settled, result)
+    }
+
+    @Test fun a_refresh_answer_a_usage_updated_frame_overtook_does_not_bring_the_spinners_back() = runTest {
+        val app = appOvertaken(settled, startedBody)
+
+        val result = app.refreshUsage()
+
+        assertEquals(settled, app.usageSnapshot.value)
+        assertEquals(emptyList(), app.usageSnapshot.value?.refreshing)
+        assertEquals(settled, result)
+    }
+
     @Test fun usage_updated_frame_replaces_the_held_snapshot() {
         val s = HostStore(
             baseUrl = "ws://test:9898",

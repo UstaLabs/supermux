@@ -111,32 +111,48 @@ internal object SesNativeLoader {
 
     private fun cacheRoots(): List<File> {
         val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
-        val os = System.getProperty("os.name").orEmpty().lowercase()
-        val root = when {
-            os.startsWith("windows") -> System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { File(it) }
-            os.startsWith("mac") || os.startsWith("darwin") -> home?.let { File(it, "Library/Caches") }
-            else -> System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() }?.let { File(it) } ?: home?.let { File(it, ".cache") }
-        }
-        return listOfNotNull(root)
+        return listOfNotNull(nativeLibraryCacheRoot(System.getProperty("os.name").orEmpty(), System::getenv, home))
     }
 
     private fun sha256(b: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
 
     /** `<os>-<arch>` as native/build.sh names the desktop targets, or null for anything else. */
-    fun platformKey(): String? {
-        val os = System.getProperty("os.name").orEmpty().lowercase()
-        val o = when {
-            os.startsWith("linux") -> "linux"
-            os.startsWith("mac") || os.startsWith("darwin") -> "macos"
-            os.startsWith("windows") -> "windows"
-            else -> return null
-        }
-        val a = when (System.getProperty("os.arch").orEmpty().lowercase()) {
-            "amd64", "x86_64", "x64" -> "x64"
-            "aarch64", "arm64" -> "arm64"
-            else -> return null
-        }
-        return "$o-$a"
+    fun platformKey(): String? =
+        nativeLibraryKey(System.getProperty("os.name").orEmpty(), System.getProperty("os.arch").orEmpty())
+}
+
+// native-library-key: begin
+// Word for word in terminal-core's JvmNativeLibrary.kt and editor-syntax's SesNativeLoader.kt: neither library is on
+// Compose (no Skiko hostOs) and neither depends on the other. tests/native-library-key.test.ts keeps the copies equal.
+
+/** `<os>-<arch>` of a desktop JVM as native/build.sh names its targets, or null for any other OS or architecture. */
+internal fun nativeLibraryKey(osName: String, osArch: String): String? {
+    val os = osName.lowercase()
+    val o = when {
+        os.startsWith("linux") -> "linux"
+        os.startsWith("mac") || os.startsWith("darwin") -> "macos"
+        os.startsWith("windows") -> "windows"
+        else -> return null
+    }
+    val a = when (osArch.lowercase()) {
+        "amd64", "x86_64", "x64" -> "x64"
+        "aarch64", "arm64" -> "arm64"
+        else -> return null
+    }
+    return "$o-$a"
+}
+
+/**
+ * The user's own cache folder, where an extracted library is kept: `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on
+ * macOS, else `$XDG_CACHE_HOME` (only when absolute, as the XDG spec says) or `~/.cache`. Null when none is known.
+ */
+internal fun nativeLibraryCacheRoot(osName: String, getenv: (String) -> String?, home: String?): File? {
+    val os = osName.lowercase()
+    return when {
+        os.startsWith("windows") -> getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { File(it) }
+        os.startsWith("mac") || os.startsWith("darwin") -> home?.let { File(it, "Library/Caches") }
+        else -> getenv("XDG_CACHE_HOME")?.let { File(it) }?.takeIf { it.isAbsolute } ?: home?.let { File(it, ".cache") }
     }
 }
+// native-library-key: end

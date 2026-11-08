@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import type { ClaudeUsage, CursorUsage, UsageResponse } from "./index"
-import { UsageStore, type UsageFailed, type UsageSnapshot } from "./store"
+import type { AntigravityUsage, ClaudeUsage, CursorUsage, UsageResponse } from "./index"
+import { UsageStore, isUsageProvider, type UsageFailed, type UsageSnapshot } from "./store"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 
 let tmp: string
@@ -547,4 +547,38 @@ test("applyResponse (the /usage command) records error codes and emits failed fo
   const snap = store.snapshot()
   expect(snap.errorCodes).toEqual({ cursor: "account_expired" })
   expect(failed).toEqual([{ provider: "cursor", account: "cursor:system", message: "Cursor sign-in expired — sign in to Cursor again.", code: "account_expired" }])
+})
+
+test("Antigravity is a usage provider: its reading lands in the snapshot, the spinner ends, and it survives a restart", async () => {
+  const antigravity: AntigravityUsage = {
+    windows: [{ id: "gemini-5h", label: "Gemini Models · 5-hour", used: 60, resetsAt: "2026-11-07T17:19:08Z", resetsAtIso: "2026-11-07T17:19:08.000Z" }],
+  }
+  const gate = deferred<AntigravityUsage>()
+  const path = filePath()
+  const store = new UsageStore({ filePath: path, fetchers: { antigravity: () => gate.promise }, localReaders: {} })
+  stores.push(store)
+  expect(isUsageProvider("antigravity")).toBe(true)
+
+  store.ensureFresh()
+  await flush()
+  expect(store.snapshot().refreshing).toEqual(["antigravity"])
+  gate.resolve(antigravity)
+  await flush(10)
+  const snap = store.snapshot()
+  expect(snap.antigravity).toEqual(antigravity)
+  expect(snap.source.antigravity).toBe("live")
+  expect(snap.refreshing).toEqual([])
+
+  store.dispose()
+  const again = new UsageStore({ filePath: path, fetchers: {}, localReaders: {} })
+  stores.push(again)
+  expect(again.snapshot().antigravity).toEqual(antigravity)
+  expect(again.snapshot().source.antigravity).toBe("cache")
+})
+
+test("an Antigravity read that finds no sign-in says so in words", async () => {
+  const store = makeStore({ fetchers: { antigravity: async () => null } })
+  await store.refresh(["antigravity"])
+  expect(store.snapshot().antigravity).toBeNull()
+  expect(store.snapshot().errors.antigravity).toBe("Not signed in to Antigravity.")
 })

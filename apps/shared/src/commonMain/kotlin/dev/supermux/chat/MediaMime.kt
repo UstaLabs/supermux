@@ -52,3 +52,26 @@ private val EXTENSION_MIME: Map<String, String> = mapOf(
     "csv" to "text/csv",
     "html" to "text/html",
 )
+
+/**
+ * Whether a browser would run this type as a page or a script: HTML, XHTML, any XML (SVG included) and JavaScript.
+ * Matched on the essence, so case and parameters don't hide it. The broker serves the same types as downloads.
+ */
+fun isActiveMime(mime: String?): Boolean {
+    val essence = mime?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    return essence == "text/html" || essence == "text/xml" || essence == "application/xml" || essence.endsWith("+xml") ||
+        SCRIPT_MIME_RE.containsMatchIn(essence)
+}
+
+private val SCRIPT_MIME_RE = Regex("(java|ecma)script|jscript|livescript")
+
+/** How the web app hands a file's bytes to the browser: as a blob of [mime], downloaded or opened in a new tab. */
+data class WebHandoff(val mime: String, val download: Boolean)
+
+/**
+ * A file the web app was asked to [open] (else to save). Its blob URL has the app's own origin, so a type the browser
+ * would run, or would have to guess, only ever downloads, as opaque bytes.
+ */
+fun webHandoff(mime: String, open: Boolean): WebHandoff =
+    if (mime.isBlank() || isActiveMime(mime)) WebHandoff("application/octet-stream", download = true)
+    else WebHandoff(mime, download = !open)

@@ -3,6 +3,8 @@ package dev.supermux.state
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
+import dev.supermux.net.UsageResponse
+import dev.supermux.proto.ServerFrame
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -166,6 +168,42 @@ class FleetStoreUsageTest {
             fleet.setActiveHost("h1")
             advanceUntilIdle()
             assertEquals(12.0, fleet.usageSnapshot.value?.claude?.fiveHour?.used)
+            fleet.close()
+        }
+
+    /**
+     * Card #101: the broker's last `usage_updated` of a refresh whose fetches all settled at once (nothing signed
+     * in) lands before the refresh's own answer, which still says everything is refreshing. The fleet's
+     * snapshot, the one the desktop Usage card draws, must keep the frame.
+     */
+    @Test fun a_refresh_answer_the_hosts_frame_overtook_does_not_bring_the_spinners_back() =
+        runTest(UnconfinedTestDispatcher()) {
+            val settled = UsageResponse(errors = mapOf("claude" to "credentials not found or token expired"), refreshing = emptyList())
+            lateinit var host: HostStore
+            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
+            val client = HttpClient(
+                MockEngine {
+                    host.reduce(ServerFrame.UsageUpdated(settled))
+                    respond(
+                        """{"errors":{"claude":"credentials not found or token expired"},"refreshing":["claude"]}""",
+                        HttpStatusCode.OK, jsonHeaders,
+                    )
+                },
+            )
+            val fleet = FleetStore(
+                store = store(hostA), scope = this, deps = testDeps(),
+                appFactory = { url, token, onConn ->
+                    HostStore(url, token, this, testDeps(http = client), connectOnInit = false, onConnectionChange = onConn)
+                        .also { host = it }
+                },
+            )
+            advanceUntilIdle()
+
+            fleet.refreshUsage()
+            advanceUntilIdle()
+
+            assertEquals(emptyList(), fleet.usageSnapshot.value?.refreshing)
+            assertEquals(settled, fleet.usageSnapshot.value)
             fleet.close()
         }
 

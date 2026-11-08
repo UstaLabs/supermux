@@ -6,6 +6,7 @@ import { loadAccess, isAllowed } from "./access"
 import { setMenu } from "./menu"
 import { normalizeTelegramInbound } from "./inbound"
 import type { FileStore } from "../../core/files/store"
+import { telegramApiRoot } from "../../core/session-manager/download"
 import { makeLogger } from "../../shared/log"
 import { ACCESS_FILE } from "../../shared/paths"
 
@@ -31,7 +32,7 @@ export class TelegramChannel implements Channel {
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
 
   constructor(opts: TelegramChannelOpts) {
-    this.bot = new Bot(opts.token)
+    this.bot = new Bot(opts.token, { client: { apiRoot: telegramApiRoot() } })
     this.api = createBotApi(this.bot.api)
     this.token = opts.token
     this.fileStore = opts.fileStore

@@ -5,7 +5,6 @@ import dev.supermux.net.HostIdentity
 import dev.supermux.net.HostRequirements
 import dev.supermux.net.KeepAwakeState
 import kotlinx.serialization.json.Json
-import java.io.File
 import java.io.IOException
 import java.net.ConnectException
 import java.net.InetSocketAddress
@@ -32,6 +31,8 @@ sealed interface HostProbeResult {
         val requirements: HostRequirements? = null,
         /** "Keep this computer awake" as the broker holds it; null from a broker older than keep-awake. */
         val keepAwake: KeepAwakeState? = null,
+        /** The broker's "restart it to run the new code" sentence when its checkout moved under it; null otherwise. */
+        val checkoutMoved: String? = null,
     ) : HostProbeResult {
         /**
          * The broker's git requirement. An older broker that only said `gitAvailable: false` was a
@@ -104,7 +105,8 @@ private fun canonical(p: String): String {
     val path = runCatching { Path.of(p) }.getOrNull() ?: return p
     val c = runCatching { path.toRealPath().toString() }.getOrNull()
         ?: runCatching { path.toAbsolutePath().normalize().toString() }.getOrDefault(p)
-    return if (File.separatorChar == '\\') c.lowercase() else c
+    // Windows' names ignore case, and a folder that does not exist yet keeps the spelling it was given.
+    return if (dev.supermux.desktop.platform.isWindowsOs()) c.lowercase() else c
 }
 
 private fun sameDir(a: String, b: String): Boolean = canonical(a) == canonical(b)
@@ -112,7 +114,7 @@ private fun sameDir(a: String, b: String): Boolean = canonical(a) == canonical(b
 /** Where the broker's state lives (mirrors src/shared/paths.ts). */
 object BrokerPaths {
     fun defaultStateDir(): Path {
-        val home = System.getProperty("user.home") ?: "."
+        val home = SystemOsEnv.home.toString()
         val muxHome = System.getenv("MUX_HOME") ?: "$home/.mux"
         return Path.of(System.getenv("MUX_STATE_DIR") ?: "$muxHome/state")
     }
@@ -150,7 +152,10 @@ object HostProber {
         val id = runCatching { json.decodeFromString(HostIdentity.serializer(), body) }.getOrNull()
             ?: return HostProbeResult.ForeignProcess
         if (id.hostId.isBlank()) return HostProbeResult.ForeignProcess
-        return HostProbeResult.Supermux(id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements, id.keepAwake)
+        return HostProbeResult.Supermux(
+            id.hostId, id.build, id.mode, id.managedBy, id.stateDir, id.gitAvailable, id.requirements, id.keepAwake,
+            checkoutMoved = id.checkoutMoved?.message?.takeIf { it.isNotBlank() },
+        )
     }
 
     private fun tcpConnectable(host: String, port: Int): Boolean =

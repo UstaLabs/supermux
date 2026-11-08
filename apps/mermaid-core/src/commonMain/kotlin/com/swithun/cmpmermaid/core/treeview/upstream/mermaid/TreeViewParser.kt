@@ -231,6 +231,7 @@ internal class TreeViewParser(
             }
         }
 
+        // platform-ok: mermaid's treeview syntax, not a path
         val directory = rawName.endsWith('/')
         return GMResult.Ok(
             ParsedNode(

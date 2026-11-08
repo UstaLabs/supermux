@@ -160,6 +160,7 @@ fun uriToWorkdirPath(uri: String, workdir: String): String? {
     val abs = hostPathFromFileUri(uri) ?: return null
     hostRelativePath(workdir, abs)?.let { return it.ifEmpty { null } }
     // clangd and friends canonicalise (/private/var for /var): compare loosely on that prefix.
+    // platform-ok: /private is a macOS host's prefix; a Windows workdir never starts with /
     if (workdir.startsWith('/')) hostRelativePath("/private$workdir", abs)?.let { return it.ifEmpty { null } }
     return null
 }

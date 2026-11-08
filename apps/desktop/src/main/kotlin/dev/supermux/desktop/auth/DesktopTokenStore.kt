@@ -9,6 +9,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
+import dev.supermux.desktop.host.SystemOsEnv
 
 @Serializable
 private data class DesktopTokenStoreBlob(val token: String? = null, val baseUrl: String? = null)
@@ -67,7 +68,7 @@ class DesktopTokenStore(val path: Path = defaultPath()) {
             setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
         fun defaultPath(): Path =
-            configBase(DesktopOs.current, System::getenv, System.getProperty("user.home")).resolve("supermux-desktop").resolve("auth.json")
+            configBase(DesktopOs.current, System::getenv, SystemOsEnv.home.toString()).resolve("supermux-desktop").resolve("auth.json")
 
         /**
          * The platform config dir the app's own data lives under, on [os], for [getenv] and [home]. The OS is

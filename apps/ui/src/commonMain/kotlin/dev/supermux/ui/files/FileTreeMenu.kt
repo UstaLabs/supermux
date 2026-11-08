@@ -24,9 +24,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +35,7 @@ import dev.supermux.fs.sameHostSegment
 import dev.supermux.fs.snapshotOrPrevious
 import dev.supermux.net.FsException
 import dev.supermux.ui.adaptive.LocalHardwareKeyboard
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetainedScope
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -281,7 +280,7 @@ fun ColumnScope.FileTreeMenuItems(
     dismiss: () -> Unit,
     onDialog: (FileTreeDialog) -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     val parent = newEntryParent(row)
     val folder = row.status != RowStatus.FILE
     DropdownMenuItem(
@@ -309,14 +308,14 @@ fun ColumnScope.FileTreeMenuItems(
     DropdownMenuItem(
         text = { Text("Copy path") },
         modifier = Modifier.testTag("tree_menu_copy_path"),
-        onClick = { dismiss(); clipboard.setText(AnnotatedString(row.path)) },
+        onClick = { dismiss(); platform.copyToClipboard(row.path) },
     )
     val relative = relativeToWorkdir(workdir, row.path)?.takeIf { it != "." }
     if (relative != null) {
         DropdownMenuItem(
             text = { Text("Copy relative path") },
             modifier = Modifier.testTag("tree_menu_copy_relative_path"),
-            onClick = { dismiss(); clipboard.setText(AnnotatedString(relative)) },
+            onClick = { dismiss(); platform.copyToClipboard(relative) },
         )
     }
 }

@@ -1,4 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process"
+import type { ChildProcess } from "node:child_process"
+import { spawnCommand } from "../process/launcher"
+import { lspCommand, type LspLaunch } from "./install"
 import { encodeMessage, MessageReader } from "./framing"
 
 export interface LspServerOpts {
@@ -10,6 +12,8 @@ export interface LspServerOpts {
   onMessage: (json: string) => void
   onExit: (code: number | null, signal: NodeJS.Signals | null) => void
   onStderr?: (text: string) => void
+  /** How the process starts (tests). */
+  launch?: LspLaunch
 }
 
 // A single running language-server child process. Mirrors the codex
@@ -22,10 +26,12 @@ export class LspServerProcess {
   private alive = true
 
   constructor(opts: LspServerOpts) {
-    this.child = spawn(opts.command, opts.args, {
+    const env = { ...process.env, ...opts.env }
+    this.child = spawnCommand(lspCommand(opts.command, env, opts.launch), opts.args, {
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env },
+      env,
       stdio: ["pipe", "pipe", "pipe"],
+      ...opts.launch,
     })
     this.pid = this.child.pid ?? -1
     this.reader = new MessageReader(opts.onMessage)

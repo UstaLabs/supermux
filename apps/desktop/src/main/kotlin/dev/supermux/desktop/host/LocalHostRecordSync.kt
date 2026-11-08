@@ -33,6 +33,7 @@ fun thisComputerRecordFix(hosts: List<PairedHost>, hostId: String?, localBaseUrl
     return HostRecordFix(rec.recordId, localBaseUrl, fill)
 }
 
+// platform-ok: a URL
 private fun sameUrl(a: String, b: String) = a.trim().trimEnd('/').equals(b.trim().trimEnd('/'), ignoreCase = true)
 
 /** Apply [fix] to [store], keeping the record's token, name, relay and the rest. True if it changed. */

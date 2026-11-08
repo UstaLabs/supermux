@@ -5,7 +5,7 @@
 //
 // Everything that touches the machine is a parameter, so the callers' tests run on any OS.
 import { createHash } from "crypto"
-import { execFile } from "child_process"
+import { runCommand } from "../process/run"
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "fs"
 import { win32 as winPath } from "path"
 import { findEscape, isInUse } from "../agents/archive-guard"
@@ -178,15 +178,14 @@ export function windowsPowerShellPath(env: Record<string, string | undefined> = 
   return winPath.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 }
 
-export function powershell(script: string, extraEnv: Record<string, string> = {}): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      windowsPowerShellPath(),
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { timeout: 5 * 60_000, windowsHide: true, env: { ...process.env, ...extraEnv }, maxBuffer: 1 << 20 },
-      (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err))) : resolve(String(stdout))),
-    )
-  })
+export async function powershell(script: string, extraEnv: Record<string, string> = {}): Promise<string> {
+  const r = await runCommand(
+    windowsPowerShellPath(),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { timeoutMs: 5 * 60_000, env: { ...process.env, ...extraEnv } },
+  )
+  if (r.code !== 0) throw new Error(r.stderr || r.error || (r.timedOut ? "PowerShell timed out" : `PowerShell exited with ${r.code}`))
+  return r.stdout
 }
 
 /** Paths go through the environment, never into the script text: no quoting to get wrong. */
@@ -211,9 +210,14 @@ export function fromUtf16Base64(b64: string): string {
 // The raw value (DoNotExpandEnvironmentNames) so %USERPROFILE%-style entries stay variables, and
 // written back as REG_EXPAND_SZ. Environment.SetEnvironmentVariable would write REG_SZ and break
 // them. WM_SETTINGCHANGE "Environment" makes Explorer (new terminals) pick the change up.
+/** Where each scope keeps its `Path`: a key under HKEY_CURRENT_USER, and one under HKEY_LOCAL_MACHINE. */
+export const REGISTRY_PATH_KEYS = {
+  user: "Environment",
+  machine: "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+} as const
 const REGISTRY_ROOTS = {
-  user: "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
-  machine: "[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')",
+  user: `[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${REGISTRY_PATH_KEYS.user}')`,
+  machine: `[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('${REGISTRY_PATH_KEYS.machine}')`,
 } as const
 
 /** A PowerShell script printing the raw `Path` of [scope] as base64 UTF-16LE (nothing when unset). */

@@ -2,6 +2,7 @@ package dev.supermux.desktop.host
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class HostProbeTest {
     private val stateDir = "/Users/a/.mux/state"
@@ -94,6 +95,16 @@ class HostProbeTest {
         assertEquals(HostProbeResult.Supermux("h9", null, null, null, null, gitAvailable = false), r)
         assertEquals(null, (HostProber.parse("""{"hostId":"h9"}""") as HostProbeResult.Supermux).gitAvailable)
     }
+    // The keeper-error card: a broker run from a checkout that moved under it says so; the app shows its sentence.
+    @Test fun parseReadsACheckoutThatMoved() {
+        val r = HostProber.parse(
+            """{"hostId":"h9","protocolVersion":1,
+               "checkoutMoved":{"runs":"aaaaaaaaa","checkout":"bbbbbbbbb","message":"This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code."}}""",
+        ) as HostProbeResult.Supermux
+        assertEquals("This broker runs aaaaaaaaa, the checkout is at bbbbbbbbb: restart it to run the new code.", r.checkoutMoved)
+        assertNull((HostProber.parse("""{"hostId":"h9","protocolVersion":1}""") as HostProbeResult.Supermux).checkoutMoved)
+    }
+
     @Test fun parseReadsTheRequirement() {
         val r = HostProber.parse(
             """{"hostId":"h9","protocolVersion":1,"gitAvailable":false,

@@ -52,8 +52,10 @@ fun pathFor(route: Route, selectedId: String?): String = when (route) {
  * user input, and the worst it may do is open the wrong screen.
  */
 fun parsePath(pathAndQuery: String): UrlTarget {
+    // platform-ok: a URL's route
     val path = pathAndQuery.substringBefore('?').trimEnd('/').ifEmpty { "/" }
     val query = pathAndQuery.substringAfter('?', "")
+    // platform-ok: a URL's route
     val segs = path.trimStart('/').split('/').filter { it.isNotEmpty() }
     return when {
         segs.isEmpty() -> UrlTarget.Screen(Route.Home)

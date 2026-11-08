@@ -24,6 +24,13 @@ describe("TypeScript rules", () => {
     expect(ids(ts("src/a.ts", "const found = Bun.which(name) !== null"))).toEqual(["which-path"])
   })
 
+  // A type is no process: only an import that brings in a value can start one.
+  test("a type-only import from child_process is not a spawn", () => {
+    expect(ts("src/a.ts", 'import type { ChildProcess } from "child_process"')).toEqual([])
+    expect(ts("src/a.ts", 'export type { ChildProcess } from "node:child_process"')).toEqual([])
+    expect(ids(ts("src/a.ts", 'import { spawn, type ChildProcess } from "child_process"'))).toEqual(["spawn"])
+  })
+
   test("the runtime's own answers pass", () => {
     expect(ts("src/a.ts", 'symlinkSync(dir, link, "junction")')).toEqual([])
     expect(ts("src/a.ts", "const leaf = basename(p); const rel = relative(root, p)")).toEqual([])
@@ -58,9 +65,41 @@ describe("Kotlin rules", () => {
     expect(kt("apps/desktop/src/main/kotlin/B.kt", 'val desktop = System.getenv("XDG_CURRENT_DESKTOP")')).toEqual([])
   })
 
+  // Platform.kt: a shared screen never names the machine's own clipboard or link opener. Compose's handlers
+  // differ per app (AWT on the desktop, an Intent on Android that throws when nothing takes the link);
+  // Platform's copyToClipboard and openUrl are each app's one implementation, and never throw.
+  test("a shared screen copies and opens links through its Platform", () => {
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val clipboard = LocalClipboardManager.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/ui/src/commonMain/kotlin/A.kt", "val uri = LocalUriHandler.current"))).toEqual(["platform-seam-kt"])
+    expect(ids(kt("apps/android/src/main/kotlin/B.kt", "import androidx.compose.ui.platform.LocalUriHandler"))).toEqual(["platform-seam-kt"])
+    // The libraries below :ui have no Platform: they use Compose's own, which an app can provide (TerminalClipboard,
+    // EditorClipboard, the webview's link opener).
+    expect(kt("apps/terminal-compose/src/commonMain/kotlin/dev/supermux/terminal/compose/TerminalClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/editor-compose/src/commonMain/kotlin/dev/supermux/editor/compose/EditorClipboard.kt", "val manager = LocalClipboardManager.current")).toEqual([])
+    expect(kt("apps/webview-compose/src/commonMain/kotlin/dev/supermux/webview/WebView.kt", "val uriHandler = LocalUriHandler.current")).toEqual([])
+  })
+
+  // #29 step 11: the folders a Kotlin library or the desktop reads through one seam each.
+  test("the desktop's OsEnv and the libraries' own seams may read home, temp and PATH", () => {
+    expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", 'override val home: Path = Path.of(System.getProperty("user.home") ?: ".")')).toEqual([])
+    expect(kt("apps/terminal-core/src/jvmMain/kotlin/dev/supermux/terminal/JvmNativeLibrary.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-syntax/src/jvmAndAndroidMain/kotlin/dev/supermux/editor/syntax/SesNativeLoader.kt", 'val home = System.getProperty("user.home")')).toEqual([])
+    expect(kt("apps/editor-plugins/lsp/src/jvmMain/kotlin/dev/supermux/editor/plugins/lsp/ProcessLspTransport.kt", "ProcessBuilder(command)")).toEqual([])
+    // Everywhere else in the desktop, home comes from OsEnv.
+    expect(ids(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/HostProbe.kt", 'val home = System.getProperty("user.home") ?: "."'))).toEqual(["env-dirs-kt"])
+  })
+
   test("HostPaths and the desktop's OS seams are allowed", () => {
     expect(kt("apps/shared/src/commonMain/kotlin/dev/supermux/fs/HostPaths.kt", "path.split('/')")).toEqual([])
     expect(kt("apps/desktop/src/main/kotlin/dev/supermux/desktop/host/OsEnv.kt", "ProcessBuilder(argv)")).toEqual([])
+  })
+
+  test("the webview library's OS seams are allowed under their own rule only", () => {
+    const loader = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WinNativeLoader.kt"
+    expect(kt(loader, 'val local = System.getenv("LOCALAPPDATA")')).toEqual([])
+    expect(ids(kt(loader, 'val os = System.getProperty("os.name")'))).toEqual(["os-check-kt"])
+    const beside = "apps/webview-compose/src/jvmMain/kotlin/dev/supermux/webview/engine/windows/WindowsWebEngine.kt"
+    expect(ids(kt(beside, 'val local = System.getenv("LOCALAPPDATA")'))).toEqual(["env-dirs-kt"])
   })
 })
 
@@ -130,5 +169,57 @@ describe("sourceFiles", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  // #29: developer and CI tooling ships to no one, so no rule applies to it; what the CLI runs from scripts/ still does.
+  test("leaves out developer and CI tooling, but not the scripts the CLI ships", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const { dirname, join } = await import("node:path")
+    const { sourceFiles } = await import("./platform-boundary")
+    const root = mkdtempSync(join(tmpdir(), "mux-guard-"))
+    try {
+      for (const file of [
+        "scripts/asset-probe.ts",
+        "scripts/migration-dry-run/03-continuation.ts",
+        "scripts/pair.ts",
+        "scripts/revoke.ts",
+        "packages/supermux-core/scripts/context-probe.ts",
+        "packages/supermux-core/examples/kanban/server.ts",
+        "packages/supermux-core/src/keeper/client.ts",
+        "src/cli.ts",
+      ]) {
+        mkdirSync(join(root, dirname(file)), { recursive: true })
+        writeFileSync(join(root, file), "")
+      }
+      expect(sourceFiles(root).map(f => f.file)).toEqual([
+        "packages/supermux-core/src/keeper/client.ts",
+        "scripts/pair.ts",
+        "scripts/revoke.ts",
+        "src/cli.ts",
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("every file of a tooling folder the product imports is one the guard still scans", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { join, normalize } = await import("node:path")
+    const { Glob } = await import("bun")
+    const { DEV_TOOLING, SHIPPED_TOOLING } = await import("./platform-boundary")
+    const root = join(import.meta.dir, "..")
+    const imported = new Set<string>()
+    for (const dir of ["src", "packages/supermux-core/src", "packages/platform/src"]) {
+      for (const path of new Glob("**/*.ts").scanSync({ cwd: join(root, dir) })) {
+        if (/\.(?:test|spec)\.ts$/.test(path)) continue
+        const text = readFileSync(join(root, dir, path), "utf8")
+        for (const match of text.matchAll(/(?:from\s*|import\(\s*)["'](\.{1,2}\/[^"']+)["']/g)) {
+          const target = normalize(join(dir, path, "..", match[1]!)).replace(/\\/g, "/").replace(/(\.ts)?$/, ".ts")
+          if (Object.keys(DEV_TOOLING).some(folder => target.startsWith(folder))) imported.add(target)
+        }
+      }
+    }
+    expect([...imported].sort()).toEqual([...SHIPPED_TOOLING].sort())
   })
 })

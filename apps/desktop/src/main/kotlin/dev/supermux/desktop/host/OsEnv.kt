@@ -1,5 +1,6 @@
 package dev.supermux.desktop.host
 
+import dev.supermux.desktop.platform.DesktopOs
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -8,14 +9,12 @@ import java.util.concurrent.TimeUnit
  * unit tests use a fake and never touch a real service. [SystemOsEnv] is the real one.
  */
 interface OsEnv {
-    enum class Os { MAC, LINUX, WINDOWS, OTHER }
-
     companion object {
         /** A command that waits on the user (a UAC or admin password prompt): long, but not forever. */
         const val PROMPT_TIMEOUT_MS = 10 * 60_000L
     }
 
-    val os: Os
+    val os: DesktopOs
     val home: Path
     val localAppData: Path
     val uid: Long?
@@ -56,17 +55,9 @@ interface OsEnv {
     fun postLocal(url: String, headers: Map<String, String>): Int? = null
 }
 
-/** The real environment: OS from `os.name`, uid via UnixSystem (guarded), PATH command probing. */
+/** The real environment: OS from [DesktopOs], uid via UnixSystem (guarded), PATH command probing. */
 object SystemOsEnv : OsEnv {
-    override val os: OsEnv.Os = run {
-        val name = System.getProperty("os.name")?.lowercase() ?: ""
-        when {
-            name.contains("mac") || name.contains("darwin") -> OsEnv.Os.MAC
-            name.contains("win") -> OsEnv.Os.WINDOWS
-            name.contains("nux") || name.contains("nix") -> OsEnv.Os.LINUX
-            else -> OsEnv.Os.OTHER
-        }
-    }
+    override val os: DesktopOs = DesktopOs.current
 
     override val home: Path = Path.of(System.getProperty("user.home") ?: ".")
     override val localAppData: Path = Path.of(
@@ -75,7 +66,7 @@ object SystemOsEnv : OsEnv {
 
     override val uid: Long? by lazy {
         // getuid is macOS/Linux-only; guarded so it never runs on Windows.
-        if (os != OsEnv.Os.MAC && os != OsEnv.Os.LINUX) null
+        if (os != DesktopOs.MACOS && os != DesktopOs.LINUX) null
         else runCatching { com.sun.security.auth.module.UnixSystem().uid }.getOrNull()
     }
 
@@ -87,7 +78,7 @@ object SystemOsEnv : OsEnv {
 
     // In-process (findOnPath): no `which` (missing on Windows and some Linux images) or `where` process.
     override fun hasCommand(name: String): Boolean =
-        dev.supermux.desktop.platform.findOnPath(name, System.getenv("PATH"), os == OsEnv.Os.WINDOWS, System.getenv("PATHEXT")) != null
+        dev.supermux.desktop.platform.findOnPath(name, System.getenv("PATH"), os == DesktopOs.WINDOWS, System.getenv("PATHEXT")) != null
 
     override fun run(argv: List<String>): Boolean = runResult(argv).exit == 0
 
@@ -141,7 +132,7 @@ object SystemOsEnv : OsEnv {
     override fun getenv(name: String): String? = System.getenv(name)
 
     override fun selfCgroup(): String? =
-        if (os != OsEnv.Os.LINUX) null
+        if (os != DesktopOs.LINUX) null
         else runCatching { java.nio.file.Files.readString(Path.of("/proc/self/cgroup")) }.getOrNull()
 
     override fun runCapture(argv: List<String>): String? =

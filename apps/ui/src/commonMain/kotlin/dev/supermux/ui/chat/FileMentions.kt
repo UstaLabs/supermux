@@ -48,9 +48,11 @@ fun activeMentionToken(text: String, caret: Int): MentionToken? {
  */
 fun mentionLookup(query: String): MentionLookup? {
     val q = query.removePrefix("./")
+    // platform-ok: a mention is workdir-relative, always /
     if (q.startsWith('/') || q.split('/').any { it == ".." }) return null
     return when {
         q.isEmpty() -> MentionLookup.Folder("")
+        // platform-ok: a mention is workdir-relative, always /
         q.endsWith('/') -> MentionLookup.Folder(q.trimEnd('/'))
         else -> MentionLookup.Search(q)
     }
@@ -61,6 +63,7 @@ fun mentionLookup(query: String): MentionLookup? {
  * whitespace. [open] leaves the closing quote off, so the word stays open on that folder.
  */
 fun mentionText(relativePath: String, isDir: Boolean, open: Boolean = false): String {
+    // platform-ok: a mention is workdir-relative, always /
     val path = if (isDir) relativePath.trimEnd('/') + "/" else relativePath
     if (path.none { it.isWhitespace() }) return "@$path"
     return if (open) "@\"$path" else "@\"$path\""
