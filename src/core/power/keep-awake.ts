@@ -21,7 +21,9 @@
 // backoff (1 s → 60 s), at most 10 times an hour; after that the state says why it is not active.
 // A refusal ("Access denied" / "not authorized" on stderr) is never retried: the next inhibitor
 // is tried at once.
-import { execFile, spawn as nodeSpawn } from "child_process"
+import type { ChildProcess } from "child_process"
+import { spawnCommand } from "../process/launcher"
+import { runCommand } from "../process/run"
 import { existsSync } from "fs"
 import { readFile, readdir } from "fs/promises"
 import { join } from "path"
@@ -282,12 +284,10 @@ export function spawnInhibitor(argv: string[], opts: { env?: Record<string, stri
     settled = true
     resolveExit(stderr ? { ...e, stderr } : e)
   }
-  let child: ReturnType<typeof nodeSpawn> | undefined
+  let child: ChildProcess | undefined
   try {
     const env = opts.env && Object.keys(opts.env).length ? { ...process.env, ...opts.env } : undefined
-    child = nodeSpawn(argv[0]!, argv.slice(1), {
-      stdio: ["ignore", "ignore", "pipe"], windowsHide: true, shell: false, ...(env ? { env } : {}),
-    })
+    child = spawnCommand(argv[0]!, argv.slice(1), { stdio: ["ignore", "ignore", "pipe"], ...(env ? { env } : {}) })
     child.on("error", (err) => finish({ error: String(err) }))
     child.stderr?.on("data", (d: Buffer) => { if (stderr.length < STDERR_MAX) stderr += d.toString("utf8").slice(0, STDERR_MAX - stderr.length) })
     child.stderr?.on("error", () => {})
@@ -348,16 +348,9 @@ export function parseWin32BatteryStatus(out: string): boolean | undefined {
   return codes.some((c) => WIN32_ON_BATTERY_CODES.has(c))
 }
 
-function execText(cmd: string, args: string[], timeoutMs = 5_000): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    try {
-      execFile(cmd, args, { timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
-        resolve(err ? undefined : String(stdout))
-      })
-    } catch {
-      resolve(undefined)
-    }
-  })
+async function execText(cmd: string, args: string[], timeoutMs = 5_000): Promise<string | undefined> {
+  const r = await runCommand(cmd, args, { timeoutMs })
+  return r.code === 0 ? r.stdout : undefined
 }
 
 async function readTrim(path: string): Promise<string | undefined> {

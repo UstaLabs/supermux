@@ -131,6 +131,7 @@ import { sweepRuntimeAssets } from "./core/runtime-assets-gc"
 import { BUILD_VERSION, BUILD_COMMIT, IS_COMPILED, versionString } from "./shared/build-info"
 import { createCheckoutWatch } from "./core/checkout-watch"
 import { gitAsync } from "./core/git/exec"
+import { runSyncOrThrow } from "./core/git/exec-sync"
 import { agentsCloseMode, captureWindowsTaskFlag, expectRestart, restartService } from "./core/update/apply"
 import { installMinGit, realMinGitDeps } from "./core/git/mingit"
 import { loadOrCreateHostKey } from "./core/host-identity"
@@ -164,9 +165,9 @@ import { readEnvText } from "./shared/env-file"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync, cpSync, chmodSync, statSync, unlinkSync } from "fs"
 import { watchDir } from "./core/fs/dir-watchers"
 import { randomBytes, randomUUID } from "crypto"
-import { spawn as nodeSpawn, execFileSync } from "child_process"
+import type { ChildProcess } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { resolveCommand, spawnCommand, spawnCommandSync } from "./core/process/launcher"
 import { checkPreflight, hasBinary, workspaceTerminalReadiness } from "./shared/preflight"
 import { AgentNotInstalledError, applySignInExpiry, detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { startFailureNotice, wakeFailureNotice } from "./core/agents/start-failure"
@@ -177,7 +178,6 @@ import {
   GitInstaller, GitRequirementMonitor, bunWhich, readRegistryPath,
   setTmuxGlobalPath, spawnDetached, xcodeSelectExit,
 } from "./core/git/requirement"
-import { spawnSync as spawnSyncForGit } from "child_process"
 import { hostname, tmpdir } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
@@ -303,7 +303,7 @@ const gitRequirement = new GitRequirementMonitor({
   // Synchronous only for the boot check (before listen); every re-check is async.
   runXcodeSelectSync: () => {
     try {
-      return spawnSyncForGit("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
+      return spawnCommandSync("xcode-select", ["-p"], { stdio: "ignore", timeout: 5_000 }).status ?? 1
     } catch {
       return 1
     }
@@ -951,8 +951,8 @@ function bgOpenCount(sessionId: string): number {
 
 function resolveGitDirs(workdir: string): { gitDir: string; commonDir: string } | null {
   try {
-    const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
-    const raw = execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, encoding: "utf-8" }).trim()
+    const gitDir = runSyncOrThrow("git", ["rev-parse", "--absolute-git-dir"], { cwd: workdir, timeoutMs: 10_000 })
+    const raw = runSyncOrThrow("git", ["rev-parse", "--git-common-dir"], { cwd: workdir, timeoutMs: 10_000 })
     return { gitDir, commonDir: isAbsolute(raw) ? raw : resolve(workdir, raw) }
   } catch { return null }
 }
@@ -2437,7 +2437,7 @@ function spawnLoginProc(kind: string) {
   }
   // Windows PTY logins (claude, agy): the account login's ConPTY spawner.
   if (spec.conpty) return conptyLoginProc(spec, env, cleanup, (err) => log.warn("login_spawn_failed", { kind, cmd, err }))
-  let child: ReturnType<typeof nodeSpawn>
+  let child: ChildProcess
   try {
     // The launcher spawner equals a plain spawn on POSIX and only wraps the
     // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
