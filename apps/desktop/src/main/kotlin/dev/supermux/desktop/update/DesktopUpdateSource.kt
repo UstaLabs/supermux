@@ -23,6 +23,8 @@ import java.util.prefs.Preferences
 object DesktopUpdateSource {
     private val prefs: Preferences = Preferences.userRoot().node("dev/supermux/desktop/app_update")
     private const val KEY_DISMISSED = "dismissed_latest"
+    private const val KEY_BACKGROUND = "background_updates"
+    private const val KEY_INSTALLING = "installing_version"
 
     internal fun platform(os: DesktopOs = DesktopOs.current): ClientPlatform = when (os) {
         DesktopOs.WINDOWS -> ClientPlatform.DESKTOP_WINDOWS
@@ -136,5 +138,19 @@ object DesktopUpdateSource {
 
     fun dismiss(latestVersion: String) {
         prefs.put(KEY_DISMISSED, latestVersion)
+    }
+
+    /** "Download updates in the background" (#113): on unless the user turned it off. */
+    fun backgroundUpdates(): Boolean = prefs.getBoolean(KEY_BACKGROUND, true)
+
+    fun setBackgroundUpdates(on: Boolean) {
+        prefs.putBoolean(KEY_BACKGROUND, on)
+    }
+
+    /** The version the app's own install was started for (#113); null when none is pending. */
+    fun installing(): String? = prefs.get(KEY_INSTALLING, null)
+
+    fun setInstalling(version: String?) {
+        if (version == null) prefs.remove(KEY_INSTALLING) else prefs.put(KEY_INSTALLING, version)
     }
 }

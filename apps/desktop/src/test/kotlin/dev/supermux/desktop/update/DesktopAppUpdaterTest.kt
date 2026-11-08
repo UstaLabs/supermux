@@ -40,9 +40,18 @@ class DesktopAppUpdaterTest {
     /** Held open by the tests that need to observe a download mid-flight. */
     private var installerGate: CompletableDeferred<Unit>? = null
 
-    private fun updater(): DesktopAppUpdater {
+    /** The remembered "download updates in the background" choice; null: never chosen (the default, on). */
+    private var savedBackground: Boolean? = null
+    private var installerRequests = 0
+    /** The version an install was started for, remembered across the restart. */
+    private var installing: String? = null
+    /** Installers handed to the OS (the hand-off itself is never run from a test). */
+    private val handedOff = mutableListOf<File>()
+
+    private fun updater(restarts: Boolean = true): DesktopAppUpdater {
         val engine = MockEngine { request ->
             if (request.url.toString().contains("installer.bin")) {
+                installerRequests++
                 installerGate?.await()
                 respond(
                     installer,
@@ -60,7 +69,93 @@ class DesktopAppUpdaterTest {
                 )
             }
         }
-        return DesktopAppUpdater(HttpClient(engine), currentVersion = "1.0.0")
+        return DesktopAppUpdater(
+            HttpClient(engine), currentVersion = "1.0.0",
+            loadBackground = { savedBackground ?: true }, saveBackground = { savedBackground = it }, restartsToUpdate = restarts,
+            loadInstalling = { installing }, saveInstalling = { installing = it }, openInstaller = { require(it.isFile) { "no installer at $it" }; handedOff += it; false },
+        )
+    }
+
+    // ── #113: download updates in the background, then "Restart to update" ──
+
+    @Test
+    fun `background updates are on until the user turns them off, and the choice is remembered`() = runTest {
+        val updater = updater()
+        assertTrue(updater.status.value.background)
+        updater.setBackgroundUpdates(false)
+        assertFalse(updater.status.value.background)
+        assertEquals(false, savedBackground)
+        assertFalse(updater().status.value.background, "a new launch reads the choice back")
+    }
+
+    @Test
+    fun `a background prepare downloads a newer release quietly and publishes it ready`() = runTest {
+        val updater = updater()
+        updater.prepareInBackground()
+        val ready = assertNotNull(updater.status.value.ready)
+        assertTrue(File(ready.location).isFile)
+        assertEquals(UpdatePhase.Available, updater.status.value.phase)
+        assertFalse(updater.status.value.busy)
+        File(ready.location).delete()
+    }
+
+    @Test
+    fun `with background updates off a prepare downloads nothing`() = runTest {
+        savedBackground = false
+        val updater = updater()
+        updater.prepareInBackground()
+        assertNull(updater.status.value.ready)
+        assertEquals(0, installerRequests)
+    }
+
+    @Test
+    fun `a ready update is not downloaded again`() = runTest {
+        val updater = updater()
+        updater.prepareInBackground()
+        updater.prepareInBackground()
+        assertEquals(1, installerRequests)
+        updater.status.value.ready?.let { File(it.location).delete() }
+    }
+
+    @Test
+    fun `an install remembers its version, and the updated app says so once`() = runTest {
+        val updater = updater()
+        updater.prepareInBackground()
+        assertNull(updater.install(assertNotNull(updater.status.value.ready)))
+        assertEquals(1, handedOff.size)
+        assertEquals("9.9.9", installing)
+        val reopened = DesktopAppUpdater(
+            HttpClient(MockEngine { respond("", HttpStatusCode.NotFound) }), currentVersion = "9.9.9",
+            loadBackground = { true }, saveBackground = {}, loadInstalling = { installing }, saveInstalling = { installing = it },
+        )
+        assertEquals("9.9.9", reopened.justUpdatedTo)
+        reopened.acknowledgeUpdated()
+        assertNull(installing)
+        assertNull(reopened.justUpdatedTo)
+        updater.status.value.ready?.let { File(it.location).delete() }
+    }
+
+    @Test
+    fun `a hand-off that failed remembers nothing`() = runTest {
+        val updater = DesktopAppUpdater(
+            HttpClient(MockEngine { respond("", HttpStatusCode.NotFound) }), currentVersion = "1.0.0",
+            loadBackground = { true }, saveBackground = {}, loadInstalling = { installing }, saveInstalling = { installing = it },
+            openInstaller = { error("no installer") },
+        )
+        assertNotNull(updater.install(DownloadedInstaller("/tmp/x.msi", "msi")))
+        assertNull(installing)
+    }
+
+    @Test
+    fun `an app that did not reach the version it installed says nothing`() {
+        installing = "9.9.9"
+        assertNull(updater().justUpdatedTo, "still 1.0.0: the install didn't happen")
+    }
+
+    @Test
+    fun `only an installer that restarts the app by itself offers Restart to update`() {
+        assertTrue(updater(restarts = true).restartsToUpdate)
+        assertFalse(updater(restarts = false).restartsToUpdate)
     }
 
     @Test
