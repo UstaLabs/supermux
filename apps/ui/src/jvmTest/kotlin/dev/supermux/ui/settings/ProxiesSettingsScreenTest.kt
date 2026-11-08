@@ -37,6 +37,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -369,29 +370,36 @@ class ProxiesSettingsScreenTest {
         deleteStatus: HttpStatusCode = HttpStatusCode.OK,
     ): Pair<HostStore, CopyOnWriteArrayList<Pair<HttpMethod, String>>> {
         val methods = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            val path = req.url.encodedPath
-            methods.add(req.method to path)
-            when {
-                path == "/proxies" && req.method == HttpMethod.Get -> {
-                    if (listJson == null) {
-                        respond("{}", HttpStatusCode.InternalServerError, jsonHeaders)
-                    } else {
-                        respond(listJson, HttpStatusCode.OK, jsonHeaders)
+        // The engine answers on the thread that asked (Dispatchers.Unconfined). On Ktor's IO dispatcher the
+        // screen's load resumed on a worker thread waitForIdle cannot see, so an assertion right after a
+        // load could run before its result was stored.
+        val client = HttpClient(MockEngine) {
+            engine {
+                dispatcher = Dispatchers.Unconfined
+                addHandler { req ->
+                    val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
+                    val path = req.url.encodedPath
+                    methods.add(req.method to path)
+                    when {
+                        path == "/proxies" && req.method == HttpMethod.Get -> {
+                            if (listJson == null) {
+                                respond("{}", HttpStatusCode.InternalServerError, jsonHeaders)
+                            } else {
+                                respond(listJson, HttpStatusCode.OK, jsonHeaders)
+                            }
+                        }
+                        path == "/proxies" && req.method == HttpMethod.Post ->
+                            respond(createJson, createStatus, jsonHeaders)
+                        path.startsWith("/proxies/") && req.method == HttpMethod.Patch ->
+                            respond("{}", patchStatus, jsonHeaders)
+                        path.startsWith("/proxies/") && req.method == HttpMethod.Delete ->
+                            respond("{}", deleteStatus, jsonHeaders)
+                        else ->
+                            respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
                     }
                 }
-                path == "/proxies" && req.method == HttpMethod.Post ->
-                    respond(createJson, createStatus, jsonHeaders)
-                path.startsWith("/proxies/") && req.method == HttpMethod.Patch ->
-                    respond("{}", patchStatus, jsonHeaders)
-                path.startsWith("/proxies/") && req.method == HttpMethod.Delete ->
-                    respond("{}", deleteStatus, jsonHeaders)
-                else ->
-                    respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
             }
         }
-        val client = HttpClient(engine)
         val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
