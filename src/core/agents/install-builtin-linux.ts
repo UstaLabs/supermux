@@ -12,6 +12,7 @@
 //     ~/.opencode/bin/opencode.
 //
 // Both dirs are on the broker's PATH (bin-dirs.ts), so the new CLI is found without a restart.
+// platform-ok: Linux only (the builtin agents' Linux install): tar, with a timeout; never runs on Windows
 import { execFile } from "child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
 import { posix } from "path"

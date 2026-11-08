@@ -178,17 +178,5 @@
     "src/core/editor/changes.ts": 1,
     "src/core/git/exec.ts": 1,
     "src/core/terminal/zmx/backend.ts": 1
-  },
-  "spawn": {
-    "src/core/agents/claude/auth.ts": 1,
-    "src/core/agents/codex/spawn.ts": 1,
-    "src/core/agents/grok/runner.ts": 1,
-    "src/core/agents/install-builtin-linux.ts": 1,
-    "src/core/agents/install.ts": 1,
-    "src/core/agents/opencode/spawn.ts": 1,
-    "src/core/git/requirement.ts": 1,
-    "src/core/power/keep-awake.ts": 1,
-    "src/core/windows/user-install.ts": 1,
-    "src/main.ts": 2
   }
 }
