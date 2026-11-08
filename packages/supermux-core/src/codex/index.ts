@@ -775,6 +775,8 @@ export function codex(options: CodexOptions): AgentDriver {
     }
     const setupAbort = () => { fail(new Error('Codex setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
+    // An abort that came while codex was starting has already fired: no listener would ever hear it.
+    if (context.signal.aborted) setupAbort()
     const timer = setTimeout(() => { fail(new Error('Codex setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
     const hookRuntimeRequest = (threadId: string) => {
       if (!options.onRuntimeRequest) return
