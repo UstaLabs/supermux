@@ -64,7 +64,7 @@ class WorkspaceScreenModelTest {
 
     @Test fun phoneAddKindsExcludeChat() {
         assertEquals(
-            listOf(NewViewKind.TERMINAL, NewViewKind.EDITOR, NewViewKind.DIFF, NewViewKind.DISPLAY),
+            listOf(NewViewKind.TERMINAL, NewViewKind.EDITOR, NewViewKind.DIFF, NewViewKind.DISPLAY, NewViewKind.BROWSER),
             phoneAddKinds(),
         )
     }

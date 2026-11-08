@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
@@ -1390,6 +1391,7 @@ private fun ViewTabIcon(v: ViewDto?, agent: String?, selected: Boolean) {
         v?.kind == "chat" -> Icons.Outlined.ChatBubbleOutline
         v?.kind == "terminal" -> Icons.Outlined.Terminal
         v?.kind == "display" -> Icons.Outlined.DesktopWindows
+        v?.kind == "browser" -> Icons.Outlined.Language
         v?.kind == "editor" && v.stateString("mode") == "diff" -> Icons.Outlined.Difference
         v != null && v.isFilesTreeView() -> Icons.Outlined.Folder
         else -> Icons.AutoMirrored.Outlined.InsertDriveFile

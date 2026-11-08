@@ -506,6 +506,7 @@ internal fun newTabChoices(
                 NewViewKind.EDITOR -> NewTabGlyphs.Files
                 NewViewKind.DIFF -> NewTabGlyphs.Changes
                 NewViewKind.DISPLAY -> NewTabGlyphs.Display
+                NewViewKind.BROWSER -> NewTabGlyphs.Browser
             },
             label = k.label,
             detail = when (k) {
@@ -514,6 +515,7 @@ internal fun newTabChoices(
                 NewViewKind.EDITOR -> "Browse and edit files"
                 NewViewKind.DIFF -> "Review what changed"
                 NewViewKind.DISPLAY -> "Watch an agent's screen"
+                NewViewKind.BROWSER -> "A web page, or an app running on a port"
             },
             alreadyOpen = k.singleton && openSingletonView(layout, viewsById, k) != null,
         )
