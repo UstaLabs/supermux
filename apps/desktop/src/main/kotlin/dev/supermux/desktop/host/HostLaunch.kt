@@ -144,7 +144,10 @@ internal suspend fun HostSupervisor.removeServiceLocked(port: Int): String? {
     val r = withContext(io) { BrokerService.remove(osEnv, me) }
     log("service remove: ${r.describe()}")
     if (r is BrokerService.Result.Failed) return "Couldn't stop the background service: ${r.message}"
-    if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after removing the service")
+    if (!awaitPortFree(port)) {
+        log("port $port still answers ${timing.portFreeMs / 1000} s after removing the service")
+        freeStalePortLocked(port)
+    }
     return null
 }
 
@@ -176,7 +179,10 @@ internal suspend fun HostSupervisor.stopWindowsServiceLocked(port: Int): Boolean
     val stopped = withContext(io) { BrokerService.stop(osEnv, stateDir, port) }
     log("service stop: ${if (stopped) "the broker is gone" else "the broker is still running"}")
     if (!stopped) return false
-    if (!awaitPortFree(port)) log("port $port still answers ${timing.portFreeMs / 1000} s after stopping the service")
+    if (!awaitPortFree(port)) {
+        log("port $port still answers ${timing.portFreeMs / 1000} s after stopping the service")
+        freeStalePortLocked(port)
+    }
     return true
 }
 
@@ -187,6 +193,25 @@ internal suspend fun HostSupervisor.keepServiceAfterFailedStop(prefs: HostingPre
     _backgroundError.value = BrokerService.WINDOWS_STOP_FAILED
     log(BrokerService.WINDOWS_STOP_FAILED)
     afterLaunch(prefs, awaitHealthy(prefs.port, null, timing.systemdHealthMs))
+}
+
+/**
+ * Windows (#113): [port] stays taken with no broker of ours answering. A broker that has exited can leave its listener
+ * held by its leftovers (keepers, agents' shims, mux-sessiond); those are stopped ([BrokerService.freeWindowsPort]), a
+ * live process never. Returns the sentence naming what still holds the port (logged), null once free or elsewhere.
+ */
+internal suspend fun HostSupervisor.freeStalePortLocked(port: Int): String? {
+    if (osEnv.os != DesktopOs.WINDOWS) return null
+    val left = withContext(io) { BrokerService.freeWindowsPort(osEnv, port) }
+    if (left.isEmpty()) return null
+    return BrokerService.describePortHolders(port, left).also { log(it) }
+}
+
+/** Windows: the sentence naming what holds [port] ([BrokerService.describePortHolders]), with a leading space; else "". */
+private suspend fun HostSupervisor.portHeldBy(port: Int): String {
+    if (osEnv.os != DesktopOs.WINDOWS) return ""
+    val holders = withContext(io) { BrokerService.windowsPortHolders(osEnv, port) }
+    return if (holders.isEmpty()) "" else " " + BrokerService.describePortHolders(port, holders)
 }
 
 /** True once nothing answers on [port]; false after [timeoutMs]. */
@@ -293,7 +318,7 @@ internal suspend fun HostSupervisor.awaitHealthy(port: Int, c: ChildHandle?, tim
             log("healthy on port $port: ${r.hostId}, build ${r.build ?: "?"}")
             return null
         }
-        if (now() >= deadline) return "supermux didn't answer on port $port." + logTail()
+        if (now() >= deadline) return "supermux didn't answer on port $port." + portHeldBy(port) + logTail()
         delay(timing.healthPollMs)
     }
 }

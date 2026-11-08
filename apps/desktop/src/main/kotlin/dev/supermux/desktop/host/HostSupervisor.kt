@@ -545,6 +545,11 @@ class HostSupervisor(
 
         var found = probe(prefs.port)
         log("probe :${prefs.port}: ${found.describe()}")
+        // Windows (#113): a gone broker's leftovers can keep its listener; stop them before deciding anything.
+        if (osEnv.os == DesktopOs.WINDOWS && (found == HostProbeResult.Busy || found == HostProbeResult.ForeignProcess)) {
+            freeStalePortLocked(prefs.port)
+            found = probe(prefs.port)
+        }
         // Finish or undo a takeover a crash interrupted (journal in <stateDir>/takeover-backup).
         val healthy = found.isOurs() && ownsRunningBroker()
         val recovered = withContext(io) { Takeover.recoverPending(stateDir, osEnv, ourServiceHealthy = healthy, me = me) }

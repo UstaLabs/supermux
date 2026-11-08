@@ -980,6 +980,80 @@ Terminal=false
         WinProcess(pid, f[1].trim().toLongOrNull() ?: 0, f[2].trim(), f.getOrElse(3) { "" })
     }.toList()
 
+    /** A process holding a port on Windows (#113). [stale]: a leftover of a broker that has exited, ours to stop. */
+    data class PortHolder(val pid: Long, val name: String, val commandLine: String, val stale: Boolean)
+
+    /** The pids that own [port]'s listener, one a line. No double quotes in the script: Java does not escape them on Windows. */
+    internal fun portOwnersArgv(port: Int): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { [string]\$_.OwningProcess }",
+    )
+
+    /** Every process, as [listWindowsProcessesArgv] lists its few: `pid TAB parentPid TAB name TAB commandLine`. */
+    internal fun listAllProcessesArgv(): List<String> = listOf(
+        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+        "Get-CimInstance Win32_Process | ForEach-Object { [string]\$_.ProcessId + [char]9 + [string]\$_.ParentProcessId + " +
+            "[char]9 + \$_.Name + [char]9 + [string]\$_.CommandLine }",
+    )
+
+    /**
+     * Pure. Who holds a port whose listener [owners] made. A live owner is named, never stale: it is a running program
+     * (a broker still stopping, or another app). A gone owner's listener lives on in a process that kept its handle: its
+     * supermux descendants (keepers, the agents' shims, mux-sessiond), found through the parent pids Windows keeps after
+     * a parent exits, are the stale holders. A gone owner with none of those is still named, by its pid.
+     */
+    fun portHolders(owners: List<Long>, procs: List<WinProcess>): List<PortHolder> {
+        val byPid = procs.associateBy { it.pid }
+        val children = procs.groupBy { it.parentPid }
+        return owners.distinct().flatMap { owner ->
+            byPid[owner]?.let { return@flatMap listOf(PortHolder(owner, it.name, it.commandLine, stale = false)) }
+            val tree = mutableListOf<WinProcess>()
+            val queue = ArrayDeque(listOf(owner))
+            val seen = mutableSetOf(owner)
+            while (queue.isNotEmpty()) {
+                for (c in children[queue.removeFirst()].orEmpty()) if (seen.add(c.pid)) { tree += c; queue += c.pid }
+            }
+            tree.filter { isSupermuxImage(it.name) }.sortedBy { it.pid }.map { PortHolder(it.pid, it.name, it.commandLine, stale = true) }
+                .ifEmpty { listOf(PortHolder(owner, "", "", stale = false)) }
+        }.distinctBy { it.pid }
+    }
+
+    private fun isSupermuxImage(name: String) =
+        name.equals(WINDOWS_BROKER_EXE, ignoreCase = true) || name.equals("mux-sessiond.exe", ignoreCase = true)
+
+    /** What holds [port] on Windows ([portHolders]); empty when nothing does, it can't be told, or elsewhere. */
+    fun windowsPortHolders(env: OsEnv, port: Int): List<PortHolder> {
+        if (env.os != DesktopOs.WINDOWS) return emptyList()
+        val owners = env.runCapture(portOwnersArgv(port))?.lineSequence()?.mapNotNull { it.trim().toLongOrNull() }?.toList()
+        if (owners.isNullOrEmpty()) return emptyList()
+        val procs = env.runCapture(listAllProcessesArgv())?.let(::parseWindowsProcesses).orEmpty()
+        return portHolders(owners, procs)
+    }
+
+    /**
+     * Windows (#113): stop the stale holders of [port] ([portHolders]) and wait (up to ~10 s) for it to come free. A
+     * live process is never stopped. Returns what still holds it, empty once free.
+     */
+    fun freeWindowsPort(env: OsEnv, port: Int): List<PortHolder> {
+        val holders = windowsPortHolders(env, port)
+        val stale = holders.filter { it.stale }
+        if (stale.isEmpty()) return holders
+        env.run(taskkillArgv(stale.map { it.pid }))
+        for (i in 1..20) {
+            val left = windowsPortHolders(env, port)
+            if (left.isEmpty()) return left
+            env.sleep(500)
+        }
+        return windowsPortHolders(env, port)
+    }
+
+    /** The error's sentence naming [holders] of [port], each with its pid and command line, so a report carries them. */
+    fun describePortHolders(port: Int, holders: List<PortHolder>): String =
+        "Port $port is still held by " + holders.joinToString("; ") { h ->
+            if (h.name.isEmpty()) "a process that has exited (pid ${h.pid}), through a handle another process kept"
+            else "${h.name} (pid ${h.pid})" + (h.commandLine.takeIf { it.isNotBlank() }?.let { ": ${it.take(300)}" } ?: "")
+        } + "."
+
     private fun taskkillArgv(pids: List<Long>): List<String> =
         listOf("taskkill", "/F") + pids.flatMap { listOf("/PID", it.toString()) }
 
