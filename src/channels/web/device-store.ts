@@ -7,6 +7,8 @@ export interface DeviceRecord {
   name: string
   created_at: string
   last_seen_at: string | null
+  /** The device's preview-only token (#105): it opens port previews and nothing else. Gone with the device. */
+  preview_hash?: string
 }
 
 function sha256(s: string): string {
@@ -103,6 +105,27 @@ export class DeviceStore {
     })
     this.write(records)
     return { token, name }
+  }
+
+  /**
+   * A preview-only token for the device holding `deviceToken`, or undefined when that token isn't a device's.
+   * Minting again replaces the last one. It never verifies as a device token: verify() matches token_hash only.
+   */
+  mintPreview(deviceToken: string): string | undefined {
+    const records = this.read()
+    const record = records.find((r) => r.token_hash === sha256(deviceToken))
+    if (!record) return undefined
+    const token = randomBytes(32).toString("base64url")
+    record.preview_hash = sha256(token)
+    this.write(records)
+    return token
+  }
+
+  verifyPreview(token: string): DeviceRecord | undefined {
+    if (!token) return undefined
+    const hash = sha256(token)
+    const r = this.cached().find((x) => x.preview_hash === hash)
+    return r ? { ...r } : undefined
   }
 
   verify(token: string): DeviceRecord | undefined {
