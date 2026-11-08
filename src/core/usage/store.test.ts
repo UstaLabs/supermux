@@ -582,3 +582,21 @@ test("an Antigravity read that finds no sign-in says so in words", async () => {
   expect(store.snapshot().antigravity).toBeNull()
   expect(store.snapshot().errors.antigravity).toBe("Not signed in to Antigravity.")
 })
+
+test("opencode is throttled like the others now that it asks OpenCode for the Go limits; a forced refresh still fetches", async () => {
+  let calls = 0
+  let now = 1_000_000
+  const store = makeStore({
+    staleMs: 60_000,
+    now: () => now,
+    fetchers: { opencode: async () => { calls++; return { sessions: 0, messages: 0, totalCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } },
+  })
+  await store.refresh(["opencode"])
+  await store.refresh(["opencode"])
+  expect(calls).toBe(1)
+  await store.refresh(["opencode"], { force: true })
+  expect(calls).toBe(2)
+  now += 61_000
+  await store.refresh(["opencode"])
+  expect(calls).toBe(3)
+})

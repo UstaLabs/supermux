@@ -9,6 +9,7 @@ import {
   fetchCursorUsage,
   fetchGrokUsage,
   fetchOpenCodeUsage,
+  fetchSystemOpenCodePlan,
   type AntigravityUsage,
   type ClaudeUsage,
   type CodexUsage,
@@ -28,7 +29,6 @@ export type UsageSource = "live" | "agent" | "local" | "cache"
 const PROVIDERS: UsageProvider[] = ["claude", "codex", "cursor", "opencode", "grok", "antigravity"]
 const DEFAULT_STALE_MS = 5 * 60_000
 const PERSIST_DEBOUNCE_MS = 250
-const UNTHROTTLED = new Set<UsageProvider>(["opencode"])
 
 /**
  * One added account (not the agent's system login, which is the top-level provider data). Its
@@ -101,7 +101,7 @@ const DEFAULT_FETCHERS: Record<UsageProvider, () => Promise<unknown | null>> = {
   claude: () => fetchClaudeUsage(),
   codex: () => fetchCodexUsage(),
   cursor: () => fetchCursorUsage(),
-  opencode: () => fetchOpenCodeUsage(),
+  opencode: () => fetchOpenCodeUsage(undefined, { plan: fetchSystemOpenCodePlan }),
   grok: () => fetchGrokUsage(),
   antigravity: () => fetchAntigravityUsage(),
 }
@@ -244,7 +244,7 @@ export class UsageStore extends EventEmitter {
     const jobs: Promise<void>[] = []
     for (const provider of list) {
       if (!this.fetchers[provider]) continue
-      if (!force && !UNTHROTTLED.has(provider)) {
+      if (!force) {
         const last = this.lastLiveAt[provider]
         if (last != null && this.nowFn() - last < this.staleMs) continue
       }

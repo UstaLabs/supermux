@@ -12,6 +12,9 @@
 import { existsSync } from "fs"
 import { join, win32 } from "path"
 import type { AgentAuthResult } from "../auth-result"
+import type { LoginSpawnCommand } from "../login/spawn-command"
+import { browserlessScratch } from "../antigravity/auth"
+import { resolveCommand } from "../../process/launcher"
 
 export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
   dataDir: string
@@ -59,8 +62,13 @@ export async function resolveOpenCodeAuth(opts: {
   return { mode, env: {}, dataDir, authPath, authed: mode !== "none" }
 }
 
-/** opencode has no CLI device-login flow the broker can drive; auth goes
- * through the provider OAuth/API-key ops (auth-ops.ts). null = unsupported. */
-export function loginSpawnCommand(): null {
-  return null
+/** The OpenCode Console (Zen / Go) sign-in: `opencode console login` prints a device link + code and polls until
+ * the user approves it in a browser, then keeps the login in opencode.db (see console.ts). It would also open the
+ * host's browser, so it runs with no display and no-op openers ([browserlessScratch]). Provider keys and other
+ * providers' OAuth stay with auth-ops.ts. */
+export function loginSpawnCommand(platform: NodeJS.Platform = process.platform): LoginSpawnCommand {
+  const env = { ...process.env } as Record<string, string>
+  const cmd = resolveCommand(["opencode"], env, platform) ?? "opencode"
+  const scratch = browserlessScratch(env, platform, "supermux-opencode-login-")
+  return { cmd, args: ["console", "login"], env: scratch.env, cwd: scratch.cwd, cleanup: scratch.cleanup }
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "fs"
-import { join } from "path"
+import { dirname, join } from "path"
 import { Database } from "bun:sqlite"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../shared/agents"
@@ -9,6 +9,7 @@ import { CURSOR_SIGN_IN_EXPIRED } from "../agents/cursor/auth"
 import { readClaudeStoredLogin } from "../agents/claude/stored-login"
 import { authCredPath } from "../agents/detect"
 import { openCodeDataDir } from "../agents/opencode/auth"
+import { fetchOpenCodePlan, type OpenCodePlan } from "./opencode-go"
 import { home } from "../../shared/home"
 
 const log = makeLogger("usage")
@@ -122,6 +123,8 @@ export interface OpenCodeUsage {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  /** The OpenCode Go plan's limits; absent when they weren't asked for. */
+  plan?: OpenCodePlan
 }
 
 // Grok Build (xAI SuperGrok) subscription credits via cli-chat-proxy.
@@ -710,9 +713,28 @@ export async function fetchCursorUsageWithToken(token: string): Promise<CursorUs
 // for assistant messages, `cost` and `tokens: { input, output, cache: { read, write } }`.
 const OPENCODE_SESSION_TOTALS = ["cost", "tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"]
 
+/** The local totals, and with `plan` the OpenCode Go limits beside them. null = nothing to show at all. */
 export async function fetchOpenCodeUsage(
   dbPath: string = OPENCODE_DB,
+  opts: { plan?: () => Promise<OpenCodePlan> } = {},
 ): Promise<OpenCodeUsage | null> {
+  const plan = await opts.plan?.()
+  const local = readOpenCodeTotals(dbPath)
+  if (!plan) return local
+  if (!local && plan.status === "signed_out") return null
+  return { ...(local ?? EMPTY_OPENCODE_TOTALS), plan }
+}
+
+const EMPTY_OPENCODE_TOTALS: OpenCodeUsage = {
+  sessions: 0, messages: 0, totalCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+}
+
+/** OpenCode Go limits for the system login: the native data dir's Console sign-in or OpenCode key. */
+export function fetchSystemOpenCodePlan(): Promise<OpenCodePlan> {
+  return fetchOpenCodePlan({ dbPath: OPENCODE_DB, authPath: join(dirname(OPENCODE_DB), "auth.json") })
+}
+
+function readOpenCodeTotals(dbPath: string): OpenCodeUsage | null {
   if (!existsSync(dbPath)) return null
 
   const db = new Database(dbPath, { readonly: true })

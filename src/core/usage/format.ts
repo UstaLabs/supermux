@@ -1,4 +1,5 @@
 import type { UsageResponse, ClaudeUsage, CodexUsage, CursorUsage, OpenCodeUsage, GrokUsage, UsageWindow } from "./index"
+import type { OpenCodePlan } from "./opencode-go"
 
 // ── Helpers ──
 
@@ -123,10 +124,30 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
-// opencode has no quota — report cumulative local cost + token totals instead.
+/** One line for an OpenCode plan with no meters to show; null when there is nothing to say. */
+export function openCodePlanNote(plan: OpenCodePlan): string | null {
+  switch (plan.status) {
+    case "none": return "No OpenCode Go plan."
+    case "expired": return "OpenCode sign-in expired. Sign in again."
+    case "unavailable": return `OpenCode Go limits unavailable${plan.error ? `: ${plan.error}` : "."}`
+    default: return null
+  }
+}
+
+// The OpenCode Go windows when the login has a plan; local cost + token totals after them.
 function fmtOpenCode(c: OpenCodeUsage, now: number): string {
-  const lines: string[] = ["opencode"]
-  lines.push(`  $${c.totalCostUsd.toFixed(2)} · ${fmtTokens(c.inputTokens)} in / ${fmtTokens(c.outputTokens)} out`)
+  const lines: string[] = [c.plan?.go ? "OpenCode Go" : "opencode"]
+  const go = c.plan?.go
+  if (go) {
+    for (const [label, m] of [["5-hour", go.rolling], ["Weekly", go.weekly], ["Monthly", go.monthly]] as const) {
+      const rst = resetLabel(Date.parse(m.resetsAtIso), now)
+      lines.push(`  ${label}: ${pct(m.percent)}${m.limited ? " · limit reached" : ""} · resets ${rst}`)
+    }
+  } else if (c.plan) {
+    const note = openCodePlanNote(c.plan)
+    if (note) lines.push(`  ${note}`)
+  }
+  lines.push(`  Local: $${c.totalCostUsd.toFixed(2)} · ${fmtTokens(c.inputTokens)} in / ${fmtTokens(c.outputTokens)} out`)
   lines.push(`  ${c.sessions} sessions · ${c.messages} messages`)
   return lines.join("\n")
 }

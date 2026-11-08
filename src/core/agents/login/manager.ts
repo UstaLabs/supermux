@@ -3,12 +3,18 @@ import { AgentKind as Agent } from "../../../shared/agents"
 import { typeLoginCode } from "../../../../packages/supermux-core/src/accounts/index.js"
 import { authCredPath, type DetectPaths } from "../detect"
 import { LoginSession, type LoginState, type LoginProc } from "./session"
-import { parseAntigravityLoginUrl, parseCodexDeviceAuth, parseCursorLoginUrl, parseGrokDeviceAuth } from "./parse"
+import { parseAntigravityLoginUrl, parseCodexDeviceAuth, parseCursorLoginUrl, parseDeviceAuth, parseGrokDeviceAuth } from "./parse"
 
 export interface LoginManagerDeps {
   paths: DetectPaths
   fileExists: (p: string) => boolean
   hasCredential?: (kind: AgentKind) => boolean
+  /**
+   * A kind whose sign-in is told apart by a fingerprint rather than a credential file (OpenCode's Console login,
+   * which lives in opencode.db beside any API key): success = the fingerprint is set and differs from before the
+   * login started. null = signed out.
+   */
+  signInProbe?: (kind: AgentKind) => (() => string | null) | undefined
   spawnLogin: (kind: AgentKind) => LoginProc
   onChange: (kind: AgentKind, state: LoginState) => void
   setInterval?: (fn: () => void, ms: number) => any
@@ -18,6 +24,7 @@ export interface LoginManagerDeps {
 function parserFor(kind: AgentKind): (out: string) => { url?: string; code?: string } | null {
   if (kind === Agent.Codex) return (out) => parseCodexDeviceAuth(out)
   if (kind === Agent.Grok) return (out) => parseGrokDeviceAuth(out)
+  if (kind === Agent.OpenCode) return (out) => parseDeviceAuth(out)
   if (kind === Agent.Cursor) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   if (kind === Agent.Claude) return (out) => { const url = parseCursorLoginUrl(out); return url ? { url } : null }
   if (kind === Agent.Antigravity) return (out) => { const url = parseAntigravityLoginUrl(out); return url ? { url } : null }
@@ -34,14 +41,17 @@ export class LoginManager {
 
   start(kind: AgentKind): LoginState {
     this.cancel(kind)
-    const alreadyAuthed = this.deps.fileExists(authCredPath(kind, this.deps.paths))
-      || (this.deps.hasCredential?.(kind) ?? false)
+    const probe = this.deps.signInProbe?.(kind)
+    const before = probe?.()
+    const isAuthed = probe
+      ? () => { const now = probe(); return now !== null && now !== before }
+      : () => this.deps.fileExists(authCredPath(kind, this.deps.paths)) || (this.deps.hasCredential?.(kind) ?? false)
+    const alreadyAuthed = probe ? false : isAuthed()
     const session = new LoginSession({
       kind,
       spawn: () => this.deps.spawnLogin(kind),
       parse: parserFor(kind),
-      isAuthed: () => this.deps.fileExists(authCredPath(kind, this.deps.paths))
-        || (this.deps.hasCredential?.(kind) ?? false),
+      isAuthed,
       onChange: (st) => { this.states.set(kind, st); this.deps.onChange(kind, st) },
       needsCode: kind === Agent.Claude || kind === Agent.Antigravity,
       alreadyAuthed,

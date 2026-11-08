@@ -212,3 +212,37 @@ test("formatUsageTelegram labels the Grok window weekly under unified billing", 
   // monthlyLimit 0 under unified billing — no meaningless "3 / 0" credits row.
   expect(out).not.toContain("Credits:")
 })
+
+const OPENCODE_TOTALS = { sessions: 4, messages: 9, totalCostUsd: 1.5, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 }
+
+test("opencode with an OpenCode Go plan: the three windows lead, local spend follows", () => {
+  const now = Date.parse("2026-11-08T10:00:00Z")
+  const out = formatUsageTelegram({
+    claude: null, codex: null, cursor: null, grok: null, errors: {},
+    opencode: {
+      ...OPENCODE_TOTALS,
+      plan: {
+        status: "active", via: "api_key",
+        go: {
+          rolling: { percent: 3, limited: false, resetsAtIso: "2026-11-08T12:00:00.000Z" },
+          weekly: { percent: 100, limited: true, resetsAtIso: "2026-11-09T10:00:00.000Z" },
+          monthly: { percent: 41.5, limited: false, resetsAtIso: "2026-12-01T00:00:00.000Z" },
+        },
+      },
+    },
+  }, now)
+  expect(out).toContain("OpenCode Go")
+  expect(out).toContain("5-hour: 3% used · resets in 2h 00m")
+  expect(out).toContain("Weekly: 100% used · limit reached")
+  expect(out).toContain("Monthly: 42% used")
+  expect(out.indexOf("5-hour")).toBeLessThan(out.indexOf("$1.50"))
+})
+
+test("opencode without a Go plan says so in one line", () => {
+  const out = formatUsageTelegram({
+    claude: null, codex: null, cursor: null, grok: null, errors: {},
+    opencode: { ...OPENCODE_TOTALS, plan: { status: "none", go: null, via: "api_key" } },
+  })
+  expect(out).toContain("No OpenCode Go plan.")
+  expect(out).toContain("$1.50")
+})

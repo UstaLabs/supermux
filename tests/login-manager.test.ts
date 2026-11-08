@@ -139,3 +139,50 @@ test("Cursor login polling uses the supplied Windows APPDATA root", () => {
   expect(checked).toContain("D:\\Roaming\\cursor\\auth.json")
   expect(mgr.get("cursor")?.phase).toBe("success")
 })
+
+// OpenCode's Console (Go) sign-in: `opencode console login` prints a device link + code and may exit 0 even when the
+// code expired, and an auth.json from an API key already exists. Only a NEW Console sign-in in opencode.db is success.
+function openCodeHarness(probe: () => string | null) {
+  let outCb: (c: string) => void = () => {}
+  let exitCb: (code: number | null) => void = () => {}
+  let tick: () => void = () => {}
+  const mgr = new LoginManager({
+    paths: { home: "/home/u" },
+    fileExists: () => true,
+    signInProbe: (kind) => (kind === "opencode" ? probe : undefined),
+    spawnLogin: () => ({ onStdout: (cb) => { outCb = cb }, onExit: (cb) => { exitCb = cb }, kill: () => {}, write: () => {} }),
+    onChange: () => {},
+    setInterval: (fn) => { tick = fn; return 1 },
+    clearInterval: () => {},
+  })
+  return { mgr, out: (c: string) => outCb(c), exit: (c: number | null) => exitCb(c), tick: () => tick() }
+}
+
+test("opencode: the device link and code come from `opencode console login`", () => {
+  const h = openCodeHarness(() => null)
+  h.mgr.start("opencode")
+  h.out("\x1b[0m\n┌  Log in\n│\n●  Go to: https://opencode.ai/console/device?user_code=QLCP-HTDB&client_id=opencode-cli\n│\n●  Enter code: QLCP-HTDB\n")
+  expect(h.mgr.get("opencode")).toMatchObject({
+    phase: "awaiting_user",
+    url: "https://opencode.ai/console/device?user_code=QLCP-HTDB&client_id=opencode-cli",
+    code: "QLCP-HTDB",
+  })
+})
+
+test("opencode: an exit 0 without a new Console sign-in is a failure, even with an API key in auth.json", () => {
+  const h = openCodeHarness(() => "acc1:old")
+  h.mgr.start("opencode")
+  h.exit(0)
+  expect(h.mgr.get("opencode")?.phase).toBe("failed")
+})
+
+test("opencode: a changed Console sign-in is success, while the CLI still runs", () => {
+  let fp: string | null = null
+  const h = openCodeHarness(() => fp)
+  h.mgr.start("opencode")
+  h.tick()
+  expect(h.mgr.get("opencode")?.phase).toBe("starting")
+  fp = "acc1:new"
+  h.tick()
+  expect(h.mgr.get("opencode")?.phase).toBe("success")
+})
