@@ -16,6 +16,9 @@ import type { LoginSpawnCommand } from "../login/spawn-command"
 import { browserlessScratch } from "../antigravity/auth"
 import { resolveCommand } from "../../process/launcher"
 
+/** The host OS, the default of every OS parameter in this module; callers and tests pass their own. */
+const HOST_PLATFORM: NodeJS.Platform = process.platform
+
 export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
   dataDir: string
   authPath: string
@@ -31,7 +34,7 @@ export function openCodeDataDir(opts: {
   platform?: NodeJS.Platform
 }): string {
   const env = opts.env ?? process.env
-  const pathJoin = (opts.platform ?? process.platform) === "win32" ? win32.join : join
+  const pathJoin = (opts.platform ?? HOST_PLATFORM) === "win32" ? win32.join : join
   return pathJoin(opts.xdgDataHome || env.XDG_DATA_HOME || pathJoin(opts.home, ".local", "share"), "opencode")
 }
 
@@ -55,7 +58,7 @@ export async function resolveOpenCodeAuth(opts: {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   const env = opts.env ?? process.env
   const dataDir = openCodeDataDir(opts)
-  const authPath = (opts.platform ?? process.platform) === "win32"
+  const authPath = (opts.platform ?? HOST_PLATFORM) === "win32"
     ? win32.join(dataDir, "auth.json") : join(dataDir, "auth.json")
   const hasProviderKey = PROVIDER_KEY_ENV.some((k) => !!env[k])
   const mode = exists(authPath) ? "shared_auth" : hasProviderKey ? "provider_key" : "none"
@@ -66,7 +69,7 @@ export async function resolveOpenCodeAuth(opts: {
  * the user approves it in a browser, then keeps the login in opencode.db (see console.ts). It would also open the
  * host's browser, so it runs with no display and no-op openers ([browserlessScratch]). Provider keys and other
  * providers' OAuth stay with auth-ops.ts. */
-export function loginSpawnCommand(platform: NodeJS.Platform = process.platform): LoginSpawnCommand {
+export function loginSpawnCommand(platform: NodeJS.Platform = HOST_PLATFORM): LoginSpawnCommand {
   const env = { ...process.env } as Record<string, string>
   const cmd = resolveCommand(["opencode"], env, platform) ?? "opencode"
   const scratch = browserlessScratch(env, platform, "supermux-opencode-login-")

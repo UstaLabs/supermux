@@ -99,7 +99,7 @@
     "src/core/agents/grok/runner.ts": 1,
     "src/core/agents/install.ts": 1,
     "src/core/agents/login/spawn-command.ts": 2,
-    "src/core/agents/opencode/auth.ts": 2,
+    "src/core/agents/opencode/auth.ts": 1,
     "src/core/agents/opencode/spawn.ts": 1,
     "src/core/display/providers/macos-screen.ts": 1,
     "src/core/fs/file-ops.ts": 1,
