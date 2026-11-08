@@ -20,7 +20,10 @@
 - A preview-only token, scoped to /p/, lets a tab open private previews.
 - `localhost:<port>` opens through that port's preview link.
 - On the web client, chat links open a new tab of the real browser.
-- Unexposed ports get the offer page from the proposal sent to Tally on 2026-11-08: "Port 5173 runs on ‹host›, not on this device. [Make a private link]". If Ahmet answers otherwise, Task 8's offer page changes and nothing else does.
+- **Ports (Ahmet, 2026-11-08, replacing the "Make a private link" offer).** `localhost:PORT` opens through the host's by-port preview, `/p/<port>/` (or `<port>.<base>` in subdomain mode). It needs no registration and asks no question. The broker serves it and tells the app its template, e.g. `https://h-….relay.supermux.dev/p/{port}/`. A separate broker car builds that.
+  - Until it's live, a port opens through a named preview of it if one exists. Otherwise the tab says it can't open the port from here.
+  - The app only asks for the template where it also holds the preview-only cookie, i.e. a native Browser tab. That is the design proposed to Tally: by-port pages accept only the preview token, because in path mode a previewed page shares the web app's origin.
+- **Shortcuts and ⌘-click are strict (#96):** ⌘ on Apple platforms and Ctrl elsewhere, never either (`isApplePlatform` from editor-compose). The tab's keys stay pane-local until #96 phase 2 is on dev; then they move into its registry as `KeyContext.Browser`, which is not opaque.
 
 **Out of this plan:**
 - Desktop packaging: the macOS glue in the DMG, the Windows DLL in CI, the WPE runtime in the .deb (`2026-11-08-browser-tab-packaging.md`).
@@ -51,10 +54,10 @@ flock -w 3600 /tmp/supermux-heavy.lock systemd-run --user --scope -q -p MemoryMa
 - `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/AppWebViews.kt`: the app's one `WebViewRuntime`, made on first use, which tests replace.
 - `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/LinkOpener.kt`: `LocalLinkOpener`, `LocalOpenLink` and click-modifier tracking.
 - `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserPane.kt`: the pane.
-- `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserBars.kt`: the toolbar, the find bar, the offer page and the empty states.
+- `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserBars.kt`: the toolbar, the find bar and the messages, and the tab's strict shortcuts.
 - Tests:
-  - shared: `browser/BrowserTabSyncTest.kt`, `browser/AddressActionTest.kt`, `browser/BrowserZoomTest.kt`, `workspace/WorkspaceBrowserOpenTest.kt`;
-  - ui: `browser/BrowserPaneTest.kt`, `browser/LinkOpenerTest.kt`, `shell/BrowserKindTest.kt`.
+  - shared: `browser/BrowserTabSyncTest.kt`, `browser/AddressActionTest.kt`, `browser/BrowserZoomTest.kt`, `workspace/WorkspaceBrowserOpenTest.kt`, `net/BrokerApiBrowserTest.kt`;
+  - ui: `browser/BrowserBarsTest.kt`, `browser/BrowserPaneTest.kt`, `browser/LinkOpenerTest.kt`, `shell/BrowserKindTest.kt`.
 
 **Modify:**
 - `apps/ui/build.gradle.kts`: the two dependencies.
@@ -62,7 +65,7 @@ flock -w 3600 /tmp/supermux-heavy.lock systemd-run --user --scope -q -p MemoryMa
 - `apps/shared/.../workspace/NewViewKind.kt`, `WorkspaceSingletonView.kt`, `ViewTitle.kt`, `WorkspaceFileOpen.kt`.
 - `apps/shared/.../state/HostStore.kt`: `addWorkspaceView`'s state table.
 - `apps/shared/.../browser/BrowserAddress.kt`: `AddressAction`.
-- `apps/shared/.../net/BrokerApi.kt`: `previewToken()` and its DTOs.
+- `apps/shared/.../net/BrokerApi.kt`: `previewToken()`, `byPortTemplate()` and their DTOs.
 - `apps/shared/.../util/TransportPolicy.kt`: `isLoopback`.
 - `apps/ui/.../shell/`: `WorkspaceModel.kt`, `NewTabs.kt`, `NewTabGlyphs.kt`, `CloseViewDialog.kt`, `WorkspacePanes.kt`, `PhoneTabSwitcher.kt`, `ViewHost.kt`, `ShellActions.kt`, `SupermuxApp.kt`.
 - `apps/ui/.../workspace/WorkspaceSession.kt`.
@@ -278,13 +281,19 @@ git commit -m "feat(browser): a Browser kind in the New tab page (row 6), its ti
 
 ---
 
-### Task 3: The tab's pure rules: what it writes back, what an address does, the zoom steps
+### Task 3: The tab's pure rules: ports through the by-port preview, what a tab writes back, what an address does, the zoom steps
 
 **Files:**
 - Create: `apps/shared/src/commonMain/kotlin/dev/supermux/browser/BrowserTabSync.kt`
 - Create: `apps/shared/src/commonMain/kotlin/dev/supermux/browser/BrowserZoom.kt`
-- Modify: `apps/shared/src/commonMain/kotlin/dev/supermux/browser/BrowserAddress.kt` (append `AddressAction`)
-- Test: `apps/shared/src/commonTest/kotlin/dev/supermux/browser/BrowserTabSyncTest.kt`, `AddressActionTest.kt`, `BrowserZoomTest.kt`
+- Modify: `apps/shared/src/commonMain/kotlin/dev/supermux/browser/BrowserAddress.kt`:
+  - `PortTarget.NoRoute` replaces `OfferPreview`;
+  - `resolvePort` and `displayAddress` learn the by-port template;
+  - append `AddressAction`.
+- Test: `apps/shared/src/commonTest/kotlin/dev/supermux/browser/BrowserTabSyncTest.kt`, `AddressActionTest.kt`, `BrowserZoomTest.kt` (new)
+- Test: `BrowserAddressTest.kt` (one line changes; two tests are added)
+
+The by-port template is the host's `/p/<port>/` URL with `{port}` in it, such as `https://h-….relay.supermux.dev/p/{port}/` or `https://{port}.base/` in subdomain mode, always ending in `/`. A broker car serves it; until then the app gets none (`null`).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -354,25 +363,31 @@ import kotlin.test.assertTrue
 
 class AddressActionTest {
     private val preview = ProxyDto(domain = "p-5173", sessionName = "fix-login", port = 5173, url = "https://relay.test/p/p-5173/")
+    private val byPort = "https://relay.test/p/{port}/"
 
     @Test fun aSiteLoads() {
-        assertEquals(AddressAction.Load("https://vitejs.dev"), addressAction("vitejs.dev", emptyList(), onHost = false))
+        assertEquals(AddressAction.Load("https://vitejs.dev"), addressAction("vitejs.dev", emptyList(), onHost = false, byPort = byPort))
     }
 
     @Test fun aPortIsTheHostsOwnOnTheHost() {
-        assertEquals(AddressAction.Load("http://localhost:5173/login"), addressAction("localhost:5173/login", emptyList(), onHost = true))
+        assertEquals(AddressAction.Load("http://localhost:5173/login"), addressAction("localhost:5173/login", emptyList(), onHost = true, byPort = byPort))
     }
 
-    @Test fun aPortElsewhereOpensItsPreview() {
-        assertEquals(AddressAction.Load("https://relay.test/p/p-5173/login"), addressAction("http://localhost:5173/login", listOf(preview), onHost = false))
+    @Test fun aPortElsewhereOpensThroughTheHostsByPortPreview() {
+        assertEquals(AddressAction.Load("https://relay.test/p/5173/login"), addressAction("http://localhost:5173/login", listOf(preview), onHost = false, byPort = byPort))
     }
 
-    @Test fun aPortWithNoPreviewIsAnOffer() {
-        assertEquals(AddressAction.Offer(3000, "/"), addressAction("3000", listOf(preview), onHost = false))
+    @Test fun withoutByPortANamedPreviewOfThePortOpens() {
+        assertEquals(AddressAction.Load("https://relay.test/p/p-5173/login"), addressAction("http://localhost:5173/login", listOf(preview), onHost = false, byPort = null))
+    }
+
+    @Test fun aPortWithNoRouteSaysSo() {
+        val said = addressAction("3000", listOf(preview), onHost = false, byPort = null)
+        assertTrue(said is AddressAction.Say && "port 3000" in said.message && "can't be opened" in said.message)
     }
 
     @Test fun textThatIsntAnAddressSaysSo() {
-        val said = addressAction("how do I deploy", emptyList(), onHost = false)
+        val said = addressAction("how do I deploy", emptyList(), onHost = false, byPort = byPort)
         assertTrue(said is AddressAction.Say && "isn't an address" in said.message)
     }
 }
@@ -400,10 +415,36 @@ class BrowserZoomTest {
 }
 ```
 
+In `BrowserAddressTest`, `aPortOpensOnTheHostItselfOrThroughItsPreview`'s last line becomes:
+
+```kotlin
+        assertEquals(PortTarget.NoRoute(3000), resolvePort(3000, "/", listOf(preview), onHost = false))
+```
+
+and add:
+
+```kotlin
+    @Test fun aPortOpensThroughTheHostsByPortPreviewWhenItHasOne() {
+        val byPort = "https://relay.test/p/{port}/"
+        assertEquals(PortTarget.Go("https://relay.test/p/5173/login"), resolvePort(5173, "/login", listOf(preview), onHost = false, byPort = byPort))
+        assertEquals(PortTarget.Go("https://relay.test/p/3000/"), resolvePort(3000, "/", emptyList(), onHost = false, byPort = byPort))
+        assertEquals(PortTarget.Go("https://3000.base.test/"), resolvePort(3000, "/", emptyList(), onHost = false, byPort = "https://{port}.base.test/"))
+        assertEquals(PortTarget.Go("http://localhost:3000/"), resolvePort(3000, "/", emptyList(), onHost = true, byPort = byPort), "the host itself first")
+    }
+
+    @Test fun theAddressBarShowsAByPortPreviewAsItsPort() {
+        val byPort = "https://relay.test/p/{port}/"
+        assertEquals(DisplayAddress.Preview(5173, "/login"), displayAddress("https://relay.test/p/5173/login", emptyList(), byPort))
+        assertEquals(DisplayAddress.Preview(5173, "/"), displayAddress("https://relay.test/p/5173/", emptyList(), byPort))
+        assertEquals(DisplayAddress.Preview(3000, "/"), displayAddress("https://3000.base.test/", emptyList(), "https://{port}.base.test/"))
+        assertEquals(DisplayAddress.Web("relay.test", "/p/abc/"), displayAddress("https://relay.test/p/abc/", emptyList(), byPort), "a name isn't a port")
+    }
+```
+
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.browser.*' --max-workers=2`
-Expected: compilation FAILS: `BrowserTabSync`, `AddressAction`, `nextZoom` unresolved.
+Expected: compilation FAILS: `BrowserTabSync`, `AddressAction`, `nextZoom`, `PortTarget.NoRoute` and the `byPort` parameters are unresolved.
 
 - [ ] **Step 3: Implement.** `BrowserTabSync.kt`:
 
@@ -465,44 +506,94 @@ fun nextZoom(current: Float, direction: Int): Float =
     else ZOOM_STEPS.lastOrNull { it < current - 0.001f } ?: ZOOM_STEPS.first()
 ```
 
+In `BrowserAddress.kt`, replace `PortTarget`, `resolvePort` and `displayAddress` with:
+
+```kotlin
+/** Where a port on the host opens from this device. */
+sealed interface PortTarget {
+    data class Go(val url: String) : PortTarget
+
+    /** No way to it from here: this device isn't the host, the host gave no by-port previews, and nothing exposes it. */
+    data class NoRoute(val port: Int) : PortTarget
+}
+```
+
+```kotlin
+/**
+ * [port] on the host: itself when this app runs there, else the host's by-port preview ([byPort], a template such as
+ * `https://…/p/{port}/`; Ahmet 2026-11-08: no registration, no question), else a named preview of the port, else none.
+ */
+fun resolvePort(port: Int, path: String, previews: List<ProxyDto>, onHost: Boolean, byPort: String? = null): PortTarget {
+    if (onHost) return PortTarget.Go("http://localhost:$port$path")
+    if (byPort != null) return PortTarget.Go(byPortUrl(byPort, port) + path.removePrefix("/"))
+    val preview = previews.firstOrNull { it.port == port } ?: return PortTarget.NoRoute(port)
+    return PortTarget.Go(proxyUrl(preview).trimEnd('/') + path)
+}
+
+/** The by-port preview [template] (`…{port}…/`) for [port]. */
+fun byPortUrl(template: String, port: Int): String = template.replace("{port}", port.toString())
+
+fun displayAddress(url: String, previews: List<ProxyDto>, byPort: String? = null): DisplayAddress {
+    byPort?.let { byPortAddress(url, it) }?.let { return it }
+    for (p in previews) {
+        val base = proxyUrl(p).trimEnd('/')
+        if (url == base || url.startsWith("$base/")) return DisplayAddress.Preview(p.port, url.removePrefix(base).ifEmpty { "/" })
+    }
+    val parsed = runCatching { Url(url) }.getOrNull() ?: return DisplayAddress.Web(url, "/")
+    val host = parsed.host.lowercase()
+    return if (host in LOCAL_HOSTS) DisplayAddress.Local(parsed.port, pathAndQuery(parsed)) else DisplayAddress.Web(host, pathAndQuery(parsed))
+}
+
+/** [url] as a by-port preview's port and path, or null when it isn't one ([template]'s `{port}` is digits there). */
+private fun byPortAddress(url: String, template: String): DisplayAddress.Preview? {
+    val before = template.substringBefore("{port}")
+    val after = template.substringAfter("{port}")
+    if (!url.startsWith(before)) return null
+    val digits = url.removePrefix(before).takeWhile { it.isDigit() }
+    val port = digits.takeIf { it.length in 1..5 }?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+    val rest = url.removePrefix(before + digits)
+    if (!rest.startsWith(after)) return null
+    return DisplayAddress.Preview(port, "/" + rest.removePrefix(after))
+}
+```
+
 Append to `BrowserAddress.kt`:
 
 ```kotlin
-/** What a Browser tab does with an address: load it, offer a private link for a port, or say why it can't. */
+/** What a Browser tab does with an address: load it, or say why it can't. */
 sealed interface AddressAction {
     data class Load(val url: String) : AddressAction
-
-    data class Offer(val port: Int, val path: String) : AddressAction
 
     data class Say(val message: String) : AddressAction
 }
 
 /**
  * [text] typed in the address bar, or a page the tab was asked to open, as what the tab does. A port on the host is the
- * host's own address when this app runs there ([onHost]), else its preview link, else an offer to make one; text that
- * isn't an address says so. Every page a tab loads goes through here, so a `localhost` link from chat opens the
- * preview on a phone.
+ * host's own address when this app runs there ([onHost]), else its by-port preview ([byPort]), else a named preview;
+ * text that isn't an address says so. Every page a tab loads goes through here, so a `localhost` link from chat opens the
+ * port's preview on a phone.
  */
-fun addressAction(text: String, previews: List<ProxyDto>, onHost: Boolean): AddressAction = when (val input = parseAddress(text)) {
-    is AddressInput.Go -> AddressAction.Load(input.url)
-    is AddressInput.Port -> when (val target = resolvePort(input.port, input.path, previews, onHost)) {
-        is PortTarget.Go -> AddressAction.Load(target.url)
-        is PortTarget.OfferPreview -> AddressAction.Offer(target.port, target.path)
+fun addressAction(text: String, previews: List<ProxyDto>, onHost: Boolean, byPort: String? = null): AddressAction =
+    when (val input = parseAddress(text)) {
+        is AddressInput.Go -> AddressAction.Load(input.url)
+        is AddressInput.Port -> when (val target = resolvePort(input.port, input.path, previews, onHost, byPort)) {
+            is PortTarget.Go -> AddressAction.Load(target.url)
+            is PortTarget.NoRoute -> AddressAction.Say("Port ${target.port} on the host can't be opened from here.")
+        }
+        is AddressInput.NotAnAddress -> AddressAction.Say("“${input.text}” isn't an address. Type a site, or a port such as 5173.")
     }
-    is AddressInput.NotAnAddress -> AddressAction.Say("“${input.text}” isn't an address. Type a site, or a port such as 5173.")
-}
 ```
 
 - [ ] **Step 4: Run the tests**
 
 Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.browser.*' --max-workers=2`
-Expected: PASS: these three files plus the 11 existing browser tests.
+Expected: PASS: the three new files, plus the existing browser tests with `BrowserAddressTest`'s change.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/shared/src/commonMain/kotlin/dev/supermux/browser apps/shared/src/commonTest/kotlin/dev/supermux/browser
-git commit -m "feat(browser): what a tab writes back and follows, what an address does, the zoom steps (#105)"
+git commit -m "feat(browser): ports through the host's by-port preview; what a tab writes back and follows; the zoom steps (#105)"
 ```
 
 ---
@@ -891,12 +982,16 @@ git commit -m "feat(workspace): where a link opens: its tab, the Browser tabs' g
 
 **Files:**
 - Modify: `apps/shared/src/commonMain/kotlin/dev/supermux/util/TransportPolicy.kt` (add `isLoopback`)
-- Modify: `apps/shared/src/commonMain/kotlin/dev/supermux/net/BrokerApi.kt` (DTOs next to `CreateProxyResponse` at :593; `previewToken()` after `createProxy` at :2903)
+- Modify: `apps/shared/src/commonMain/kotlin/dev/supermux/net/BrokerApi.kt`:
+  - the DTOs, next to `CreateProxyResponse` (around :593);
+  - `previewToken()` and `byPortTemplate()`, after `createProxy` (around :2903).
 - Create: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserActions.kt`
 - Create: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/AppWebViews.kt`
 - Create: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/LinkOpener.kt`
-- Modify: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/ShellActions.kt` (a `browser` member; the `HostStore` builder at :165)
-- Test: `apps/shared/src/commonTest/kotlin/dev/supermux/util/TransportPolicyTest.kt`, `apps/shared/src/commonTest/kotlin/dev/supermux/net/BrokerApiPreviewTokenTest.kt` (new), `apps/ui/src/jvmTest/kotlin/dev/supermux/ui/browser/BrowserActionsTest.kt` (new)
+- Modify: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/ShellActions.kt` (a `browser` member; the `HostStore` builder around :165)
+- Test: `apps/shared/src/commonTest/kotlin/dev/supermux/util/TransportPolicyTest.kt`, `apps/shared/src/commonTest/kotlin/dev/supermux/net/BrokerApiBrowserTest.kt` (new)
+
+`GET /proxies/by-port` doesn't exist yet: a broker car adds it (Ahmet's item 1). Until it's live the client answers null, and ports open through named previews (Task 3).
 
 - [ ] **Step 1: Write the failing tests.** Append to `TransportPolicyTest`:
 
@@ -910,7 +1005,7 @@ git commit -m "feat(workspace): where a link opens: its tab, the Browser tabs' g
     }
 ```
 
-`BrokerApiPreviewTokenTest.kt`:
+`BrokerApiBrowserTest.kt`:
 
 ```kotlin
 package dev.supermux.net
@@ -921,68 +1016,45 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
-/** #105 car 2's route, as the app reads it: a token and the cookie to keep it in, asked for with the device's bearer. */
-class BrokerApiPreviewTokenTest {
+/** The Browser tab's two broker calls (#105): its preview-only token, and the host's by-port preview template. */
+class BrokerApiBrowserTest {
+    private fun api(seen: MutableList<HttpRequestData>, status: HttpStatusCode, body: String) = BrokerApi("http://h", "tok", HttpClient(MockEngine { req ->
+        seen += req
+        respond(content = ByteReadChannel(body), status = status, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }))
+
     @Test fun aPreviewTokenIsAskedForWithTheBearerAndItsCookieDecoded() = runTest {
         val seen = mutableListOf<HttpRequestData>()
         val body = """{"token":"pv_abc","cookie":{"name":"cmux_preview","value":"pv_abc","url":"https://h.test/p/",""" +
             """"path":"/p/","httpOnly":true,"secure":true,"sameSite":"Lax","maxAge":31536000}}"""
-        val api = BrokerApi("http://h", "tok", HttpClient(MockEngine { req ->
-            seen += req
-            respond(content = ByteReadChannel(body), headers = headersOf(HttpHeaders.ContentType, "application/json"))
-        }))
-        val answer = api.previewToken()
+        val answer = api(seen, HttpStatusCode.OK, body).previewToken()
         assertEquals(HttpMethod.Post, seen.single().method)
         assertEquals("/devices/preview-token", seen.single().url.encodedPath)
         assertEquals("Bearer tok", seen.single().headers[HttpHeaders.Authorization])
         assertEquals(PreviewCookieDto("cmux_preview", "pv_abc", "https://h.test/p/", path = "/p/", maxAge = 31536000), answer.cookie)
     }
-}
-```
 
-`apps/ui/src/jvmTest/kotlin/dev/supermux/ui/browser/BrowserActionsTest.kt`:
-
-```kotlin
-package dev.supermux.ui.browser
-
-import dev.supermux.proto.SessionInfo
-import dev.supermux.proto.ViewDto
-import dev.supermux.proto.WorkspaceDto
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertNull
-
-class BrowserActionsTest {
-    private fun chat(id: String, session: String) =
-        ViewDto(id = id, workspaceId = "w", kind = "chat", state = JsonObject(mapOf("sessionId" to JsonPrimitive(session))))
-
-    private val sessions = listOf(
-        SessionInfo(id = "s1", name = "first", workdir = "/w", agent = "claude"),
-        SessionInfo(id = "s2", name = "second", workdir = "/w", agent = "claude"),
-    )
-
-    @Test fun aPrivateLinkIsMadeForTheWorkspacesPrimarySessionElseItsLastChat() {
-        val views = listOf(chat("c1", "s1"), ViewDto(id = "t", workspaceId = "w", kind = "terminal"), chat("c2", "s2"))
-        assertEquals("first", previewSessionName(WorkspaceDto(id = "w", name = "w", workdir = "/w", primarySessionId = "s1", views = views), sessions))
-        assertEquals("second", previewSessionName(WorkspaceDto(id = "w", name = "w", workdir = "/w", views = views), sessions))
-        assertNull(previewSessionName(WorkspaceDto(id = "w", name = "w", workdir = "/w"), sessions), "no chat, no session")
-        assertNull(previewSessionName(null, sessions))
+    @Test fun theByPortTemplateIsReadAndABrokerWithoutOneAnswersNull() = runTest {
+        val seen = mutableListOf<HttpRequestData>()
+        assertEquals("https://h.test/p/{port}/", api(seen, HttpStatusCode.OK, """{"url":"https://h.test/p/{port}/"}""").byPortTemplate())
+        assertEquals("/proxies/by-port", seen.single().url.encodedPath)
+        assertNull(api(mutableListOf(), HttpStatusCode.NotFound, """{"error":"not found"}""").byPortTemplate())
     }
 }
 ```
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.util.TransportPolicyTest' --tests 'dev.supermux.net.BrokerApiPreviewTokenTest' :ui:jvmTest --tests 'dev.supermux.ui.browser.BrowserActionsTest' --max-workers=2`
-Expected: compilation FAILS: `isLoopback`, `previewToken`, `PreviewCookieDto`, `previewSessionName` unresolved.
+Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.util.TransportPolicyTest' --tests 'dev.supermux.net.BrokerApiBrowserTest' --max-workers=2`
+Expected: compilation FAILS: `isLoopback`, `previewToken`, `PreviewCookieDto` and `byPortTemplate` are unresolved.
 
 - [ ] **Step 3: The shared halves.** In `TransportPolicy`, after `isPlainHttpAllowedWithoutOptIn`:
 
@@ -1011,6 +1083,10 @@ data class PreviewCookieDto(
 /** POST /devices/preview-token's answer. */
 @Serializable
 data class PreviewTokenResponse(val token: String, val cookie: PreviewCookieDto)
+
+/** GET /proxies/by-port's answer: the host's by-port preview URL, `{port}` standing for the port. */
+@Serializable
+data class ByPortDto(val url: String)
 ```
 
 and after `createProxy`:
@@ -1019,7 +1095,12 @@ and after `createProxy`:
     /** POST /devices/preview-token: a token that opens this host's port previews and nothing else (#105). Bearer only. */
     suspend fun previewToken(): PreviewTokenResponse =
         decode(http.post("$httpBase/devices/preview-token") { authHeader() })
+
+    /** GET /proxies/by-port: the host's `/p/<port>/` template (#105), or null from a broker without by-port previews. */
+    suspend fun byPortTemplate(): String? = runCatching { getJson<ByPortDto>("$httpBase/proxies/by-port").url }.getOrNull()
 ```
+
+(`getJson` is the file's existing typed GET helper, the one `proxies()` uses. If it isn't reified-generic, call it the way `proxies()` does.)
 
 - [ ] **Step 4: `BrowserActions.kt`**
 
@@ -1032,9 +1113,6 @@ import androidx.compose.runtime.remember
 import dev.supermux.net.PatchViewBody
 import dev.supermux.net.PreviewCookieDto
 import dev.supermux.net.ProxyDto
-import dev.supermux.proto.SessionInfo
-import dev.supermux.proto.WorkspaceDto
-import dev.supermux.proto.chatSessionId
 import dev.supermux.state.HostStore
 import dev.supermux.util.TransportPolicy
 import kotlinx.serialization.json.JsonObject
@@ -1048,10 +1126,10 @@ class BrowserActions(
     /** Write the tab's page (its `{url}` state) and title to its view. False when the broker refused. */
     val saveView: suspend (workspaceId: String, viewId: String, state: JsonObject, title: String?) -> Boolean =
         { _, _, _, _ -> false },
-    /** The host's port previews: the bar names a preview by its port, and a port typed opens its preview. */
+    /** The host's named port previews: the bar names one by its port, and a port with no by-port route opens one. */
     val proxies: suspend () -> List<ProxyDto> = { emptyList() },
-    /** Expose [port] privately (paired devices only) for the workspace's session: the new preview, or null. */
-    val makePreview: suspend (workspaceId: String, port: Int) -> ProxyDto? = { _, _ -> null },
+    /** The host's by-port preview template (`https://…/p/{port}/`), or null when this tab can't use one. */
+    val byPort: suspend () -> String? = { null },
     /** This device's preview-only cookie for the host, asked for once a run; null when the host gives none. */
     val previewCookie: suspend () -> PreviewCookieDto? = { null },
     /** Whether this app runs on the host, so a `localhost` address is the host's own. */
@@ -1063,36 +1141,27 @@ class BrowserActions(
 fun rememberBrowserActions(app: HostStore): BrowserActions = remember(app) {
     var asked = false
     var cookie: PreviewCookieDto? = null
+    // One token a run: the broker mints a new one each time it's asked. The web client, signed in by the app's own
+    // cookie, is refused (the route takes a bearer only), and its iframe tab needs none.
+    suspend fun previewCookie(): PreviewCookieDto? {
+        if (!asked) {
+            asked = true
+            cookie = runCatching { app.api.previewToken().cookie }.getOrNull()
+        }
+        return cookie
+    }
     BrowserActions(
         saveView = { workspaceId, viewId, state, title ->
             runCatching { app.api.patchView(workspaceId, viewId, PatchViewBody(title = title, state = state)) }.isSuccess
         },
         proxies = { app.proxies() },
-        makePreview = { workspaceId, port ->
-            val name = previewSessionName(app.workspaces.value.firstOrNull { it.id == workspaceId }, app.sessions.value)
-            name?.let { runCatching { app.api.createProxy(it, port) }.getOrNull() }?.let { made ->
-                // POST /proxies makes a private preview (registry: isPublic defaults to false). Never a public one here.
-                ProxyDto(domain = made.domain, sessionName = name, port = made.port, url = made.url.ifEmpty { null })
-            }
-        },
-        // One token a run: the broker mints a new one each time it's asked. The web client, signed in by the app's own
-        // cookie, is refused (the route takes a bearer only), and its iframe tab needs none.
-        previewCookie = {
-            if (!asked) {
-                asked = true
-                cookie = runCatching { app.api.previewToken().cookie }.getOrNull()
-            }
-            cookie
-        },
+        // By-port pages take only the preview cookie: in path mode they share the web app's origin, where the app's own
+        // cookie would hand a page the user's session. So only a tab that holds the preview cookie asks for the route.
+        byPort = { if (previewCookie() == null) null else app.api.byPortTemplate() },
+        previewCookie = { previewCookie() },
         // A broker reached over loopback runs on this machine: a desktop that is the host reaches its own that way.
         onHost = TransportPolicy.isLoopback(app.baseUrl),
     )
-}
-
-/** The session a private link is made for: the workspace's primary session, else its last chat's (views come in order). */
-internal fun previewSessionName(workspace: WorkspaceDto?, sessions: List<SessionInfo>): String? {
-    val id = workspace?.primarySessionId ?: workspace?.views?.lastOrNull { it.chatSessionId() != null }?.chatSessionId()
-    return id?.let { sid -> sessions.firstOrNull { it.id == sid }?.name }
 }
 ```
 
@@ -1134,6 +1203,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import dev.supermux.editor.compose.isApplePlatform
 
 /** Opens a link where the workspace says (#105): the tab that shows it, a new Browser tab, or the system's browser. */
 fun interface LinkOpener {
@@ -1143,22 +1213,25 @@ fun interface LinkOpener {
 /** The workspace's opener. Null outside a workspace, and on the web client, whose links open a tab of the browser itself. */
 val LocalLinkOpener = staticCompositionLocalOf<LinkOpener?> { null }
 
-/** What a chat's links call: its view's opener, with the click's modifiers. Null → `Platform.openUrl`. */
+/** What a chat's links call: its view's opener, with the click's modifier. Null → `Platform.openUrl`. */
 val LocalOpenLink = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
-/** The ⌘/Ctrl state of the last press inside, for a link click, which carries no modifiers of its own. */
+/** Whether the last press inside held the platform's modifier, for a link click, which carries no modifiers of its own. */
 class ClickModifiers {
     var modified: Boolean = false
         internal set
 }
 
-/** Records [into] each press's ⌘/Ctrl state before anything inside handles the press (the Initial pass). */
-fun Modifier.trackClickModifiers(into: ClickModifiers): Modifier = pointerInput(into) {
+/**
+ * Records [into] whether each press held ⌘ on Apple platforms or Ctrl elsewhere (#96's rule: never either), before
+ * anything inside handles the press (the Initial pass).
+ */
+fun Modifier.trackClickModifiers(into: ClickModifiers, apple: Boolean = isApplePlatform): Modifier = pointerInput(into, apple) {
     awaitPointerEventScope {
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
             if (event.type == PointerEventType.Press) {
-                into.modified = event.keyboardModifiers.isMetaPressed || event.keyboardModifiers.isCtrlPressed
+                into.modified = if (apple) event.keyboardModifiers.isMetaPressed else event.keyboardModifiers.isCtrlPressed
             }
         }
     }
@@ -1172,23 +1245,28 @@ fun Modifier.trackClickModifiers(into: ClickModifiers): Modifier = pointerInput(
     val browser: dev.supermux.ui.browser.BrowserActions = dev.supermux.ui.browser.BrowserActions(),
 ```
 
-In the `HostStore` builder: add `val browserActions = dev.supermux.ui.browser.rememberBrowserActions(app)` after `val displayActions = rememberDisplayActions(app)`, add `browserActions` to `remember(app, walkthroughCap, displayActions)`'s keys, and `browser = browserActions,` after `display = displayActions,`. The fleet builder keeps the default: the workspace panes build theirs from the `HostStore` that owns the workspace (`WorkspacePanes.kt:1124`, `SupermuxApp.kt:1915`).
+In the `HostStore` builder:
+- add `val browserActions = dev.supermux.ui.browser.rememberBrowserActions(app)` after `val displayActions = rememberDisplayActions(app)`;
+- add `browserActions` to `remember(app, walkthroughCap, displayActions)`'s keys;
+- add `browser = browserActions,` after `display = displayActions,`.
 
-- [ ] **Step 7: Run the tests**
+The fleet builder keeps the default. The workspace panes build theirs from the `HostStore` that owns the workspace (`WorkspacePanes.kt:1124`, `SupermuxApp.kt:1915`).
 
-Run: the Step 2 command.
-Expected: PASS.
+- [ ] **Step 7: Run the tests, and compile `:ui`**
+
+Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.util.TransportPolicyTest' --tests 'dev.supermux.net.BrokerApiBrowserTest' :ui:compileKotlinJvm --max-workers=2`
+Expected: PASS, BUILD SUCCESSFUL.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add apps/shared apps/ui
-git commit -m "feat(browser): the tab's broker seams (view writes, previews, a private link, the preview cookie) and locals (#105)"
+git commit -m "feat(browser): the tab's broker seams (view writes, previews, by-port route, preview cookie) and locals (#105)"
 ```
 
 ---
 
-### Task 6: The tab's bars: the toolbar, the find bar, the offer page, the messages, the shortcuts
+### Task 6: The tab's bars: the toolbar, the find bar, the messages, and its strict shortcuts
 
 **Files:**
 - Create: `apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserBars.kt`
@@ -1206,13 +1284,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextReplacement
@@ -1259,31 +1338,30 @@ class BrowserBarsTest {
         assertEquals("vitejs.dev", submitted)
     }
 
-    @Test fun theOfferAsksOnceAndSaysWhenTheHostRefused() = runComposeUiTest {
-        var asks = 0
-        var answer: ((Boolean) -> Unit)? = null
-        setPlatformContent { PortOffer(5173, onMake = { done -> asks++; answer = done }) }
-        onNodeWithText("Port 5173 runs on the host, not on this device.").assertExists()
-        onNodeWithTag("browser-make-link").performClick()
-        onNodeWithTag("browser-make-link").assertIsNotEnabled()
-        answer!!(false)
-        waitForIdle()
-        onNodeWithText("The host didn't make one", substring = true).assertExists()
-        assertEquals(1, asks)
-    }
-
-    @Test fun cmdOrCtrlWithTheirKeysAreTheTabsShortcutsAndPlainKeysAreNot() = runComposeUiTest {
-        val seen = mutableListOf<BrowserShortcut>()
+    @Test fun theModifierIsCmdOnApplePlatformsAndCtrlElsewhereNeverEither() = runComposeUiTest {
+        // Each R press, read as both platforms would: (apple?, the shortcut it is).
+        val seen = mutableListOf<Pair<Boolean, BrowserShortcut?>>()
         setPlatformContent {
-            Box(Modifier.size(100.dp).testTag("k").focusable().onPreviewKeyEvent { e -> browserShortcut(e)?.let { seen += it; true } ?: false })
+            Box(Modifier.size(100.dp).testTag("k").focusable().onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown && e.key == Key.R) {
+                    seen += false to browserShortcut(e, apple = false)
+                    seen += true to browserShortcut(e, apple = true)
+                }
+                false
+            })
         }
         onNodeWithTag("k").requestFocus()
-        onNodeWithTag("k").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.R) }
-            withKeyDown(Key.MetaLeft) { pressKey(Key.L) }
-            pressKey(Key.R)
-        }
-        assertEquals(listOf(BrowserShortcut.Reload, BrowserShortcut.FocusAddress), seen)
+        onNodeWithTag("k").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.R) } }
+        onNodeWithTag("k").performKeyInput { withKeyDown(Key.MetaLeft) { pressKey(Key.R) } }
+        onNodeWithTag("k").performKeyInput { pressKey(Key.R) }
+        assertEquals(
+            listOf(
+                false to BrowserShortcut.Reload, true to null, // Ctrl+R
+                false to null, true to BrowserShortcut.Reload, // ⌘R
+                false to null, true to null, // R alone
+            ),
+            seen,
+        )
     }
 }
 ```
@@ -1291,7 +1369,7 @@ class BrowserBarsTest {
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `… ./gradlew :ui:jvmTest --tests 'dev.supermux.ui.browser.BrowserBarsTest' --max-workers=2`
-Expected: compilation FAILS: `text`, `findText`, `BrowserToolbar`, `PortOffer`, `browserShortcut` unresolved.
+Expected: compilation FAILS: `text`, `findText`, `BrowserToolbar` and `browserShortcut` are unresolved.
 
 - [ ] **Step 3: Implement `BrowserBars.kt`**
 
@@ -1305,7 +1383,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1322,7 +1399,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -1361,6 +1437,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.browser.DisplayAddress
+import dev.supermux.editor.compose.isApplePlatform
 import dev.supermux.webview.FindResult
 import kotlinx.coroutines.launch
 
@@ -1371,11 +1448,13 @@ internal fun DisplayAddress.text(): String = when (this) {
     is DisplayAddress.Web -> host + path.takeIf { it != "/" }.orEmpty()
 }
 
-/** The pane's own shortcuts until #96's registry is on dev: ⌘ or Ctrl with L, R, F, [, ], =, −, 0. */
+/** The pane's own shortcuts until #96's registry is on dev: the platform's modifier with L, R, F, [, ], =, −, 0. */
 internal enum class BrowserShortcut { FocusAddress, Reload, Find, Back, Forward, ZoomIn, ZoomOut, ZoomReset }
 
-internal fun browserShortcut(event: KeyEvent): BrowserShortcut? {
-    if (event.type != KeyEventType.KeyDown || !(event.isMetaPressed || event.isCtrlPressed)) return null
+/** [event] as one of the tab's shortcuts: ⌘ on Apple platforms, Ctrl elsewhere, never either (#96's rule). */
+internal fun browserShortcut(event: KeyEvent, apple: Boolean = isApplePlatform): BrowserShortcut? {
+    val mod = if (apple) event.isMetaPressed else event.isCtrlPressed
+    if (event.type != KeyEventType.KeyDown || !mod) return null
     return when (event.key) {
         Key.L -> BrowserShortcut.FocusAddress
         Key.R -> BrowserShortcut.Reload
@@ -1528,28 +1607,6 @@ internal fun FindBar(onFind: suspend (query: String, backwards: Boolean) -> Find
     }
 }
 
-/** A port on the host with no preview, on a device that isn't the host: the offer from the proposal. Never automatic. */
-@Composable
-internal fun PortOffer(port: Int, onMake: (done: (ok: Boolean) -> Unit) -> Unit, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    var making by remember(port) { mutableStateOf(false) }
-    var failed by remember(port) { mutableStateOf(false) }
-    Column(modifier.fillMaxSize().padding(24.dp).testTag("browser-offer"), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Port $port runs on the host, not on this device.", style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = { making = true; failed = false; onMake { ok -> making = false; failed = !ok } },
-            enabled = !making,
-            modifier = Modifier.testTag("browser-make-link"),
-        ) { Text(if (making) "Making a private link…" else "Make a private link") }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            if (failed) "The host didn't make one. Is the workspace's session still running?" else "Only your paired devices can open it.",
-            color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
-        )
-    }
-}
-
 /** A message in place of the page (a new tab, text that isn't an address, no engine), with an action when there's one. */
 @Composable
 internal fun BrowserMessage(text: String, tag: String, action: Pair<String, () -> Unit>? = null) {
@@ -1569,7 +1626,7 @@ Expected: PASS.
 
 ```bash
 git add apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserBars.kt apps/ui/src/jvmTest/kotlin/dev/supermux/ui/browser/BrowserBarsTest.kt
-git commit -m "feat(browser): the tab's toolbar, find bar, port offer and messages, and its own shortcuts (#105)"
+git commit -m "feat(browser): the tab's toolbar, find bar and messages, and its own strict shortcuts (#105)"
 ```
 
 ---
@@ -1639,15 +1696,14 @@ class BrowserPaneTest {
     private class Rig {
         val engines = FakeWebEngineFactory(behavior = FakeEngineBehavior())
         val writes = mutableListOf<Pair<JsonObject, String?>>()
-        var made = 0
         val calls: List<String> get() = engines.created.flatMap { it.calls }
         fun loads(): List<String> = calls.filter { it.startsWith("load:") && "url:" in it }.map { it.substringAfter("url:") }
     }
 
-    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null) = BrowserActions(
+    private fun Rig.actions(previews: List<ProxyDto> = emptyList(), cookie: PreviewCookieDto? = null, byPort: String? = null) = BrowserActions(
         saveView = { _, _, state, title -> writes += state to title; true },
         proxies = { previews },
-        makePreview = { _, port -> made++; preview.copy(port = port) },
+        byPort = { byPort },
         previewCookie = { cookie },
     )
 
@@ -1698,13 +1754,18 @@ class BrowserPaneTest {
         waitUntil(timeoutMillis = 5_000) { "https://relay.test/p/p-5173/login" in rig.loads() }
     }
 
-    @Test fun aPortWithNoPreviewIsOfferedAndTheLinkMadeLoadsIt() = runComposeUiTest {
+    @Test fun aLocalhostLinkOpensThroughTheHostsByPortPreview() = runComposeUiTest {
         val rig = Rig()
-        show(rig, mutableStateOf(view("http://localhost:5173/")), rig.actions())
-        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-offer").fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithTag("browser-make-link").performClick()
-        waitUntil(timeoutMillis = 5_000) { rig.loads().any { it.startsWith("https://relay.test/p/p-5173/") } }
-        assertEquals(1, rig.made)
+        show(rig, mutableStateOf(view("http://localhost:3000/app")), rig.actions(byPort = "https://relay.test/p/{port}/", cookie = cookie))
+        waitUntil(timeoutMillis = 5_000) { "https://relay.test/p/3000/app" in rig.loads() }
+        onNodeWithTag("browser-address").assertTextEquals("port 3000/app")
+    }
+
+    @Test fun aPortWithNoRouteSaysSoInsteadOfLoading() = runComposeUiTest {
+        val rig = Rig()
+        show(rig, mutableStateOf(view("http://localhost:3000/")), rig.actions())
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("browser-said").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rig.loads().isEmpty())
     }
 
     @Test fun aPreviewTakesTheCookieBeforeItLoads() = runComposeUiTest {
@@ -1777,7 +1838,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -1815,7 +1875,6 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 import kotlin.time.TimeSource
@@ -1826,9 +1885,6 @@ internal sealed interface BrowserBody {
     data object NewTab : BrowserBody
 
     data class Page(val url: String) : BrowserBody
-
-    /** A port on the host with no preview, on a device that isn't the host. */
-    data class Offer(val port: Int, val path: String) : BrowserBody
 
     data class Said(val message: String) : BrowserBody
 }
@@ -1858,8 +1914,8 @@ private class BrowserClient(private val newWindow: (String) -> Unit) : WebClient
  *
  * Its page is the view's synced state. It opens the page stored there, writes each page it commits back with the page's
  * title (which names the tab on every client), and follows a page another client stores ([BrowserTabSync]). Every page
- * goes through [addressAction], so a `localhost` link opens the port's preview on a device that isn't the host, or
- * offers to make one. A preview loads after the host's preview cookie is in the tabs' profile.
+ * goes through [addressAction], so a `localhost` link opens the port's by-port preview on a device that isn't the host
+ * (or a named one, or says why it can't). A preview loads after the host's preview cookie is in the tabs' profile.
  */
 @OptIn(FlowPreview::class)
 @Composable
@@ -1867,30 +1923,36 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     val platform = LocalPlatform.current
     val webViews = LocalAppWebViews.current ?: AppWebViews.app
     val links by rememberUpdatedState(LocalLinkOpener.current)
-    val scope = rememberCoroutineScope()
     val sync = remember(view.id) { BrowserTabSync() }
     val state = remember(view.id) { WebViewState(BLANK) }
     val address = remember { FocusRequester() }
     var body by remember(view.id) { mutableStateOf<BrowserBody>(BrowserBody.NewTab) }
     var previews by remember { mutableStateOf<List<ProxyDto>?>(null) }
+    var byPort by remember { mutableStateOf<String?>(null) }
     var requested by remember(view.id) { mutableStateOf<String?>(null) }
     var finding by remember(view.id) { mutableStateOf(false) }
     var zoom by remember(view.id) { mutableFloatStateOf(1f) }
     var notice by remember(view.id) { mutableStateOf<String?>(null) }
 
-    // A port resolves through the previews, so the first page waits for them: three seconds at most, then none.
-    LaunchedEffect(Unit) { previews = withTimeoutOrNull(3_000) { runCatching { actions.proxies() }.getOrNull() } ?: emptyList() }
+    // A port resolves through the by-port route or the previews, so the first page waits for them: three seconds at
+    // most, then none.
+    LaunchedEffect(Unit) {
+        withTimeoutOrNull(3_000) {
+            byPort = runCatching { actions.byPort() }.getOrNull()
+            previews = runCatching { actions.proxies() }.getOrNull()
+        }
+        if (previews == null) previews = emptyList()
+    }
 
     fun go(url: String) {
-        body = when (val action = addressAction(url, previews.orEmpty(), actions.onHost)) {
+        body = when (val action = addressAction(url, previews.orEmpty(), actions.onHost, byPort)) {
             is AddressAction.Load -> BrowserBody.Page(action.url)
-            is AddressAction.Offer -> BrowserBody.Offer(action.port, action.path)
             is AddressAction.Say -> BrowserBody.Said(action.message)
         }
     }
 
     // The view's stored page: the first to open, then another client's (never this tab's own echo). A port waits for
-    // the previews, which it resolves through.
+    // its routes, which it resolves through.
     val stored = remember(view.state) { BrowserViewState.from(view.state) }
     val previewsKnown = previews != null
     LaunchedEffect(stored, previewsKnown) {
@@ -1905,7 +1967,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     LaunchedEffect(page, live) {
         val url = page ?: return@LaunchedEffect
         if (url == requested) return@LaunchedEffect
-        if (displayAddress(url, previews.orEmpty()) is DisplayAddress.Preview) {
+        if (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview) {
             val cookie = actions.previewCookie()
             if (cookie != null && cookie.url !in webViews.previewCookies) {
                 if (!live) return@LaunchedEffect
@@ -1979,7 +2041,7 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
     ) {
         val loading = state.loading is LoadingState.Loading
         BrowserToolbar(
-            shown = shown?.let { displayAddress(it, previews.orEmpty()).text() }.orEmpty(),
+            shown = shown?.let { displayAddress(it, previews.orEmpty(), byPort).text() }.orEmpty(),
             full = shown,
             canGoBack = state.canGoBack,
             canGoForward = state.canGoForward,
@@ -2011,16 +2073,6 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
             when (val b = body) {
                 BrowserBody.NewTab -> BrowserMessage("Type a site, or a port such as 5173.", "browser-new-tab")
                 is BrowserBody.Said -> BrowserMessage(b.message, "browser-said")
-                is BrowserBody.Offer -> PortOffer(b.port, onMake = { done ->
-                    scope.launch {
-                        val made = actions.makePreview(workspaceId, b.port)
-                        if (made != null) {
-                            previews = previews.orEmpty() + made
-                            go("http://localhost:${b.port}${b.path}")
-                        }
-                        done(made != null)
-                    }
-                })
                 is BrowserBody.Page -> {
                     ProvideWebViewRuntime(webViews.runtime) {
                         WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager)
@@ -2055,7 +2107,7 @@ Expected: PASS. If `aPreviewTakesTheCookieBeforeItLoads` loads before the cookie
 
 ```bash
 git add apps/ui/src/commonMain/kotlin/dev/supermux/ui/browser/BrowserPane.kt apps/ui/src/commonMain/kotlin/dev/supermux/ui/shell/ViewHost.kt apps/ui/src/jvmTest
-git commit -m "feat(browser): the Browser pane: a synced page under its bars, previews through their cookie, ports offered (#105)"
+git commit -m "feat(browser): the Browser pane: a synced page under its bars, previews through their cookie, ports by port (#105)"
 ```
 
 ---
@@ -2122,9 +2174,10 @@ class LinkOpenerTest {
         assertEquals(listOf("https://vitejs.dev/"), platform.openedUrls)
     }
 
-    @Test fun aPressWithCtrlOrCmdIsRememberedForTheLinkItOpens() = runComposeUiTest {
+    @Test fun aPressWithThePlatformsModifierIsRememberedForTheLinkItOpens() = runComposeUiTest {
         val clicks = ClickModifiers()
-        setPlatformContent { Box(Modifier.size(100.dp).testTag("t").focusable().trackClickModifiers(clicks)) }
+        // Ctrl, as on Linux and Windows (apple = false); on Apple platforms it's ⌘, never either (#96).
+        setPlatformContent { Box(Modifier.size(100.dp).testTag("t").focusable().trackClickModifiers(clicks, apple = false)) }
         onNodeWithTag("t").performMouseInput { click() }
         assertFalse(clicks.modified)
         onNodeWithTag("t").requestFocus()
@@ -2255,7 +2308,7 @@ On a phone, a link's tab, new or brought forward, becomes the active view, the w
 - [ ] **Step 8: Run the tests, then the chat and shell suites the change touches**
 
 Run: `… ./gradlew :ui:jvmTest --tests 'dev.supermux.ui.browser.*' --tests 'dev.supermux.ui.chat.Markdown*' --tests 'dev.supermux.ui.shell.ViewHostTest' --tests 'dev.supermux.ui.workspace.*' --max-workers=2`
-Expected: PASS. If `aPressWithCtrlOrCmdIsRememberedForTheLinkItOpens` fails because the test's mouse events carry no key state, give `ClickModifiers` an internal setter test instead, and check the real ⌘-click on the Mac in Task 10.
+Expected: PASS. If `aPressWithThePlatformsModifierIsRememberedForTheLinkItOpens` fails because the test's mouse events carry no key state, give `ClickModifiers` an internal setter test instead, and check the real ⌘-click on the Mac in Task 10.
 
 - [ ] **Step 9: Compile the web client** (it sets the new capability)
 
@@ -2358,13 +2411,13 @@ git commit -m "feat(browser): a Browser tab shows its page's icon (#105)"
 
 - [ ] **Step 1: Every test the plan touched, and the targets this box builds.**
 
-Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.browser.*' --tests 'dev.supermux.workspace.*' --tests 'dev.supermux.util.TransportPolicyTest' --tests 'dev.supermux.net.BrokerApiPreviewTokenTest' :ui:jvmTest --tests 'dev.supermux.ui.browser.*' --tests 'dev.supermux.ui.shell.*' --tests 'dev.supermux.ui.chat.Markdown*' --tests 'dev.supermux.ui.workspace.*' :ui:compileKotlinWasmJs :ui:compileDebugKotlinAndroid :web:compileKotlinWasmJs --max-workers=2`
+Run: `… ./gradlew :shared:jvmTest --tests 'dev.supermux.browser.*' --tests 'dev.supermux.workspace.*' --tests 'dev.supermux.util.TransportPolicyTest' --tests 'dev.supermux.net.BrokerApiBrowserTest' :ui:jvmTest --tests 'dev.supermux.ui.browser.*' --tests 'dev.supermux.ui.shell.*' --tests 'dev.supermux.ui.chat.Markdown*' --tests 'dev.supermux.ui.workspace.*' :ui:compileKotlinWasmJs :ui:compileDebugKotlinAndroid :web:compileKotlinWasmJs --max-workers=2`
 Expected: PASS, BUILD SUCCESSFUL.
 
 - [ ] **Step 2: The Mac, real WebKit.** This needs the 2a car's glue, built on the Mac. Follow Tally's terms: a `.lease` in `~/work/supermux-hotreload`, nice, one Gradle worker, no VM, and load and swap checked twice before starting. Ping Tally at the start and at the finish, and leave things clean. Then `:desktop:run` against the live broker, and check:
   1. New tab → Browser (row 6). Type `vitejs.dev`: the page loads, and its title and icon land on the tab.
   2. In a chat, click a link: a new Browser tab opens to the right. Click the same link again: that tab comes forward. ⌘-click it: Safari opens it.
-  3. In a chat, click `http://localhost:<an exposed port>`: the tab opens the preview with no 401. That proves the cookie, which needs #105 car 2 live.
+  3. In a chat, click `http://localhost:<port>`: the tab opens it as "port <n>" with no 401. That proves the cookie, which needs #105 car 2 live. With the by-port broker car live, it opens through `/p/<port>/`; without it, through a named preview of an exposed port.
   4. ⌘F finds, ⌘= zooms, ⌘R reloads, ⌘L selects the address.
   5. Open the tab on a second client (the web app): the page follows.
 
@@ -2383,7 +2436,7 @@ Rebasing drops the two merges, because their commits are on dev by then. Send Mu
 
 - [ ] **Step 5: Shared memory.** Append to `~/.mux/domains/claudemux.md` under `## #105 the Browser tab in the app (YYYY-MM-DD)`:
   - where it lives (`ui/browser`, `shared/browser`, `WorkspaceBrowserOpener`);
-  - the rules it follows: same-link reuse, ⌘-click, the web client, ports through previews, the offer;
+  - the rules it follows: same-link reuse, strict ⌘/Ctrl-click, the web client, ports through the by-port preview (preview cookie only);
   - the preview cookie sequence: a blank page, then the cookie, then the page;
   - favicons are local;
   - its keys stay pane-local until #96 phase 2.
