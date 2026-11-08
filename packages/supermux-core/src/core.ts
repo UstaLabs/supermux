@@ -909,6 +909,8 @@ export class Core {
      * raw update went out unnormalized.
      */
     let heldCommands: AgentUpdate | undefined
+    /** Likewise the last model list (an ACP session start's configOptions, #102): state, normalized once the Session exists. */
+    let heldModels: AgentUpdate | undefined
     /**
      * A new conversation the agent went on in while opening (a re-attach replaying a /clear, or a record one /clear
      * behind its process): the record is made with it, and the Session reports it once it exists.
@@ -968,6 +970,7 @@ export class Core {
           if (session) session.update(update)
           else if (!discarded) {
             if (carriesCommands(update)) heldCommands = update
+            if (carriesModels(update)) heldModels = update
             if (holding) {
               earlyBytes += jsonBytes(update.value)
               if (earlyBytes > EARLY_UPDATE_BYTES) {
@@ -1077,10 +1080,12 @@ export class Core {
         else if (item.normalize) {
           session.update(item.update)
           if (item.update === heldCommands) heldCommands = undefined
+          if (item.update === heldModels) heldModels = undefined
         }
         else this.events.emit({ type: "session.update", sessionId: record.id, update: item.update })
       }
-      if (heldCommands) session.reportHeldCommands(heldCommands)
+      if (heldCommands) session.reportHeldState(heldCommands)
+      if (heldModels) session.reportHeldState(heldModels)
       // The latest one: a replay can report it after open() returned, while the record was being saved.
       if (openingReset) session.conversationReset(openingReset)
       if (!holding) for (const notice of outstandingActivity.values()) session.reportActivity(notice)
@@ -1645,6 +1650,12 @@ function carriesCommands(update: AgentUpdate): boolean {
   if (update.protocol === "acp") return value.sessionUpdate === "available_commands_update"
   if (value.type === "system") return value.subtype === "commands_changed"
   return value.type === "control_response" && Array.isArray(value.response?.response?.commands)
+}
+
+/** An ACP driver's forwarded session-start option lists (the agent's models, #102). */
+function carriesModels(update: AgentUpdate): boolean {
+  const value = update.value as { method?: unknown } | null | undefined
+  return update.protocol === "native" && !!value && typeof value === "object" && value.method === "config_options"
 }
 
 /** A driver's ConversationReset, copied; undefined unless both ids are nonempty strings. */

@@ -6,7 +6,9 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cursor, type CursorOptions } from '../src/agents/index.js'
-import type { DriverContext } from '../src/types.js'
+import type { CoreEvent, DriverContext } from '../src/types.js'
+import { createCore } from '../src/core.js'
+import { TEST_LIMITS, nextId } from './helpers.js'
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/cursor-agent.mjs', import.meta.url))
@@ -173,6 +175,22 @@ test("a session start hands the host Cursor's model options (#102)", async () =>
     expect(forwarded?.protocol).toBe('native')
     expect(forwarded?.value.params.configOptions.find(o => o.id === 'model')?.options).toEqual([{ value: 'default[]', name: 'Auto' }, { value: 'composer-1[fast=true]', name: 'composer-1' }])
   } finally { await r.close({ mode: 'shutdown' }) }
+})
+
+test("through Core, the model list Cursor gives while a session opens becomes one models-update (#102)", async () => {
+  // session/new answers before Core has made the Session, while it holds updates: like a command list, the model
+  // list is state, so it must still come out normalized (a host learns Cursor's picker from it).
+  const stateDirectory = mkdtempSyncDir()
+  const core = createCore({ stateDirectory, agents: [driver()], limits: TEST_LIMITS })
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  try {
+    await core.sessions.create({ agent: 'cursor', cwd: process.cwd(), id: nextId() })
+    const models = events.flatMap(e => e.type === 'session.event' && e.event.kind === 'models-update' ? [e.event.models] : [])
+    expect(models).toEqual([[{ value: 'default[]', name: 'Auto' }, { value: 'composer-1[fast=true]', name: 'composer-1' }]])
+  } finally {
+    await core.close({ agents: 'shutdown' })
+  }
 })
 
 test('sessionConfig model+mode is sent after session/load', async () => {

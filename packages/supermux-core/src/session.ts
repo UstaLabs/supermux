@@ -567,12 +567,12 @@ export class Session {
   }
 
   /**
-   * A command list the agent reported while this session was opening, which Core passed on raw: only its
-   * commands-update is emitted (state, not turn content). See Core's held updates.
+   * A command or model list (#102) the agent reported while this session was opening, which Core passed on raw: only
+   * its commands-update / models-update is emitted (state, not turn content). See Core's held updates.
    */
-  reportHeldCommands(update: AgentUpdate): void {
+  reportHeldState(update: AgentUpdate): void {
     if (this.state === "closed") return
-    for (const body of this.runtime.normalize?.(update) ?? []) if (body.kind === "commands-update") this.emitNormalized(body, update)
+    for (const body of this.runtime.normalize?.(update) ?? []) if (body.kind === "commands-update" || body.kind === "models-update") this.emitNormalized(body, update)
   }
 
   /**
