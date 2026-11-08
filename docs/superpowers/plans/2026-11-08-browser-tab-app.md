@@ -261,7 +261,7 @@ private fun browserTabTitle(view: ViewDto): String = when (val state = BrowserVi
 fun closeNeedsConfirmation(kind: String): Boolean = kind != "editor" && kind != "browser"
 ```
 
-  - `WorkspacePanes.kt`, in `ViewTabIcon`'s `when`: add `v?.kind == "browser" -> Icons.Outlined.Language` after the `display` line, and `import androidx.compose.material.icons.outlined.Language`. Task 10 adds the page's own icon.
+  - `WorkspacePanes.kt`, in `ViewTabIcon`'s `when`: add `v?.kind == "browser" -> Icons.Outlined.Language` after the `display` line, and `import androidx.compose.material.icons.outlined.Language`. Task 9 adds the page's own icon.
   - `PhoneTabSwitcher.kt`, in `switcherIcon`: add `"browser" -> Icons.Filled.Language` after `"display"`, and `import androidx.compose.material.icons.filled.Language`.
 
 - [ ] **Step 6: Run the tests, then the New tab page's own tests**
