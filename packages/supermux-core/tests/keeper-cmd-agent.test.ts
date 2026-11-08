@@ -63,3 +63,34 @@ test.skipIf(process.platform !== 'win32')('the keeper starts a .cmd agent, talks
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// An interrupt is TerminateProcess on Windows: sent to the recorded pid alone it ended cmd.exe and left the agent
+// behind it running, with no keeper. The keeper treats that pid as the root of the agent's tree.
+test.skipIf(process.platform !== 'win32')('an interrupt of a .cmd agent does not leave the program behind cmd.exe running', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'keeper-cmd-int-'))
+  try {
+    const shim = join(dir, 'echo agent.cmd')
+    writeFileSync(shim, `@"${process.execPath}" "${fixture}" %*\r\n`)
+    const pidFile = join(dir, 'agent.pid')
+    const conn = await connectKeeper({
+      stateDirectory: join(dir, 'state'),
+      sessionId: 'cmd-agent-int',
+      spec: {
+        command: shim, args: [], cwd: dir,
+        env: { ...(process.env as Record<string, string>), PID_FILE: pidFile },
+        frameShape: 'jsonrpc', captureStderr: false,
+      },
+      limits: { maxFrameBytes: 4096, shutdownTimeoutMs: 2_000, parkedDeadlineMs: 5_000, journalMaxBytes: 64_000, connectTimeoutMs: 30_000 },
+      cursor: 0,
+    })
+    conn.write(JSON.stringify({ cmd: 'echo', n: 1 }))
+    expect(await nextFrame(conn)).toContain('"echoed":1')
+    await until('the agent to say where it runs', () => { try { return readFileSync(pidFile, 'utf8').length > 0 } catch { return false } })
+    const agentPid = Number(readFileSync(pidFile, 'utf8'))
+    conn.signal('SIGINT')
+    await until('the interrupted program behind cmd.exe to stop', () => !alive(agentPid))
+    await conn.shutdown().catch(() => {})
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
