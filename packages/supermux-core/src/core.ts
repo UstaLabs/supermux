@@ -11,7 +11,7 @@ import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import { AccountRegistry, systemAccountId } from "./accounts/registry.js"
 import { adapterFor } from "./accounts/adapters/index.js"
-import { ACCOUNT_UNAVAILABLE_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
+import { ACCOUNT_UNAVAILABLE_ERROR, NOT_SIGNED_IN_ERROR, BALANCE_WINDOW, accountHttpStatus, limited, pickAccount, switchable } from "./accounts/policy.js"
 import { UsageStore } from "./accounts/usage-store.js"
 import { defaultLoginRunner, defaultLoginSchedule, findCommand, startLogin, type LoginKind } from "./accounts/login.js"
 import { assertVaultId } from "./accounts/vault.js"
@@ -616,13 +616,15 @@ export class Core {
         const status = accountHttpStatus(result.error)
         if (status !== undefined) this.accountRefusedTurn(event.sessionId, status, result.error)
       }
-    } else if (event.type === "session.event" && event.event.kind === "error" && event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR) {
+    } else if (event.type === "session.event" && event.event.kind === "error" && (event.event.errorType === ACCOUNT_UNAVAILABLE_ERROR || event.event.errorType === NOT_SIGNED_IN_ERROR)) {
       const record = this.live.get(event.sessionId)?.snapshot()
       if (!record || record.authProfile !== undefined) return
       const account = record.account ?? systemAccountId(record.agent)
       const reason = event.event.message
       if (this.inTurn.has(event.sessionId)) this.turnRefused.add(event.sessionId)
-      if (this.usage.markUnavailable(account, reason)) {
+      // Not signed in (#106): the login is dead (expired, revoked or gone), so it is marked to be signed in again.
+      const code = event.event.errorType === NOT_SIGNED_IN_ERROR ? ACCOUNT_EXPIRED : undefined
+      if (this.usage.markUnavailable(account, reason, new Date(), code)) {
         this.events.emit({ type: "account.unavailable", sessionId: event.sessionId, agent: record.agent, account, reason })
       }
       if (this.autoSwitch()) {
@@ -1627,6 +1629,8 @@ const DEFAULT_UNAVAILABLE_CONTINUE_PROMPT = "Continue from where you stopped. Yo
 const LIMIT_STOP_REASON = /limit|quota/i
 /** An out-of-credits account (HTTP 402) counts as full this long, unless fresher usage says otherwise first. */
 const BALANCE_RETRY_MS = 60 * 60_000
+/** The unavailable-mark code of a login that must be signed in again (the broker's SIGN_IN_EXPIRED). */
+const ACCOUNT_EXPIRED = "account_expired"
 /** Token sessions open with at least this much validity and are reopened (when idle) this long before expiry. */
 const SESSION_TOKEN_MARGIN_MS = 30 * 60_000
 const LOGIN_TIMEOUT_MS = 30 * 60_000

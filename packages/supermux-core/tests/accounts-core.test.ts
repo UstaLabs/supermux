@@ -37,6 +37,10 @@ function fake(id: string): Fake {
             const text = content[0]?.type === "text" ? content[0].text : ""
             prompts.push({ ...(context.account !== undefined ? { account: context.account } : {}), text })
             if (text.startsWith("usage:")) context.onUpdate({ protocol: "native", value: { rateLimits: JSON.parse(text.slice(6)) } })
+            if (text.startsWith("signout:")) {
+              context.onUpdate({ protocol: "native", value: { signedOut: text.slice(8) } })
+              throw new Error(text.slice(8))
+            }
             if (text.startsWith("refuse:")) {
               context.onUpdate({ protocol: "native", value: { refused: text.slice(7) } })
               throw new Error(text.slice(7))
@@ -56,7 +60,8 @@ function fake(id: string): Fake {
           interrupt: async () => {},
           close: async () => {},
           normalize: update => {
-            const value = update.value as { rateLimits?: unknown; refused?: string }
+            const value = update.value as { rateLimits?: unknown; refused?: string; signedOut?: string }
+            if (value && typeof value === "object" && typeof value.signedOut === "string") return [{ kind: "error", message: value.signedOut, errorType: "not_signed_in" }]
             if (value && typeof value === "object" && typeof value.refused === "string") return [{ kind: "error", message: value.refused, errorType: "account_unavailable" }]
             return value && typeof value === "object" && "rateLimits" in value ? [{ kind: "usage", rateLimits: value.rateLimits }] : []
           },
@@ -788,4 +793,23 @@ test("a session whose account was removed reopens on the account it is moved to,
   const back = await core.sessions.resume(id, { account: "claude:system" })
   expect(agents[0]!.contexts.at(-1)!.account).toBe("claude:system")
   expect((await (await back.send({ content: text("hello"), whenBusy: "queue" })).completed).status).toBe("completed")
+})
+
+test("a turn refused as not signed in marks its account signed out (account_expired) and the switch moves the session on (#106)", async () => {
+  const { core, agents, events } = await setup({ autoSwitch: true })
+  const cwd = await scratch()
+  await core.accounts.add({ id: "a", agent: "claude", method: "token", secret: "t-a" })
+  const id = nextId()
+  const session = await core.sessions.create({ id, agent: "claude", cwd, account: "a" })
+  const EXPIRED = "OAuth session expired and could not be refreshed"
+  expect((await (await session.send({ content: text(`signout:${EXPIRED}`), whenBusy: "queue" })).completed).status).toBe("failed")
+  expect(await waitFor(events, e => e.type === "account.unavailable" ? e : undefined))
+    .toEqual({ type: "account.unavailable", sessionId: id, agent: "claude", account: "a", reason: EXPIRED })
+  expect(core.accounts.unavailable("a")).toEqual({ reason: EXPIRED, since: expect.any(Date), code: "account_expired" })
+  expect(await waitFor(events, e => e.type === "account.switched" ? e : undefined))
+    .toEqual({ type: "account.switched", sessionId: id, from: "a", to: "claude:system", reason: "unavailable" })
+  expect((await core.accounts.pick("claude"))?.id).toBe("claude:system")
+  const deadline = Date.now() + 3000
+  while (agents[0]!.prompts.length < 2 && Date.now() < deadline) await settle(10)
+  expect(agents[0]!.prompts.at(-1)).toEqual({ account: "claude:system", text: UNAVAILABLE_CONTINUE })
 })
