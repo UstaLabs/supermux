@@ -25,7 +25,7 @@ import { isWav } from "../wav"
 import { authCredPath } from "../../agents/detect"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 import { home } from "../../../shared/home"
-import { host } from "@supermux/platform"
+import { dirs, host } from "@supermux/platform"
 
 const log = makeLogger("stt-cursor")
 
@@ -199,8 +199,7 @@ export function cursorSttEngine(opts: CursorSttEngineOpts = {}): SttEngine {
   const read = opts.readFileFn ?? defaultRead
   const authPath = opts.authPath ?? authCredPath("cursor", {
     home: home(),
-    xdgConfigHome: process.env.XDG_CONFIG_HOME,
-    appData: process.env.APPDATA,
+    ...dirs.baseDirs(),
     platform: host.os(),
   })
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
