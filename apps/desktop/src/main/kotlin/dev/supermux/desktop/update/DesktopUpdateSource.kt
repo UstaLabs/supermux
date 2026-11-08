@@ -114,12 +114,67 @@ object DesktopUpdateSource {
             cmd.start()
             return true
         }
+        val app = System.getProperty("jpackage.app-path")
+        if (file.name.endsWith(".deb") && linuxRestarts(DesktopOs.current, app, File(PKEXEC).canExecute())) {
+            return installLinuxDeb(file, app, ProcessHandle.current().pid(), run = { dev.supermux.desktop.host.SystemOsEnv.runResult(it, PASSWORD_PROMPT_MS).exit }, start = { it.start() })
+        }
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
             Desktop.getDesktop().open(file)
             return false
         }
         openCommand(file.absolutePath).start(ProcessBuilder.Redirect.INHERIT)
         return false
+    }
+
+    // ── Linux (#113): "Restart to update" ──
+
+    private const val UPDATE_RELAUNCH_APP = "SUPERMUX_UPDATE_APP"
+    private const val UPDATE_RELAUNCH_PID = "SUPERMUX_UPDATE_APP_PID"
+    private const val PKEXEC = "/usr/bin/pkexec"
+
+    /** How long the password prompt may stay open before the update gives up. */
+    private const val PASSWORD_PROMPT_MS = 10 * 60_000L
+
+    /** The .deb installed with one password prompt: polkit's pkexec runs dpkg as root. Absolute paths, never the PATH. */
+    internal fun linuxInstallArgv(deb: File): List<String> = listOf(PKEXEC, "/usr/bin/dpkg", "-i", deb.absolutePath)
+
+    /** Linux restarts to update when the app is the packaged one ([app], jpackage's launcher) and pkexec is there. */
+    internal fun linuxRestarts(os: DesktopOs, app: String?, pkexecPresent: Boolean): Boolean =
+        os == DesktopOs.LINUX && !app.isNullOrBlank() && pkexecPresent
+
+    /**
+     * The relaunch helper: waits (up to ~2 min) for the app's process to end, then starts the app again, detached. Its
+     * paths come in the environment, never as code.
+     */
+    internal const val LINUX_RELAUNCH_SCRIPT =
+        "i=0; while kill -0 \"\$$UPDATE_RELAUNCH_PID\" 2>/dev/null && [ \$i -lt 600 ]; do sleep 0.2; i=\$((i+1)); done; " +
+            "[ -x \"\$$UPDATE_RELAUNCH_APP\" ] && setsid \"\$$UPDATE_RELAUNCH_APP\" >/dev/null 2>&1 < /dev/null &"
+
+    internal fun linuxRelaunchCommand(app: String, appPid: Long): OsCommand = OsCommand(
+        listOf("/bin/sh", "-c", LINUX_RELAUNCH_SCRIPT),
+        mapOf(UPDATE_RELAUNCH_APP to app, UPDATE_RELAUNCH_PID to appPid.toString()),
+    )
+
+    /**
+     * Install [deb] while the app still runs (Linux replaces a running program's files), and only when that worked
+     * start the relaunch helper: true, the app must now quit. A cancelled password prompt (pkexec's 126) or a failed
+     * dpkg throws, with the app left running.
+     */
+    internal fun installLinuxDeb(deb: File, app: String, appPid: Long, run: (List<String>) -> Int, start: (OsCommand) -> Any): Boolean {
+        when (val exit = run(linuxInstallArgv(deb))) {
+            0 -> Unit
+            126, 127 -> throw IllegalStateException("The update was cancelled, so supermux wasn't updated.")
+            else -> throw IllegalStateException("The update couldn't be installed (dpkg exit $exit).")
+        }
+        start(linuxRelaunchCommand(app, appPid))
+        return true
+    }
+
+    /** Whether this app's installer restarts it by itself: the Windows MSI, or a packaged Linux app with pkexec. */
+    fun restartsToUpdate(): Boolean = when (installerExtension()) {
+        "msi" -> true
+        "deb" -> linuxRestarts(DesktopOs.current, System.getProperty("jpackage.app-path"), File(PKEXEC).canExecute())
+        else -> false
     }
 
     /** AWT's browser first; otherwise [openCommand], which never hands the URL to `cmd` (an `&` would split it). */

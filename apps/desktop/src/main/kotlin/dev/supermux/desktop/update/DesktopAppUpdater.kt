@@ -38,7 +38,7 @@ class DesktopAppUpdater(
     private val loadBackground: () -> Boolean = { DesktopUpdateSource.backgroundUpdates() },
     private val saveBackground: (Boolean) -> Unit = { DesktopUpdateSource.setBackgroundUpdates(it) },
     /** Whether the installer closes, updates and reopens the app by itself: the Windows MSI's helper. */
-    override val restartsToUpdate: Boolean = DesktopUpdateSource.installerExtension() == "msi",
+    override val restartsToUpdate: Boolean = DesktopUpdateSource.restartsToUpdate(),
     /** The version an install was handed off for, kept across the restart so the updated app can say so (#113). */
     private val loadInstalling: () -> String? = { DesktopUpdateSource.installing() },
     private val saveInstalling: (String?) -> Unit = { DesktopUpdateSource.setInstalling(it) },
