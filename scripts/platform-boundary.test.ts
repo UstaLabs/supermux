@@ -24,6 +24,13 @@ describe("TypeScript rules", () => {
     expect(ids(ts("src/a.ts", "const found = Bun.which(name) !== null"))).toEqual(["which-path"])
   })
 
+  // A type is no process: only an import that brings in a value can start one.
+  test("a type-only import from child_process is not a spawn", () => {
+    expect(ts("src/a.ts", 'import type { ChildProcess } from "child_process"')).toEqual([])
+    expect(ts("src/a.ts", 'export type { ChildProcess } from "node:child_process"')).toEqual([])
+    expect(ids(ts("src/a.ts", 'import { spawn, type ChildProcess } from "child_process"'))).toEqual(["spawn"])
+  })
+
   test("the runtime's own answers pass", () => {
     expect(ts("src/a.ts", 'symlinkSync(dir, link, "junction")')).toEqual([])
     expect(ts("src/a.ts", "const leaf = basename(p); const rel = relative(root, p)")).toEqual([])
