@@ -78,6 +78,9 @@ internal class FakeAppUpdater(
                 phase = if (found.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                 release = found,
                 dismissed = found.latestVersion in dismissedVersions,
+                // Contract (#113): the background choice and a ready download outlive a check.
+                background = state.value.background,
+                ready = state.value.ready,
             )
         }
         return state.value
@@ -150,5 +153,34 @@ internal class FakeAppUpdater(
     override fun dismiss() {
         state.value.release?.latestVersion?.let { dismissedVersions.add(it) }
         state.value = state.value.copy(dismissed = true)
+    }
+
+    // ── #113: background updates ──
+    override var restartsToUpdate: Boolean = false
+    override var offersBackgroundUpdates: Boolean = false
+
+    override var justUpdatedTo: String? = null
+    var acknowledged = 0
+        private set
+
+    override fun acknowledgeUpdated() {
+        acknowledged++
+        justUpdatedTo = null
+    }
+
+    var prepares = 0
+        private set
+
+    override suspend fun prepareInBackground() {
+        prepares++
+    }
+
+    override fun setBackgroundUpdates(on: Boolean) {
+        state.value = state.value.copy(background = on)
+    }
+
+    /** Stands in for a background download that finished: the release found by [check] is now [UpdateStatus.ready]. */
+    fun becomeReady(installer: DownloadedInstaller = DownloadedInstaller("/tmp/ready.msi", "msi")) {
+        state.value = state.value.copy(background = true, ready = installer)
     }
 }

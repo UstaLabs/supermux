@@ -319,4 +319,22 @@ class AppUpdateScreenTest {
         assertEquals("Downloads the latest .appimage and opens it.", installCaption("appimage"))
         assertEquals("Downloads the latest installer and opens it.", installCaption(null))
     }
+
+    // #113: "Download updates in the background", where the host offers it (desktop); on unless turned off.
+    @Test fun the_background_switch_shows_where_offered_and_turns_background_updates_off() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release(available = false)).also { it.offersBackgroundUpdates = true; it.setBackgroundUpdates(true) }
+        setPlatformContent(platform(updater)) { AppUpdateScreen() }
+        waitForIdle()
+        onNodeWithText("Download updates in the background").assertIsDisplayed()
+        onNodeWithTag("app_update_background").performClick()
+        waitForIdle()
+        assertEquals(false, updater.status.value.background)
+    }
+
+    @Test fun no_background_switch_where_the_host_does_not_offer_it() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release(available = false))
+        setPlatformContent(platform(updater)) { AppUpdateScreen() }
+        waitForIdle()
+        onNodeWithTag("app_update_background").assertDoesNotExist()
+    }
 }

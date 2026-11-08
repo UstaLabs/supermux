@@ -175,6 +175,8 @@ import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
 import dev.supermux.ui.update.AppUpdateScreen
+import dev.supermux.ui.update.announceUpdate
+import dev.supermux.ui.update.keepUpdated
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
@@ -203,6 +205,7 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -811,7 +814,10 @@ fun SupermuxApp(
             // One update check per launch, here rather than in the sidebar's card: on a phone the
             // sidebar comes and goes with every chat, and each return would be another poll.
             val appUpdater = LocalPlatform.current.updates
-            LaunchedEffect(appUpdater) { appUpdater.check() }
+            LaunchedEffect(appUpdater) { appUpdater.keepUpdated() }
+            // After the app's own update (#113): say so once, when the sessions are back.
+            val notices = LocalPlatform.current.notices
+            LaunchedEffect(appUpdater) { appUpdater.announceUpdate(notices, fleet.sessions.map { it.isNotEmpty() }) }
             Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
 
