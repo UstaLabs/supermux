@@ -22,6 +22,7 @@ async function boot() {
   runMigrations(db, MIGRATIONS)
   const registry = new Registry(db)
   registry.register({ name: "alpha", workdir: "/tmp", tmux_target: "t:alpha", pid: 1 })
+  registry.refuseProxyPort(9898) // main.ts tells the registry the broker's own port
   const token = new DeviceStore(devicesFile).mint("test-device").token
   const opts: WebChannelOpts = {
     port: 0, devicesFile, publicUrl: "http://localhost",
@@ -82,4 +83,13 @@ test("POST /proxies without a domain still gets the random px- default", async (
     expect(res.status).toBe(200)
     expect(((await res.json()) as { domain: string }).domain).toMatch(/^px-[0-9a-f]{8}$/)
   }
+})
+
+test("POST /proxies refuses the broker's own port with a 400, and still takes any other", async () => {
+  const { registry, post } = await boot()
+  const own = await post({ sessionName: "alpha", port: 9898, domain: "app" })
+  expect(own.status).toBe(400)
+  expect(await own.json()).toEqual({ error: "can't expose port 9898: that is the broker itself" })
+  expect(registry.listProxies()).toEqual([])
+  expect((await post({ sessionName: "alpha", port: 9899, domain: "app" })).status).toBe(200)
 })

@@ -363,6 +363,14 @@ describe("proxy commands", () => {
     expect(r.getProxy("px-1234")?.port).toBe(3000)
   })
 
+  test("/proxy refuses the broker's own port", async () => {
+    r.refuseProxyPort(9898)
+    const result = await handleSlash({ command: "proxy", rest: "zoom 9898 app" }, ctx)
+    expect(result.text).toBe("proxy failed: can't expose port 9898: that is the broker itself")
+    expect(r.listProxies()).toEqual([])
+    expect((await handleSlash({ command: "proxy", rest: "zoom 9899 app" }, ctx)).text).toContain("proxy created")
+  })
+
   test("/proxy nope 3000 rejects unknown session", async () => {
     const result = await handleSlash({ command: "proxy", rest: "nope 3000 myapp" }, ctx)
     expect(result.text).toMatch(/no such session/)

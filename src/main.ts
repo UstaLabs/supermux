@@ -4835,7 +4835,13 @@ try {
   if (swept.length) log.info("runtime_assets_swept", { removed: swept })
 } catch (err) { log.warn("runtime_assets_sweep_failed", { err: String(err) }) }
 await refreshTelegramMenu()
-if (webChannel) await webChannel.start()
+if (webChannel) {
+  // No named proxy may point at the broker itself (Registry.refuseProxyPort says why). Both: the configured port, and the
+  // one actually bound (they differ only for port 0).
+  if (MUX_WEB_PORT) registry.refuseProxyPort(MUX_WEB_PORT)
+  await webChannel.start()
+  registry.refuseProxyPort(webChannel.boundPort)
+}
 telemetry.start()
 {
   const t = telemetryState()
