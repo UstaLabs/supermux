@@ -9,7 +9,7 @@ import { REASON } from "../src/subagent-actions.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, CoreEvent } from "../src/types.js"
 import type { EventEnvelope, NormalizedBody } from "../src/events/normalized.js"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 import { fixturePath, replayAgent } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -27,7 +27,7 @@ function common(dir: string, env: Record<string, string>) {
   return {
     id: "agent", inheritEnv: true, mcpServers: [], env,
     permissions: { kind: "acp" as const, policy: "ask" as const, nativeMode: null },
-    setupTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256,
     cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 2000,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
   }

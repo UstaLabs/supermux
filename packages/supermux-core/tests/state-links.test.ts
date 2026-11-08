@@ -14,7 +14,7 @@ import { prepareAntigravityEnvironment } from "../src/environment/index.js"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, DriverContext } from "../src/types.js"
 import { CLAUDE_CONTEXT } from "../src/context/agents.js"
-import { TEST_LIMITS, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL("./fixtures/antigravity-agent.mjs", import.meta.url))
@@ -48,7 +48,7 @@ async function agyRig() {
   const options: AntigravityOptions = {
     id: "antigravity", command: process.execPath, args: [fixture], env: { FAKE_AGY_LOG: log }, inheritEnv: true,
     permissions: { kind: "antigravity", mode: "bypass" }, home: { shadow, user },
-    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
     keeper: { stateDirectory: paths.state, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
   }
   const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({

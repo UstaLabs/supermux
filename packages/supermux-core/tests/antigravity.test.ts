@@ -12,6 +12,7 @@ import { sessionPreamble } from "../src/context/agents.js"
 import type { LaunchContext } from "../src/context/types.js"
 import { prepareAntigravityEnvironment } from "../src/environment/index.js"
 import type { AgentUpdate, DriverContext } from "../src/types.js"
+import { FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL("./fixtures/antigravity-agent.mjs", import.meta.url))
@@ -37,7 +38,7 @@ async function rig() {
   const driver = (extra: Partial<AntigravityOptions> = {}) => antigravity({
     id: "antigravity", command: process.execPath, args: [fixture], env: { FAKE_AGY_LOG: log }, inheritEnv: true,
     permissions: { kind: "antigravity", mode: "bypass" }, home: { shadow, user },
-    setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, interruptGraceMs: 5000,
     keeper: { stateDirectory, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
     ...extra,
   })

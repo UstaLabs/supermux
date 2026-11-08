@@ -9,14 +9,14 @@ import { fileURLToPath } from "node:url"
 import { cursor } from "../src/agents/index.js"
 import type { LaunchContext } from "../src/context/types.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
-import { TEST_ACP_PERMISSIONS } from "./helpers.js"
+import { TEST_ACP_PERMISSIONS, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const dirs: string[] = []
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))) })
 function scratch(): string { const dir = mkdtempSync(join(tmpdir(), "cursor-skills-")); dirs.push(dir); return dir }
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url))
-const ACP = { setupTimeoutMs: 5000, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, inheritEnv: true }
+const ACP = { setupTimeoutMs: FIXTURE_SETUP_MS, shutdownTimeoutMs: 500, maxFrameBytes: 16 * 1024 * 1024, maxOutstandingActivity: 256, cancelRetryIntervalMs: 250, cancelRetryTimeoutMs: 10_000, inheritEnv: true }
 
 function cursorDriver(env: Record<string, string>, homeSkills?: boolean): AgentDriver {
   return cursor({

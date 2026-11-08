@@ -7,7 +7,7 @@ import {join} from 'node:path'
 import {claude} from '../src/claude/index.js'
 import { createCore } from '../src/core.js'
 import type {CoreEvent, DriverContext} from '../src/types.js'
-import { TEST_LIMITS, TEST_CLAUDE_PERMISSIONS, nextId } from './helpers.js'
+import { TEST_LIMITS, TEST_CLAUDE_PERMISSIONS, nextId, FIXTURE_SETUP_MS } from './helpers.js'
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -32,7 +32,7 @@ const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => claude({
   id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none', permissions: TEST_CLAUDE_PERMISSIONS, partialMessages: false,
-  setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
+  setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
   keeper: keeperOf(), ...extra,
 })
 const input = (text: string) => [{type: 'text' as const, text}]

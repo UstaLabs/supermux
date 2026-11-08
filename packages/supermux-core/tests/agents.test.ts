@@ -8,7 +8,7 @@ import { grok, opencode, type GrokOptions } from '../src/agents/index.js'
 import { MAX_OUTSTANDING_ACTIVITY } from '../src/activity.js'
 import { createCore } from '../src/core.js'
 import type { AgentDriver, AgentRuntime, DriverContext, PermissionsSpec } from '../src/types.js'
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/grok-agent.mjs', import.meta.url))
@@ -45,7 +45,7 @@ function grokRequired(extra: Partial<GrokOptions> = {}): GrokOptions {
     noLeader: true,
     inheritEnv: true,
     mcpServers: [],
-    setupTimeoutMs: 4000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 40,
     maxFrameBytes: 16 * 1024 * 1024,
     maxOutstandingActivity: 256,
