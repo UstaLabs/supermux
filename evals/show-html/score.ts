@@ -48,6 +48,14 @@ export interface Score {
 const LOCAL_REF = /\b(?:src|href)\s*=\s*["'](?!https?:|data:|blob:|#|mailto:|tel:|javascript:)([^"']+)["']|url\(\s*["']?(?!https?:|data:|blob:|#)[^)"'\s]+/i
 const PAGE_BACKGROUND = /(?:^|[}\s,>;])(?:html|body|:root)\s*(?:,\s*(?:html|body|:root)\s*)*\{[^}]*background(?:-color)?\s*:(?!\s*(?:transparent|none|inherit|initial|unset|var\(--sm-))/i
 
+/**
+ * No tokens and no tool call: the model never answered (a usage limit, a provider that hung). That isn't a result: the
+ * runner keeps it out of results.jsonl, so a rerun repeats it.
+ */
+export function gotNoAnswer(usage: Usage, calls: Call[]): boolean {
+  return usage.inputTokens + usage.cachedTokens + usage.outputTokens === 0 && calls.length === 0
+}
+
 export function pageTraits(html: string): { selfContained: boolean; usesTheme: boolean; transparent: boolean } {
   return { selfContained: !LOCAL_REF.test(html), usesTheme: /var\(\s*--sm-/.test(html), transparent: !PAGE_BACKGROUND.test(html) }
 }

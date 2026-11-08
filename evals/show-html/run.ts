@@ -10,7 +10,7 @@ import { PROMPTS, type EvalPrompt } from "./prompts"
 import { invocation, type AgentKind } from "./agents"
 import { launchBrowser } from "./check"
 import { clickRoundTrip } from "./click"
-import { score, type Call, type Result } from "./score"
+import { gotNoAnswer, score, type Call, type Result } from "./score"
 
 const RUN_TIMEOUT_MS = 4 * 60_000
 
@@ -29,7 +29,9 @@ function cleanEnv(extra: Record<string, string>): Record<string, string> {
   return { ...env, ...extra }
 }
 
-async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: Arm; prompt: EvalPrompt; sample: number; out: string; home?: string }): Promise<Result> {
+interface Ran { result: Result; answered: boolean; reason?: string }
+
+async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: Arm; prompt: EvalPrompt; sample: number; out: string; home?: string }): Promise<Ran> {
   const dir = resolve(o.out, "work", o.arm, o.model, `${o.prompt.id}-${o.sample}`)
   mkdirSync(dir, { recursive: true })
   for (const [path, body] of Object.entries(o.prompt.files ?? {})) {
@@ -62,13 +64,38 @@ async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: 
     }
   }
   const parsed = inv.parse(stdout)
-  return {
+  const answered = !gotNoAnswer(parsed.usage, calls)
+  const result: Result = {
     runId: o.runId, agent: o.agent, model: o.model, arm: o.arm, prompt: o.prompt.id, sample: o.sample, expect: o.prompt.expect,
     ...(o.prompt.heldOut ? { heldOut: true } : {}),
     score: score(o.prompt, calls, shownPage, sendWorks, parsed.finalText), usage: parsed.usage, finalText: parsed.finalText.slice(0, 2000),
     refusedTools: parsed.refusedTools, exitCode, timedOut, ms: Date.now() - started,
     ...(exitCode !== 0 && !timedOut ? { error: stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 400) } : {}),
   }
+  return { result, answered, ...(answered ? {} : { reason: noAnswerReason(stdout + "\n" + stderr, timedOut) }) }
+}
+
+/** Why the model didn't answer, when the CLI says so; OpenCode says it only in its own log. */
+function noAnswerReason(output: string, timedOut: boolean): string {
+  const said = output.split("\n").find((l) => /limit|quota|funds|credit|rate.?limit|overloaded|not (signed|logged) in|unauthori[sz]ed/i.test(l))
+  return said?.trim().slice(0, 300) ?? (timedOut ? "nothing came back before the cap (for OpenCode, see ~/.local/share/opencode/log)" : "no tokens and no tool call")
+}
+
+/**
+ * Runs the queue on [concurrency] workers. Three runs in a row with no answer stop it: a usage limit would otherwise
+ * fake hours of timeouts. Runs already started still finish.
+ */
+export async function drain<J>(queue: J[], concurrency: number, run: (job: J) => Promise<boolean>, maxNoAnswers = 3): Promise<"done" | "no-answer"> {
+  let noAnswers = 0
+  let stopped = false
+  const worker = async () => {
+    for (let job = queue.shift(); job !== undefined && !stopped; job = stopped ? undefined : queue.shift()) {
+      noAnswers = (await run(job)) ? 0 : noAnswers + 1
+      if (noAnswers >= maxNoAnswers) stopped = true
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker))
+  return stopped ? "no-answer" : "done"
 }
 
 /** The box is shared with his sessions: a run starts only below the load cap and with enough memory free. */
@@ -104,17 +131,24 @@ if (import.meta.main) {
     .filter((j) => !finished.has(`${model}/${j.arm}/${j.prompt.id}/${j.sample}`))
   console.log(`${queue.length} runs → ${out}/results.jsonl`)
   let done = 0
-  const worker = async () => {
-    for (let job = queue.shift(); job; job = queue.shift()) {
-      await waitForRoom(maxLoad, minFreeGb)
-      const r = await runOne({ runId, agent, model, out, home, ...job })
-      appendFileSync(join(out, "results.jsonl"), JSON.stringify(r) + "\n")
-      done++
-      console.log(`[${done}] ${r.arm} ${r.prompt}#${r.sample}: toolUse=${r.score.toolUse} shows=${r.score.shows} ` +
-        `problems=${r.score.realProblems.join("+") || "-"} repaired=${r.score.repaired ?? "-"} send=${r.score.sendWorks ?? "-"} ` +
-        `tokens=${r.usage.inputTokens + r.usage.cachedTokens}/${r.usage.outputTokens} $${r.usage.costUsd?.toFixed(4) ?? "?"} ` +
-        `${Math.round(r.ms / 1000)}s${r.timedOut ? " TIMEOUT" : ""}${r.error ? ` ERROR ${r.error}` : ""}`)
+  const end = await drain(queue, concurrency, async (job) => {
+    await waitForRoom(maxLoad, minFreeGb)
+    const { result: r, answered, reason } = await runOne({ runId, agent, model, out, home, ...job })
+    if (!answered) {
+      appendFileSync(join(out, "no-answer.jsonl"), JSON.stringify({ runId, model, arm: r.arm, prompt: r.prompt, sample: r.sample, reason, ms: r.ms, at: new Date().toISOString() }) + "\n")
+      console.log(`NO ANSWER ${r.arm} ${r.prompt}#${r.sample} after ${Math.round(r.ms / 1000)}s: ${reason}. Not scored; a rerun repeats it.`)
+      return false
     }
+    appendFileSync(join(out, "results.jsonl"), JSON.stringify(r) + "\n")
+    done++
+    console.log(`[${done}] ${r.arm} ${r.prompt}#${r.sample}: toolUse=${r.score.toolUse} shows=${r.score.shows} ` +
+      `problems=${r.score.realProblems.join("+") || "-"} repaired=${r.score.repaired ?? "-"} send=${r.score.sendWorks ?? "-"} ` +
+      `tokens=${r.usage.inputTokens + r.usage.cachedTokens}/${r.usage.outputTokens} $${r.usage.costUsd?.toFixed(4) ?? "?"} ` +
+      `${Math.round(r.ms / 1000)}s${r.timedOut ? " TIMEOUT" : ""}${r.error ? ` ERROR ${r.error}` : ""}`)
+    return true
+  })
+  if (end === "no-answer") {
+    console.error("Stopped: three runs in a row got no answer from the model (a usage limit?). See no-answer.jsonl; the same command resumes.")
+    process.exit(2)
   }
-  await Promise.all(Array.from({ length: concurrency }, worker))
 }

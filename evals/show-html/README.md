@@ -9,13 +9,13 @@ No app UI and no broker: each run starts an agent CLI in a throwaway folder with
 | file | what it is |
 |---|---|
 | `arms.ts` | the six arms: variants A (one tool), B (preview + show), C (one tool + a "check your result" line) × wordings 1 and 2: tool descriptions and the "Interactive HTML" instructions |
-| `prompts.ts` | the 18 fixed prompts, with what each should end with (a card or none); 16–18 force one problem on the first check |
+| `prompts.ts` | the 24 fixed prompts, with what each should end with (a card or none); 16–18 force one problem on the first check; 22–24 are held out from tuning the wordings |
 | `server.ts` | the stub MCP server: serves an arm's tools, runs the real check on each page, records `calls.jsonl` and `pages/` |
 | `check.ts` | the render check: the page in a sandboxed `blob:` frame at 390 and 720 px; script errors, blank, overflow, endless height; local addresses refused |
 | `page-api.ts` | what every page gets first: the `--sm-*` theme variables, a base sheet, `window.supermux` with the click guard |
 | `click.ts` | the click round trip as the web app will do it: real clicks through the DevTools protocol, the host's half of the guard |
-| `agents.ts` | how each CLI runs one prompt (Claude Code, Codex so far) |
-| `run.ts` | the runner: arms × prompts × samples on one agent and model → `results.jsonl` |
+| `agents.ts` | how each CLI runs one prompt: Claude Code, Codex, OpenCode, Cursor, Grok, Antigravity |
+| `run.ts` | the runner: arms × prompts × samples on one agent and model → `results.jsonl`; a run the model never answered goes to `no-answer.jsonl` instead |
 | `score.ts`, `report.ts` | scores per run, and the table per model × arm |
 
 ```sh
@@ -28,4 +28,7 @@ bun evals/show-html/report.ts ~/.cache/x/show-html-evals/*/results.jsonl
   subscription limits: pick one with room (`~/.mux/state/accounts/usage.json`), never the account your own session uses.
 - Claude runs have no Bash and load no user settings (`--setting-sources project`), so hooks and plugins don't skew them.
 - The runner strips every `MUX_*` variable, so a run can't reach the live broker.
+- A run with no tokens and no tool call never got an answer (a usage limit, a provider that hung). It isn't scored:
+  it goes to `no-answer.jsonl`, and the same command reruns it. Three in a row stop the runner (exit 2). OpenCode logs
+  the cause only in `~/.local/share/opencode/log/opencode.log` ("Free usage limit reached").
 - Tests: `SHOW_HTML_EVALS=1 bun test evals/show-html` runs the ones in real Chrome, Edge or Chromium (`MUX_CHECK_BROWSER` points at another one); without it only the pure ones run, as in CI.

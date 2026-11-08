@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { pageTraits, score, type Call } from "./score"
+import { gotNoAnswer, pageTraits, score, type Call } from "./score"
 import { PROMPTS } from "./prompts"
 
 const prompt = (id: string) => PROMPTS.find((p) => p.id === id)!
@@ -60,4 +60,13 @@ test("page traits: local files, theme variables, a page background", () => {
   expect(pageTraits(`<style>body { background: #000; color: #fff }</style>`).transparent).toBe(false)
   expect(pageTraits(`<style>html, body { background: transparent }</style>`).transparent).toBe(true)
   expect(pageTraits(`<style>.card { background: #111 }</style>`).transparent).toBe(true)
+})
+
+test("no tokens and no tool call is no answer at all (a usage limit, a provider that hung), not a result", () => {
+  const none = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }
+  expect(gotNoAnswer(none, [])).toBe(true)
+  // A plain answer with no card still answered.
+  expect(gotNoAnswer({ ...none, inputTokens: 11795, outputTokens: 102 }, [])).toBe(false)
+  // Claude Code reports tokens only at the end: a run cut off after calling a tool still answered.
+  expect(gotNoAnswer(none, [show(1, { shown: true })])).toBe(false)
 })
