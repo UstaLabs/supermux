@@ -161,6 +161,7 @@ import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.work.DownloadsBar
+import dev.supermux.ui.work.NowPlayingDock
 import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.workspace.ProjectRef
@@ -2402,7 +2403,8 @@ private fun NavItem(label: String, icon: ImageVector, tag: String, onClick: () -
  * The sticky sidebar footer — the same bar on a phone's Home and on a desktop: the host switch on
  * the left; theme / usage / devices / settings on the right, and before them, while anything is
  * listed, the downloads' ring (#95, design A) and a hairline. [card] stands on the bar, above its
- * sheet: the update card's place. The list the ring opens stands on both.
+ * sheet: the update card's place. While something plays, the player docks in the sheet above the
+ * host row (#118, design A). The list the ring opens stands on both.
  *
  * A slot rather than parameters on the screen — usage is an anchored popover whose body only the
  * shell can build, and so is the host switch ([hostSwitcher]), which reaches the fleet.
@@ -2437,6 +2439,8 @@ fun SessionListFooter(
                     .clip(RoundedCornerShape(10.dp))
                     .background(cs.surfaceContainerLow),
             ) {
+                // While something plays (#118, design A): the player, docked above the host row.
+                NowPlayingDock()
                 Row(
                     Modifier
                         .fillMaxWidth()

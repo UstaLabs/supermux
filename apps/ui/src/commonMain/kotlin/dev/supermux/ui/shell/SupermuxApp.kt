@@ -793,14 +793,23 @@ fun SupermuxApp(
                 dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
             }
         }
+    // The fleet's audio (#118) on the library the clips play through: one set of outputs for the fleet, kept with it,
+    // so a recreated shell (an Android rotation) finds the item still playing.
+    val audioOutputs = remember(fleet) {
+        fleet.retainedUi.getOrPut("audio.outputs") { dev.supermux.ui.work.LibraryAudioOutputs(fleet.retainedUi.scope) }
+            .also { if (!fleet.audio.hasOutputs) fleet.audio.useOutputs(it) }
+    }
     CompositionLocalProvider(
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,
         dev.supermux.ui.chat.LocalComposerAttachmentStore provides attachmentStore,
         // The fleet's downloads (#95): one a screen starts outlives it, as its retained state does.
         LocalDownloads provides fleet.downloads,
+        dev.supermux.ui.work.LocalAudioPlayer provides fleet.audio,
     ) {
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // The web's player element, unseen, at the root: what plays outlives every screen change.
+        dev.supermux.ui.work.AudioSurfaceHost(fleet.audio, audioOutputs)
         ShortcutRoot(shortcuts, Modifier.fillMaxSize()) {
             // The window's commands. Those that change the layout are off while a page is up (Settings, Archived,
             // New session…): it is modal, so a key must not change the layout behind it. New session and Settings
@@ -1017,7 +1026,11 @@ fun SupermuxApp(
                             onOpenSession = { sid -> ui.selectSession(sid) },
                             onShowSidebar = { ui.sidebarCollapsed = false },
                             // Downloads (#95): the bottom bar's ring, on the rail's own tone above its sheet.
-                            aboveFooter = { ActivityRailIcon() },
+                            // And the player (#118), above them, while something plays.
+                            aboveFooter = {
+                                dev.supermux.ui.work.AudioRailIcon()
+                                ActivityRailIcon()
+                            },
                             footer = {
                                 HostSwitcher(
                                     hosts = hostViews,
@@ -1848,6 +1861,7 @@ private fun WorkspacePanel(
     panesBind.sessionNames = sessionNames
     panesBind.unreadSessions = unreadSessions
     panesBind.downloads = LocalDownloads.current
+    panesBind.audio = dev.supermux.ui.work.LocalAudioPlayer.current
     ui.panesBinds[current.id] = panesBind
     androidx.compose.runtime.DisposableEffect(panesBind) {
         panesBind.holders++

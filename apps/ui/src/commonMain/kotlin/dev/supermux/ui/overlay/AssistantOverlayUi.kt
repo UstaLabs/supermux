@@ -1101,7 +1101,10 @@ fun OverlayChat(
                 }
                 // The overlay is a composition of its own, outside the shell's providers: the fleet's downloads
                 // (#95), so a file the Agent sent keeps downloading when the overlay closes.
-                androidx.compose.runtime.CompositionLocalProvider(dev.supermux.ui.work.LocalDownloads provides fleet.downloads) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    dev.supermux.ui.work.LocalDownloads provides fleet.downloads,
+                    dev.supermux.ui.work.LocalAudioPlayer provides fleet.audio,
+                ) {
                     ChatPanel(
                         session = agent.session,
                         state = state,

@@ -135,6 +135,9 @@ import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.work.handOverAsTapped
 import dev.supermux.ui.work.DownloadItemRing
 import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.ui.work.AudioToggleButton
+import dev.supermux.ui.work.rememberAudioPlayer
+import dev.supermux.work.AudioItem
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
 import dev.supermux.work.DownloadOrigin
@@ -1132,7 +1135,7 @@ private fun AttachmentItem(
         isAudio -> MediaIcons.Volume
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
-    AttachmentFileCard(icon, label, att, media, entryId)
+    AttachmentFileCard(icon, label, att, media, entryId, audio = isAudio)
 }
 
 /**
@@ -2134,6 +2137,7 @@ private fun AttachmentFileCard(
     att: Attachment,
     media: AttachmentMedia,
     entryId: String = "",
+    audio: Boolean = false,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
@@ -2237,6 +2241,10 @@ private fun AttachmentFileCard(
                 )
             }
         }
+        if (audio) {
+            AudioCardControl(att, label, media, download, origin, onFailed = { failed = true })
+            return@Row
+        }
         val shown = download
             ?: stored?.let { Download(key.orEmpty(), it.name, it.mime, DownloadPurpose.File, DownloadState.Done(it), origin) }
         DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
@@ -2253,6 +2261,58 @@ private fun AttachmentFileCard(
 private object FileCard {
     val BadgeSize = 40.dp
 }
+
+/**
+ * A voice note's ▶ (#118), in the card's ring place: it downloads the note as a job of the fleet's [DownloadCenter]
+ * exactly as a clip's ▶ does ([fetchClip]: the same key and ring, a stored one at once), then plays the stored file in
+ * the app's player ([rememberAudioPlayer]) with this chat and message as where it came from. While the note is what
+ * plays, ❚❚/▶ toggles it. Leaving the chat lets go of the wait; the download, and what plays, carry on.
+ */
+@Composable
+private fun AudioCardControl(
+    att: Attachment,
+    label: String,
+    media: AttachmentMedia,
+    download: Download?,
+    origin: DownloadOrigin?,
+    onFailed: () -> Unit,
+) {
+    val player = rememberAudioPlayer()
+    val downloads = rememberDownloads()
+    val platform = LocalPlatform.current
+    val chat = LocalChatTitle.current
+    val scope = rememberCoroutineScope()
+    val now by player.state.collectAsState()
+    // What names this note in the player: its download key, or — a preview's media has none — its file id.
+    val identity = media.downloadKey(att) ?: "att:${att.file_id}"
+    val mine = now?.takeIf { it.item.key == identity }
+    var fetching by remember(att.file_id) { mutableStateOf(false) }
+    val state = download?.state
+    when {
+        mine != null -> AudioToggleButton(playing = mine.playing, tag = AUDIO_PLAY_TAG) { player.toggle() }
+        state is DownloadState.Running || state == DownloadState.Cancelled || state is DownloadState.Failed ->
+            DownloadItemRing(download, "attachment_ring")
+        fetching -> DownloadItemRing(null, "attachment_ring", busy = true)
+        else -> AudioToggleButton(playing = false, tag = AUDIO_PLAY_TAG) {
+            fetching = true
+            scope.launch {
+                try {
+                    when (val got = fetchClip(downloads, media, att, platform, origin)) {
+                        is ClipFetch.Ready -> player.play(AudioItem(label, got.clip.uri, origin, chat, identity, att.duration_ms))
+                        ClipFetch.Failed -> onFailed()
+                        // Paused or cancelled: its ring offers Resume.
+                        ClipFetch.Stopped -> Unit
+                    }
+                } finally {
+                    fetching = false
+                }
+            }
+        }
+    }
+}
+
+/** The tag of a voice note's ▶ / ❚❚ on its card. */
+internal const val AUDIO_PLAY_TAG = "attachment_audio_play"
 
 /**
  * The chat message a download here starts from: this chat's session ([LocalChatSessionId]) and
