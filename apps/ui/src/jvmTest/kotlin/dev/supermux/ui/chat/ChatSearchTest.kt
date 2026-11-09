@@ -8,6 +8,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -22,6 +26,7 @@ import dev.supermux.net.MessageSearchHit
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.keys.ShortcutDispatcher
 import dev.supermux.ui.keys.ShortcutRoot
 import kotlin.test.Test
@@ -111,6 +116,54 @@ class ChatSearchTest {
         }
         // Back in This chat, on the picked (older) hit rather than the newest.
         onNodeWithTag(CHAT_FIND_COUNT_TAG).assertTextEquals("1/2")
+    }
+
+    // A download's row opens its chat at the message (#95, round 2): scrolled to and tinted, no find bar.
+    @Test fun a_reveal_scrolls_to_the_message_and_marks_it_without_the_find_bar() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        val host = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it })
+        val messages = (0 until 60).map { msg("m$it", "message number $it") }
+        setPlatformContent {
+            CompositionLocalProvider(LocalChatSearch provides host) {
+                ChatPanel(session = session, state = ChatState(messages = messages), actions = ChatActions(), draft = "", onDraftChange = {})
+            }
+        }
+        waitForIdle()
+        host.reveal("s1", "m3")
+        waitForIdle()
+        runOnIdle {
+            assertEquals(listOf("s1"), opened)
+            assertNull(host.jump.value) // this panel took it
+        }
+        onNodeWithTag(CHAT_REVEALED_TAG).assertIsDisplayed()
+        onAllNodes(hasAnyAncestor(hasTestTag(CHAT_REVEALED_TAG)) and hasText("message number 3"), useUnmergedTree = true)
+            .onFirst()
+            .assertIsDisplayed()
+        onNodeWithTag(CHAT_FIND_TAG).assertDoesNotExist()
+    }
+
+    @Test fun a_reveal_of_a_message_the_chat_no_longer_has_says_so() = runComposeUiTest {
+        val platform = FakePlatform()
+        val host = ChatSearchHost(searchAll = { emptyList() }, openSession = {})
+        setPlatformContent(platform) {
+            CompositionLocalProvider(LocalChatSearch provides host) {
+                ChatPanel(session = session, state = ChatState(messages = listOf(msg("m1", "alpha"))), actions = ChatActions(), draft = "", onDraftChange = {})
+            }
+        }
+        waitForIdle()
+        host.reveal("s1", "gone")
+        waitForIdle()
+        runOnIdle { assertEquals(listOf("That message is no longer in the chat"), platform.notices.shown) }
+        onNodeWithTag(CHAT_REVEALED_TAG).assertDoesNotExist()
+        onNodeWithTag(CHAT_FIND_TAG).assertDoesNotExist()
+    }
+
+    @Test fun a_reveal_of_a_chat_that_is_gone_opens_nothing() {
+        val opened = mutableListOf<String>()
+        val host = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it }, hasSession = { false })
+        assertFalse(host.reveal("s9", "m1"))
+        assertEquals(emptyList(), opened)
+        assertNull(host.jump.value)
     }
 
     /** A host with no ShortcutRoot (the assistant overlay's own window) has no dispatcher: the chat takes its own find key (#96). */

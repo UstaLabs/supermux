@@ -27,8 +27,6 @@ import dev.supermux.ui.editor.FilePreviewKind
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
-import dev.supermux.work.DownloadPurpose
-import dev.supermux.work.DownloadSource
 import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.CompletableDeferred
@@ -52,7 +50,7 @@ import kotlin.test.assertNotNull
  * The viewer's Save and the inline clip's system-player button on the fleet's downloads (#95): each starts the
  * download by its key and only waits for it, so closing the viewer or leaving the chat neither stops the download
  * nor loses it — it waits in the bar, announced — while staying hands the FILE over at once (R1). And a clip whose
- * download was cancelled in the bar shows its file card rather than fetching the whole clip again into memory.
+ * download was paused in the bar is its poster again rather than fetching the whole clip again into memory.
  * The player is a stub: a headless worker must never load a native backend.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -252,7 +250,8 @@ class ViewerSaveDownloadTest {
 
     // ── the inline clip ────────────────────────────────────────────────────────────────────────
 
-    @Test fun theClipsSystemPlayerButtonGoesOnAfterTheChatIsLeft() = runDesktopComposeUiTest {
+    // ▶ is the fleet's download (#95, round 2): leaving the chat while it runs neither stops it nor opens anything later.
+    @Test fun aClipsPlayDownloadGoesOnAfterTheChatIsLeft() = runDesktopComposeUiTest {
         val platform = FakePlatform()
         val center = DownloadCenter(scope)
         val heard = announced(center)
@@ -261,9 +260,6 @@ class ViewerSaveDownloadTest {
         var shown by mutableStateOf(true)
         inlineClip(platform, center, media, external, shown = { shown })
         onNodeWithTag("attachment_video_poster").performClick()
-        settle { external.get() != null }
-        val openInTheSystemPlayer = assertNotNull(external.get(), "the clip plays")
-        openInTheSystemPlayer()
         settle { center.items.value.isNotEmpty() }
         assertEquals(listOf("att:h/mux95-clip"), center.items.value.map { it.key })
 
@@ -277,28 +273,23 @@ class ViewerSaveDownloadTest {
         platform.handedOverNothing()
     }
 
-    // A3 shares one transfer between a clip's inline player and its download. Cancelled in the bar, the player gets
-    // no file — and falling back to the bytes would fetch the whole clip again, into memory.
-    @Test fun aClipWhoseDownloadWasCancelledShowsItsFileCardAndIsNeverReadIntoMemory() = runDesktopComposeUiTest {
+    // A3 shares one transfer between a clip's player and its download. Paused in the bar, the clip is its poster again
+    // — with the ring to resume it — and is never read into memory instead.
+    @Test fun aClipWhoseDownloadWasPausedIsItsPosterAndIsNeverReadIntoMemory() = runDesktopComposeUiTest {
         val platform = FakePlatform()
         val center = DownloadCenter(scope)
         val media = SharedClipMedia()
         inlineClip(platform, center, media)
         onNodeWithTag("attachment_video_poster").performClick()
-        settle { media.playerWaiting.get() }
+        settle { center.items.value.isNotEmpty() }
 
-        // The same file is downloading in the bar (its viewer's Save started it, say), and he cancels it there.
-        val source = object : DownloadSource {
-            override suspend fun fetch(progress: (received: Long, total: Long?) -> Unit): DownloadedFile? = media.download(clip, progress)
-
-            override fun cancel() = media.cancelDownload(clip)
-        }
-        center.start("att:h/mux95-clip", "clip.mp4", "video/mp4", DownloadPurpose.File, source).release()
         center.cancel("att:h/mux95-clip")
-        settle { onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().isNotEmpty() }
+        settle { onAllNodesWithTag("attachment_video_poster").fetchSemanticsNodes().isNotEmpty() }
 
-        assertEquals(0, media.byteReads.get(), "the clip was read into memory after its download was cancelled")
-        onNodeWithTag("attachment_chip").assertIsDisplayed()
+        assertEquals(0, media.byteReads.get(), "the clip was read into memory after its download was paused")
+        onNodeWithTag("attachment_video_poster").assertIsDisplayed()
+        onNodeWithTag("attachment_video_ring", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size)
         assertEquals(0, onAllNodesWithTag("stub_player").fetchSemanticsNodes().size)
     }
 }

@@ -116,7 +116,9 @@ import dev.supermux.ui.theme.Media
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.work.DownloadItemRing
 import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.DownloadState
 import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -134,6 +136,9 @@ fun interface ChatMediaOpener {
 
 /** The chat panel's viewer; null outside a chat (an archived transcript, a preview, a test). */
 val LocalChatMediaViewer = staticCompositionLocalOf<ChatMediaOpener?> { null }
+
+/** The chat a timeline (or its viewer) shows, so a download started there remembers it (#95). Null outside a chat. */
+val LocalChatSessionId = staticCompositionLocalOf<String?> { null }
 
 /** The message a timeline row draws, so its media can name themselves in the viewer's set. */
 val LocalChatMediaEntry = compositionLocalOf<String?> { null }
@@ -448,6 +453,7 @@ internal fun ChatMediaViewerContent(
                         FilePreviewKind.Image -> ViewerPicture(handle, item.name, transformOf(item.key), trackpad, onTap = toggleBars)
                         FilePreviewKind.Video -> ViewerClip(
                             handle = handle,
+                            entryId = item.entryId,
                             active = index == pager.settledPage,
                             renderPlayer = renderPlayer,
                             onTransport = { t -> if (t == null) transports.remove(item.key) else transports[item.key] = t },
@@ -547,11 +553,14 @@ private fun ViewerPicture(handle: MediaHandle, name: String, transform: Lightbox
 
 /**
  * A clip page. Until it is [active] (the settled page) it is a poster that fetches nothing; then it
- * resolves a playable URI the inline player's way ([resolvePlayableClip]) and mounts the player.
+ * fetches the clip the inline player's way ([fetchClip]: a host's clip is a job of the fleet's
+ * downloads, its ring showing how far it got) and mounts the player. Paused or cancelled, it is the
+ * poster again, with the ring to resume it.
  */
 @Composable
 private fun ViewerClip(
     handle: MediaHandle,
+    entryId: String,
     active: Boolean,
     renderPlayer: @Composable (uri: String, onError: () -> Unit, onTransport: (VideoTransport?) -> Unit) -> Unit,
     onTransport: (VideoTransport?) -> Unit,
@@ -563,16 +572,40 @@ private fun ViewerClip(
         return
     }
     val platform = LocalPlatform.current
+    val downloads = rememberDownloads()
+    val origin = rememberDownloadOrigin(entryId)
+    val download = rememberListedDownload(downloads, handle.media.downloadKey(handle.att))
+    // Already in the store (#95: after a restart): opened from there, with no ring.
+    val stored = rememberStoredFile(handle.media, handle.att, download)
     var uri by remember(handle.att.file_id) { mutableStateOf<String?>(null) }
     var failed by remember(handle.att.file_id) { mutableStateOf(false) }
-    LaunchedEffect(handle.att.file_id) {
-        val clip = resolvePlayableClip(handle.att, handle.media, platform)
-        if (clip == null) failed = true else uri = clip.uri
+    var stopped by remember(handle.att.file_id) { mutableStateOf(false) }
+    LaunchedEffect(handle.att.file_id, stopped) {
+        if (stopped) return@LaunchedEffect
+        when (val fetched = fetchClip(downloads, handle.media, handle.att, platform, origin)) {
+            is ClipFetch.Ready -> uri = fetched.clip.uri
+            ClipFetch.Failed -> failed = true
+            ClipFetch.Stopped -> stopped = true
+        }
     }
     val located = uri
     when {
         failed -> ViewerNotice("Couldn't play this video here. Save it to watch it.")
-        located == null -> ViewerSpinner()
+        stopped -> Box(Modifier.fillMaxSize().clickable { stopped = false }.testTag("chat_media_viewer_poster")) {
+            ClipPoster(handle.att, handle.media, 0, "chat_media_viewer", Sizes.videoPlayGlyph)
+            if (download != null && download.state !is DownloadState.Done) {
+                DownloadItemRing(download, VIDEO_RING_TAG, Modifier.align(Alignment.TopEnd).padding(Space.md), tint = Color.White, track = Color.White.copy(alpha = 0.25f))
+            }
+        }
+        located == null -> Box(Modifier.fillMaxSize().testTag("chat_media_viewer_loading"), contentAlignment = Alignment.Center) {
+            DownloadItemRing(
+                download?.takeIf { it.state !is DownloadState.Done },
+                VIDEO_RING_TAG,
+                busy = stored == null,
+                tint = Color.White,
+                track = Color.White.copy(alpha = 0.25f),
+            )
+        }
         // The controls sit at the bottom of the frame: keep them clear of a phone's gesture bar.
         else -> Box(Modifier.fillMaxSize().navigationBarsPadding()) {
             // A clip with no phone poster: let the player keep a frame of it for its tiles.

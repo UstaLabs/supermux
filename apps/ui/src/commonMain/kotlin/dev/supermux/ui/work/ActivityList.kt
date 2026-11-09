@@ -88,9 +88,14 @@ import kotlin.time.TimeSource
 /**
  * Every listed download (#95) and what can be done with it — design A, round 1's palette for the downloads alone: a
  * header ("Downloads · 5", and Clear finished once anything has ended), then a quiet row a download — our thin glyph,
- * the name, a dim line saying what became of it, and its actions as quiet words: Cancel while it runs, Retry once it
- * failed or was cancelled, and once done the host's own [actions] for a file (R3) or Install for an app update. Under
- * a running row a hairline fills.
+ * the name, a dim line saying what became of it, and at its end what can be done. Until it is done that is the
+ * download's ring ([RingControl], #95 round 3): a tap pauses a running one, resumes a paused one, retries a failed one,
+ * and the ✕ beside a stopped one takes it off the list. Once done: the host's own [actions] for a file (R3), or Install
+ * for an app update, as quiet words. Under a running row a hairline fills. The engine has no pause of its own: Pause is
+ * [onCancel] (what arrived is kept), Resume and Retry are [onRetry], and ✕ is [onDismiss].
+ *
+ * A row that knows where it came from (its [Download.origin], a chat message) opens it when its name or detail line
+ * is tapped ([onOpenSource]); its words stay words.
  *
  * A phone's sheet draws two lines a row. A desktop's [popover] draws one, washes the selected row, and lists the keys
  * under the rows: ↑↓ to move, ↵ for the selected row's first word (esc is the popover's own).
@@ -107,12 +112,25 @@ fun ActivityList(
     onInstall: (Download) -> Unit,
     modifier: Modifier = Modifier,
     onClearFinished: () -> Unit = {},
+    onDismiss: (Download) -> Unit = {},
+    onOpenSource: (Download) -> Unit = {},
     popover: Boolean = false,
 ) {
     val rows = remember(items) {
         items.filter { it.state is DownloadState.Running } + items.filter { it.state !is DownloadState.Running }
     }
-    val wordsOf: (Download) -> List<Word> = { wordsFor(it, actions, onCancel, onRetry, onAction, onInstall) }
+    val wordsOf: (Download) -> List<Word> = { wordsFor(it, actions, onAction, onInstall) }
+    val primary: (Download) -> Word? = { primaryOf(it, wordsOf(it), onRetry) }
+    val ring: @Composable (Download) -> Unit = { item ->
+        RingControl(
+            item = item,
+            tag = "activity_ring",
+            onToggle = { if (item.state is DownloadState.Running) onCancel(item) else onRetry(item) },
+            onRemove = { onDismiss(item) },
+            // The row's hairline says how far it got.
+            progressSemantics = false,
+        )
+    }
     var selected by remember { mutableIntStateOf(0) }
     val current = selected.coerceIn(0, (rows.size - 1).coerceAtLeast(0))
     val focus = remember { FocusRequester() }
@@ -125,7 +143,7 @@ fun ActivityList(
                 Key.DirectionDown -> { selected = (current + 1).coerceAtMost(rows.lastIndex); true }
                 Key.DirectionUp -> { selected = (current - 1).coerceAtLeast(0); true }
                 Key.Enter, Key.NumPadEnter -> {
-                    rows.getOrNull(current)?.let { primaryOf(it, wordsOf(it)) }?.act?.invoke()
+                    rows.getOrNull(current)?.let(primary)?.act?.invoke()
                     true
                 }
                 else -> false
@@ -145,15 +163,15 @@ fun ActivityList(
             rows.forEachIndexed { i, item ->
                 key(item.key) {
                     if (popover) {
-                        PopoverRow(item, wordsOf(item), selected = i == current, onHover = { selected = i })
+                        PopoverRow(item, wordsOf(item), ring, selected = i == current, onHover = { selected = i }, onOpenSource)
                     } else {
-                        SheetRow(item, wordsOf(item))
+                        SheetRow(item, wordsOf(item), ring, onOpenSource)
                     }
                 }
             }
         }
         if (popover && LocalHardwareKeyboard.current) {
-            Hints(verb = rows.getOrNull(current)?.let { primaryOf(it, wordsOf(it)) }?.label?.lowercase())
+            Hints(verb = rows.getOrNull(current)?.let(primary)?.label?.lowercase())
         }
     }
 }
@@ -181,7 +199,7 @@ private fun Header(count: Int, clearable: Boolean, onClear: () -> Unit, popover:
 
 /** A phone's row: the glyph; the name and its size or %; what became of it and the quiet words; the hairline. */
 @Composable
-private fun SheetRow(item: Download, words: List<Word>) {
+private fun SheetRow(item: Download, words: List<Word>, ring: @Composable (Download) -> Unit, onOpenSource: (Download) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val state = item.state
     val timeLeft = rememberTimeLeft(item.key, state as? DownloadState.Running)
@@ -190,7 +208,8 @@ private fun SheetRow(item: Download, words: List<Word>) {
             .fillMaxWidth()
             .testTag("activity_item")
             // One stop that reads what it shows ("notes.pdf, 4.2 MB, Downloaded"); its words stay stops of their own.
-            .semantics(mergeDescendants = true) { activityItemKey = item.key },
+            .semantics(mergeDescendants = true) { activityItemKey = item.key }
+            .opensSource(item, onOpenSource),
     ) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 12.dp, bottom = 4.dp)) {
             Icon(glyphOf(item), contentDescription = null, tint = cs.sheetTint(item), modifier = Modifier.padding(top = 2.dp).size(18.dp))
@@ -213,6 +232,7 @@ private fun SheetRow(item: Download, words: List<Word>) {
                         modifier = Modifier.weight(1f),
                     )
                     Words(words, WordSize.Sheet)
+                    if (state !is DownloadState.Done) ring(item)
                 }
             }
         }
@@ -224,7 +244,14 @@ private fun SheetRow(item: Download, words: List<Word>) {
 
 /** A desktop's row, one line: glyph · name · what became of it · % · the quiet words; washed while selected. */
 @Composable
-private fun PopoverRow(item: Download, words: List<Word>, selected: Boolean, onHover: () -> Unit) {
+private fun PopoverRow(
+    item: Download,
+    words: List<Word>,
+    ring: @Composable (Download) -> Unit,
+    selected: Boolean,
+    onHover: () -> Unit,
+    onOpenSource: (Download) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     val state = item.state
     val source = remember { MutableInteractionSource() }
@@ -240,7 +267,8 @@ private fun PopoverRow(item: Download, words: List<Word>, selected: Boolean, onH
             .background(if (selected) cs.onSurface.copy(alpha = cs.washAlpha) else Color.Transparent)
             .hoverable(source)
             .testTag("activity_item")
-            .semantics(mergeDescendants = true) { activityItemKey = item.key },
+            .semantics(mergeDescendants = true) { activityItemKey = item.key }
+            .opensSource(item, onOpenSource),
     ) {
         Row(Modifier.fillMaxSize().padding(start = 12.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(glyphOf(item), contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
@@ -256,6 +284,7 @@ private fun PopoverRow(item: Download, words: List<Word>, selected: Boolean, onH
             }
             Spacer(Modifier.width(12.dp))
             Words(words, WordSize.Popover)
+            if (state !is DownloadState.Done) ring(item)
         }
         if (state is DownloadState.Running) {
             Hairline(state.fraction(), Modifier.align(Alignment.BottomStart).padding(start = 40.dp, end = 12.dp, bottom = 3.dp))
@@ -292,6 +321,18 @@ private fun Hairline(fraction: Float?, modifier: Modifier) {
         if (fraction != null && fraction > 0f) drawRect(fill, size = Size(size.width * fraction, size.height))
     }
 }
+
+/**
+ * A row that came from a chat message opens it: a tap anywhere but on its words (which take their own taps). Nothing
+ * for one that came from nowhere (an app update, a Files download).
+ */
+private fun Modifier.opensSource(item: Download, onOpenSource: (Download) -> Unit): Modifier =
+    if (item.origin == null) {
+        this
+    } else {
+        clickable(indication = null, interactionSource = null, onClickLabel = "Show in chat") { onOpenSource(item) }
+            .pointerHoverIcon(PointerIcon.Hand)
+    }
 
 /** A row's quiet words, a dim dot between two. */
 @Composable
@@ -380,16 +421,14 @@ internal fun middleEllipsis(text: String, fits: (String) -> Boolean): String {
 /** One quiet word on a row: what it says, its test tag, and what it does. */
 private class Word(val label: String, val tag: String, val act: () -> Unit)
 
+/** A done row's words. Until it is done a row has its ring instead ([RingControl]). */
 private fun wordsFor(
     item: Download,
     actions: Set<FileAction>,
-    onCancel: (Download) -> Unit,
-    onRetry: (Download) -> Unit,
     onAction: (Download, FileAction) -> Unit,
     onInstall: (Download) -> Unit,
 ): List<Word> = when (item.state) {
-    is DownloadState.Running -> listOf(Word("Cancel", "activity_cancel") { onCancel(item) })
-    is DownloadState.Failed, DownloadState.Cancelled -> listOf(Word("Retry", "activity_retry") { onRetry(item) })
+    is DownloadState.Running, DownloadState.Cancelled, is DownloadState.Failed -> emptyList()
     is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) {
         listOf(Word("Install", "activity_install") { onInstall(item) })
     } else {
@@ -400,19 +439,23 @@ private fun wordsFor(
     }
 }
 
-/** What ↵ does on a row: its first word — never a running row's Cancel. */
-private fun primaryOf(item: Download, words: List<Word>): Word? =
-    if (item.state is DownloadState.Running) null else words.firstOrNull()
+/** What ↵ does on a row: what its ring's tap does once it stopped (resume, retry), a done row's first word — nothing on a running row. */
+private fun primaryOf(item: Download, words: List<Word>, onRetry: (Download) -> Unit): Word? = when (item.state) {
+    is DownloadState.Running -> null
+    DownloadState.Cancelled -> Word("Resume", "activity_resume") { onRetry(item) }
+    is DownloadState.Failed -> Word("Retry", "activity_retry") { onRetry(item) }
+    is DownloadState.Done -> words.firstOrNull()
+}
 
 /** Our glyph for where an item is. */
 private fun glyphOf(item: Download): ImageVector = when (item.state) {
     is DownloadState.Running -> DownloadGlyphs.Download
     is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) DownloadGlyphs.Package else DownloadGlyphs.Done
     is DownloadState.Failed -> DownloadGlyphs.Failed
-    DownloadState.Cancelled -> DownloadGlyphs.Cancelled
+    DownloadState.Cancelled -> DownloadGlyphs.Paused
 }
 
-/** A phone row's glyph: teal while it runs, the alarm colour once it failed, dim otherwise (the user's Cancel included). */
+/** A phone row's glyph: teal while it runs, the alarm colour once it failed, dim otherwise (a paused one included). */
 private fun ColorScheme.sheetTint(item: Download): Color = when (item.state) {
     is DownloadState.Failed -> error
     is DownloadState.Running -> primary
@@ -439,7 +482,7 @@ private fun sheetDetail(item: Download, timeLeft: String?): String = when (val s
         ?: "${sizeText(s.received)} so far"
     is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) "Ready to install" else "Downloaded"
     is DownloadState.Failed -> failure("Failed", s.message)
-    DownloadState.Cancelled -> "Cancelled"
+    DownloadState.Cancelled -> "Paused"
 }
 
 /** A popover row's words after the name: "12 of 28 MB", "4.2 MB", "ready to install", "failed · connection lost". */
@@ -451,7 +494,7 @@ private fun popoverDetail(item: Download): String = when (val s = item.state) {
         else -> "downloaded"
     }
     is DownloadState.Failed -> failure("failed", s.message)
-    DownloadState.Cancelled -> "cancelled"
+    DownloadState.Cancelled -> "paused"
 }
 
 /** A popover row's figure, before its words: how far a running one got. */

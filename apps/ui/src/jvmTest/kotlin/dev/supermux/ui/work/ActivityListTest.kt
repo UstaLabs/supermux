@@ -77,6 +77,7 @@ class ActivityListTest {
         onAction: (Download, FileAction) -> Unit = { _, _ -> },
         onInstall: (Download) -> Unit = {},
         onClearFinished: () -> Unit = {},
+        onDismiss: (Download) -> Unit = {},
         popover: Boolean = false,
     ) = setPlatformContent(
         FakePlatform(),
@@ -84,7 +85,7 @@ class ActivityListTest {
         widthClass = if (popover) WindowWidthClass.Expanded else WindowWidthClass.Compact,
     ) {
         SupermuxTheme(appearance = AppearanceMode.LIGHT) {
-            ActivityList(items, actions, onCancel, onRetry, onAction, onInstall, onClearFinished = onClearFinished, popover = popover)
+            ActivityList(items, actions, onCancel, onRetry, onAction, onInstall, onClearFinished = onClearFinished, onDismiss = onDismiss, popover = popover)
         }
     }
 
@@ -100,7 +101,7 @@ class ActivityListTest {
     )
 
     private val buttonTags =
-        listOf("activity_cancel", "activity_retry", "activity_open", "activity_save", "activity_share", "activity_install")
+        listOf("activity_ring", "activity_ring_remove", "activity_pause", "activity_resume", "activity_cancel", "activity_retry", "activity_open", "activity_save", "activity_share", "activity_install")
 
     /** The buttons drawn in [key]'s row, in [buttonTags] order. */
     private fun ComposeUiTest.buttonsOf(key: String): List<String> = buttonTags.filter { tag ->
@@ -138,7 +139,7 @@ class ActivityListTest {
         onNode(hasItemKey("u")).assertTextEquals("Supermux 1.2.0", "96 MB", "Ready to install")
         onNode(hasItemKey("f")).assertTextEquals("a.zip", "Failed")
         onNode(hasItemKey("g")).assertTextEquals("logs.zip", "Failed · connection lost")
-        onNode(hasItemKey("c")).assertTextEquals("b.zip", "Cancelled")
+        onNode(hasItemKey("c")).assertTextEquals("b.zip", "Paused")
     }
 
     @Test fun whatRunsComesFirst() = runDesktopComposeUiTest {
@@ -179,7 +180,7 @@ class ActivityListTest {
         onNode(hasItemKey("d")).assertTextEquals("notes.pdf", "4.2 MB")
         onNode(hasItemKey("u")).assertTextEquals("Supermux 1.2.0", "ready to install")
         onNode(hasItemKey("f")).assertTextEquals("a.zip", "failed")
-        onNode(hasItemKey("c")).assertTextEquals("b.zip", "cancelled")
+        onNode(hasItemKey("c")).assertTextEquals("b.zip", "paused")
         onNodeWithTag("activity_hints").assertTextContains("esc to close", substring = true)
         // Each row is one line: no taller than the prototype's 38 dp.
         val row = onNode(hasItemKey("d")).getUnclippedBoundsInRoot()
@@ -197,6 +198,7 @@ class ActivityListTest {
             listOf(video, failed("f", "a.zip"), done("d", "notes.pdf")),
             popover = true,
             onRetry = { calls += "retry:${it.key}" },
+            onDismiss = { calls += "dismiss:${it.key}" },
             onAction = { item, action -> calls += "${action.name}:${item.key}" },
         )
         onNodeWithTag("activity_list").requestFocus()
@@ -217,18 +219,20 @@ class ActivityListTest {
         list(everyState)
         onNodeWithTag("activity_list").assertIsDisplayed()
         onAllNodesWithTag("activity_item").assertCountEquals(5)
-        assertEquals(listOf("activity_cancel"), buttonsOf("r"))
-        assertEquals(listOf("activity_retry"), buttonsOf("f"))
-        assertEquals(listOf("activity_retry"), buttonsOf("c"))
+        // #95, round 3: no words for the transfer — its ring toggles, and ✕ beside it removes it once it stopped.
+        assertEquals(listOf("activity_ring"), buttonsOf("r"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("f"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("c"))
         assertEquals(listOf("activity_open", "activity_save", "activity_share"), buttonsOf("d"))
         assertEquals(listOf("activity_install"), buttonsOf("u"))
     }
 
     @Test fun thePopoverOffersTheSame() = runDesktopComposeUiTest {
         list(everyState, popover = true)
-        assertEquals(listOf("activity_cancel"), buttonsOf("r"))
-        assertEquals(listOf("activity_retry"), buttonsOf("f"))
-        assertEquals(listOf("activity_retry"), buttonsOf("c"))
+        // #95, round 3: no words for the transfer — its ring toggles, and ✕ beside it removes it once it stopped.
+        assertEquals(listOf("activity_ring"), buttonsOf("r"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("f"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("c"))
         assertEquals(listOf("activity_open", "activity_save", "activity_share"), buttonsOf("d"))
         assertEquals(listOf("activity_install"), buttonsOf("u"))
     }
@@ -246,18 +250,22 @@ class ActivityListTest {
             everyState,
             onCancel = { calls += "cancel:${it.key}" },
             onRetry = { calls += "retry:${it.key}" },
+            onDismiss = { calls += "dismiss:${it.key}" },
             onAction = { item, action -> calls += "${action.name}:${item.key}" },
             onInstall = { calls += "install:${it.key}" },
         )
-        onNodeWithTag("activity_cancel").performClick()
-        onNode(hasTestTag("activity_retry") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("r"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring_remove") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("f"))).performClick()
+        onNode(hasTestTag("activity_ring_remove") and hasAnyAncestor(hasItemKey("f"))).performClick()
         onNodeWithTag("activity_open").performClick()
         onNodeWithTag("activity_save").performClick()
         onNodeWithTag("activity_share").performClick()
         onNodeWithTag("activity_install").performClick()
         waitForIdle()
         assertEquals(
-            listOf("cancel:r", "retry:c", "Open:d", "Save:d", "Share:d", "install:u"),
+            listOf("cancel:r", "retry:c", "dismiss:c", "retry:f", "dismiss:f", "Open:d", "Save:d", "Share:d", "install:u"),
             calls,
         )
     }

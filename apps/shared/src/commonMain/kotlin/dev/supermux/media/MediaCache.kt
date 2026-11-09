@@ -149,6 +149,17 @@ class MediaCache(
         return stored(key)
     }
 
+    /**
+     * [att]'s file if the store already holds it whole (#95: a restart keeps it, so the card shows it as done) — a
+     * look at the store and nothing more: no download, and a kept partial is not a file. Null where entries are not
+     * files (the web) and for a key that cannot be stored.
+     */
+    suspend fun storedFile(host: String, att: Attachment): StoredFile? {
+        if (!store.hasFiles) return null
+        val key = MediaKey.of(host, att.file_id, att.name, att.mime) ?: return null
+        return stored(key)
+    }
+
     /** The user's Cancel: stop [fileId]'s file download, keeping what arrived for a retry. */
     fun cancelFile(host: String, fileId: String) {
         val transfer = synchronized(lock) {

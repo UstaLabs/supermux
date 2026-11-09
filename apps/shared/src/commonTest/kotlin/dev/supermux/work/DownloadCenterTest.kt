@@ -145,6 +145,23 @@ class DownloadCenterTest {
         assertEquals(1, s.cancels)
     }
 
+    // #95: a paused ring stays drawn at how far it got.
+    @Test fun aPauseRemembersHowFarItGotUntilItResumes() = runTest {
+        val c = center()
+        val s = FakeSource()
+        c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s)
+        runCurrent()
+        s.progress!!(42, 100)
+        c.cancel("k")
+        runCurrent()
+        assertEquals(DownloadState.Cancelled, c.items.value.single().state)
+        assertEquals(DownloadState.Running(42, 100), c.items.value.single().pausedAt)
+        c.retry("k")
+        runCurrent()
+        assertIs<DownloadState.Running>(c.items.value.single().state)
+        c.close()
+    }
+
     @Test fun closeCancelsEverySharedTransfer() = runTest {
         val c = center()
         val a = FakeSource()
@@ -194,6 +211,51 @@ class DownloadCenterTest {
         runCurrent()
         assertEquals(2, s.fetches)
         assertIs<DownloadState.Running>(c.items.value.single().state)
+        c.close()
+    }
+
+    // The list's Cancel (#95, round 2): stop it — the shared transfer told at once, as with Pause — and forget it.
+    @Test fun dismissStopsARunningDownloadAndTakesItOffTheList() = runTest {
+        val c = center()
+        val s = FakeSource()
+        val claim = c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s)
+        c.start("other", "b.pdf", "application/pdf", DownloadPurpose.File, FakeSource()).release()
+        runCurrent()
+        c.dismiss("k")
+        assertEquals(1, s.cancels, "told before the job's catch has run")
+        assertEquals(listOf("other"), c.items.value.map { it.key })
+        runCurrent()
+        assertEquals(1, s.cancels, "and told once")
+        assertEquals(listOf("other"), c.items.value.map { it.key })
+        assertNull(claim.await(), "a screen waiting for it is answered")
+        c.close()
+    }
+
+    @Test fun dismissForgetsAPausedDownload() = runTest {
+        val c = center()
+        val s = FakeSource()
+        c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s).release()
+        runCurrent()
+        c.cancel("k")
+        runCurrent()
+        c.dismiss("k")
+        assertEquals(emptyList(), c.items.value)
+        assertEquals(1, s.cancels, "a paused transfer is not told twice")
+        c.retry("k")
+        assertEquals(emptyList(), c.items.value, "nothing left to resume")
+    }
+
+    @Test fun aDownloadRemembersWhereItCameFrom() = runTest {
+        val c = center()
+        val origin = DownloadOrigin(sessionId = "s1", messageId = "m7")
+        c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, FakeSource(), origin).release()
+        c.start("u", "Supermux 1.2.0", "application/octet-stream", DownloadPurpose.Installer, FakeSource()).release()
+        runCurrent()
+        assertEquals(origin, c.items.value.first { it.key == "k" }.origin)
+        assertNull(c.items.value.first { it.key == "u" }.origin)
+        c.cancel("k")
+        c.retry("k")
+        assertEquals(origin, c.items.value.first { it.key == "k" }.origin, "kept across a pause and a resume")
         c.close()
     }
 

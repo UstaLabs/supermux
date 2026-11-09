@@ -61,7 +61,13 @@ data class Download(
     val mime: String,
     val purpose: DownloadPurpose,
     val state: DownloadState,
+    val origin: DownloadOrigin? = null,
+    /** How far a paused ([DownloadState.Cancelled]) download got when it was paused: its ring stays drawn there. */
+    val pausedAt: DownloadState.Running? = null,
 )
+
+/** Where a download was started: the chat [sessionId] and the message [messageId] it is attached to. */
+data class DownloadOrigin(val sessionId: String, val messageId: String)
 
 sealed interface DownloadState {
     data class Running(val received: Long, val total: Long?) : DownloadState
@@ -120,8 +126,16 @@ class DownloadCenter(private val scope: CoroutineScope) {
      * Start [key] — or join it while it runs or once it is done, so a second tap never fetches twice — and claim
      * it for the caller. A failed or cancelled key starts again (that is what a second tap means) and moves to
      * the front. The claim is counted before the job can run, so even an instant finish is the caller's.
+     * [origin] is the chat message it was started from, where there is one: the list opens it.
      */
-    fun start(key: String, name: String, mime: String, purpose: DownloadPurpose, source: DownloadSource): DownloadClaim {
+    fun start(
+        key: String,
+        name: String,
+        mime: String,
+        purpose: DownloadPurpose,
+        source: DownloadSource,
+        origin: DownloadOrigin? = null,
+    ): DownloadClaim {
         val (claim, job) = synchronized(lock) {
             val entry = entries.getOrPut(key) { Entry(source) }
             entry.claims++
@@ -129,7 +143,9 @@ class DownloadCenter(private val scope: CoroutineScope) {
                 is DownloadState.Running, is DownloadState.Done -> null
                 else -> {
                     entry.source = source
-                    relaunch(key, entry, Download(key, name, mime, purpose, STARTING))
+                    // A start that cannot say where it came from (the viewer's Save) keeps what an earlier one said.
+                    val from = origin ?: listed.value.firstOrNull { it.key == key }?.origin
+                    relaunch(key, entry, Download(key, name, mime, purpose, STARTING, from))
                 }
             }
             Claim(key, entry) to job
@@ -138,18 +154,35 @@ class DownloadCenter(private val scope: CoroutineScope) {
         return claim
     }
 
-    /** The user's Cancel. The source keeps what arrived, so [retry] continues from there. */
+    /** The user's Pause (the engine's cancel). The source keeps what arrived, so [retry] continues from there. */
     fun cancel(key: String) {
         val (source, job) = synchronized(lock) {
             val entry = entries[key]
             if (entry == null || stateOf(key) !is DownloadState.Running) return
-            set(key) { DownloadState.Cancelled }
+            listed.update { all ->
+                all.map { if (it.key == key) it.copy(state = DownloadState.Cancelled, pausedAt = it.state as? DownloadState.Running) else it }
+            }
             entry.source to entry.job
         }
         // Told here, at once: a transfer the source shares with the media cache runs on that cache's own scope,
         // and the job's catch runs only later, on the dispatcher — after the fleet's close() has gone on to close
         // the hosts, while that transfer carried on until its next range failed.
         source.cancel()
+        job?.cancel()
+    }
+
+    /**
+     * The user's Cancel (#95, round 2): stop [key] — its source told at once, as [cancel] does — and take it off the
+     * list. Nothing is left to resume; a screen still waiting for it is answered with nothing.
+     */
+    fun dismiss(key: String) {
+        val (source, job) = synchronized(lock) {
+            val entry = entries.remove(key) ?: return
+            val running = stateOf(key) is DownloadState.Running
+            listed.update { all -> all.filter { it.key != key } }
+            (if (running) entry.source else null) to entry.job
+        }
+        source?.cancel()
         job?.cancel()
     }
 

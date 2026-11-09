@@ -61,25 +61,7 @@ internal fun DownloadsRing(items: List<Download>, rest: Dp, tint: Color, surface
     val running = lead.state as? DownloadState.Running
     Box(modifier, contentAlignment = Alignment.Center) {
         if (running != null) {
-            val fraction = running.fraction()
-            val track = cs.onSurface.copy(alpha = 0.10f)
-            val arc = cs.primary
-            Canvas(Modifier.size(RingTokens.Ring)) {
-                val stroke = RingTokens.Line.toPx()
-                val r = (size.minDimension - stroke) / 2f - RingTokens.Inset.toPx()
-                drawCircle(track, radius = r, style = Stroke(stroke))
-                if (fraction != null && fraction > 0f) {
-                    drawArc(
-                        arc,
-                        startAngle = -90f,
-                        sweepAngle = 360f * fraction,
-                        useCenter = false,
-                        topLeft = Offset(center.x - r, center.y - r),
-                        size = Size(2 * r, 2 * r),
-                        style = Stroke(stroke, cap = StrokeCap.Round),
-                    )
-                }
-            }
+            ProgressRing(running.fraction())
             Icon(DownloadGlyphs.InRing, contentDescription = null, tint = cs.primary, modifier = Modifier.size(RingTokens.Glyph))
         } else {
             Icon(DownloadGlyphs.Download, contentDescription = null, tint = tint, modifier = Modifier.size(rest))
@@ -93,6 +75,31 @@ internal fun DownloadsRing(items: List<Download>, rest: Dp, tint: Color, surface
                     drawCircle(dot, radius = r, center = c)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Our thin ring: a faint track, and — once [fraction] is known — a teal arc filling it clockwise from the top. Not
+ * Material's progress indicator. [track] tints the track (a badge's colour, a dark video frame).
+ */
+@Composable
+internal fun ProgressRing(fraction: Float?, modifier: Modifier = Modifier, track: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)) {
+    val arc = MaterialTheme.colorScheme.primary
+    Canvas(modifier.size(RingTokens.Ring)) {
+        val stroke = RingTokens.Line.toPx()
+        val r = (size.minDimension - stroke) / 2f - RingTokens.Inset.toPx()
+        drawCircle(track, radius = r, style = Stroke(stroke))
+        if (fraction != null && fraction > 0f) {
+            drawArc(
+                arc,
+                startAngle = -90f,
+                sweepAngle = 360f * fraction,
+                useCenter = false,
+                topLeft = Offset(center.x - r, center.y - r),
+                size = Size(2 * r, 2 * r),
+                style = Stroke(stroke, cap = StrokeCap.Round),
+            )
         }
     }
 }
@@ -139,7 +146,7 @@ private fun ringState(lead: Download): String = when (val state = lead.state) {
     is DownloadState.Running -> state.percent()?.let { "${lead.name}, $it%" } ?: "${lead.name}, downloading"
     is DownloadState.Done -> if (lead.purpose == DownloadPurpose.Installer) "${lead.name} is ready to install" else "${lead.name} downloaded"
     is DownloadState.Failed -> "${lead.name} failed"
-    DownloadState.Cancelled -> "${lead.name} cancelled"
+    DownloadState.Cancelled -> "${lead.name} paused"
 }
 
 /**
@@ -179,6 +186,37 @@ internal object DownloadGlyphs {
             circle()
             moveTo(6.2f, 17.8f)
             lineTo(17.8f, 6.2f)
+        }
+    }
+
+    /** Two bars in a circle: paused. */
+    val Paused: ImageVector by lazy {
+        glyph("download-paused") {
+            circle()
+            moveTo(10f, 9f)
+            lineTo(10f, 15f)
+            moveTo(14f, 9f)
+            lineTo(14f, 15f)
+        }
+    }
+
+    /** ▷: a paused download, to resume — drawn small inside its ring, so in the ring's heavier stroke. */
+    val Resume: ImageVector by lazy {
+        glyph("download-resume", stroke = 2f) {
+            moveTo(8.5f, 5.5f)
+            lineTo(18f, 12f)
+            lineTo(8.5f, 18.5f)
+            close()
+        }
+    }
+
+    /** ✕: take a download off the list. */
+    val Remove: ImageVector by lazy {
+        glyph("download-remove", stroke = 2f) {
+            moveTo(6f, 6f)
+            lineTo(18f, 18f)
+            moveTo(18f, 6f)
+            lineTo(6f, 18f)
         }
     }
 

@@ -89,9 +89,10 @@ import kotlin.time.Clock
 
 /**
  * "Open [sessionId]'s find bar": on [query], landing on [messageId] (a picked hit), or just opened
- * as it was ([messageId] null — a header's search button).
+ * as it was ([messageId] null — a header's search button). With [reveal] there is no find bar: the
+ * chat scrolls to [messageId] and tints it a moment (a download's row, #95).
  */
-data class ChatJump(val sessionId: String, val messageId: String?, val query: String = "")
+data class ChatJump(val sessionId: String, val messageId: String?, val query: String = "", val reveal: Boolean = false)
 
 /**
  * The fleet-wide half of chat search, provided once at the app root ([LocalChatSearch]). Without
@@ -103,6 +104,8 @@ class ChatSearchHost(
     val searchAll: suspend (query: String) -> List<MessageSearchHit>?,
     /** Bring [sessionId]'s chat on screen (the shell's chat-tab focus). */
     private val openSession: (sessionId: String) -> Unit,
+    /** Whether [sessionId] is still a chat the app lists (not archived, deleted or on a host gone). */
+    private val hasSession: (sessionId: String) -> Boolean = { true },
 ) {
     private val _jump = MutableStateFlow<ChatJump?>(null)
 
@@ -122,12 +125,26 @@ class ChatSearchHost(
         _jump.value = ChatJump(sessionId, messageId = null)
     }
 
+    /**
+     * Open [sessionId]'s chat at [messageId], scrolled to and tinted, without the find bar (#95: where a download
+     * came from). False, and nothing opened, when that chat is gone; the caller says so.
+     */
+    fun reveal(sessionId: String, messageId: String): Boolean {
+        if (!hasSession(sessionId)) return false
+        _jump.value = ChatJump(sessionId, messageId, reveal = true)
+        openSession(sessionId)
+        return true
+    }
+
     fun consume(jump: ChatJump) {
         _jump.compareAndSet(jump, null)
     }
 }
 
 val LocalChatSearch = staticCompositionLocalOf<ChatSearchHost?> { null }
+
+/** The row a [ChatSearchHost.reveal] landed on. */
+const val CHAT_REVEALED_TAG = "chat_revealed"
 
 enum class ChatSearchScope { ThisChat, AllChats }
 
