@@ -3,6 +3,7 @@ import { join } from "path"
 import { buildAgentsMd } from "./index-builder"
 import { muxHomeNow } from "../../shared/paths"
 import { TEMPLATES } from "./templates-embedded"
+import { files } from "@supermux/platform"
 
 /** The mux home as the environment says now (shared/paths.ts muxHomeNow: MUX_HOME, else ~/.mux, Q2's rule). */
 export function getMuxHome(): string {
@@ -14,7 +15,7 @@ export function initMux(home?: string): string {
 
   if (existsSync(join(root, "agents.md"))) return root
 
-  mkdirSync(root, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(root)
   mkdirSync(join(root, "personal"), { recursive: true })
   mkdirSync(join(root, "domains"), { recursive: true })
   mkdirSync(join(root, "skills"), { recursive: true })

@@ -2,6 +2,7 @@
 import { runSyncOrThrow } from "../git/exec-sync"
 import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync } from "fs"
 import { join } from "path"
+import { files } from "@supermux/platform"
 
 function safeId(connectionId: string): string {
   return connectionId.replace(/[^a-zA-Z0-9._-]/g, "_")
@@ -9,7 +10,7 @@ function safeId(connectionId: string): string {
 
 function keyDir(root: string, connectionId: string): string {
   const dir = join(root, safeId(connectionId))
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   return dir
 }
 
@@ -26,7 +27,7 @@ export function ensureKeypair(root: string, connectionId: string): Keypair {
   const priv = join(dir, "id_ed25519")
   if (!existsSync(priv)) {
     runSyncOrThrow("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `supermux:${connectionId}`, "-f", priv], { timeoutMs: 60_000 })
-    chmodSync(priv, 0o600)
+    files.makePrivate(priv)
   }
   const publicKey = readFileSync(`${priv}.pub`, "utf8").trim()
   const fingerprint = runSyncOrThrow("ssh-keygen", ["-lf", `${priv}.pub`], { timeoutMs: 30_000 }).split(/\s+/)[1] ?? ""

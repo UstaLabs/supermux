@@ -4,6 +4,7 @@ import {
 } from "crypto"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, linkSync, rmSync } from "fs"
 import { dirname } from "path"
+import { files } from "@supermux/platform"
 
 const B32 = "abcdefghijklmnopqrstuvwxyz234567" // RFC 4648 lower, no padding
 
@@ -53,7 +54,7 @@ export function loadOrCreateHostKey(path: string): HostIdentity {
     return toIdentity(priv, createPublicKey(priv))
   }
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dirname(path))
   // Exclusive creation makes the durable identity deterministic even if two first-start
   // brokers race (for example, the desktop app and a restored LaunchAgent). The loser reads
   // the winner's key instead of overwriting it and continuing with a different in-memory ID.
@@ -62,8 +63,8 @@ export function loadOrCreateHostKey(path: string): HostIdentity {
   // it empty.
   const pending = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
   try {
-    writeFileSync(pending, privateKey.export({ type: "pkcs8", format: "pem" }), { flag: "wx", mode: 0o600 })
-    chmodSync(pending, 0o600) // umask-proof
+    files.writePrivate(pending, privateKey.export({ type: "pkcs8", format: "pem" }), { flag: "wx" })
+    files.makePrivate(pending) // umask-proof
     linkSync(pending, path)
     return toIdentity(privateKey, publicKey)
   } catch (error: any) {

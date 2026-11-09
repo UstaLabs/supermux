@@ -31,10 +31,10 @@ export function loadOrGenerateVapid(path: string, subject: string): VapidKeys {
     privateKey: generated.privateKey,
     subject,
   }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dirname(path))
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(record, null, 2), { mode: 0o600 })
+  files.writePrivate(tmp, JSON.stringify(record, null, 2))
   files.replaceSync(tmp, path)
-  chmodSync(path, 0o600)
+  files.makePrivate(path)
   return record
 }

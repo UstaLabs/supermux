@@ -6,7 +6,7 @@ import { encodeFrame } from "../../shared/frame-codec"
 import { parseRequest, PROTOCOL_VERSION, type SessiondRequest, type SessiondResponse } from "./protocol"
 import { timingSafeSecretEqual } from "./secret"
 import { SESSIOND_MAX_FRAME_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 export { SESSIOND_MAX_BUFFER_BYTES, SESSIOND_MAX_FRAME_BYTES } from "./framing"
 
 export type SessiondServerOptions = {
@@ -73,7 +73,7 @@ async function endpointIsLive(endpoint: string): Promise<boolean> {
 }
 
 async function preparePosixEndpoint(endpoint: string): Promise<void> {
-  await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 })
+  await files.mkdirPrivateAsync(dirname(endpoint))
   let existing: Awaited<ReturnType<typeof lstat>>
   try {
     existing = await lstat(endpoint)
@@ -318,7 +318,7 @@ export async function startSessiondServer(options: SessiondServerOptions): Promi
       const before = await lstat(options.endpoint, { bigint: true })
       if (!before.isSocket()) throw new Error("sessiond listener endpoint is not a socket")
       ownedIdentity = { dev: before.dev, ino: before.ino }
-      await chmod(options.endpoint, 0o600)
+      files.makePrivate(options.endpoint)
       const after = await lstat(options.endpoint, { bigint: true })
       if (!after.isSocket() || after.dev !== before.dev || after.ino !== before.ino) {
         throw new Error("sessiond listener endpoint ownership changed during setup")

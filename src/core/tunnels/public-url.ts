@@ -13,6 +13,7 @@ import type { AppConfig } from "../settings/app-config"
 import type { Println } from "./types"
 import { STOP_TOKEN_FILE } from "../session-manager/stop-token"
 import { envText, readEnvText } from "../../shared/env-file"
+import { files } from "@supermux/platform"
 
 /**
  * Upsert MUX_WEB_PORT + MUX_WEB_PUBLIC_URL in `<stateDir>/.env`, CLOBBERING any
@@ -26,7 +27,7 @@ export function writeEnvPublicUrl(
   url: string,
   proxyBaseDomain?: string,
 ): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(stateDir)
   const envPath = join(stateDir, ".env")
   const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_WEB_PORT", port)
@@ -37,19 +38,19 @@ export function writeEnvPublicUrl(
   if (proxyBaseDomain) map.set("MUX_PROXY_BASE_DOMAIN", proxyBaseDomain)
   else map.delete("MUX_PROXY_BASE_DOMAIN")
   writeFileSync(envPath, envText(map))
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 }
 
 /** Enable/disable the hosted relay without deleting the key. Keeping an empty
  * value records an explicit opt-out, so a later idempotent `supermux setup`
  * does not silently turn it back on. */
 export function setEnvRelayDomain(stateDir: string, domain: string): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(stateDir)
   const envPath = join(stateDir, ".env")
   const map = existsSync(envPath) ? readEnvText(readFileSync(envPath, "utf8")) : new Map<string, string>()
   map.set("MUX_RELAY_DOMAIN", domain)
   writeFileSync(envPath, envText(map))
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 }
 
 /**

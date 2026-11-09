@@ -121,7 +121,7 @@ export class FileStore {
   private readonly probe: (path: string) => Promise<MediaMeta | null>
 
   constructor(private readonly db: Db, private readonly rootDir: string, opts: FileStoreOptions = {}) {
-    mkdirSync(rootDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(rootDir)
     this.probe = opts.probe ?? probeFileMeta
   }
 
@@ -130,7 +130,7 @@ export class FileStore {
     const ext = extFromMime(input.mime)
     const shard = file_id.slice(0, 2)
     const shardDir = join(this.rootDir, shard)
-    mkdirSync(shardDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(shardDir)
 
     const finalPath = join(shardDir, `${file_id}.${ext}`)
     const partPath = `${finalPath}.part`
@@ -197,7 +197,7 @@ export class FileStore {
     const ext = extFromMime(input.mime)
     const shard = file_id.slice(0, 2)
     const shardDir = join(this.rootDir, shard)
-    mkdirSync(shardDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(shardDir)
 
     const finalPath = join(shardDir, `${file_id}.${ext}`)
     const partPath = `${finalPath}.part`
@@ -290,7 +290,7 @@ export class FileStore {
     const upload_id = randomBytes(16).toString("hex")
     const shard = upload_id.slice(0, 2)
     const shardDir = join(this.rootDir, shard)
-    mkdirSync(shardDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(shardDir)
     // The .part is keyed by upload_id only; finalize derives the final extension
     // from mime at rename time (so we don't store ext here).
     const partPath = join(shardDir, `${upload_id}.part`)

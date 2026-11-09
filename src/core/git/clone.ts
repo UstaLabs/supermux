@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { runSync } from "./exec-sync"
+import { files } from "@supermux/platform"
 
 export function projectDir(root: string, host: string, owner: string, name: string): string {
   return join(root, host, owner, name)
@@ -26,7 +27,7 @@ export async function gitClone(opts: CloneOpts): Promise<{ localPath: string; re
     const script = join(askpassDir, "askpass.sh")
     // git calls askpass twice: once for Username, once for Password.
     writeFileSync(script, `#!/bin/sh\ncase "$1" in *Username*) echo "$MUX_GIT_USER";; *) echo "$MUX_GIT_TOKEN";; esac\n`)
-    chmodSync(script, 0o700)
+    files.makePrivate(script, { executable: true })
     env.GIT_ASKPASS = script
     env.MUX_GIT_USER = opts.https.user
     env.MUX_GIT_TOKEN = opts.https.token

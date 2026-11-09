@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto"
 import { renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { files } from "@supermux/platform"
 
 export const STOP_TOKEN_FILE = "stop-token"
 
@@ -12,7 +13,7 @@ export function writeStopToken(stateDir: string): string {
   const token = randomBytes(24).toString("hex")
   const path = join(stateDir, STOP_TOKEN_FILE)
   const aside = `${path}.${process.pid}.tmp`
-  writeFileSync(aside, token, { mode: 0o600 }) // platform-ok: POSIX mode; on Windows the state dir is the user's profile, private by its ACL. files.makePrivate (step 7) takes this over
+  files.writePrivate(aside, token) // platform-ok: POSIX mode; on Windows the state dir is the user's profile, private by its ACL. files.makePrivate (step 7) takes this over
   renameSync(aside, path)
   return token
 }

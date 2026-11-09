@@ -22,7 +22,7 @@ import { files } from "@supermux/platform"
 export function materializeAsset(opts: { stateDir: string; name: string; sourcePath: string; executable?: boolean }): string {
   const dest = join(opts.stateDir, "runtime-assets", BUILD_VERSION, opts.name)
   if (existsSync(dest)) return dest
-  mkdirSync(dirname(dest), { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dirname(dest))
   // Atomic: write to a tmp in the same dir, chmod it, then rename onto dest —
   // a mid-write crash/ENOSPC can never leave a partial file that the
   // existsSync fast-path above would then trust forever (the file gets
@@ -35,7 +35,7 @@ export function materializeAsset(opts: { stateDir: string; name: string; sourceP
   const tmp = `${dest}.tmp.${process.pid}`
   try {
     writeFileSync(tmp, readFileSync(opts.sourcePath))
-    if (opts.executable) chmodSync(tmp, 0o755)
+    if (opts.executable) files.makeExecutable(tmp)
     files.replaceSync(tmp, dest)
   } catch (err) {
     try { unlinkSync(tmp) } catch {}

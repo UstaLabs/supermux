@@ -146,8 +146,8 @@ describe("no curl (Ubuntu Desktop ships wget, not curl)", () => {
         home: "/home/u", arch: "x64",
         fetch: (async () => new Response("down", { status: 502 })) as unknown as typeof fetch,
         sha256: () => "", untar: async () => {}, hasAvx2: () => true, isMusl: () => false,
-        fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {}, chmod: () => {}, symlink: () => {}, contained: () => null },
-        linkFs: { kind: () => "missing", exists: () => false, readlink: () => "", mkdir: () => {}, unlink: () => {}, symlink: () => {} },
+        fs: { exists: () => false, mkdir: () => {}, write: () => {}, rename: () => {}, remove: () => {}, makeExecutable: () => {}, linkFile: () => {}, contained: () => null },
+        linkFs: { kind: () => "missing", exists: () => false, readlink: () => "", mkdir: () => {}, unlink: () => {}, linkFile: () => {} },
       },
       spawn: () => { spawned = true; return fakeChild() },
       isInstalled: () => false,
@@ -399,7 +399,7 @@ describe("~/.local/bin/opencode link (macOS/Linux)", () => {
       readlink: (p) => e.get(p)!.link!,
       mkdir: (p) => { ops.push(`mkdir ${p}`) },
       unlink: (p) => { ops.push(`unlink ${p}`); e.delete(p) },
-      symlink: (t, p) => { ops.push(`symlink ${p} -> ${t}`); e.set(p, { link: t }) },
+      linkFile: (t, p) => { ops.push(`symlink ${p} -> ${t}`); e.set(p, { link: t }) },
     }
     return { fs, e, ops }
   }

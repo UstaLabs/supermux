@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { chmod, link, lstat, mkdir, open, readFile, unlink } from "node:fs/promises"
 import { isAbsolute, join, normalize, resolve } from "node:path"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 export const SESSIOND_SECRET_FILE = "sessiond.secret"
 
@@ -22,11 +22,11 @@ async function readValidated(path: string): Promise<string> {
 
 /** Load or exclusively create the user-scoped RPC secret. */
 export async function createOrLoadSessiondSecret(stateDir: string): Promise<string> {
-  await mkdir(stateDir, { recursive: true, mode: 0o700 })
+  await files.mkdirPrivateAsync(stateDir)
   const path = join(stateDir, SESSIOND_SECRET_FILE)
   try {
     const existing = await readValidated(path)
-    if (!host.windows()) await chmod(path, 0o600)
+    if (!host.windows()) files.makePrivate(path)
     return existing
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
@@ -46,7 +46,7 @@ export async function createOrLoadSessiondSecret(stateDir: string): Promise<stri
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     }
     const published = await readValidated(path)
-    if (!host.windows()) await chmod(path, 0o600)
+    if (!host.windows()) files.makePrivate(path)
     return published
   } finally {
     try { await unlink(tempPath) } catch (error) {

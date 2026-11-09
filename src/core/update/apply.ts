@@ -51,7 +51,7 @@ import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
 import { spawnProcess } from "../process/launcher"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 const TMP_NAME = `.supermux-update.${process.pid}.tmp`
 const PREV_SUFFIX = ".prev"
@@ -290,7 +290,7 @@ export async function applyUpdate(opts: {
 
   // 4. Make the downloaded binary executable.
   try {
-    chmodSync(tmpPath, 0o755)
+    files.makeExecutable(tmpPath)
   } catch (err) {
     try {
       unlinkSync(tmpPath)
