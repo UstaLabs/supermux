@@ -8,7 +8,7 @@ import { requireCloseMode } from '../types.js'
 import { cursorContext, grokContext, opencodeContext, type CursorContextOptions } from '../context/agents.js'
 import { detachedKeeperHooks } from '../keeper/client.js'
 
-const EFFORTS = new Set(['low', 'medium', 'high'])
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh'])
 
 export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args' | 'captureStderr' | 'sessionConfig'> & {
   id: string
@@ -17,15 +17,15 @@ export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args' | 'captureS
   /** Prefix argv before Grok CLI args (e.g. `[fixture]` with `command: process.execPath`). */
   commandArgs: string[]
   model?: string
-  reasoningEffort?: 'low' | 'medium' | 'high'
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
   authPath?: string
   noLeader: boolean
   permissions: Extract<PermissionsSpec, { kind: 'acp' }>
 }
 
-function requireEffort(value: string): 'low' | 'medium' | 'high' {
-  if (!EFFORTS.has(value)) throw new TypeError('Grok reasoningEffort must be low, medium, or high')
-  return value as 'low' | 'medium' | 'high'
+function requireEffort(value: string): 'low' | 'medium' | 'high' | 'xhigh' {
+  if (!EFFORTS.has(value)) throw new TypeError('Grok reasoningEffort must be low, medium, high, or xhigh')
+  return value as 'low' | 'medium' | 'high' | 'xhigh'
 }
 
 function sessionOverrides(value: SessionConfiguration | undefined): SessionConfiguration {

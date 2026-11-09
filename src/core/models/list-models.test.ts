@@ -79,7 +79,14 @@ test("models carry their label and efforts; a gated model is not ready, and says
   ])
 })
 
-test("Claude models get the --effort scale the app offers", () => {
-  const r = listModels(input({ agent: "claude", lookupModels: () => [{ id: "opus", displayName: "Opus", agent: "claude" }] }))
-  expect(r.agents[0]!.models).toEqual([{ id: "opus", label: "Opus", efforts: ["low", "medium", "high", "xhigh", "max"], ready: true }])
+test("Claude efforts come from the catalog row", () => {
+  const known: ModelInfo[] = [
+    { id: "claude-opus-4-6", displayName: "Opus 4.6", agent: "claude", reasoningLevels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }] },
+    { id: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", agent: "claude" },
+  ]
+  const r = listModels(input({ agent: "claude", lookupModels: () => known }))
+  expect(r.agents[0]!.models).toEqual([
+    { id: "claude-opus-4-6", label: "Opus 4.6", efforts: ["low", "medium", "high", "max"], ready: true },
+    { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", efforts: [], ready: true },
+  ])
 })

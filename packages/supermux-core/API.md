@@ -73,7 +73,7 @@ createCore(options: CoreOptions): Core
 
 ### Configuration
 
-Only `model`, `reasoningEffort` and `serviceTier` (nonempty strings). `serviceTier` is Codex's Fast tier id: Grok and Antigravity accept it and ignore it, and a driver without `configure` (Claude, ACP, Cursor, OpenCode) refuses it like any nonempty configuration (see below). Unknown keys / non-object → `invalid_input`. Core does not enumerate vendor effort strings; drivers may still reject (Grok: `low|medium|high` or a `TypeError` on open/configure).
+Only `model`, `reasoningEffort` and `serviceTier` (nonempty strings). `serviceTier` is Codex's Fast tier id: Grok and Antigravity accept it and ignore it, and a driver without `configure` (Claude, ACP, Cursor, OpenCode) refuses it like any nonempty configuration (see below). Unknown keys / non-object → `invalid_input`. Core does not enumerate vendor effort strings; drivers may still reject (Grok: `low|medium|high|xhigh` or a `TypeError` on open/configure).
 
 Create/resume-open pass cloned requested state into `driver.open` when nonempty. On create/adopt, `{}` / omitted / undefined values → omit on disk and omit on `DriverContext`. Resume `configuration: {}` is an **explicit patch** (see table). **Adopt never opens**: nonempty adopt config is persisted only; `configure` capability is enforced on later resume-open, not at adopt.
 

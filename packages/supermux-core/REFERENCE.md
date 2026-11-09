@@ -50,7 +50,7 @@ The library does its part. `sessions.create`, `resume`, `fork` and `adopt` alway
 
 ## Configuration (create / adopt / resume)
 
-Core keys are only the nonempty strings `model`, `reasoningEffort` and `serviceTier` (Codex's Fast tier id). Grok and Antigravity accept `serviceTier` and ignore it; Claude, ACP, Cursor and OpenCode advertise no `configure`, so they refuse it, like any nonempty configuration, with `unsupported_operation`. Unknown keys or a non-object → `invalid_input`. Core does **not** check vendor enums; Codex/Claude/Grok may still reject values (Grok effort other than `low|medium|high` throws a driver `TypeError` on open/configure).
+Core keys are only the nonempty strings `model`, `reasoningEffort` and `serviceTier` (Codex's Fast tier id). Grok and Antigravity accept `serviceTier` and ignore it; Claude, ACP, Cursor and OpenCode advertise no `configure`, so they refuse it, like any nonempty configuration, with `unsupported_operation`. Unknown keys or a non-object → `invalid_input`. Core does **not** check vendor enums; Codex/Claude/Grok may still reject values (Grok effort other than `low|medium|high|xhigh` throws a driver `TypeError` on open/configure).
 
 Pass requested state **before** native open on create/resume. Do not rely on a later `Session.configure` if the host needs the child born with that model.
 
