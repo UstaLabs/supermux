@@ -57,6 +57,9 @@ internal interface SessionPlayer {
         fun onEnded(mediaId: String?)
         fun onError(mediaId: String?, message: String)
 
+        /** The item the player holds now (null: none), whoever changed it: the service emptying it on its way out. */
+        fun onItemChanged(mediaId: String?)
+
         /** The session is gone (the service stopped: supermux swiped away). */
         fun onDisconnected()
     }
@@ -157,6 +160,16 @@ internal class AndroidAudioOutputs(
         current(mediaId)?.fail(message)
     }
 
+    /**
+     * The item gone from the player once it held it (the service emptied it, swiped from Recents): it has ended, so
+     * the dock clears rather than show a dead item playing. Before the player has held it, a change is the last
+     * item's unload trailing in.
+     */
+    override fun onItemChanged(mediaId: String?) {
+        val item = owner ?: return
+        if (mediaId == item.id) item.held = true else if (item.held) item.end()
+    }
+
     override fun onDisconnected() {
         player = null
         owner?.end()
@@ -164,6 +177,9 @@ internal class AndroidAudioOutputs(
 
     private inner class Item(val events: AudioOutput.Events, val id: String) : AudioOutput {
         @Volatile private var released = false
+
+        /** The player has said it holds this item ([onItemChanged]). */
+        var held = false
         private var cancelPoll: (() -> Unit)? = null
 
         private fun later(block: (SessionPlayer) -> Unit) = loop.run {
@@ -321,6 +337,10 @@ private class ControllerPlayer : SessionPlayer, MediaController.Listener, Player
         val c = controller ?: return
         c.stop()
         c.clearMediaItems()
+    }
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        listener?.onItemChanged(mediaItem?.mediaId)
     }
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {

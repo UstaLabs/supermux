@@ -48,21 +48,28 @@ class AudioPlaybackService : MediaSessionService() {
     /** The app's own controller and the system's (the notification, the lock screen, a headset, a watch). */
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
-    /** supermux swiped away from Recents: the sound stops with it. */
+    /**
+     * supermux swiped away from Recents: the sound stops with it, and the session goes. Releasing it disconnects the
+     * app's controller, which clears the dock ([AndroidAudioOutputs.onDisconnected]) and lets this bound service be
+     * destroyed: `stopSelf` alone does not end a service a controller is still bound to, and the app's player was
+     * left pointing at an empty one (a PLAYING bar whose ▶ did nothing). The next play binds a fresh service.
+     */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        session?.player?.let {
-            it.stop()
-            it.clearMediaItems()
-        }
+        releaseSession()
         stopSelf()
     }
 
     override fun onDestroy() {
-        session?.let {
-            it.player.release()
-            it.release()
-        }
-        session = null
+        releaseSession()
         super.onDestroy()
+    }
+
+    private fun releaseSession() {
+        val it = session ?: return
+        session = null
+        it.player.stop()
+        it.player.clearMediaItems()
+        it.player.release()
+        it.release()
     }
 }

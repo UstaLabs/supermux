@@ -3,6 +3,7 @@ package dev.supermux.android.platform
 import dev.supermux.work.AudioItem
 import dev.supermux.work.AudioOutput
 import dev.supermux.work.AudioOutputs
+import dev.supermux.work.AudioPlayer
 import dev.supermux.work.DownloadOrigin
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -218,5 +219,47 @@ class AndroidAudioOutputsTest {
         val first = AndroidAudio.shared(make)
         assertSame(first, AndroidAudio.shared(make), "every window's platform shares the session")
         assertEquals(1, made.size)
+    }
+
+    // ── The service going away under the app's player (Ahmet on the Fold: swiped from Recents, reopened, the dock
+    //    still said PLAYING and ▶ did nothing). Its player emptied or its session gone, the dock clears, and the
+    //    next play makes a fresh one and plays.
+
+    @Test fun thePlayerEmptiedUnderTheItemClearsTheDockAndTheNextPlayPlays() {
+        val p = AudioPlayer(outputs())
+        p.play(note)
+        val listener = session.listener!!
+        listener.onItemChanged(session.mediaId)
+        // supermux swiped away: the service empties its player.
+        listener.onItemChanged(null)
+        assertNull(p.state.value, "no dead PLAYING bar")
+        session.calls.clear()
+        p.play(other)
+        assertEquals(listOf("load /cache/other.mp3 'other.mp3' by null", "play"), session.calls)
+        assertTrue(p.state.value!!.playing)
+    }
+
+    @Test fun theLastItemsUnloadArrivingLateDoesNotEndTheNext() {
+        val p = AudioPlayer(outputs())
+        p.play(note)
+        val listener = session.listener!!
+        listener.onItemChanged(session.mediaId)
+        p.play(other)
+        // The controller's events trail its commands: the first item's unload, then the second's load.
+        listener.onItemChanged(null)
+        listener.onItemChanged(session.mediaId)
+        assertSame(other, p.state.value?.item)
+    }
+
+    @Test fun theSessionGoneClearsTheDockAndTheNextPlayConnectsAFreshOne() {
+        val p = AudioPlayer(outputs())
+        p.play(note)
+        session.listener!!.onDisconnected()
+        assertNull(p.state.value, "no dead PLAYING bar")
+        session.calls.clear()
+        p.play(other)
+        assertEquals(2, connects, "a fresh session for the next item")
+        assertEquals(listOf("load /cache/other.mp3 'other.mp3' by null", "play"), session.calls)
+        assertTrue(p.state.value!!.playing)
     }
 }
