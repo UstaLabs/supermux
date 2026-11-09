@@ -340,9 +340,20 @@ internal class FakeTts : TtsEngine {
     var stops = 0
     var shutdowns = 0
 
-    override suspend fun speak(text: String) { spoken.add(text) }
+    /** Speech lasts until [stop], as a real voice does, instead of ending at once. */
+    var hold = false
+    private var gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    override suspend fun speak(text: String) {
+        spoken.add(text)
+        if (hold) gate.await()
+    }
     override suspend fun playAudioChunk(bytes: ByteArray) { chunks.add(bytes.size) }
-    override fun stop() { stops++ }
+    override fun stop() {
+        stops++
+        gate.complete(Unit)
+        gate = kotlinx.coroutines.CompletableDeferred()
+    }
     override fun shutdown() { shutdowns++ }
 }
 

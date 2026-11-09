@@ -188,4 +188,87 @@ class AudioPlayerTest {
         assertTrue(outputs.made.single().released)
         assertTrue(outputs.closed)
     }
+
+    // ── an item that makes its own sound (#118 car 2: the OS voice reading a message) ─────────────
+
+    private val spoken = AudioItem("Read aloud · Here is the plan", "", origin, chat = "demo-day-recap", key = "read-aloud:Here is the plan")
+
+    @Test fun itsOwnSoundIsTheCurrentItemWithAStopOnly() {
+        val (p, outputs) = player()
+        var stops = 0
+        p.playOwn(spoken) { stops++ }
+        val now = assertNotNull(p.state.value)
+        assertSame(spoken, now.item)
+        assertTrue(now.playing)
+        assertTrue(now.stopOnly, "no pause, seek or speed for a sound the player cannot drive")
+        assertTrue(outputs.made.isEmpty(), "it opens no output")
+        // ❚❚, seek and speed do nothing to it.
+        p.toggle()
+        p.seek(5_000)
+        p.nextSpeed()
+        assertEquals(now, p.state.value)
+        assertEquals(0, stops)
+        // ✕ stops it.
+        p.stop()
+        assertNull(p.state.value)
+        assertEquals(1, stops)
+    }
+
+    @Test fun itsOwnSoundWorksWithoutOutputs() {
+        val p = AudioPlayer()
+        p.playOwn(spoken) {}
+        assertSame(spoken, p.state.value?.item)
+    }
+
+    @Test fun itsOwnSoundEndingByItselfGoesIdleWithoutBeingStopped() {
+        val (p, _) = player()
+        var stops = 0
+        val ended = p.playOwn(spoken) { stops++ }
+        ended()
+        assertNull(p.state.value)
+        assertEquals(0, stops, "it ended, nothing to stop")
+    }
+
+    @Test fun playingAnItemStopsItsOwnSound() {
+        val (p, outputs) = player()
+        var stops = 0
+        val ended = p.playOwn(spoken) { stops++ }
+        p.play(note)
+        assertEquals(1, stops)
+        assertSame(note, p.state.value?.item)
+        assertFalse(assertNotNull(p.state.value).stopOnly)
+        // Its late end is not the note's.
+        ended()
+        assertSame(note, p.state.value?.item)
+        assertFalse(outputs.made.single().released)
+    }
+
+    @Test fun itsOwnSoundReplacesAnItem() {
+        val (p, outputs) = player()
+        var gone = 0
+        p.play(note) { gone++ }
+        p.playOwn(spoken) {}
+        assertSame(spoken, p.state.value?.item)
+        assertTrue(outputs.made.single().released, "the note stops")
+        assertEquals(1, gone, "and its player is told")
+    }
+
+    @Test fun anItemsWatcherHearsItGoForAnyReason() {
+        val (p, outputs) = player()
+        var gone = 0
+        p.play(note) { gone++ }
+        p.stop()
+        assertEquals(1, gone, "✕")
+        p.play(note) { gone++ }
+        outputs.made[1].events.onEnded()
+        assertEquals(2, gone, "its end")
+        p.play(note) { gone++ }
+        outputs.made[2].events.onError("Can't decode")
+        assertEquals(3, gone, "an error")
+        p.play(note) { gone++ }
+        p.play(other)
+        assertEquals(4, gone, "replaced")
+        p.stop()
+        assertEquals(4, gone, "a replaced item is told once")
+    }
 }

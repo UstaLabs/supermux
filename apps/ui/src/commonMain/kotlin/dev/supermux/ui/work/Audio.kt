@@ -102,7 +102,8 @@ fun rememberAudioPlayer(): AudioPlayer {
  * The bottom bar's now-playing part (#118, design A), docked above the host row while something plays — the same
  * bar on a phone's Home and on a desktop: ❚❚/▶, the title and the chat it came from (a tap opens that chat at the
  * message), the speed (1× → 1.5× → 2×) and ✕; under them a thin scrubber you drag, between the time played and the
- * length. Nothing while idle or outside a fleet.
+ * length. Nothing while idle or outside a fleet. A sound the player cannot drive (#118 car 2: the OS voice reading a
+ * message) shows its title, its chat and ✕ only.
  */
 @Composable
 fun NowPlayingDock(modifier: Modifier = Modifier) {
@@ -126,19 +127,26 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(m.gap),
         ) {
-            QuietButton(
-                size = m.button,
-                corner = m.corner,
-                label = if (now.playing) "Pause" else "Play",
-                tag = "now_playing_toggle",
-                onClick = { player.toggle() },
-            ) {
-                Icon(
-                    if (now.playing) AudioGlyphs.Pause else AudioGlyphs.Play,
-                    contentDescription = null,
-                    tint = cs.primary,
-                    modifier = Modifier.size(m.glyph),
-                )
+            if (now.stopOnly) {
+                // Nothing to pause: a quiet mark of the voice in the button's place, so the title lines up.
+                Box(Modifier.size(m.button), contentAlignment = Alignment.Center) {
+                    Icon(AudioGlyphs.Voice, contentDescription = null, tint = cs.primary, modifier = Modifier.size(m.glyph))
+                }
+            } else {
+                QuietButton(
+                    size = m.button,
+                    corner = m.corner,
+                    label = if (now.playing) "Pause" else "Play",
+                    tag = "now_playing_toggle",
+                    onClick = { player.toggle() },
+                ) {
+                    Icon(
+                        if (now.playing) AudioGlyphs.Pause else AudioGlyphs.Play,
+                        contentDescription = null,
+                        tint = cs.primary,
+                        modifier = Modifier.size(m.glyph),
+                    )
+                }
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -161,7 +169,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                     }
                 }
             }
-            QuietButton(
+            if (!now.stopOnly) QuietButton(
                 size = m.speedHeight,
                 width = null,
                 corner = m.corner,
@@ -180,7 +188,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                 Icon(AudioGlyphs.Stop, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(m.stopGlyph))
             }
         }
-        Scrubber(player, now, m)
+        if (!now.stopOnly) Scrubber(player, now, m)
     }
 }
 
@@ -313,12 +321,12 @@ fun AudioRailIcon(modifier: Modifier = Modifier) {
                     .background(if (open) cs.onSurface.copy(alpha = cs.washAlpha) else Color.Transparent)
                     .semantics {
                         contentDescription = "Now playing: ${now.item.title}"
-                        stateDescription = if (now.playing) "playing" else "paused"
+                        stateDescription = if (now.stopOnly) "reading" else if (now.playing) "playing" else "paused"
                         progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                PlayerRing(fraction, now.playing)
+                PlayerRing(fraction, now.playing, voice = now.stopOnly)
             }
         }
         if (open) {
@@ -355,12 +363,16 @@ fun AudioRailIcon(modifier: Modifier = Modifier) {
 
 /** Our ring for the player: the time played as a teal arc on a faint track, the play/pause it also is in it. */
 @Composable
-internal fun PlayerRing(fraction: Float, playing: Boolean, modifier: Modifier = Modifier) {
+internal fun PlayerRing(fraction: Float, playing: Boolean, modifier: Modifier = Modifier, voice: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     Box(modifier.size(RingTokens.Ring), contentAlignment = Alignment.Center) {
         ProgressRing(fraction.takeIf { it > 0f })
         Icon(
-            if (playing) AudioGlyphs.Pause else AudioGlyphs.Play,
+            when {
+                voice -> AudioGlyphs.Voice
+                playing -> AudioGlyphs.Pause
+                else -> AudioGlyphs.Play
+            },
             contentDescription = null,
             tint = cs.primary,
             modifier = Modifier.size(RingTokens.Glyph),
@@ -452,6 +464,21 @@ internal object AudioGlyphs {
             lineTo(9f, 18f)
             moveTo(15f, 6f)
             lineTo(15f, 18f)
+        }
+    }
+
+    /** A voice reading: a small speaker and one wave. */
+    val Voice: ImageVector by lazy {
+        glyph("voice", stroke = 1.7f) {
+            moveTo(5f, 10f)
+            lineTo(8f, 10f)
+            lineTo(12f, 6.5f)
+            lineTo(12f, 17.5f)
+            lineTo(8f, 14f)
+            lineTo(5f, 14f)
+            close()
+            moveTo(15.5f, 9f)
+            curveTo(17f, 10.5f, 17f, 13.5f, 15.5f, 15f)
         }
     }
 
