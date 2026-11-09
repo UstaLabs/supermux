@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- The audio player playing on in the background (#118 car 3a, platform/AudioPlaybackService.kt). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Attachment camera capture is delegated to the system camera app (TakePicture);
          the camera is optional so non-camera devices can still install. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -101,6 +103,18 @@
             android:excludeFromRecents="true"
             android:autoRemoveFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode" />
+        <!-- The app's audio player (#118 car 3a, platform/AudioPlaybackService.kt): a Media3 session, so a voice note
+             plays on in the background with the media notification and the lock screen's controls. Exported, with
+             the session intent filter, as Media3 requires: the system's controllers (the notification, a headset,
+             a watch) bind it. -->
+        <service
+            android:name=".platform.AudioPlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

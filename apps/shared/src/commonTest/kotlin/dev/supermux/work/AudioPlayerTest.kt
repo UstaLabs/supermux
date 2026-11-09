@@ -317,4 +317,22 @@ class AudioPlayerTest {
         p.stop()
         assertEquals(4, gone, "a replaced item is told once")
     }
+
+    /** An output that shows what plays to the system (Android's media session) is handed the whole item. */
+    @Test fun anOutputIsOpenedWithTheWholeItem() {
+        val opened = mutableListOf<AudioItem>()
+        val outputs = AudioOutputs { _ ->
+            object : AudioOutput {
+                override fun open(uri: String) = Unit
+                override fun open(item: AudioItem) { opened += item }
+                override fun play() = Unit
+                override fun pause() = Unit
+                override fun seekTo(ms: Long) = Unit
+                override fun setRate(rate: Float) = Unit
+                override fun release() = Unit
+            }
+        }
+        AudioPlayer(outputs).play(note)
+        assertEquals(listOf(note), opened, "its title and chat, for the notification")
+    }
 }
