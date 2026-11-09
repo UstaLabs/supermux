@@ -1,11 +1,8 @@
 import type { AgentKind } from "../agents/types"
 import { AgentKind as Agent } from "../../shared/agents"
-import { readFileSync } from "fs"
 import { resolveCommand, spawnCommand } from "../process/launcher"
-import { home } from "../../shared/home"
-import { join } from "path"
-import { claudeModelSupportsFast, CODEX_FAST_SERVICE_TIER } from "./fast-mode"
-import { readClaudeStoredLogin } from "../agents/claude/stored-login"
+import { CODEX_FAST_SERVICE_TIER } from "./fast-mode"
+import { CLAUDE_MODEL_CATALOG_URL, claudeModelsFromCatalog } from "./claude-catalog"
 
 /**
  * An added account's launch env (the registry's `materialize`): discovery runs with it in place of
@@ -22,81 +19,35 @@ export type ModelInfo = {
   supportsFast?: true
 }
 
-const CREDENTIALS_PATH = `${home()}/.claude/.credentials.json`
-
-function oauthTokenFromCredential(raw: string): string | undefined {
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed?.claudeAiOauth?.accessToken
-  } catch {
-    return undefined
-  }
-}
-
-function readFileOrUndefined(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8")
-  } catch {
-    return undefined
-  }
-}
-
 export async function discoverClaudeModels(opts?: {
   fetch?: typeof globalThis.fetch
   env?: Record<string, string | undefined>
   readCredentialFile?: () => string | undefined
-  /** The login Claude Code keeps in the OS credential store for a CLAUDE_CONFIG_DIR (unset = the system login). */
+  /** Ignored. The catalog is public; Claude's login is not what decides the picker. */
   readStoredLogin?: (configDir?: string) => Promise<string | null>
   launch?: DiscoveryLaunch
+  /** Installed `claude --version`. Undefined looks it up, unless `fetch` is injected (tests). */
+  claudeVersion?: string | null
 }): Promise<ModelInfo[]> {
   const fetchFn = opts?.fetch ?? globalThis.fetch
-  // An account's launch env stands alone: a subscription home's credentials, its token, or its key.
-  const launch = opts?.launch
-  const env = launch ? launch.env : opts?.env ?? process.env
-  const credentialsPath = launch
-    ? launch.env.CLAUDE_CONFIG_DIR ? join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json") : undefined
-    : CREDENTIALS_PATH
-  const readCredentialFile = opts?.readCredentialFile
-    ?? (() => credentialsPath ? readFileOrUndefined(credentialsPath) : undefined)
-
-  const fileToken = oauthTokenFromCredential(readCredentialFile() ?? "")
-  // Without a file, Claude Code on Windows may keep the login in Credential Manager (#101). A token-only account has
-  // neither, and stands alone.
-  const storedDir = launch?.env.CLAUDE_CONFIG_DIR
-  const readStoredLogin = opts?.readStoredLogin ?? ((configDir?: string) => readClaudeStoredLogin(configDir))
-  const storedToken = !fileToken && (!launch || storedDir)
-    ? oauthTokenFromCredential((await readStoredLogin(storedDir).catch(() => null)) ?? "")
-    : undefined
-  const oauthTokens = [
-    env.CLAUDE_CODE_OAUTH_TOKEN,
-    fileToken,
-    storedToken,
-  ].filter((token, i, all): token is string => Boolean(token) && all.indexOf(token) === i)
-
-  const authHeaders: Record<string, string>[] = [
-    ...oauthTokens.map((token) => ({ Authorization: `Bearer ${token}` })),
-    ...(env.ANTHROPIC_API_KEY ? [{ "x-api-key": env.ANTHROPIC_API_KEY }] : []),
-  ]
-
-  for (const auth of authHeaders) {
+  let version: string | undefined
+  if (typeof opts?.claudeVersion === "string") version = opts.claudeVersion
+  else if (opts?.claudeVersion !== null && opts?.fetch === undefined) {
     try {
-      const res = await fetchFn("https://api.anthropic.com/v1/models?limit=100", {
-        headers: {
-          ...auth,
-          "anthropic-version": "2023-06-01",
-        },
-      })
-      if (!res.ok) continue
-      const body = await res.json() as { data?: { id: string; display_name: string }[] }
-      return (body.data ?? []).map((m) => ({
-        id: m.id,
-        displayName: m.display_name,
-        agent: Agent.Claude,
-        ...(claudeModelSupportsFast(m.id) ? { supportsFast: true as const } : {}),
-      }))
+      const raw = await runCli(["claude"], ["--version"], 5_000, opts?.launch)
+      version = raw.match(/(\d+\.\d+\.\d+)/)?.[1]
     } catch {
-      // Try the next configured auth source.
+      version = undefined
     }
+  }
+  try {
+    const res = await fetchFn(CLAUDE_MODEL_CATALOG_URL, { signal: AbortSignal.timeout(10_000) })
+    if (res.ok) {
+      const models = claudeModelsFromCatalog(await res.json(), version)
+      if (models.length > 0) return models
+    }
+  } catch {
+    // A miss leaves the previous cache in place (the refresh treats an empty result as unchanged-or-empty).
   }
   return []
 }

@@ -49,3 +49,14 @@ test("shouldShowReasoningControl hidden for cursor and single-level codex", () =
   expect(shouldShowReasoningControl("codex", models, "only")).toBe(false)
   expect(shouldShowReasoningControl("claude", [], undefined)).toBe(true)
 })
+
+test("a known Claude model uses only the efforts its catalog row lists", () => {
+  const models: ModelInfo[] = [
+    { id: "claude-opus-4-6", displayName: "Opus 4.6", agent: "claude", reasoningLevels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }] },
+    { id: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", agent: "claude" },
+  ]
+  expect(effectiveReasoningLevel("claude", models, "claude-opus-4-6", "xhigh")).toBe("max")
+  expect(effectiveReasoningLevel("claude", models, "claude-haiku-4-5-20251001", "high")).toBeUndefined()
+  expect(shouldShowReasoningControl("claude", models, "claude-haiku-4-5-20251001")).toBe(false)
+  expect(clampReasoningLevel("claude", models, "claude-opus-4-6", "xhigh")).toBe("max")
+})

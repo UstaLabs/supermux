@@ -1,5 +1,6 @@
 import { test, expect, mock } from "bun:test"
 import { cursorModelsFromAcp, discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverWithAccounts } from "../src/core/models/discovery"
+import { CLAUDE_MODEL_CATALOG_URL } from "../src/core/models/claude-catalog"
 import { discoverGrokModels, mapGrokModels } from "../src/core/agents/grok/model-discovery"
 
 // Verbatim `_meta.modelState.availableModels` from a live ACP `initialize`
@@ -98,128 +99,70 @@ test("discoverGrokModels returns empty when the CLI is missing", async () => {
   expect(await discoverGrokModels({ runner: runner as any })).toEqual([])
 })
 
-test("discoverClaudeModels parses Anthropic API response", async () => {
-  let seenHeaders: Record<string, string> | undefined
-  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
-    seenHeaders = init?.headers
-    return Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({
-        data: [
-          { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
-          { id: "claude-opus-4-7", display_name: "Claude Opus 4.7" },
-          { id: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6" },
+const CLAUDE_CATALOG = {
+  surfaces: {
+    cc: {
+      model_selector_config: [{
+        models: [
+          {
+            id: "claude-opus-5-5",
+            name: "Opus 5.5",
+            min_claude_code_version: "2.1.280",
+            thinking: { type: "effort", effort_options: ["low", "medium", "high", "xhigh", "max"].map((id) => ({ id })) },
+            fast_mode: { type: "toggle" },
+          },
+          {
+            id: "claude-opus-4-6",
+            name: "Opus 4.6",
+            thinking: { type: "effort", effort_options: ["low", "medium", "high", "max"].map((id) => ({ id })) },
+          },
+          { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", thinking: { type: "none" } },
+          { id: "claude-future", name: "Future", min_claude_code_version: "9.0.0", thinking: { type: "none" } },
         ],
-      }),
-    })
-  })
-  const models = await discoverClaudeModels({
-    fetch: mockFetch as any,
-    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
-    readCredentialFile: () => undefined,
-  })
-  expect(models).toEqual([
-    { id: "claude-opus-5-5", displayName: "Claude Opus 5.5", agent: "claude", supportsFast: true },
-    { id: "claude-opus-4-7", displayName: "Claude Opus 4.7", agent: "claude" },
-    { id: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", agent: "claude" },
-  ])
-  expect(seenHeaders).toEqual({
-    Authorization: "Bearer oauth-token",
-    "anthropic-version": "2023-06-01",
-  })
-})
+      }],
+    },
+  },
+}
 
-test("discoverClaudeModels returns empty on auth failure", async () => {
-  const mockFetch = mock(() => Promise.resolve({ ok: false, status: 401 }))
-  const models = await discoverClaudeModels({
-    fetch: mockFetch as any,
-    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
-    readCredentialFile: () => undefined,
+test("discoverClaudeModels reads Claude Code's catalog, with each model's own efforts", async () => {
+  let seenUrl: string | undefined
+  const mockFetch = mock((input: unknown) => {
+    seenUrl = String(input)
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(CLAUDE_CATALOG) })
   })
-  expect(models).toEqual([])
-})
-
-test("discoverClaudeModels returns empty on network error", async () => {
-  const mockFetch = mock(() => Promise.reject(new Error("network")))
-  const models = await discoverClaudeModels({
-    fetch: mockFetch as any,
-    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
-    readCredentialFile: () => undefined,
-  })
-  expect(models).toEqual([])
-})
-
-// #101: Claude Code on Windows can keep its login in Credential Manager (and delete the file) instead.
-test("discoverClaudeModels uses the login Claude Code keeps in Windows Credential Manager when there is no file", async () => {
-  let seenHeaders: Record<string, string> | undefined
-  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
-    seenHeaders = init?.headers
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ id: "claude-opus-5-5", display_name: "Claude Opus 5.5" }] }) })
-  })
-  const asked: Array<string | undefined> = []
-  const models = await discoverClaudeModels({
-    fetch: mockFetch as any,
-    env: {},
-    readCredentialFile: () => undefined,
-    readStoredLogin: async (configDir) => { asked.push(configDir); return JSON.stringify({ claudeAiOauth: { accessToken: "credman-token" } }) },
-  })
-  expect(models.map((m) => m.id)).toEqual(["claude-opus-5-5"])
-  expect(seenHeaders?.Authorization).toBe("Bearer credman-token")
-  expect(asked).toEqual([undefined])
-})
-
-test("discovery asks the store only without a file token: for an account, that account's folder; for a token account, never", async () => {
-  const ok = mock(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [] }) }))
   const asked: string[] = []
-  const readStoredLogin = async (configDir?: string) => { asked.push(configDir ?? "system"); return null }
-  await discoverClaudeModels({ fetch: ok as any, env: {}, readStoredLogin, readCredentialFile: () => JSON.stringify({ claudeAiOauth: { accessToken: "file-token" } }) })
-  await discoverClaudeModels({ fetch: ok as any, readStoredLogin, readCredentialFile: () => undefined, launch: { env: { CLAUDE_CONFIG_DIR: "C:\\acct" } } })
-  await discoverClaudeModels({ fetch: ok as any, readStoredLogin, readCredentialFile: () => undefined, launch: { env: { CLAUDE_CODE_OAUTH_TOKEN: "t" } } })
-  expect(asked).toEqual(["C:\\acct"])
-})
-
-test("discoverClaudeModels reads a fresh Linux Claude login from the credentials file", async () => {
-  let seenHeaders: Record<string, string> | undefined
-  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
-    seenHeaders = init?.headers
-    return Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ data: [{ id: "claude-opus-4-8", display_name: "Claude Opus 4.8" }] }),
-    })
-  })
   const models = await discoverClaudeModels({
     fetch: mockFetch as any,
-    env: {},
-    readCredentialFile: () => JSON.stringify({
-      claudeAiOauth: { accessToken: "linux-file-oauth-token" },
-    }),
+    claudeVersion: "2.1.319",
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-token" },
+    readCredentialFile: () => JSON.stringify({ claudeAiOauth: { accessToken: "file-token" } }),
+    readStoredLogin: async () => { asked.push("store"); return "stored" },
   })
-  expect(models.map((m) => m.id)).toEqual(["claude-opus-4-8"])
-  expect(seenHeaders).toEqual({
-    Authorization: "Bearer linux-file-oauth-token",
-    "anthropic-version": "2023-06-01",
-  })
+  expect(seenUrl).toBe(CLAUDE_MODEL_CATALOG_URL)
+  expect(asked).toEqual([])
+  expect(models).toEqual([
+    {
+      id: "claude-opus-5-5",
+      displayName: "Claude Opus 5.5",
+      agent: "claude",
+      reasoningLevels: ["low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
+      supportsFast: true,
+    },
+    {
+      id: "claude-opus-4-6",
+      displayName: "Claude Opus 4.6",
+      agent: "claude",
+      reasoningLevels: ["low", "medium", "high", "max"].map((id) => ({ id })),
+    },
+    { id: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5", agent: "claude" },
+  ])
 })
 
-test("discoverClaudeModels supports API-key-only setup", async () => {
-  let seenHeaders: Record<string, string> | undefined
-  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
-    seenHeaders = init?.headers
-    return Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ data: [{ id: "claude-sonnet-5", display_name: "Claude Sonnet 5" }] }),
-    })
-  })
-  const models = await discoverClaudeModels({
-    fetch: mockFetch as any,
-    env: { ANTHROPIC_API_KEY: "api-key" },
-    readCredentialFile: () => undefined,
-  })
-  expect(models.map((m) => m.id)).toEqual(["claude-sonnet-5"])
-  expect(seenHeaders).toEqual({
-    "x-api-key": "api-key",
-    "anthropic-version": "2023-06-01",
-  })
+test("discoverClaudeModels returns empty when the catalog cannot be fetched", async () => {
+  const denied = mock(() => Promise.resolve({ ok: false, status: 503 }))
+  expect(await discoverClaudeModels({ fetch: denied as any, claudeVersion: null })).toEqual([])
+  const failing = mock(() => Promise.reject(new Error("network")))
+  expect(await discoverClaudeModels({ fetch: failing as any, claudeVersion: null })).toEqual([])
 })
 
 test("discoverCodexModels parses codex debug models JSON", async () => {
@@ -288,20 +231,14 @@ test("discoverCursorModels returns empty when CLI fails", async () => {
   expect(models).toEqual([])
 })
 
-test("discoverClaudeModels uses an account's launch env instead of the system login", async () => {
-  const seen: Record<string, string>[] = []
-  const mockFetch = mock((_input: unknown, init?: { headers?: Record<string, string> }) => {
-    seen.push(init!.headers!)
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ id: "claude-x", display_name: "X" }] }) })
-  })
+test("discoverClaudeModels hides catalog rows the installed Claude Code is too old to run", async () => {
+  const mockFetch = mock(() => Promise.resolve({ ok: true, json: () => Promise.resolve(CLAUDE_CATALOG) }))
   const models = await discoverClaudeModels({
     fetch: mockFetch as any,
+    claudeVersion: "1.0.0",
     launch: { env: { CLAUDE_CODE_OAUTH_TOKEN: "account-token" } },
-    readCredentialFile: () => undefined,
   })
-  expect(models.map((m) => m.id)).toEqual(["claude-x"])
-  expect(seen).toHaveLength(1)
-  expect(seen[0]!.Authorization).toBe("Bearer account-token")
+  expect(models.map((m) => m.id)).toEqual(["claude-opus-4-6", "claude-haiku-4-5-20251001"])
 })
 
 test("discoverWithAccounts keeps the system login's models when they work", async () => {

@@ -111,6 +111,16 @@ test('explicit commandArgs prefix is the fixture; command is the exact executabl
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true, force: true }) }
 })
 
+test('xhigh reasoning effort is passed through to the CLI', async () => {
+  const { r, dir, lines } = await traced({}, { noLeader: false, model: 'grok-4.7', reasoningEffort: 'xhigh' })
+  try {
+    const argv = argvs(await lines())[0]!
+    expect(argv).toEqual(expect.arrayContaining(['--model', 'grok-4.7', '--reasoning-effort', 'xhigh']))
+    await r.configure({ model: 'grok-4.7', reasoningEffort: 'xhigh' })
+    expect(r.configuration()).toEqual({ model: 'grok-4.7', reasoningEffort: 'xhigh' })
+  } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true, force: true }) }
+})
+
 test('explicit broker flags disable noLeader', async () => {
   const { r, dir, lines } = await traced({}, { noLeader: false, model: 'grok-4', reasoningEffort: 'high' })
   try {
