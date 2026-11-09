@@ -5,6 +5,7 @@ import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { muxLspHome } from "./paths"
 import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 export function dartArch(): "arm64" | "x64" {
   return process.arch === "arm64" ? "arm64" : "x64"
@@ -31,7 +32,7 @@ export function extractZipArgv(zip: string, into: string, platform: NodeJS.Platf
 }
 
 // platform-ok: which Dart SDK build to download and how to unpack it (an artifact per OS)
-const HOST = process.platform
+const HOST = host.os()
 
 /** This host's dart binary name (dart.exe on Windows), for finding an installed SDK. */
 export const DART_EXE = dartExecutable(HOST)

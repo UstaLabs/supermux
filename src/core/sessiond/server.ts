@@ -6,6 +6,7 @@ import { encodeFrame } from "../../shared/frame-codec"
 import { parseRequest, PROTOCOL_VERSION, type SessiondRequest, type SessiondResponse } from "./protocol"
 import { timingSafeSecretEqual } from "./secret"
 import { SESSIOND_MAX_FRAME_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
+import { host } from "@supermux/platform"
 export { SESSIOND_MAX_BUFFER_BYTES, SESSIOND_MAX_FRAME_BYTES } from "./framing"
 
 export type SessiondServerOptions = {
@@ -96,7 +97,7 @@ function listen(server: Server, endpoint: string): Promise<void> {
 }
 
 export async function startSessiondServer(options: SessiondServerOptions): Promise<SessiondServer> {
-  const platform = options.platform ?? process.platform
+  const platform = options.platform ?? host.os()
   const filesystemEndpoint = platform !== "win32" && !isPipe(options.endpoint)
   if (filesystemEndpoint) await preparePosixEndpoint(options.endpoint)
 

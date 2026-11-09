@@ -21,6 +21,7 @@ import {
   type WorkspaceTerminalViewer,
 } from "./workspace-backend"
 import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("terminal")
 
@@ -224,7 +225,7 @@ export class TerminalManager {
     /** Injected in tests. Real builds get the platform's own. */
     workspaceBackend?: WorkspaceTerminalBackend
   }) {
-    this.platform = opts?.platform ?? process.platform
+    this.platform = opts?.platform ?? host.os()
     this.stateDir = opts?.stateDir ?? STATE_DIR
     this.environment = opts?.environment
     this.findExecutable = opts?.findExecutable

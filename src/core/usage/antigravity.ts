@@ -9,7 +9,7 @@
 
 import { existsSync } from "fs"
 import { join } from "path"
-import { proc } from "@supermux/platform"
+import { host, proc } from "@supermux/platform"
 import { CoreError } from "../../../packages/supermux-core/src/errors.js"
 import { prepareAntigravityEnvironment } from "../../../packages/supermux-core/src/environment/index.js"
 import { antigravityUpdaterEnv } from "../../../packages/supermux-core/src/antigravity/updater.js"
@@ -227,7 +227,7 @@ function defined(env: Record<string, string | undefined>): Record<string, string
  */
 export async function fetchAntigravityUsage(deps: AntigravityUsageDeps = {}): Promise<AntigravityUsage | null> {
   // platform-ok: agy opens the browser itself, through PATH openers off Windows and rundll32 on it (#103)
-  const platform = deps.platform ?? process.platform
+  const platform = deps.platform ?? host.os()
   const env = defined(deps.env ?? process.env)
   const command = deps.resolve ? deps.resolve(env) : resolveCommand(["agy"], env, platform)
   if (!command) throw new Error(NOT_INSTALLED)

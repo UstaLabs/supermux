@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { paths } from "@supermux/platform"
+import { host, paths } from "@supermux/platform"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
 
@@ -19,7 +19,7 @@ function ensureHome(home: string): void {
  *   name another folder. On Windows `\` is the separator and OpenCode reads it the same way: the pattern is written with `/`.
  * `platform` is a test seam.
  */
-export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = process.platform): string {
+export function readableFolderPattern(dir: unknown, platform: NodeJS.Platform = host.os()): string {
   const windows = platform === "win32"
   const path = paths.flavor(platform)
   const folder = typeof dir === "string" ? dir.replace(windows ? /[\\/]+$/ : /\/+$/, "") : ""

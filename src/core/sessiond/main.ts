@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path"
-import { lock } from "@supermux/platform"
+import { host, lock } from "@supermux/platform"
 import { STATE_DIR } from "../../shared/paths"
 import { createProcessJob } from "./job-object"
 import { createOrLoadSessiondSecret, sessiondEndpoint } from "./secret"
@@ -59,11 +59,11 @@ export async function acquireSessiondLock(stateDir: string, options: SessiondLoc
 
 export async function runSessiondMain(argv: string[] = process.argv.slice(2)): Promise<void> {
   const { stateDir } = parseSessiondArgs(argv)
-  const lock = await acquireSessiondLock(stateDir, { platform: process.platform })
+  const lock = await acquireSessiondLock(stateDir, { platform: host.os() })
   let server: Awaited<ReturnType<typeof startSessiondServer>> | undefined
   let shutdown: (() => void) | undefined
   try {
-    if (process.platform === "win32") {
+    if (host.windows()) {
       const probe = createProcessJob()
       probe.close()
     }

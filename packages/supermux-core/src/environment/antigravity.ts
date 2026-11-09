@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 import { requireSpec } from "./spec.js"
 import type { AntigravityEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
-import { Unsupported, files, paths } from "@supermux/platform"
+import { files, host, paths, Unsupported } from "@supermux/platform"
 
 /**
  * agy finds its config only through $HOME and its shell tool inherits $HOME, so each session runs
@@ -76,7 +76,7 @@ function refuseRealLocation(real: string, dir: string, userHome: string, platfor
  * Guard for an account's cli dir BEFORE anything creates it: not a symlink, not the real HOME or an
  * ancestor of it, not inside the real ~/.gemini (checked on the resolved path of what exists).
  */
-export function assertAccountCliDir(accountCliDir: string, userHome: string, platform: NodeJS.Platform = process.platform): void {
+export function assertAccountCliDir(accountCliDir: string, userHome: string, platform: NodeJS.Platform = host.os()): void {
   if (!isAbsolute(accountCliDir)) throw new TypeError(`antigravity account cli dir must be absolute: ${accountCliDir}`)
   if (lstatSafe(accountCliDir)?.isSymbolicLink()) throw new TypeError(`antigravity account cli dir must not be a symlink: ${accountCliDir}`)
   const real = realpathLoose(accountCliDir)
@@ -86,7 +86,7 @@ export function assertAccountCliDir(accountCliDir: string, userHome: string, pla
 }
 
 /** Guard shared by every writer: `shadowHome` is an existing, non-symlink, safe shadow home. */
-export function assertShadowHome(shadowHome: string, userHome: string, platform: NodeJS.Platform = process.platform): void {
+export function assertShadowHome(shadowHome: string, userHome: string, platform: NodeJS.Platform = host.os()): void {
   const st = lstatSafe(shadowHome)
   if (!st) throw new Error(`antigravity shadow home ${shadowHome} does not exist`)
   if (st.isSymbolicLink()) throw new TypeError(`antigravity shadow home must not be a symlink: ${shadowHome}`)
@@ -222,7 +222,7 @@ export function linkAntigravityCli(
   shadowHome: string,
   cliDir: string,
   userHome: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
 ): void {
   assertShadowHome(shadowHome, userHome, platform)
   assertNoLinkedParents(shadowHome, [".gemini"])
@@ -248,7 +248,7 @@ export function shareAntigravityHistory(
   accountCliDir: string,
   userCliDir: string,
   names: string[] = DEFAULT_SHARED_HISTORY,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
 ): void {
   const st = lstatSafe(accountCliDir)
   if (!st) throw new Error(`antigravity account cli dir ${accountCliDir} does not exist`)
@@ -352,7 +352,7 @@ export function writeAntigravityPlugins(opts: {
   wrappers: AntigravityPluginWrapper[]
   platform?: NodeJS.Platform
 }): string[] {
-  const platform = opts.platform ?? process.platform
+  const platform = opts.platform ?? host.os()
   validateWrappers(opts.wrappers)
   assertShadowHome(opts.shadowHome, opts.userHome, platform)
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config", "plugins"])

@@ -1,5 +1,6 @@
 import { spawnCommandSync } from "../process/launcher"
 import { readFileSync } from "fs"
+import { host } from "@supermux/platform"
 
 const KEY = "MUX_SESSION_ID="
 
@@ -36,6 +37,6 @@ function childPids(pid: number): number[] {
  * environment, or in its direct children's (the pane runs `bash -lc 'exec env … claude'`, so
  * either the pane process itself or its child carries it). Null when it can't be read.
  */
-export function paneSessionId(panePid: number, platform: NodeJS.Platform = process.platform): string | null {
+export function paneSessionId(panePid: number, platform: NodeJS.Platform = host.os()): string | null {
   return processSessionId(panePid, platform) ?? childPids(panePid).map((pid) => processSessionId(pid, platform)).find((id) => id) ?? null
 }

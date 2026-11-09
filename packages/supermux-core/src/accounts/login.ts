@@ -9,7 +9,7 @@ import { codexTokenFromAuth, readCodexIdentity } from "./adapters/codex.js"
 import { readCursorIdentity } from "./adapters/cursor.js"
 import { readGrokIdentity } from "./adapters/grok.js"
 import type { Account, AccountIdentity, LoginHandle, LoginOptions, LoginProcess, LoginRunner, LoginSpawn, LoginState } from "./types.js"
-import { files, proc } from "@supermux/platform"
+import { files, host, proc } from "@supermux/platform"
 
 export type LoginKind = "claude" | "codex" | "grok" | "cursor" | "antigravity"
 
@@ -153,7 +153,7 @@ export function loginEnv(extra: Record<string, string>): Record<string, string> 
   return { ...env, ...extra }
 }
 
-export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string, platform: NodeJS.Platform = process.platform): Plan {
+export function loginPlan(kind: LoginKind, directory: string, command: string, email?: string, platform: NodeJS.Platform = host.os()): Plan {
   switch (kind) {
     case "claude": return {
       spawn: { command, args: ["auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], env: loginEnv({ CLAUDE_CONFIG_DIR: directory }), cwd: directory, pty: true },
@@ -207,7 +207,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
           files.linkDirectory(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"))
           await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
           // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
-          if (process.platform !== "win32") for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+          if (!host.windows()) for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
         },
         finalize: async dir => {
           await unlinkLink(join(dir, ".login-home", ".gemini", "antigravity-cli"))
@@ -224,7 +224,7 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
  * BSD on macOS; ported from the broker's spawn-command.ts). Windows has no `script`: the default
  * runner gives it a ConPTY through Bun instead (spawnConptyLogin).
  */
-export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform = process.platform): { command: string; args: string[] } {
+export function ptyCommand(spawn: Pick<LoginSpawn, "command" | "args">, platform = host.os()): { command: string; args: string[] } {
   const shell = `stty cols 600; exec ${[spawn.command, ...spawn.args].map(quote).join(" ")}`
   if (platform === "win32") throw new CoreError("unsupported_operation", "Guided Claude login needs a pseudo-terminal (`script`), which Windows does not have")
   if (platform === "darwin") {
@@ -314,10 +314,10 @@ export function spawnConptyLogin(input: Pick<LoginSpawn, "command" | "args" | "e
 
 /** Default runner: its own process group (killed as a whole); PTY logins go through `script`, or a ConPTY on Windows. */
 export const defaultLoginRunner: LoginRunner = input => {
-  if (input.pty && process.platform === "win32") return spawnConptyLogin(input)
+  if (input.pty && host.windows()) return spawnConptyLogin(input)
   const { command, args } = input.pty ? ptyCommand(input) : input
   // Through @supermux/platform's spawnCommand: on Windows a CLI that is an npm shim (codex.cmd) starts through cmd.exe.
-  const child = proc.spawnCommand(command, args, { cwd: input.cwd, env: input.env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] })
+  const child = proc.spawnCommand(command, args, { cwd: input.cwd, env: input.env, detached: !host.windows(), stdio: ["pipe", "pipe", "pipe"] })
   const output: Array<(chunk: string) => void> = []
   const exits: Array<(code: number | null) => void> = []
   let exited: { code: number | null } | undefined

@@ -2,9 +2,10 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
 import { CoreError } from "./errors.js"
+import { host } from "@supermux/platform"
 
 /** Longest usable sun_path (bytes, without the NUL): 108 on Linux, 104 on macOS/BSD. */
-export const SUN_PATH_MAX = process.platform === "linux" ? 107 : 103
+export const SUN_PATH_MAX = host.os() === "linux" ? 107 : 103
 
 /** A 0700 directory owned by this user (created, or checked and tightened). Never follows a symlink. */
 export function privateDirectory(path: string): void {

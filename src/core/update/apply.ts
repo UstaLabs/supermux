@@ -51,6 +51,7 @@ import { dirname, join } from "path"
 import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
 import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 const TMP_NAME = `.supermux-update.${process.pid}.tmp`
 const PREV_SUFFIX = ".prev"
@@ -93,10 +94,10 @@ export function assetKeyFor(platform: string, arch: string): string | null {
 /**
  * Back-compat shim: resolve the asset key for the CURRENT platform's `arch`.
  * Exported so the unmapped path stays unit-testable on hosts where process.arch
- * can't be faked. New code should call assetKeyFor(process.platform, …) directly.
+ * can't be faked. New code should call assetKeyFor(host.os(), …) directly.
  */
 export function archAssetKeyFor(arch: string): string | null {
-  return assetKeyFor(process.platform, arch)
+  return assetKeyFor(host.os(), arch)
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -203,7 +204,7 @@ export async function applyUpdate(opts: {
   if (opts.archAssetKey !== undefined) {
     assetKey = opts.archAssetKey
   } else {
-    const mapped = assetKeyFor(process.platform, process.arch)
+    const mapped = assetKeyFor(host.os(), process.arch)
     if (mapped === null) {
       return { ok: false, error: { kind: "arch-unsupported", arch: process.arch } }
     }
@@ -743,7 +744,7 @@ export function restartViaWindowsTask(opts: {
  * back up), false if not service-managed (caller shows "restart required").
  */
 export function restartService(opts: { unit?: string; label?: string } = {}): boolean {
-  if (process.platform === "darwin") return restartViaLaunchd({ label: opts.label })
-  if (process.platform === "win32") return restartViaWindowsTask()
+  if (host.os() === "darwin") return restartViaLaunchd({ label: opts.label })
+  if (host.windows()) return restartViaWindowsTask()
   return restartViaSystemd({ unit: opts.unit })
 }

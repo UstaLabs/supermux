@@ -7,6 +7,7 @@ import { PROTOCOL_VERSION } from "./protocol"
 import { SESSIOND_MAX_BUFFER_BYTES, SessiondFrameAccumulator, SessiondFrameError } from "./framing"
 import { createOrLoadSessiondSecret } from "./secret"
 import { spawnProcess } from "../process/launcher"
+import { host } from "@supermux/platform"
 
 type SpawnSessiond = (executable: string, stateDir: string) => void | Promise<void>
 type ConnectSocket = (endpoint: string) => Promise<Socket>
@@ -145,7 +146,7 @@ export class SessiondBackend implements SessionBackend {
     this.endpoint = options.endpoint
     this.secret = options.secret
     this.stateDir = isAbsolute(options.stateDir) ? options.stateDir : resolve(options.stateDir)
-    this.platform = options.platform ?? process.platform
+    this.platform = options.platform ?? host.os()
     this.executable = options.executable ?? resolveSessiondExecutable()
     this.spawnSessiond = options.spawnSessiond ?? defaultSpawn
     this.connectSocket = options.connectSocket ?? defaultConnectSocket

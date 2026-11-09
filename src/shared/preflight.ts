@@ -1,5 +1,6 @@
 import { helperBinaries, verifyHelperManifest, zmxBinDir } from "../core/terminal/zmx/helper"
 import { resolveCommand } from "../core/process/launcher"
+import { host } from "@supermux/platform"
 
 export interface PreflightResult {
   fatal: string[]
@@ -40,7 +41,7 @@ const AGENT_CLIS = [
  */
 export function checkPreflight(
   has: (bin: string) => boolean,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
   workspace: WorkspaceTerminalReadiness | null = null,
 ): PreflightResult {
   const fatal: string[] = []
@@ -81,7 +82,7 @@ export function checkPreflight(
 
 /** Real PATH probe used at boot. */
 export function hasBinary(bin: string): boolean {
-  return resolveCommand([bin], process.env, process.platform) !== null
+  return resolveCommand([bin], process.env, host.os()) !== null
 }
 
 /**
@@ -94,7 +95,7 @@ export function hasBinary(bin: string): boolean {
  * Windows has no bundle and needs none: persistent terminals there are
  * sessiond's, which the broker owns directly.
  */
-export function workspaceTerminalReadiness(platform: NodeJS.Platform = process.platform): WorkspaceTerminalReadiness {
+export function workspaceTerminalReadiness(platform: NodeJS.Platform = host.os()): WorkspaceTerminalReadiness {
   if (platform === "win32") return { ok: true, detail: "sessiond (Windows)" }
   try {
     const dir = zmxBinDir()
