@@ -21,7 +21,7 @@ import { LINUX_BUILTIN_INSTALLERS, realLinuxBuiltinDeps, type LinuxBuiltinDeps }
 import { resolveCommand, spawnCommand } from "../process/launcher"
 import { linkIntoLocalBin, realLinkFs, type LinkFs } from "./local-bin"
 import { home as userHome } from "../../shared/home"
-import { proc } from "@supermux/platform"
+import { host, proc } from "@supermux/platform"
 
 const log = makeLogger("agents/install")
 
@@ -152,7 +152,7 @@ export interface InstallDeps {
   isInstalled: (kind: AgentKind) => boolean
   /** Home dir for resolving per-user bin dirs. Defaults to the user's home (home()). */
   home?: string
-  /** Defaults to process.platform. */
+  /** Defaults to host.os(). */
   platform?: NodeJS.Platform
   /** The environment installers start from. Defaults to process.env. */
   env?: Record<string, string | undefined>
@@ -232,7 +232,7 @@ export function installEnv(base: Record<string, string | undefined>, home: strin
  * recipe gives an already-failed job that says so.
  */
 export function startInstall(kind: AgentKind, deps: InstallDeps): { job: InstallJob; done: Promise<void> } {
-  const platform = deps.platform ?? process.platform
+  const platform = deps.platform ?? host.os()
   const job: InstallJob = { state: "running", log: "", exitCode: null }
   const append = (chunk: unknown) => {
     job.log += String(chunk)

@@ -21,6 +21,7 @@ import { SIGN_IN_EXPIRED, isSystemAccount, markSignInExpired } from "../../accou
 import { CURSOR_SIGN_IN_EXPIRED, cursorRefusedLogin } from "./auth"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/index.js"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agents/cursor/core-host")
 
@@ -60,7 +61,7 @@ export type CursorPrepareExtra = {
  *  the bare name so a missing CLI still fails with Cursor's own "not found". */
 export function cursorCommand(
   env: Record<string, string | undefined>,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = host.os(),
   fileExists?: FileExists,
 ): string {
   if (resolveCommand(["cursor-agent"], env, platform, { fileExists })) return "cursor-agent"
@@ -152,7 +153,7 @@ function withSignInRefusal(driver: AgentDriver, account: string | undefined): Ag
 }
 
 function userConfigDir(): string {
-  if (process.platform === "win32") {
+  if (host.windows()) {
     return process.env.APPDATA || join(HOME, "AppData", "Roaming")
   }
   return process.env.XDG_CONFIG_HOME || join(HOME, ".config")
@@ -205,8 +206,8 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
         },
         sharedRuntime: options.sharedRuntime !== undefined
           ? options.sharedRuntime
-          : (process.platform === "win32" ? null : { source: sharedCursorDir(STATE_DIR) }),
-        platform: process.platform,
+          : (host.windows() ? null : { source: sharedCursorDir(STATE_DIR) }),
+        platform: host.os(),
       })
       // Smoke is content: fail early on a broken install, after the environment is written.
       await smoke({ home: extra.sessionHome, authEnv: prepared.env })

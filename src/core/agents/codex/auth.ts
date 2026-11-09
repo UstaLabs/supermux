@@ -3,6 +3,7 @@ import { resolveCommand } from "../../process/launcher"
 import type { LoginSpawnCommand } from "../login/spawn-command"
 import { codexCredentialFreshness } from "../../../../packages/supermux-core/src/environment/index.js"
 import { home } from "../../../shared/home"
+import { host } from "@supermux/platform"
 
 export { codexCredentialFreshness }
 
@@ -10,7 +11,7 @@ export { codexCredentialFreshness }
  * device URL + code on plain stdout — no PTY needed. */
 export function loginSpawnCommand(): LoginSpawnCommand {
   const env = { ...process.env } as Record<string, string>
-  const cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"
+  const cmd = resolveCommand(["codex"], env, host.os()) ?? "codex"
   env.CODEX_HOME = join(home(), ".codex")
   return { cmd, args: ["login", "--device-auth"], env }
 }

@@ -17,6 +17,7 @@ import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { syncCodexSessionCredential } from "../account-env"
 import { codexReasoningArgs } from "../thinking-args"
 import { isSystemAccount } from "../../accounts/broker-accounts"
+import { host as thisHost } from "@supermux/platform"
 
 const log = makeLogger("agents/codex/core-host")
 
@@ -179,7 +180,7 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
         // the host's real binaries by ABSOLUTE path only (found and checked by the environment layer). One rules file per
         // session id: CODEX_HOME is the session's own today, but an account's home (which sessions can share) would let
         // sessions replace each other's file. Windows shells are not POSIX shells: no rules there.
-        ...(process.platform !== "win32"
+        ...(!thisHost.windows()
           ? { readableFiles: { name: `supermux-inbox-${registration.id}`, files: [inboxFilePath(registration.id)] } }
           : {}),
       }, options.resolveReadProgram ?? trustedHostBinary)

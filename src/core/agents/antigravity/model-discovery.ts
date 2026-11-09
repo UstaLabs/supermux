@@ -8,6 +8,7 @@ import { makeLogger } from "../../../shared/log"
 import { STATE_DIR } from "../../../shared/paths"
 import { runCli, type DiscoveryLaunch, type ModelInfo } from "../../models/discovery"
 import { antigravityUpdaterEnv } from "../../../../packages/supermux-core/src/antigravity/updater.js"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agents/antigravity/models")
 
@@ -45,7 +46,7 @@ export async function discoverAntigravityModels(opts?: {
   const cliDir = opts?.launch?.env[ANTIGRAVITY_CLI_DIR_ENV]
   const key = cliDir ? createHash("sha256").update(cliDir).digest("hex").slice(0, 12) : "system"
   try {
-    const platform = opts?.platform ?? process.platform
+    const platform = opts?.platform ?? host.os()
     const userHome = opts?.userHome ?? defaultHome()
     const shadow = join(opts?.stateDir ?? STATE_DIR, "agents", "antigravity", "_discovery", key, "home")
     await prepareAntigravityEnvironment({ home: shadow, userHome, platform })

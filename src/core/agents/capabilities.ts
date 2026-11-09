@@ -8,6 +8,7 @@
 // kind use in clients (logos, labels, help text) is intentionally not covered.
 import { AgentKind } from "../../shared/agents"
 import { isPersistentRuntimeSession } from "../session-manager/types"
+import { host } from "@supermux/platform"
 
 export interface SessionCapabilities {
   /** The session runs in a persistent runtime with an attachable agent
@@ -39,7 +40,7 @@ export function sessionCapabilities(agent: AgentKind): SessionCapabilities {
   }
 }
 
-export function agentAuthCapabilities(kind: AgentKind, platform: NodeJS.Platform = process.platform): AgentAuthCapabilities {
+export function agentAuthCapabilities(kind: AgentKind, platform: NodeJS.Platform = host.os()): AgentAuthCapabilities {
   return {
     // opencode authenticates through its own multi-provider connect UI, not a
     // broker-driven device login.

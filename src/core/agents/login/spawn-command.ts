@@ -5,6 +5,7 @@ import { loginSpawnCommand as cursorLogin } from "../cursor/auth"
 import { loginSpawnCommand as opencodeLogin } from "../opencode/auth"
 import { loginSpawnCommand as grokLogin } from "../grok/auth"
 import { loginSpawnCommand as antigravityLogin } from "../antigravity/auth"
+import { host } from "@supermux/platform"
 
 export interface LoginSpawnCommand {
   cmd: string
@@ -37,7 +38,7 @@ export function shQuote(s: string): string {
 }
 
 /** Claude's browser login needs a pseudo-terminal (it reads the pasted code from it). */
-export function claudeLoginSpawnCommand(platform = process.platform): LoginSpawnCommand {
+export function claudeLoginSpawnCommand(platform = host.os()): LoginSpawnCommand {
   return ptyLoginSpawnCommand("claude", ["auth", "login"], "supermux-claude", platform)
 }
 
@@ -49,7 +50,7 @@ export function claudeLoginSpawnCommand(platform = process.platform): LoginSpawn
  * the descriptor asks the spawner for a ConPTY instead.
  * [label] names the wrapper's argv[0]s (`<label>-script`, `<label>-login`).
  */
-export function ptyLoginSpawnCommand(command: string, args: string[], label: string, platform = process.platform): LoginSpawnCommand {
+export function ptyLoginSpawnCommand(command: string, args: string[], label: string, platform = host.os()): LoginSpawnCommand {
   if (platform === "win32") return { cmd: command, args, conpty: true }
   const shellCommand = `stty cols 600; exec ${[command, ...args].map(shQuote).join(" ")}`
   if (platform === "darwin") {

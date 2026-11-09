@@ -10,14 +10,14 @@
  * `authed` for the status badge only.
  */
 import { existsSync } from "fs"
-import { paths } from "@supermux/platform"
+import { host, paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 import type { LoginSpawnCommand } from "../login/spawn-command"
 import { browserlessScratch } from "../antigravity/auth"
 import { resolveCommand } from "../../process/launcher"
 
 /** The host OS, the default of every OS parameter in this module; callers and tests pass their own. */
-const HOST_PLATFORM: NodeJS.Platform = process.platform
+const HOST_PLATFORM: NodeJS.Platform = host.os()
 
 export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
   dataDir: string

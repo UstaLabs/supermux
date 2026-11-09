@@ -4,7 +4,7 @@
 // main.ts wires the real hasBinary/existsSync probes. Credential paths mirror
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
 import { realpathSync } from "fs"
-import { paths as hostPaths } from "@supermux/platform"
+import { host, paths as hostPaths } from "@supermux/platform"
 import { AGENT_KINDS, AgentKind, agentDisplayName } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
 import { claudeStoredLoginPresent } from "./claude/stored-login"
@@ -64,7 +64,7 @@ const BINARIES: Record<AgentKind, readonly string[]> = {
 
 /** Absolute path to the credential file the broker treats as "this CLI is logged in". */
 export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
-  const platform = paths.platform ?? process.platform
+  const platform = paths.platform ?? host.os()
   const pathJoin = hostPaths.flavor(platform).join
   switch (kind) {
     case "claude":
@@ -152,7 +152,7 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // affects the status badge, not usability.
   // Step-2's CRED_PROBE table stays the auth oracle; C's capability flags ride along.
   const authed = installed && CRED_PROBE[kind](probes, paths)
-  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind, paths.platform ?? process.platform) }
+  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind, paths.platform ?? host.os()) }
 }
 
 /** A session asked for an agent whose CLI is not on this computer: refused before anything starts. */
