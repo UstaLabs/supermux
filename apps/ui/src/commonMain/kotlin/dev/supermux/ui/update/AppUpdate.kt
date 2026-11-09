@@ -120,6 +120,7 @@ import dev.supermux.ui.platform.NoticeChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import dev.supermux.ui.platform.InFlightWork
 
 // ── Pure labels ───────────────────────────────────────────────────────────────
 
@@ -600,6 +601,10 @@ private const val INSTALLER_MIME = "application/octet-stream"
 val UpdateStatus.showsUpdateCard: Boolean
     get() = release?.updateAvailable == true && !dismissed && (!background || ready != null)
 
+/** What a waiting "Restart to update" says (#113): an upload first, as the likelier and the longer. */
+fun finishingLabel(work: List<InFlightWork.Kind>): String =
+    if (InFlightWork.Kind.Upload in work || work.isEmpty()) "Finishing upload…" else "Finishing recording…"
+
 /** The ready card's line where the installer reopens the app (#113): the agents carry on through the restart. */
 const val RESTART_CAPTION = "Restart to update: supermux closes, installs it and opens again. Your sessions carry on."
 
@@ -663,6 +668,9 @@ private fun UpdateCardBody(
     // #113: downloaded in the background; Windows' installer then closes, updates and reopens the app by itself.
     val ready = update.ready
     val restarts = ready != null && updater.restartsToUpdate
+    // "Restart to update" pressed while the app's own work runs: it waits, saying what for.
+    var waiting by remember { mutableStateOf(false) }
+    val work by InFlightWork.active.collectAsState()
     val canInstall = ready != null || (release.canInstall && release.downloadUrl != null)
     val shape = RoundedCornerShape(Radii.md)
     Column(
@@ -734,8 +742,16 @@ private fun UpdateCardBody(
                         onClick = {
                             scope.launch {
                                 if (ready != null) {
-                                    // Downloaded in the background (#113): no second download. The card has no
-                                    // room for an error: a failed hand-off opens the page.
+                                    // The app's own work first (#113): an upload or a recording finishes, then the
+                                    // restart goes ahead by itself. No dialog.
+                                    waiting = true
+                                    try {
+                                        InFlightWork.active.first { it.isEmpty() }
+                                    } finally {
+                                        waiting = false
+                                    }
+                                    // Downloaded in the background: no second download. The card has no room for an
+                                    // error: a failed hand-off opens the page.
                                     if (updater.install(ready) != null) onOpenPage()
                                     return@launch
                                 }
@@ -750,7 +766,7 @@ private fun UpdateCardBody(
                                 }
                             }
                         },
-                        enabled = !installing,
+                        enabled = !installing && !waiting,
                         shape = RoundedCornerShape(Radii.sm),
                         // Inverse ink: the one solid thing on the card, without a brand colour.
                         colors = ButtonDefaults.buttonColors(
@@ -766,6 +782,7 @@ private fun UpdateCardBody(
                         Text(
                             when {
                                 installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
+                                waiting -> finishingLabel(work)
                                 restarts -> "Restart to update"
                                 else -> "Install"
                             },
