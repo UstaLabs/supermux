@@ -225,6 +225,41 @@ class ChatMediaViewerTest {
         }
     }
 
+    // After a restart (#95, round 3): a clip the store holds plays in the viewer from its file, with no download.
+    @Test fun a_stored_clip_plays_in_the_viewer_without_a_download() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val center = DownloadCenter(scope)
+            val downloads = java.util.concurrent.atomic.AtomicInteger(0)
+            val media = object : AttachmentMedia {
+                override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? = if (att.kind == "video") null else TINY_PNG_BYTES
+                override fun downloadKey(att: Attachment): String = "att:rec/${att.file_id}"
+                override suspend fun playableUri(att: Attachment): String = "file:///cache/${att.file_id}.mp4"
+                override suspend fun stored(att: Attachment): DownloadedFile = DownloadedFile("clip.mp4", "video/mp4", 100, "/cache/${att.file_id}.mp4")
+                override suspend fun download(att: Attachment, progress: (Long, Long?) -> Unit): DownloadedFile? {
+                    downloads.incrementAndGet()
+                    return null
+                }
+            }
+            setPlatformContent {
+                CompositionLocalProvider(LocalDownloads provides center) {
+                    ChatMediaViewer(
+                        items = items,
+                        startKey = clip.key,
+                        resolve = { item -> MediaHandle((item as ChatMediaItem.FromAttachment).att, media, attachmentImageKey(item.att)) },
+                        onDismiss = {},
+                        renderPlayer = { uri, _, _ -> Text("player $uri", modifier = Modifier.testTag("stub_player")) },
+                    )
+                }
+            }
+            waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+            assertEquals(0, downloads.get(), "played from the store")
+            assertEquals(emptyList(), center.items.value, "nothing listed")
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test fun a_clip_dragged_halfway_into_view_downloads_nothing() = runComposeUiTest {
         // Mid-swipe the clip's page is composed and on screen, but nobody opened it yet.
         val media = Media()

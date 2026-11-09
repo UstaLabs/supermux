@@ -495,4 +495,24 @@ class MediaCacheTest {
         assertContentEquals(png, refreshed.await())
         assertContentEquals(png, cache.peek(host, att()), "the older load must not put its copy back over the refresh")
     }
+
+    // #95: after a restart the card asks whether the file is already stored — a look at the store, never a download.
+    @Test fun aStoredFileIsFoundWithoutTheNetwork() = runTest {
+        val store = FakeMediaStore(hasFiles = true).apply { entries["$host/$id.png"] = png }
+        val got = assertNotNull(cache(store).storedFile(host, att()))
+        assertEquals("/cache/$host/$id.png", got.path)
+        assertEquals(png.size.toLong(), got.size)
+        assertTrue(store.writes.isEmpty(), "nothing written: ${store.writes}")
+    }
+
+    @Test fun aFileNotStoredOrOnlyPartlyStoredIsNotFound() = runTest {
+        val store = FakeMediaStore(hasFiles = true).apply { partials["$host/$id.png"] = ByteArray(2) }
+        assertNull(cache(store).storedFile(host, att()))
+        assertTrue(store.partials.containsKey("$host/$id.png"), "the look keeps the partial for a resume")
+    }
+
+    @Test fun whereEntriesAreNotFilesNothingIsFound() = runTest {
+        val store = FakeMediaStore(hasFiles = false).apply { entries["$host/$id.png"] = png }
+        assertNull(cache(store).storedFile(host, att()))
+    }
 }

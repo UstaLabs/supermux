@@ -62,6 +62,8 @@ data class Download(
     val purpose: DownloadPurpose,
     val state: DownloadState,
     val origin: DownloadOrigin? = null,
+    /** How far a paused ([DownloadState.Cancelled]) download got when it was paused: its ring stays drawn there. */
+    val pausedAt: DownloadState.Running? = null,
 )
 
 /** Where a download was started: the chat [sessionId] and the message [messageId] it is attached to. */
@@ -157,7 +159,9 @@ class DownloadCenter(private val scope: CoroutineScope) {
         val (source, job) = synchronized(lock) {
             val entry = entries[key]
             if (entry == null || stateOf(key) !is DownloadState.Running) return
-            set(key) { DownloadState.Cancelled }
+            listed.update { all ->
+                all.map { if (it.key == key) it.copy(state = DownloadState.Cancelled, pausedAt = it.state as? DownloadState.Running) else it }
+            }
             entry.source to entry.job
         }
         // Told here, at once: a transfer the source shares with the media cache runs on that cache's own scope,

@@ -88,10 +88,11 @@ import kotlin.time.TimeSource
 /**
  * Every listed download (#95) and what can be done with it — design A, round 1's palette for the downloads alone: a
  * header ("Downloads · 5", and Clear finished once anything has ended), then a quiet row a download — our thin glyph,
- * the name, a dim line saying what became of it, and its actions as quiet words: Pause · Cancel while it runs, Resume ·
- * Cancel once paused, Retry once it failed, and once done the host's own [actions] for a file (R3) or Install for an
- * app update. Under a running row a hairline fills. The engine has no pause of its own: Pause is [onCancel] (what
- * arrived is kept), Resume is [onRetry], and Cancel is [onDismiss] (stopped and taken off the list).
+ * the name, a dim line saying what became of it, and at its end what can be done. Until it is done that is the
+ * download's ring ([RingControl], #95 round 3): a tap pauses a running one, resumes a paused one, retries a failed one,
+ * and the ✕ beside a stopped one takes it off the list. Once done: the host's own [actions] for a file (R3), or Install
+ * for an app update, as quiet words. Under a running row a hairline fills. The engine has no pause of its own: Pause is
+ * [onCancel] (what arrived is kept), Resume and Retry are [onRetry], and ✕ is [onDismiss].
  *
  * A row that knows where it came from (its [Download.origin], a chat message) opens it when its name or detail line
  * is tapped ([onOpenSource]); its words stay words.
@@ -118,7 +119,18 @@ fun ActivityList(
     val rows = remember(items) {
         items.filter { it.state is DownloadState.Running } + items.filter { it.state !is DownloadState.Running }
     }
-    val wordsOf: (Download) -> List<Word> = { wordsFor(it, actions, onCancel, onRetry, onAction, onInstall, onDismiss) }
+    val wordsOf: (Download) -> List<Word> = { wordsFor(it, actions, onAction, onInstall) }
+    val primary: (Download) -> Word? = { primaryOf(it, wordsOf(it), onRetry) }
+    val ring: @Composable (Download) -> Unit = { item ->
+        RingControl(
+            item = item,
+            tag = "activity_ring",
+            onToggle = { if (item.state is DownloadState.Running) onCancel(item) else onRetry(item) },
+            onRemove = { onDismiss(item) },
+            // The row's hairline says how far it got.
+            progressSemantics = false,
+        )
+    }
     var selected by remember { mutableIntStateOf(0) }
     val current = selected.coerceIn(0, (rows.size - 1).coerceAtLeast(0))
     val focus = remember { FocusRequester() }
@@ -131,7 +143,7 @@ fun ActivityList(
                 Key.DirectionDown -> { selected = (current + 1).coerceAtMost(rows.lastIndex); true }
                 Key.DirectionUp -> { selected = (current - 1).coerceAtLeast(0); true }
                 Key.Enter, Key.NumPadEnter -> {
-                    rows.getOrNull(current)?.let { primaryOf(it, wordsOf(it)) }?.act?.invoke()
+                    rows.getOrNull(current)?.let(primary)?.act?.invoke()
                     true
                 }
                 else -> false
@@ -151,15 +163,15 @@ fun ActivityList(
             rows.forEachIndexed { i, item ->
                 key(item.key) {
                     if (popover) {
-                        PopoverRow(item, wordsOf(item), selected = i == current, onHover = { selected = i }, onOpenSource)
+                        PopoverRow(item, wordsOf(item), ring, selected = i == current, onHover = { selected = i }, onOpenSource)
                     } else {
-                        SheetRow(item, wordsOf(item), onOpenSource)
+                        SheetRow(item, wordsOf(item), ring, onOpenSource)
                     }
                 }
             }
         }
         if (popover && LocalHardwareKeyboard.current) {
-            Hints(verb = rows.getOrNull(current)?.let { primaryOf(it, wordsOf(it)) }?.label?.lowercase())
+            Hints(verb = rows.getOrNull(current)?.let(primary)?.label?.lowercase())
         }
     }
 }
@@ -187,7 +199,7 @@ private fun Header(count: Int, clearable: Boolean, onClear: () -> Unit, popover:
 
 /** A phone's row: the glyph; the name and its size or %; what became of it and the quiet words; the hairline. */
 @Composable
-private fun SheetRow(item: Download, words: List<Word>, onOpenSource: (Download) -> Unit) {
+private fun SheetRow(item: Download, words: List<Word>, ring: @Composable (Download) -> Unit, onOpenSource: (Download) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val state = item.state
     val timeLeft = rememberTimeLeft(item.key, state as? DownloadState.Running)
@@ -220,6 +232,7 @@ private fun SheetRow(item: Download, words: List<Word>, onOpenSource: (Download)
                         modifier = Modifier.weight(1f),
                     )
                     Words(words, WordSize.Sheet)
+                    if (state !is DownloadState.Done) ring(item)
                 }
             }
         }
@@ -231,7 +244,14 @@ private fun SheetRow(item: Download, words: List<Word>, onOpenSource: (Download)
 
 /** A desktop's row, one line: glyph · name · what became of it · % · the quiet words; washed while selected. */
 @Composable
-private fun PopoverRow(item: Download, words: List<Word>, selected: Boolean, onHover: () -> Unit, onOpenSource: (Download) -> Unit) {
+private fun PopoverRow(
+    item: Download,
+    words: List<Word>,
+    ring: @Composable (Download) -> Unit,
+    selected: Boolean,
+    onHover: () -> Unit,
+    onOpenSource: (Download) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     val state = item.state
     val source = remember { MutableInteractionSource() }
@@ -264,6 +284,7 @@ private fun PopoverRow(item: Download, words: List<Word>, selected: Boolean, onH
             }
             Spacer(Modifier.width(12.dp))
             Words(words, WordSize.Popover)
+            if (state !is DownloadState.Done) ring(item)
         }
         if (state is DownloadState.Running) {
             Hairline(state.fraction(), Modifier.align(Alignment.BottomStart).padding(start = 40.dp, end = 12.dp, bottom = 3.dp))
@@ -400,18 +421,14 @@ internal fun middleEllipsis(text: String, fits: (String) -> Boolean): String {
 /** One quiet word on a row: what it says, its test tag, and what it does. */
 private class Word(val label: String, val tag: String, val act: () -> Unit)
 
+/** A done row's words. Until it is done a row has its ring instead ([RingControl]). */
 private fun wordsFor(
     item: Download,
     actions: Set<FileAction>,
-    onCancel: (Download) -> Unit,
-    onRetry: (Download) -> Unit,
     onAction: (Download, FileAction) -> Unit,
     onInstall: (Download) -> Unit,
-    onDismiss: (Download) -> Unit,
 ): List<Word> = when (item.state) {
-    is DownloadState.Running -> listOf(Word("Pause", "activity_pause") { onCancel(item) }, Word("Cancel", "activity_cancel") { onDismiss(item) })
-    DownloadState.Cancelled -> listOf(Word("Resume", "activity_resume") { onRetry(item) }, Word("Cancel", "activity_cancel") { onDismiss(item) })
-    is DownloadState.Failed -> listOf(Word("Retry", "activity_retry") { onRetry(item) })
+    is DownloadState.Running, DownloadState.Cancelled, is DownloadState.Failed -> emptyList()
     is DownloadState.Done -> if (item.purpose == DownloadPurpose.Installer) {
         listOf(Word("Install", "activity_install") { onInstall(item) })
     } else {
@@ -422,9 +439,13 @@ private fun wordsFor(
     }
 }
 
-/** What ↵ does on a row: its first word — nothing on a running row. */
-private fun primaryOf(item: Download, words: List<Word>): Word? =
-    if (item.state is DownloadState.Running) null else words.firstOrNull()
+/** What ↵ does on a row: what its ring's tap does once it stopped (resume, retry), a done row's first word — nothing on a running row. */
+private fun primaryOf(item: Download, words: List<Word>, onRetry: (Download) -> Unit): Word? = when (item.state) {
+    is DownloadState.Running -> null
+    DownloadState.Cancelled -> Word("Resume", "activity_resume") { onRetry(item) }
+    is DownloadState.Failed -> Word("Retry", "activity_retry") { onRetry(item) }
+    is DownloadState.Done -> words.firstOrNull()
+}
 
 /** Our glyph for where an item is. */
 private fun glyphOf(item: Download): ImageVector = when (item.state) {

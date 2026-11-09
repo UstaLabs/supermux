@@ -145,6 +145,23 @@ class DownloadCenterTest {
         assertEquals(1, s.cancels)
     }
 
+    // #95: a paused ring stays drawn at how far it got.
+    @Test fun aPauseRemembersHowFarItGotUntilItResumes() = runTest {
+        val c = center()
+        val s = FakeSource()
+        c.start("k", "a.pdf", "application/pdf", DownloadPurpose.File, s)
+        runCurrent()
+        s.progress!!(42, 100)
+        c.cancel("k")
+        runCurrent()
+        assertEquals(DownloadState.Cancelled, c.items.value.single().state)
+        assertEquals(DownloadState.Running(42, 100), c.items.value.single().pausedAt)
+        c.retry("k")
+        runCurrent()
+        assertIs<DownloadState.Running>(c.items.value.single().state)
+        c.close()
+    }
+
     @Test fun closeCancelsEverySharedTransfer() = runTest {
         val c = center()
         val a = FakeSource()

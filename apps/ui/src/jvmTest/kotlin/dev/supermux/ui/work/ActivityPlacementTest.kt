@@ -337,16 +337,17 @@ class ActivityPlacementTest {
         val center = DownloadCenter(scope).apply { running() }
         phone(center) { Footer() }
         onNodeWithTag(FOOTER_RING).performClick()
-        waitFor { onNodeWithTag("activity_pause").assertIsDisplayed() }
-        onNodeWithTag("activity_pause").performClick()
+        // The row's ring toggles (#95, round 3): pause, resume; ✕ beside a paused one removes it.
+        waitFor { onNodeWithTag("activity_ring").assertIsDisplayed() }
+        onNodeWithTag("activity_ring").performClick()
         waitForIdle()
         assertEquals(DownloadState.Cancelled, center.items.value.single().state)
-        waitFor { onNodeWithTag("activity_resume").assertIsDisplayed() }
-        onNodeWithTag("activity_resume").performClick()
+        onNodeWithTag("activity_ring").performClick()
         waitForIdle()
         assertEquals(DownloadState.Running(42, 100), center.items.value.single().state)
-        waitFor { onNodeWithTag("activity_cancel").assertIsDisplayed() }
-        onNodeWithTag("activity_cancel").performClick()
+        onNodeWithTag("activity_ring").performClick()
+        waitFor { onNodeWithTag("activity_ring_remove").assertIsDisplayed() }
+        onNodeWithTag("activity_ring_remove").performClick()
         waitForIdle()
         assertEquals(emptyList(), center.items.value, "Cancel takes it off the list")
     }

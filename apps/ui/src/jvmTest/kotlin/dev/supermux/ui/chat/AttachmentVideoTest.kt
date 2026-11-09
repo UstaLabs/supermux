@@ -244,6 +244,9 @@ class AttachmentVideoTest {
 
         override fun downloadKey(att: Attachment): String = "att:rec/${att.file_id}"
 
+        override suspend fun stored(att: Attachment): DownloadedFile? =
+            if (stored) DownloadedFile(att.name ?: att.file_id, att.mime ?: "video/mp4", 100, "/cache/${att.file_id}.mp4") else null
+
         override suspend fun download(att: Attachment, progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
             downloads.incrementAndGet()
             progress(42, 100)
@@ -335,19 +338,45 @@ class AttachmentVideoTest {
         }
         onNodeWithTag("attachment_video_poster").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag(VIDEO_RING, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        // The ring itself pauses: no menu.
         onNodeWithTag(VIDEO_RING, useUnmergedTree = true).performClick()
-        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_menu_pause").fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithTag("attachment_menu_pause").performClick()
         waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_video_poster").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(0, onAllNodesWithTag("attachment_menu").fetchSemanticsNodes().size, "no menu")
         assertEquals(DownloadState.Cancelled, center.items.value.single().state)
         assertEquals(listOf("v1"), media.cancelled.toList())
         assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size, "no error card")
-        // The poster keeps the ring, which resumes it.
+        // The poster keeps the ring, at how far it got, with its ✕; a tap on the ring resumes it.
+        onNode(hasTestTag(VIDEO_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)), useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("${VIDEO_RING}_remove", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag(VIDEO_RING, useUnmergedTree = true).performClick()
-        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_menu_resume").fetchSemanticsNodes().isNotEmpty() }
-        onNodeWithTag("attachment_menu_resume").performClick()
         waitUntil(timeoutMillis = 5_000L) { center.items.value.single().state is DownloadState.Running }
         assertEquals(2, media.downloads.get())
+    }
+
+    // After a restart (#95, round 3): a clip the store already holds plays at once from its file — no download, no ring.
+    @Test fun a_stored_clip_plays_from_its_file_on_a_fresh_center() = runComposeUiTest {
+        val center = DownloadCenter(centerScope)
+        val media = HostClips().apply { stored = true }
+        val mounted = AtomicReference<String?>(null)
+        setPlatformContent {
+            CompositionLocalProvider(LocalDownloads provides center) {
+                InlineVideo(
+                    att = videoAtt(),
+                    media = media,
+                    renderPlayer = { uri, _, _ ->
+                        mounted.set(uri)
+                        Text("player", modifier = Modifier.testTag("stub_player"))
+                    },
+                )
+            }
+        }
+        waitForIdle()
+        assertEquals(0, onAllNodesWithTag(VIDEO_RING, useUnmergedTree = true).fetchSemanticsNodes().size, "no ring on the poster")
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("file:///cache/v1.mp4", mounted.get())
+        assertEquals(0, media.downloads.get(), "played from the store, not downloaded")
+        assertEquals(emptyList(), center.items.value, "nothing listed")
     }
 
     private companion object {

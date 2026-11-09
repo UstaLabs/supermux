@@ -308,6 +308,15 @@ class HostStore(
             return DownloadedFile(name, mime, stored.size, stored.path)
         }
 
+        // #95: what the store already holds, as a finished download — a look, never a request. The web keeps no
+        // files (a browser Blob does not outlive the page): nothing is stored there.
+        override suspend fun stored(att: Attachment): DownloadedFile? {
+            if (deps.browserDownload != null) return null
+            val host = mediaHost ?: return null
+            val file = deps.media?.storedFile(host, att) ?: return null
+            return DownloadedFile(att.name ?: att.file_id, att.mime ?: "application/octet-stream", file.size, file.path)
+        }
+
         override fun cancelDownload(att: Attachment) {
             val host = mediaHost ?: return
             deps.media?.cancelFile(host, att.file_id)

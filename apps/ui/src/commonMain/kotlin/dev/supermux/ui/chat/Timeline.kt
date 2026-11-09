@@ -81,6 +81,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -141,6 +142,7 @@ import dev.supermux.work.DownloadPurpose
 import dev.supermux.work.DownloadSource
 import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
+import dev.supermux.work.isAvailable
 import dev.supermux.ui.resolveBashParts
 import dev.supermux.ui.resolveEditParts
 import dev.supermux.ui.toolDiffDoc
@@ -1502,6 +1504,8 @@ internal fun InlineVideo(
     var failed by remember(att.file_id) { mutableStateOf(false) }
     val origin = rememberDownloadOrigin(entryId)
     val download = rememberListedDownload(downloads, media.downloadKey(att))
+    // Already in the store (#95: after a restart): ▶ plays it from there, with no ring.
+    val stored = rememberStoredFile(media, att, download)
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
@@ -1562,8 +1566,9 @@ internal fun InlineVideo(
                 .testTag("attachment_video_loading"),
             contentAlignment = Alignment.Center,
         ) {
-            // The clip's download, as the card's ↓ and the sidebar draw it; a preview's bytes just turn it.
-            DownloadItemRing(download?.takeIf { it.state !is DownloadState.Done }, VIDEO_RING_TAG, busy = true)
+            // The clip's download, as the card's ↓ and the sidebar draw it; a preview's bytes just turn it. A stored
+            // clip is only opened: no ring.
+            DownloadItemRing(download?.takeIf { it.state !is DownloadState.Done }, VIDEO_RING_TAG, busy = stored == null)
         }
         else -> Box(surface) {
             renderPlayer(
@@ -1596,6 +1601,19 @@ internal fun rememberListedDownload(downloads: DownloadCenter, key: String?): Do
     return if (key == null) null else listed
 }
 
+/**
+ * [att]'s file if the store already holds it (#95: a restart keeps it) while [listed] — its live download — is none;
+ * asked again once a listed one goes. Null on the web, which keeps no files, and for media without a download.
+ */
+@Composable
+internal fun rememberStoredFile(media: AttachmentMedia, att: Attachment, listed: Download?): DownloadedFile? {
+    val look = listed == null && media.downloadKey(att) != null
+    val stored by produceState<DownloadedFile?>(null, media, att.file_id, look) {
+        value = if (look) runCatching { media.stored(att) }.getOrNull() else null
+    }
+    return if (look) stored else null
+}
+
 /** What ▶ got: a clip to play, nothing (failed), or a download the user paused or cancelled. */
 internal sealed interface ClipFetch {
     class Ready(val clip: PlayableClip) : ClipFetch
@@ -1621,6 +1639,10 @@ internal suspend fun fetchClip(
 ): ClipFetch {
     val key = media.downloadKey(att)
         ?: return resolvePlayableClip(att, media, platform)?.let { ClipFetch.Ready(it) } ?: ClipFetch.Failed
+    // Stored already and not listed (#95: after a restart): played from the store, no download to list.
+    if (downloads.items.value.none { it.key == key } && runCatching { media.stored(att) }.getOrNull() != null) {
+        resolvePlayableClip(att, media, platform)?.let { return ClipFetch.Ready(it) }
+    }
     val claim = downloads.start(key, att.name ?: att.file_id, att.mime ?: "video/mp4", DownloadPurpose.File, AttachmentDownload(media, att), origin)
     val file = try {
         claim.await()
@@ -2096,7 +2118,9 @@ internal object VideoControls {
  * key: leaving the chat lets go of it and it carries on, waiting in the activity bar; the card
  * draws the download whenever there is one, so coming back shows the same download. The file's own
  * preview (badge, name, meta) stays; only the trailing ↓ becomes the download's ring
- * ([DownloadItemRing]), whose menu pauses, resumes, cancels, retries or hands the file over. The
+ * ([DownloadItemRing]): a tap on it pauses, resumes or retries, the ✕ beside a stopped one removes it,
+ * and a done one is a quiet ✓ while the card's tap hands the file over. A file the media store already
+ * holds (after a restart) is done from the start, and handed over without a download. The
  * download remembers this chat and message ([DownloadOrigin]), so the downloads list opens them.
  * A preview's in-memory media has no key and keeps the bytes path.
  *
@@ -2120,6 +2144,10 @@ private fun AttachmentFileCard(
     val key = media.downloadKey(att)
     val download = rememberListedDownload(downloads, key)
     val running = download?.state as? DownloadState.Running
+    // Already in the store (#95: after a restart): done from the start, and a tap hands it over at once. One that
+    // vanished under the app (the OS reclaimed it, Storage › Clear) is a plain ↓ again.
+    var storeLost by remember(att.file_id) { mutableStateOf(false) }
+    val stored = rememberStoredFile(media, att, download)?.takeIf { !storeLost }
     var busy by remember(att.file_id) { mutableStateOf(false) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
     // This card waits for its download: one tap, one hand-over.
@@ -2133,6 +2161,18 @@ private fun AttachmentFileCard(
             .clip(RoundedCornerShape(Radii.md))
             .background(cs.surfaceContainerHigh)
             .clickable(enabled = !busy && !waiting && running == null) {
+                if (key != null && download == null && stored != null) {
+                    waiting = true
+                    scope.launch {
+                        try {
+                            val item = Download(key, stored.name, stored.mime, DownloadPurpose.File, DownloadState.Done(stored), origin)
+                            if (!handOverAsTapped(platform, pointer, downloads, item) && !stored.isAvailable()) storeLost = true
+                        } finally {
+                            waiting = false
+                        }
+                    }
+                    return@clickable
+                }
                 if (key != null) {
                     // The card's scope holds only the claim: leaving lets go, the download goes on.
                     waiting = true
@@ -2197,7 +2237,9 @@ private fun AttachmentFileCard(
                 )
             }
         }
-        DownloadItemRing(item = download, tag = "attachment_ring", busy = busy) {
+        val shown = download
+            ?: stored?.let { Download(key.orEmpty(), it.name, it.mime, DownloadPurpose.File, DownloadState.Done(it), origin) }
+        DownloadItemRing(item = shown, tag = "attachment_ring", busy = busy) {
             Icon(
                 imageVector = MediaIcons.Save,
                 contentDescription = "Download",

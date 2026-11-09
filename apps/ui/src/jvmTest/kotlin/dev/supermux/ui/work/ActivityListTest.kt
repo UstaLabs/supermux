@@ -101,7 +101,7 @@ class ActivityListTest {
     )
 
     private val buttonTags =
-        listOf("activity_pause", "activity_resume", "activity_cancel", "activity_retry", "activity_open", "activity_save", "activity_share", "activity_install")
+        listOf("activity_ring", "activity_ring_remove", "activity_pause", "activity_resume", "activity_cancel", "activity_retry", "activity_open", "activity_save", "activity_share", "activity_install")
 
     /** The buttons drawn in [key]'s row, in [buttonTags] order. */
     private fun ComposeUiTest.buttonsOf(key: String): List<String> = buttonTags.filter { tag ->
@@ -219,18 +219,20 @@ class ActivityListTest {
         list(everyState)
         onNodeWithTag("activity_list").assertIsDisplayed()
         onAllNodesWithTag("activity_item").assertCountEquals(5)
-        assertEquals(listOf("activity_pause", "activity_cancel"), buttonsOf("r"))
-        assertEquals(listOf("activity_retry"), buttonsOf("f"))
-        assertEquals(listOf("activity_resume", "activity_cancel"), buttonsOf("c"))
+        // #95, round 3: no words for the transfer — its ring toggles, and ✕ beside it removes it once it stopped.
+        assertEquals(listOf("activity_ring"), buttonsOf("r"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("f"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("c"))
         assertEquals(listOf("activity_open", "activity_save", "activity_share"), buttonsOf("d"))
         assertEquals(listOf("activity_install"), buttonsOf("u"))
     }
 
     @Test fun thePopoverOffersTheSame() = runDesktopComposeUiTest {
         list(everyState, popover = true)
-        assertEquals(listOf("activity_pause", "activity_cancel"), buttonsOf("r"))
-        assertEquals(listOf("activity_retry"), buttonsOf("f"))
-        assertEquals(listOf("activity_resume", "activity_cancel"), buttonsOf("c"))
+        // #95, round 3: no words for the transfer — its ring toggles, and ✕ beside it removes it once it stopped.
+        assertEquals(listOf("activity_ring"), buttonsOf("r"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("f"))
+        assertEquals(listOf("activity_ring", "activity_ring_remove"), buttonsOf("c"))
         assertEquals(listOf("activity_open", "activity_save", "activity_share"), buttonsOf("d"))
         assertEquals(listOf("activity_install"), buttonsOf("u"))
     }
@@ -252,16 +254,18 @@ class ActivityListTest {
             onAction = { item, action -> calls += "${action.name}:${item.key}" },
             onInstall = { calls += "install:${it.key}" },
         )
-        onNode(hasTestTag("activity_pause") and hasAnyAncestor(hasItemKey("r"))).performClick()
-        onNode(hasTestTag("activity_cancel") and hasAnyAncestor(hasItemKey("r"))).performClick()
-        onNode(hasTestTag("activity_resume") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("r"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring_remove") and hasAnyAncestor(hasItemKey("c"))).performClick()
+        onNode(hasTestTag("activity_ring") and hasAnyAncestor(hasItemKey("f"))).performClick()
+        onNode(hasTestTag("activity_ring_remove") and hasAnyAncestor(hasItemKey("f"))).performClick()
         onNodeWithTag("activity_open").performClick()
         onNodeWithTag("activity_save").performClick()
         onNodeWithTag("activity_share").performClick()
         onNodeWithTag("activity_install").performClick()
         waitForIdle()
         assertEquals(
-            listOf("cancel:r", "dismiss:r", "retry:c", "Open:d", "Save:d", "Share:d", "install:u"),
+            listOf("cancel:r", "retry:c", "dismiss:c", "retry:f", "dismiss:f", "Open:d", "Save:d", "Share:d", "install:u"),
             calls,
         )
     }

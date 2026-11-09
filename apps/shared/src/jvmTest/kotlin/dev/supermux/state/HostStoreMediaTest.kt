@@ -216,4 +216,30 @@ class HostStoreMediaTest {
         testScheduler.advanceUntilIdle()
         assertTrue(disk.writes.isEmpty(), "writes: ${disk.writes}")
     }
+
+    // #95: a restart keeps what the store holds, and the card asks for it without a request.
+    @Test fun aStoredAttachmentIsADownloadedFileWithoutARequest() = runTest {
+        val seen = mutableListOf<String>()
+        val disk = FakeMediaStore(hasFiles = true).apply { entries["rec-1/$id.png"] = png }
+        val app = store(MediaCache(disk, this), seen)
+        app.bindMedia("rec-1")
+        val got = assertNotNull(app.media.stored(att))
+        assertEquals("/cache/rec-1/$id.png", got.path)
+        assertEquals(png.size.toLong(), got.size)
+        assertEquals("a.png", got.name)
+        assertEquals("image/png", got.mime)
+        assertNull(app.media.stored(att.copy(file_id = "fedcba9876543210fedcba9876543210")), "not stored: null")
+        assertTrue(seen.isEmpty(), "seen: $seen")
+    }
+
+    // The web keeps no files: a Blob does not outlive the page, so nothing is stored to show as done.
+    @Test fun onTheWebNothingIsStored() = runTest {
+        val seen = mutableListOf<String>()
+        val browser = BrowserDownload { _, _, _ -> Any() to 3L }
+        val disk = FakeMediaStore(hasFiles = false).apply { entries["rec-1/$id.png"] = png }
+        val app = store(MediaCache(disk, this), seen, browser)
+        app.bindMedia("rec-1")
+        assertNull(app.media.stored(att))
+        assertTrue(seen.isEmpty(), "seen: $seen")
+    }
 }

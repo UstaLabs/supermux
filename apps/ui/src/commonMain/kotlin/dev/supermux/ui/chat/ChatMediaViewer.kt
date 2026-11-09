@@ -575,6 +575,8 @@ private fun ViewerClip(
     val downloads = rememberDownloads()
     val origin = rememberDownloadOrigin(entryId)
     val download = rememberListedDownload(downloads, handle.media.downloadKey(handle.att))
+    // Already in the store (#95: after a restart): opened from there, with no ring.
+    val stored = rememberStoredFile(handle.media, handle.att, download)
     var uri by remember(handle.att.file_id) { mutableStateOf<String?>(null) }
     var failed by remember(handle.att.file_id) { mutableStateOf(false) }
     var stopped by remember(handle.att.file_id) { mutableStateOf(false) }
@@ -599,7 +601,7 @@ private fun ViewerClip(
             DownloadItemRing(
                 download?.takeIf { it.state !is DownloadState.Done },
                 VIDEO_RING_TAG,
-                busy = true,
+                busy = stored == null,
                 tint = Color.White,
                 track = Color.White.copy(alpha = 0.25f),
             )

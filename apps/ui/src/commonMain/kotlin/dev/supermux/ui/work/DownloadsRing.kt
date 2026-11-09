@@ -200,6 +200,26 @@ internal object DownloadGlyphs {
         }
     }
 
+    /** ▷: a paused download, to resume — drawn small inside its ring, so in the ring's heavier stroke. */
+    val Resume: ImageVector by lazy {
+        glyph("download-resume", stroke = 2f) {
+            moveTo(8.5f, 5.5f)
+            lineTo(18f, 12f)
+            lineTo(8.5f, 18.5f)
+            close()
+        }
+    }
+
+    /** ✕: take a download off the list. */
+    val Remove: ImageVector by lazy {
+        glyph("download-remove", stroke = 2f) {
+            moveTo(6f, 6f)
+            lineTo(18f, 18f)
+            moveTo(18f, 6f)
+            lineTo(6f, 18f)
+        }
+    }
+
     /** A box: an app update, to install. */
     val Package: ImageVector by lazy {
         glyph("download-package") {
