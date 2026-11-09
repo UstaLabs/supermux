@@ -301,7 +301,11 @@ fun AgentErrorMessage(
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
-    val readAloud = remember(platform) { PlatformReadAloud(platform) }
+    // The reading is the fleet's player's item (#118 car 2), from this chat and message.
+    val player = dev.supermux.ui.work.LocalAudioPlayer.current
+    val origin = rememberDownloadOrigin("")
+    val chat = LocalChatTitle.current
+    val readAloud = remember(platform, player, origin, chat) { PlatformReadAloud(platform, player, origin, chat) }
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val speaking = readAloud.isSpeaking(text)

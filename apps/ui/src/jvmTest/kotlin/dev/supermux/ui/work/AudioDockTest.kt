@@ -226,6 +226,31 @@ class AudioDockTest {
         assertEquals(listOf("That chat is no longer available"), platform.notices.shown)
     }
 
+    // ── read-aloud (#118 car 2) ────────────────────────────────────────────────────────────────
+
+    /** The OS voice reading a message: its title and chat, and ✕ only — no ❚❚, speed or scrubber it cannot drive. */
+    @Test fun theOsVoiceShowsItsTitleItsChatAndAStopOnly() = runDesktopComposeUiTest {
+        val opened = mutableListOf<String>()
+        val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it }, hasSession = { it == "s1" })
+        val player = AudioPlayer(FakeOutputs())
+        var stops = 0
+        player.playOwn(AudioItem("Read aloud · Here is the plan", "", DownloadOrigin("s1", "m7"), chat = "demo-day-recap", key = "read-aloud:x")) { stops++ }
+        footer(player, search = search)
+        assertDockedAboveTheHostRow()
+        onNodeWithTag("now_playing_title").assertTextEquals("Read aloud · Here is the plan")
+        onNodeWithTag("now_playing_toggle").assertDoesNotExist()
+        onNodeWithTag("now_playing_speed").assertDoesNotExist()
+        onNodeWithTag("now_playing_seek").assertDoesNotExist()
+        onNodeWithTag("now_playing_chat").performClick()
+        waitForIdle()
+        assertEquals(ChatJump("s1", "m7", reveal = true), search.jump.value)
+        onNodeWithTag("now_playing_stop").performClick()
+        waitForIdle()
+        assertEquals(1, stops)
+        assertNull(player.state.value)
+        onNodeWithTag(DOCK).assertDoesNotExist()
+    }
+
     // ── the shell ──────────────────────────────────────────────────────────────────────────────
 
     @Test fun theFleetsPlayerDocksOnAPhonesHome() = runDesktopComposeUiTest(width = 420, height = 860) {

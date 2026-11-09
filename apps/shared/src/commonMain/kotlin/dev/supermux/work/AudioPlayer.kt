@@ -22,13 +22,17 @@ data class AudioItem(
     val durationMs: Long? = null,
 )
 
-/** What plays now: [item], whether it is [playing], where it is ([positionMs] of [durationMs]) and at what [speed]. */
+/**
+ * What plays now: [item], whether it is [playing], where it is ([positionMs] of [durationMs]) and at what [speed].
+ * [stopOnly]: a sound the player cannot drive ([AudioPlayer.playOwn]) — no ❚❚, seek or speed, only ✕.
+ */
 data class NowPlaying(
     val item: AudioItem,
     val playing: Boolean,
     val positionMs: Long,
     val durationMs: Long,
     val speed: Float,
+    val stopOnly: Boolean = false,
 )
 
 /**
@@ -81,6 +85,9 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     private val lock = SynchronizedObject()
     private val now = MutableStateFlow<NowPlaying?>(null)
     private var output: AudioOutput? = null
+
+    /** Told once when the current item stops being current, for any reason ([play]'s `onGone`, [playOwn]'s `stop`). */
+    private var gone: (() -> Unit)? = null
     private var lastError: String? = null
 
     /** What plays now, or null while idle. */
@@ -98,19 +105,56 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     }
 
     /** Play [item] from the start, at the speed the last one had; whatever played stops. Nothing without outputs. */
-    fun play(item: AudioItem) {
-        val events = Events()
-        val (old, out, speed) = synchronized(lock) {
+    /**
+     * [item] is a sound that plays on its own (#118 car 2: the OS voice reading a message): the player shows it and
+     * can only stop it — [stop] is called when ✕, a new item or [close] ends it. Whatever played stops. Returns what
+     * its owner calls when it ends by itself: the player goes idle (if it is still the item) without calling [stop].
+     */
+    fun playOwn(item: AudioItem, stop: () -> Unit): () -> Unit {
+        val own = OwnSound()
+        val (old, oldGone) = synchronized(lock) {
             val old = output
+            val oldGone = gone
+            val speed = now.value?.speed ?: 1f
+            lastError = null
+            output = own
+            gone = stop
+            now.value = NowPlaying(item, playing = true, positionMs = 0, durationMs = 0, speed = speed, stopOnly = true)
+            old to oldGone
+        }
+        old?.release()
+        oldGone?.invoke()
+        return {
+            synchronized(lock) {
+                if (output === own) {
+                    output = null
+                    gone = null
+                    now.value = null
+                }
+            }
+        }
+    }
+
+    /** [play]'s item, [onGone] told once when it stops being current: ✕, its end, an error, the next item. */
+    fun play(item: AudioItem, onGone: (() -> Unit)? = null) {
+        val events = Events()
+        val (old, oldGone, out, speed) = synchronized(lock) {
+            val old = output
+            val oldGone = gone
             val speed = now.value?.speed ?: 1f
             lastError = null
             val out = outputs?.create(events)?.also { events.mine = it }
             output = out
+            gone = out?.let { onGone }
             now.value = out?.let { NowPlaying(item, playing = true, positionMs = 0, durationMs = item.durationMs ?: 0, speed = speed) }
-            Triple(old, out, speed)
+            Started(old, oldGone, out, speed)
         }
         old?.release()
-        out ?: return
+        oldGone?.invoke()
+        if (out == null) {
+            onGone?.invoke()
+            return
+        }
         out.open(item.source)
         if (speed != 1f) out.setRate(speed)
         out.play()
@@ -119,7 +163,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     /** ❚❚ / ▶. */
     fun toggle() {
         val (out, playing) = synchronized(lock) {
-            val current = now.value ?: return
+            val current = now.value?.takeUnless { it.stopOnly } ?: return
             val out = output ?: return
             now.value = current.copy(playing = !current.playing)
             out to !current.playing
@@ -130,7 +174,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     /** To [ms] into the item, kept within it. */
     fun seek(ms: Long) {
         val (out, to) = synchronized(lock) {
-            val current = now.value ?: return
+            val current = now.value?.takeUnless { it.stopOnly } ?: return
             val out = output ?: return
             val end = current.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
             val to = ms.coerceIn(0, end)
@@ -142,7 +186,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
 
     fun setSpeed(speed: Float) {
         val out = synchronized(lock) {
-            val current = now.value ?: return
+            val current = now.value?.takeUnless { it.stopOnly } ?: return
             now.value = current.copy(speed = speed)
             output
         }
@@ -157,13 +201,16 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
 
     /** ✕: stop and forget the item. */
     fun stop() {
-        val out = synchronized(lock) {
+        val (out, wasGone) = synchronized(lock) {
             val out = output
+            val wasGone = gone
             output = null
+            gone = null
             now.value = null
-            out
+            out to wasGone
         }
         out?.release()
+        wasGone?.invoke()
     }
 
     /** The app is closing. */
@@ -199,6 +246,18 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
         override fun onError(message: String) {
             if (synchronized(lock) { current().also { if (it) lastError = message } }) stop()
         }
+    }
+
+    private data class Started(val old: AudioOutput?, val oldGone: (() -> Unit)?, val out: AudioOutput?, val speed: Float)
+
+    /** [playOwn]'s place in the output slot: the sound is its owner's, so there is nothing here to tell. */
+    private class OwnSound : AudioOutput {
+        override fun open(uri: String) = Unit
+        override fun play() = Unit
+        override fun pause() = Unit
+        override fun seekTo(ms: Long) = Unit
+        override fun setRate(rate: Float) = Unit
+        override fun release() = Unit
     }
 
     companion object {
