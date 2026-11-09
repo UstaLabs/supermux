@@ -1,11 +1,11 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { host, paths } from "@supermux/platform"
+import { files as platformFiles, host, paths } from "@supermux/platform"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(home)
 }
 
 /**
@@ -82,14 +82,14 @@ export async function prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec):
   validateMcpServerNames(spec.mcpServers)
   validateReadableDirs(spec.readableDirs)
   ensureHome(spec.home)
-  mkdirSync(spec.configHome, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(spec.configHome)
   const files: string[] = []
 
   const dir = join(spec.configHome, "opencode")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(dir)
   const configPath = join(dir, "opencode.json")
-  writeFileSync(configPath, renderOpenCodeConfig(spec), { encoding: "utf8", mode: 0o600 })
-  chmodSync(configPath, 0o600)
+  platformFiles.writePrivate(configPath, renderOpenCodeConfig(spec), { encoding: "utf8" })
+  platformFiles.makePrivate(configPath)
   files.push(configPath)
 
   return {

@@ -22,7 +22,7 @@ import { agyPromptBlocks, antigravityAttachments, loadAntigravityState, removeAn
 import { createAntigravityNormalizer } from "./normalize.js"
 import { agyTransport, type AgyExit, type AgyTransport } from "./transport.js"
 import { antigravityUpdaterEnv } from "./updater.js"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 export { createAntigravityNormalizer, type AntigravityNormalizer } from "./normalize.js"
 export { antigravityUpdaterEnv } from "./updater.js"
@@ -283,7 +283,7 @@ export function antigravity(options: AntigravityOptions): AgentDriver {
       if (!accountCli) return userCli
       // Checked before mkdir: a misconfigured value never creates anything under the real ~/.gemini.
       assertAccountCliDir(accountCli, home.user)
-      mkdirSync(accountCli, { recursive: true, mode: 0o700 })
+      files.mkdirPrivate(accountCli)
       shareAntigravityHistory(accountCli, userCli)
       return accountCli
     }

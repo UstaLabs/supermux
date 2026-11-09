@@ -18,6 +18,7 @@ import { TextDecoder } from 'node:util'
 import { assertNoLinksIn, assertRealDirectory, createPrivateFile, present, stagingPath, writeAll, writePrivateFile } from '../private-files.js'
 import { KEEPER_ENV, requestId, responseId, type FrameShape, type JournalEntry, type KeeperLimits, type KeeperMessage, type KeeperStatus } from './protocol.js'
 import { files, proc } from '@supermux/platform'
+import { files as platformFiles } from "@supermux/platform"
 
 const STATUS_COALESCE_MS = 250
 /** How much of the agent's stderr the keeper keeps for its exit report (a crash usually says why there). */
@@ -88,7 +89,7 @@ async function main() {
   // The client made the directory and passes its real path: a directory of this user's, with no link to it or in it.
   const verify = () => assertRealDirectory(sessionDir)
   verify()
-  chmodSync(sessionDir, 0o700)
+  platformFiles.makePrivate(sessionDir)
   assertNoLinksIn(sessionDir)
 
   // A short path elsewhere when this one would not fit sun_path (the client picks it: keeperSocketPath).

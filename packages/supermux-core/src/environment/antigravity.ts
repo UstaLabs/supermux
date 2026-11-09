@@ -132,7 +132,7 @@ function linkOrCopy(target: string, path: string, platform: NodeJS.Platform): vo
 /** A real (non-symlink) dir under the shadow home; a symlink in its place is removed (never followed). */
 function ensureRealDir(path: string): void {
   if (lstatSafe(path)?.isSymbolicLink()) unlinkSync(path)
-  mkdirSync(path, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(path)
 }
 
 /** Refuses when a shadow path component would lead out of the shadow home via a symlink. */
@@ -187,7 +187,7 @@ export async function prepareAntigravityEnvironment(spec: AntigravityEnvironment
   // Pre-check before mkdir so a bad target is never created (mkdir could land in the real ~/.gemini).
   refuseRealLocation(realpathLoose(home), home, userHome, platform)
   if (lstatSafe(home)?.isSymbolicLink()) throw new TypeError(`antigravity shadow home must not be a symlink: ${home}`)
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(home)
   assertShadowHome(home, userHome, platform)
 
   syncLinks(home, userHome, (n) => n === ".gemini", () => false, platform)
@@ -227,7 +227,7 @@ export function linkAntigravityCli(
   assertShadowHome(shadowHome, userHome, platform)
   assertNoLinkedParents(shadowHome, [".gemini"])
   const gemini = join(shadowHome, ".gemini")
-  mkdirSync(gemini, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(gemini)
   const path = join(gemini, "antigravity-cli")
   const current = lstatSafe(path)
   if (current?.isSymbolicLink()) {
@@ -312,10 +312,10 @@ export function writeAntigravityMcpConfig(opts: { shadowHome: string; userHome: 
   }
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config"])
   const dir = join(opts.shadowHome, ".gemini", "config")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   const path = join(dir, "mcp_config.json")
   if (lstatSafe(path)?.isSymbolicLink()) unlinkSync(path)
-  writeFileNoFollow(path, JSON.stringify({ ...base, mcpServers: { ...user, ...out } }, null, 2) + "\n", 0o600)
+  writeFileNoFollow(path, JSON.stringify({ ...base, mcpServers: { ...user, ...out } }, null, 2) + "\n")
   return { path, aliases }
 }
 
@@ -357,7 +357,7 @@ export function writeAntigravityPlugins(opts: {
   assertShadowHome(opts.shadowHome, opts.userHome, platform)
   assertNoLinkedParents(opts.shadowHome, [".gemini", "config", "plugins"])
   const dir = join(opts.shadowHome, ".gemini", "config", "plugins")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dir)
   for (const name of readdirSafe(dir)) {
     if (!name.startsWith(ANTIGRAVITY_RESERVED_PREFIX)) continue
     const path = join(dir, name)
@@ -368,12 +368,12 @@ export function writeAntigravityPlugins(opts: {
   const paths: string[] = []
   for (const w of opts.wrappers) {
     const path = join(dir, w.name)
-    mkdirSync(path, { recursive: true, mode: 0o700 })
-    writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n", 0o600)
+    files.mkdirPrivate(path)
+    writeFileNoFollow(join(path, "plugin.json"), JSON.stringify({ name: w.name }, null, 2) + "\n")
     if (w.skills) files.linkDirectory(w.skills, join(path, "skills"))
     if (w.mcpServers.length) {
       const mcpServers = Object.fromEntries(w.mcpServers.map((s) => [s.name, nativeServer(s)]))
-      writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n", 0o600)
+      writeFileNoFollow(join(path, "mcp_config.json"), JSON.stringify({ mcpServers }, null, 2) + "\n")
     }
     paths.push(path)
   }

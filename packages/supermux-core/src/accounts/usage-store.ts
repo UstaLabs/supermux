@@ -105,8 +105,8 @@ export class UsageStore {
     for (const [id, mark] of this.refused) unavailable[id] = { reason: mark.reason, since: mark.since.toISOString(), ...(mark.code ? { code: mark.code } : {}) }
     const text = JSON.stringify({ version: 1, accounts, ...(this.refused.size ? { unavailable } : {}) })
     const run = this.saving.then(async () => {
-      await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-      await chmod(dirname(this.file), 0o700)
+      await files.mkdirPrivateAsync(dirname(this.file))
+      files.makePrivate(dirname(this.file))
       const temp = `${this.file}.${randomUUID()}.tmp`
       try {
         const file = await open(temp, "wx", 0o600)

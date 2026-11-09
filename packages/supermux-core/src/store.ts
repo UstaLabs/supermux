@@ -29,7 +29,7 @@ export class SessionStore {
   async open(): Promise<void> {
     if (this.owner) return
     if (this.closed) throw new CoreError("store_closed", "The session store is closed")
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    await files.mkdirPrivateAsync(this.directory)
     this.real = realpathSync(this.directory)
     // One core per state directory, decided by the kernel first (@supermux/platform's lock): it is never stale and a
     // reused pid never holds it. .core.lock stays for older cores, which read it; while this core holds the kernel

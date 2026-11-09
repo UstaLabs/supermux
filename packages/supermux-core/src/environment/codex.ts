@@ -8,9 +8,10 @@ import { trustedHostBinary } from "./host-binary.js"
 import { copyFileReplace, writeFileNoFollow } from "./write.js"
 import { CoreError } from "../errors.js"
 import { NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
+import { files as platformFiles } from "@supermux/platform"
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(home)
 }
 
 function renderCodexConfig(spec: CodexEnvironmentSpec): string {
@@ -196,8 +197,8 @@ export async function prepareCodexEnvironmentWith(spec: CodexEnvironmentSpec, re
   }
 
   const configPath = join(spec.home, "config.toml")
-  writeFileSync(configPath, renderCodexConfig(spec), { encoding: "utf8", mode: 0o600 })
-  chmodSync(configPath, 0o600)
+  platformFiles.writePrivate(configPath, renderCodexConfig(spec), { encoding: "utf8" })
+  platformFiles.makePrivate(configPath)
   files.push(configPath)
 
   const report: CodexReadReport = {}
@@ -215,8 +216,8 @@ export async function prepareCodexEnvironmentWith(spec: CodexEnvironmentSpec, re
     if (spec.readableFiles.files.length === 0 || Object.keys(programs).length === 0) {
       rmSync(rulesPath, { force: true })
     } else {
-      mkdirSync(join(spec.home, "rules"), { recursive: true, mode: 0o700 })
-      writeFileNoFollow(rulesPath, codexReadRules(spec.readableFiles.files, programs), 0o600)
+      platformFiles.mkdirPrivate(join(spec.home, "rules"))
+      writeFileNoFollow(rulesPath, codexReadRules(spec.readableFiles.files, programs))
       files.push(rulesPath)
     }
     report.readPrograms = spec.readableFiles.files.length === 0 ? {} : programs
