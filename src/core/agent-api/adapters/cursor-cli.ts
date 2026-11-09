@@ -7,6 +7,7 @@
 import { tmpdir } from "os"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts } from "../types"
 import { resolveCommand, spawnCommand } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 const DEFAULT_MODEL = process.env.MUX_VOICE_CLEANUP_FALLBACK_MODEL ?? "composer-2.5-fast"
 
@@ -17,7 +18,7 @@ async function spawnOneShot(argv: string[], cwd: string, timeoutMs: number): Pro
   const env = { ...process.env }
   const requested = argv[0] ?? "cursor-agent"
   const names = [requested]
-  const command = resolveCommand(names, env, process.platform) ?? requested
+  const command = resolveCommand(names, env, host.os()) ?? requested
   return await new Promise((resolve) => {
     const proc = spawnCommand(command, argv.slice(1), { cwd, env, stdio: ["ignore", "pipe", "ignore"] })
     let out = ""

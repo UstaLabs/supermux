@@ -22,6 +22,7 @@ import { makeLogger } from "../../../shared/log"
 import { readPcm16 } from "../wav"
 import type { SttEngine, SttResult, SttTranscribeOpts } from "../stt-types"
 import { home } from "../../../shared/home"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("stt-claude-voice")
 
@@ -348,7 +349,7 @@ export function claudeVoiceEngine(opts: ClaudeVoiceEngineOpts = {}): SttEngine {
           Authorization: `Bearer ${accessToken}`,
           "User-Agent": `claude-cli/2.1.220 (external, supermux)`,
           "x-app": "cli",
-          "anthropic-client-platform": process.platform,
+          "anthropic-client-platform": host.os(),
         }
         const kt = sanitizeKeytermsForHeader(keyterms)
         if (kt) headers["x-config-keyterms"] = kt

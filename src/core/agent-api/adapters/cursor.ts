@@ -45,6 +45,7 @@ import { defaultRead, readJson } from "../auth"
 import { authCredPath } from "../../agents/detect"
 import { DEFAULT_TIMEOUT_MS, type AgentApi, type CompleteOpts, type FetchFn, type ReadFileFn } from "../types"
 import { home } from "../../../shared/home"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agent-api:cursor")
 
@@ -226,7 +227,7 @@ export function cursorAdapter(opts: CursorAdapterOpts = {}): AgentApi {
   const read = opts.readFileFn ?? defaultRead
   const authPath = opts.authPath ?? authCredPath("cursor", {
     home: home(), xdgConfigHome: process.env.XDG_CONFIG_HOME,
-    appData: process.env.APPDATA, platform: process.platform,
+    appData: process.env.APPDATA, platform: host.os(),
   })
 
   const loadToken = (): string | undefined => {

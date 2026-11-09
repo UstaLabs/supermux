@@ -15,6 +15,7 @@
 
 import type { ConnectCtx, TunnelProvider, TunnelResult } from "./types"
 import { which } from "./run"
+import { host } from "@supermux/platform"
 
 /** Matches a NetBird overlay IP (the 100.64.0.0/10 CGNAT range NetBird hands out). */
 const OVERLAY_IP = /\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/
@@ -36,7 +37,7 @@ export const netbirdProvider: TunnelProvider = {
   },
 
   async install(ctx: ConnectCtx): Promise<boolean> {
-    if (process.platform !== "linux" && process.platform !== "darwin") {
+    if (host.os() !== "linux" && host.os() !== "darwin") {
       ctx.println("Automatic NetBird install is only wired up for Linux/macOS.")
       ctx.println("Install it from https://docs.netbird.io/how-to/installation and re-run.")
       return false

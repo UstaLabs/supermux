@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs"
 import { dirname } from "path"
-import { proc } from "@supermux/platform"
+import { host, proc } from "@supermux/platform"
 import { spawnProcessSync } from "../process/launcher"
 
 /**
@@ -19,7 +19,7 @@ export interface BrokerProbeDeps {
 }
 
 const defaultProbeDeps: BrokerProbeDeps = {
-  platform: process.platform,
+  platform: host.os(),
   readProcCmdline: (pid) => readFileSync(`/proc/${pid}/cmdline`, "utf8"),
   run: (cmd) => {
     try {

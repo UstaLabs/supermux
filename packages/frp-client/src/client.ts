@@ -8,7 +8,7 @@
  * verifies the server's certificate unless told not to.
  */
 import { connect as netConnect, isIP, type Socket } from 'node:net'
-import { arch, platform } from 'node:os'
+import { arch, platform } from 'node:os' // platform-ok: frp's login reports this machine's OS to its server; a standalone package with no dependencies
 import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import type { Duplex } from 'node:stream'
 import { cryptoChannel, cryptoKey, encodeMessage, MsgType, privilegeKey, readMessage, type CryptoChannel } from './protocol.js'

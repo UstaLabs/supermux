@@ -1,6 +1,7 @@
 import { accessSync, constants, lstatSync, readlinkSync } from "node:fs"
 // platform-ok: a POSIX trust check (uid, mode, root-owned folders), posix on any host
 import { posix } from "node:path"
+import { host } from "@supermux/platform"
 
 /** What the check needs to know about one path, without following links. */
 export type HostStat = { uid: number; mode: number; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }
@@ -124,5 +125,5 @@ export function resolveHostBinary(name: string, fs: HostFs = nodeHostFs, dirs: r
  * folders hold none that only root controls. POSIX only: undefined on Windows.
  */
 export function trustedHostBinary(name: string): string | undefined {
-  return process.platform === "win32" ? undefined : resolveHostBinary(name)
+  return host.windows() ? undefined : resolveHostBinary(name)
 }

@@ -12,6 +12,7 @@ import { openCodeDataDir } from "../agents/opencode/auth"
 import { fetchOpenCodePlan, type OpenCodePlan } from "./opencode-go"
 import { openCodeFreeTier } from "./opencode-free"
 import { home } from "../../shared/home"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("usage")
 
@@ -635,7 +636,7 @@ export function cursorAuthPath(): string {
     home: home(),
     xdgConfigHome: process.env.XDG_CONFIG_HOME,
     appData: process.env.APPDATA,
-    platform: process.platform,
+    platform: host.os(),
   })
 }
 

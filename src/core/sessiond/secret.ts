@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { chmod, link, lstat, mkdir, open, readFile, unlink } from "node:fs/promises"
 import { isAbsolute, join, normalize, resolve } from "node:path"
+import { host } from "@supermux/platform"
 
 export const SESSIOND_SECRET_FILE = "sessiond.secret"
 
@@ -25,7 +26,7 @@ export async function createOrLoadSessiondSecret(stateDir: string): Promise<stri
   const path = join(stateDir, SESSIOND_SECRET_FILE)
   try {
     const existing = await readValidated(path)
-    if (process.platform !== "win32") await chmod(path, 0o600)
+    if (!host.windows()) await chmod(path, 0o600)
     return existing
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
@@ -45,7 +46,7 @@ export async function createOrLoadSessiondSecret(stateDir: string): Promise<stri
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
     }
     const published = await readValidated(path)
-    if (process.platform !== "win32") await chmod(path, 0o600)
+    if (!host.windows()) await chmod(path, 0o600)
     return published
   } finally {
     try { await unlink(tempPath) } catch (error) {
@@ -65,7 +66,7 @@ export function timingSafeSecretEqual(expected: string, received: string): boole
   return timingSafeEqual(paddedLeft, paddedRight) && left.length === right.length
 }
 
-export function sessiondEndpoint(stateDir: string, platform: NodeJS.Platform = process.platform): string {
+export function sessiondEndpoint(stateDir: string, platform: NodeJS.Platform = host.os()): string {
   const absolute = isAbsolute(stateDir) ? normalize(stateDir) : resolve(stateDir)
   if (platform !== "win32") return join(absolute, "sessiond.sock")
   const normalizedForWindows = absolute.replaceAll("/", "\\").toLowerCase()
