@@ -793,10 +793,14 @@ fun SupermuxApp(
                 dev.supermux.ui.chat.ComposerAttachmentStore(scope = fleet.retainedUi.scope)
             }
         }
-    // The fleet's audio (#118) on the library the clips play through: one set of outputs for the fleet, kept with it,
-    // so a recreated shell (an Android rotation) finds the item still playing.
+    // The fleet's audio (#118): the platform's own outputs where it has them (AVAudioPlayer on macOS and iOS), else
+    // the library the clips play through. One set of outputs for the fleet, kept with it, so a recreated shell (an
+    // Android rotation) finds the item still playing.
+    val platformAudio = LocalPlatform.current.audioOutputs
     val audioOutputs = remember(fleet) {
-        fleet.retainedUi.getOrPut("audio.outputs") { dev.supermux.ui.work.LibraryAudioOutputs(fleet.retainedUi.scope) }
+        fleet.retainedUi.getOrPut<dev.supermux.work.AudioOutputs>("audio.outputs") {
+            platformAudio ?: dev.supermux.ui.work.LibraryAudioOutputs(fleet.retainedUi.scope)
+        }
             .also { if (!fleet.audio.hasOutputs) fleet.audio.useOutputs(it) }
     }
     CompositionLocalProvider(

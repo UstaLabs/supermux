@@ -118,6 +118,14 @@ interface Platform {
     /** The assistant overlay's system side (#62); null where there is none. */
     val assistantOverlay: AssistantOverlayHost? get() = null
 
+    /**
+     * The app's audio player's outputs (#118) where this platform has its own — AVAudioPlayer on macOS and iOS, whose
+     * video library cannot play an audio-only file there — or null for the library's
+     * ([dev.supermux.ui.work.LibraryAudioOutputs]). One instance, shared by every player that asks: its
+     * [dev.supermux.work.AudioOutputs.close] must leave it usable.
+     */
+    val audioOutputs: dev.supermux.work.AudioOutputs? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 

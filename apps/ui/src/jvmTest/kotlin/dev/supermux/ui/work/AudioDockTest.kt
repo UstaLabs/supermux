@@ -229,6 +229,26 @@ class AudioDockTest {
     // ── read-aloud (#118 car 2) ────────────────────────────────────────────────────────────────
 
     /** The OS voice reading a message: its title and chat, and ✕ only — no ❚❚, speed or scrubber it cannot drive. */
+    /** An output that cannot play it (macOS's library, #118): the dock says so, with ✕ only, instead of hanging. */
+    @Test fun anItemThatCannotPlaySaysSoInTheDock() = runDesktopComposeUiTest {
+        val outputs = FakeOutputs()
+        val player = AudioPlayer(outputs).apply { play(note) }
+        footer(player)
+        waitForIdle()
+        outputs.made.single().events.onError("UnknownError(message=Failed to retrieve video size)")
+        waitForIdle()
+        onNodeWithTag("now_playing_title").assertTextEquals("voice-note.m4a")
+        onNodeWithTag("now_playing_error").assertTextEquals("Couldn't play this")
+        onNodeWithTag("now_playing_toggle").assertDoesNotExist()
+        onNodeWithTag("now_playing_speed").assertDoesNotExist()
+        onNodeWithTag("now_playing_seek").assertDoesNotExist()
+        assertEquals("release", outputs.made.single().calls.last(), "it stopped")
+        onNodeWithTag("now_playing_stop").performClick()
+        waitForIdle()
+        assertNull(player.state.value)
+        onNodeWithTag(DOCK).assertDoesNotExist()
+    }
+
     @Test fun theOsVoiceShowsItsTitleItsChatAndAStopOnly() = runDesktopComposeUiTest {
         val opened = mutableListOf<String>()
         val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it }, hasSession = { it == "s1" })

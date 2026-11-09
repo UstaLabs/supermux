@@ -160,14 +160,60 @@ class AudioPlayerTest {
         assertTrue(outputs.made.single().released)
     }
 
-    @Test fun anErrorGoesIdleAndSaysWhy() {
+    /**
+     * An output that cannot play the item (macOS's library: "Failed to retrieve video size") stops it, and the item
+     * stays in the dock as failed — not a dock that vanishes or one that hangs with no length.
+     */
+    @Test fun anErrorStopsTheItemAndShowsItFailed() {
+        val (p, outputs) = player()
+        var gone = 0
+        p.play(note) { gone++ }
+        val out = outputs.made.single()
+        out.events.onError("Can't decode")
+        val now = assertNotNull(p.state.value, "the dock keeps the item to say it failed")
+        assertSame(note, now.item)
+        assertEquals("Can't decode", now.failed)
+        assertFalse(now.playing)
+        assertTrue(out.released, "the output stops")
+        assertEquals(1, gone)
+        assertEquals("Can't decode", p.error)
+        // Nothing to drive: ❚❚, seek and speed do nothing; ✕ clears it.
+        p.toggle()
+        p.seek(5_000)
+        p.setSpeed(2f)
+        assertEquals(listOf("open /cache/voice-note.m4a", "play", "release"), out.calls)
+        assertFalse(assertNotNull(p.state.value).playing)
+        assertEquals(1f, p.state.value?.speed)
+        // A late word from the failed output says nothing.
+        out.events.onProgress(1_000, 2_000)
+        assertEquals(0, p.state.value?.positionMs)
+        p.stop()
+        assertNull(p.state.value)
+        assertEquals(1, gone, "told once")
+        p.play(other)
+        assertNull(p.error, "a new item starts clean")
+        assertNull(p.state.value?.failed)
+    }
+
+    @Test fun aNewItemReplacesAFailedOne() {
         val (p, outputs) = player()
         p.play(note)
         outputs.made.single().events.onError("Can't decode")
-        assertNull(p.state.value)
-        assertEquals("Can't decode", p.error)
         p.play(other)
-        assertNull(p.error, "a new item starts clean")
+        assertSame(other, p.state.value?.item)
+        assertTrue(assertNotNull(p.state.value).playing)
+        assertEquals(2, outputs.made.size)
+    }
+
+    /** Whether a streamed URL (read-aloud's codex voice) can play here: the outputs say; none installed, no. */
+    @Test fun itStreamsUrlsOnlyWhereItsOutputsCan() {
+        assertFalse(AudioPlayer().canStreamUrl, "no outputs")
+        assertTrue(AudioPlayer(FakeOutputs()).canStreamUrl, "outputs stream by default")
+        val filesOnly = object : AudioOutputs {
+            override val canStreamUrl: Boolean get() = false
+            override fun create(events: AudioOutput.Events): AudioOutput = FakeOutput(events)
+        }
+        assertFalse(AudioPlayer(filesOnly).canStreamUrl)
     }
 
     @Test fun withoutOutputsNothingPlaysUntilTheShellInstallsThem() {

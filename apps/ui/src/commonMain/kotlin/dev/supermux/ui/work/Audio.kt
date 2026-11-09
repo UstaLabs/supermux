@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -93,7 +94,8 @@ val LocalAudioPlayer = staticCompositionLocalOf<AudioPlayer?> { null }
 fun rememberAudioPlayer(): AudioPlayer {
     LocalAudioPlayer.current?.let { return it }
     val scope = rememberCoroutineScope()
-    val player = remember(scope) { AudioPlayer(LibraryAudioOutputs(scope)) }
+    val platform = LocalPlatform.current
+    val player = remember(scope, platform) { AudioPlayer(platform.audioOutputs ?: LibraryAudioOutputs(scope)) }
     DisposableEffect(player) { onDispose { player.close() } }
     return player
 }
@@ -103,7 +105,7 @@ fun rememberAudioPlayer(): AudioPlayer {
  * bar on a phone's Home and on a desktop: ❚❚/▶, the title and the chat it came from (a tap opens that chat at the
  * message), the speed (1× → 1.5× → 2×) and ✕; under them a thin scrubber you drag, between the time played and the
  * length. Nothing while idle or outside a fleet. A sound the player cannot drive (#118 car 2: the OS voice reading a
- * message) shows its title, its chat and ✕ only.
+ * message) shows its title, its chat and ✕ only; so does an item that could not play, with "Couldn't play this".
  */
 @Composable
 fun NowPlayingDock(modifier: Modifier = Modifier) {
@@ -121,13 +123,18 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
     val m = if (touch) DockTokens.Touch else DockTokens.Pointer
     val platform = LocalPlatform.current
     val search = LocalChatSearch.current
+    val failed = now.failed != null
+    val drives = !now.stopOnly && !failed
     Column(modifier.fillMaxWidth().padding(m.padding).testTag("now_playing")) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = m.button),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(m.gap),
         ) {
-            if (now.stopOnly) {
+            if (failed) {
+                // Nothing to play: an empty button's place, so the title lines up.
+                Box(Modifier.size(m.button))
+            } else if (now.stopOnly) {
                 // Nothing to pause: a quiet mark of the voice in the button's place, so the title lines up.
                 Box(Modifier.size(m.button), contentAlignment = Alignment.Center) {
                     Icon(AudioGlyphs.Voice, contentDescription = null, tint = cs.primary, modifier = Modifier.size(m.glyph))
@@ -169,7 +176,7 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                     }
                 }
             }
-            if (!now.stopOnly) QuietButton(
+            if (drives) QuietButton(
                 size = m.speedHeight,
                 width = null,
                 corner = m.corner,
@@ -188,7 +195,21 @@ private fun NowPlayingPart(player: AudioPlayer, now: NowPlaying, modifier: Modif
                 Icon(AudioGlyphs.Stop, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(m.stopGlyph))
             }
         }
-        if (!now.stopOnly) Scrubber(player, now, m)
+        if (failed) {
+            Text(
+                "Couldn't play this",
+                color = cs.error,
+                fontSize = m.time,
+                maxLines = 1,
+                modifier = Modifier
+                    .padding(start = m.seekStart, end = m.seekEnd)
+                    .heightIn(min = m.seekRow)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .testTag("now_playing_error"),
+            )
+        } else if (!now.stopOnly) {
+            Scrubber(player, now, m)
+        }
     }
 }
 

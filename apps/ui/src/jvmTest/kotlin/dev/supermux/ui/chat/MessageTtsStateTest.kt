@@ -45,7 +45,10 @@ private class RecordingTts : TtsEngine {
     override fun shutdown() { events.add("shutdown") }
     var urlCapable = false
     override val canPlayUrl: Boolean get() = urlCapable
-    override suspend fun playUrl(url: String) { events.add("url:$url") }
+    override suspend fun playUrl(url: String) {
+        events.add("url:$url")
+        if (hold) gate.await()
+    }
     override fun prepareForTap() { events.add("prepare") }
 }
 
@@ -257,6 +260,61 @@ class MessageTtsStateTest {
         testScheduler.advanceUntilIdle()
         assertNull(player.state.value)
         assertFalse(MessageTts.isSpeaking("read me please"), "the row's 🔊 follows the player")
+    }
+
+    /** Outputs that play local files only (macOS's AVAudioPlayer): they cannot stream the codex voice's URL. */
+    private class FilesOnlyOutputs : dev.supermux.work.AudioOutputs {
+        val inner = AudioDockTest.FakeOutputs()
+        override val canStreamUrl: Boolean get() = false
+        override fun create(events: dev.supermux.work.AudioOutput.Events) = inner.create(events)
+    }
+
+    /**
+     * REGRESSION (#118 car 2 on macOS): where the player's outputs cannot stream a URL, the codex voice plays as before
+     * the player — the engine's own URL player — and the dock shows the reading with ✕ only, as the OS voice.
+     */
+    @Test fun theCodexUrlGoesToTheEngineWhereTheOutputsCannotStream() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { urlCapable = true; hold = true }
+        val outputs = FilesOnlyOutputs()
+        val player = AudioPlayer(outputs)
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, _ -> }
+        MessageTts.speakRemoteUrl = { "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(tts.events.contains("url:http://h/speak/audio/x.mp3"), "the engine plays it: ${tts.events}")
+        assertTrue(outputs.inner.made.isEmpty(), "not the player's output")
+        val now = assertNotNull(player.state.value, "the dock shows the reading")
+        assertEquals("Read aloud · read me please", now.item.title)
+        assertTrue(now.stopOnly, "✕ only")
+        assertTrue(MessageTts.isSpeaking("read me please"))
+
+        player.stop()
+        testScheduler.advanceUntilIdle()
+        assertTrue(tts.events.contains("stop"), "✕ silences the engine: ${tts.events}")
+        assertFalse(MessageTts.isSpeaking("read me please"))
+    }
+
+    /** Neither the outputs nor the engine can play a URL: the chunk stream, still shown in the dock with ✕. */
+    @Test fun theCodexVoiceFallsBackToChunksWhereNothingStreams() = runTest(dispatcher) {
+        val tts = RecordingTts().apply { hold = true }
+        val outputs = FilesOnlyOutputs()
+        val player = AudioPlayer(outputs)
+        var asked = false
+        MessageTts.resolveEngine = { "codex" }
+        MessageTts.speakRemoteStream = { _, onChunk -> onChunk(byteArrayOf(1, 2, 3)) }
+        MessageTts.speakRemoteUrl = { asked = true; "http://h/speak/audio/x.mp3" }
+        MessageTts.toggle(tts, "read me please", player, origin, "chat")
+        repeat(100) {
+            testScheduler.advanceUntilIdle()
+            if (tts.events.contains("chunk:3")) return@repeat
+            Thread.sleep(10)
+        }
+        assertFalse(asked, "no URL to ask for")
+        assertTrue(tts.events.contains("chunk:3"), "got ${tts.events}")
+        assertTrue(outputs.inner.made.isEmpty())
+        assertTrue(assertNotNull(player.state.value).stopOnly)
     }
 
     @Test fun anAttachmentReplacesTheCodexUrl() = runTest(dispatcher) {

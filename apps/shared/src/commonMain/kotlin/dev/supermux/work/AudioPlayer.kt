@@ -25,6 +25,7 @@ data class AudioItem(
 /**
  * What plays now: [item], whether it is [playing], where it is ([positionMs] of [durationMs]) and at what [speed].
  * [stopOnly]: a sound the player cannot drive ([AudioPlayer.playOwn]) — no ❚❚, seek or speed, only ✕.
+ * [failed]: the output could not play it (why, in its words): it has stopped, and stays to say so until ✕ or the next.
  */
 data class NowPlaying(
     val item: AudioItem,
@@ -33,6 +34,7 @@ data class NowPlaying(
     val durationMs: Long,
     val speed: Float,
     val stopOnly: Boolean = false,
+    val failed: String? = null,
 )
 
 /**
@@ -71,6 +73,12 @@ interface AudioOutput {
 fun interface AudioOutputs {
     fun create(events: AudioOutput.Events): AudioOutput
 
+    /**
+     * Whether an output plays a streamed http URL (read-aloud's codex voice) or only a local file — AVAudioPlayer on
+     * macOS and iOS. Where it cannot, the stream plays through the TTS engine as before the player.
+     */
+    val canStreamUrl: Boolean get() = true
+
     fun close() {}
 }
 
@@ -98,6 +106,9 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
 
     /** Whether the shell has installed the outputs: a recreated shell (an Android rotation) keeps the ones it has. */
     val hasOutputs: Boolean get() = synchronized(lock) { outputs != null }
+
+    /** Whether a streamed URL can play here ([AudioOutputs.canStreamUrl]); no outputs, no. */
+    val canStreamUrl: Boolean get() = synchronized(lock) { outputs?.canStreamUrl == true }
 
     /** The platform's outputs, from the shell. An item already playing keeps the output it has. */
     fun useOutputs(outputs: AudioOutputs) {
@@ -163,7 +174,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     /** ❚❚ / ▶. */
     fun toggle() {
         val (out, playing) = synchronized(lock) {
-            val current = now.value?.takeUnless { it.stopOnly } ?: return
+            val current = now.value?.takeUnless { it.stopOnly || it.failed != null } ?: return
             val out = output ?: return
             now.value = current.copy(playing = !current.playing)
             out to !current.playing
@@ -174,7 +185,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
     /** To [ms] into the item, kept within it. */
     fun seek(ms: Long) {
         val (out, to) = synchronized(lock) {
-            val current = now.value?.takeUnless { it.stopOnly } ?: return
+            val current = now.value?.takeUnless { it.stopOnly || it.failed != null } ?: return
             val out = output ?: return
             val end = current.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
             val to = ms.coerceIn(0, end)
@@ -186,7 +197,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
 
     fun setSpeed(speed: Float) {
         val out = synchronized(lock) {
-            val current = now.value?.takeUnless { it.stopOnly } ?: return
+            val current = now.value?.takeUnless { it.stopOnly || it.failed != null } ?: return
             now.value = current.copy(speed = speed)
             output
         }
@@ -243,8 +254,20 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
             if (synchronized(lock) { current() }) stop()
         }
 
+        /** It cannot play the item: it stops, and the item stays, failed, for the dock to say so until ✕. */
         override fun onError(message: String) {
-            if (synchronized(lock) { current().also { if (it) lastError = message } }) stop()
+            val (out, wasGone) = synchronized(lock) {
+                if (!current()) return
+                lastError = message
+                val out = output
+                val wasGone = gone
+                output = null
+                gone = null
+                now.update { it?.copy(playing = false, failed = message) }
+                out to wasGone
+            }
+            out?.release()
+            wasGone?.invoke()
         }
     }
 
