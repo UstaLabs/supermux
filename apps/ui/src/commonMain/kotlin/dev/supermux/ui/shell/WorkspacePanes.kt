@@ -227,6 +227,9 @@ class WorkspacePanesBind(
      * outlive that window just the same.
      */
     var downloads by mutableStateOf<dev.supermux.work.DownloadCenter?>(null)
+
+    /** The fleet's audio player (#118), lent the same way: a voice note played there plays on in the app. */
+    var audio by mutableStateOf<dev.supermux.work.AudioPlayer?>(null)
 }
 
 /**

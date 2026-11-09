@@ -1217,6 +1217,7 @@ fun ChatPanel(
                 LocalCouncilActivity provides state.councilActivity,
                 LocalChatMediaViewer provides mediaOpener,
                 LocalChatSessionId provides session.id,
+                LocalChatTitle provides session.name,
                 LocalLiveReveals provides reveals,
             ) {
             LazyColumn(

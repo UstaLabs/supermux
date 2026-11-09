@@ -140,6 +140,9 @@ val LocalChatMediaViewer = staticCompositionLocalOf<ChatMediaOpener?> { null }
 /** The chat a timeline (or its viewer) shows, so a download started there remembers it (#95). Null outside a chat. */
 val LocalChatSessionId = staticCompositionLocalOf<String?> { null }
 
+/** That chat's name, so a voice note played there says where it came from (#118). Null outside a chat. */
+val LocalChatTitle = staticCompositionLocalOf<String?> { null }
+
 /** The message a timeline row draws, so its media can name themselves in the viewer's set. */
 val LocalChatMediaEntry = compositionLocalOf<String?> { null }
 

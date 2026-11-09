@@ -75,7 +75,10 @@ fun ExtraWindowPanes(
         RegisterCommand(AppCommands.NewTerminal) { addTerminalInWindow(ui, hostId, ws, bind.app, current.id); true }
         // This window may be a composition of its own, outside the shell's providers: the fleet's downloads come
         // with the workspace (#95), so one started here outlives the window too.
-        CompositionLocalProvider(LocalDownloads provides (bind.downloads ?: LocalDownloads.current)) {
+        CompositionLocalProvider(
+            LocalDownloads provides (bind.downloads ?: LocalDownloads.current),
+            dev.supermux.ui.work.LocalAudioPlayer provides (bind.audio ?: dev.supermux.ui.work.LocalAudioPlayer.current),
+        ) {
         WorkspacePanes(
             hostId = hostId,
             layout = hosted,
