@@ -799,6 +799,8 @@ fun Composer(
         val seq = ++ids.nextSeq
         val att = attachments[idx].copy(state = UploadState.Uploading(0f), runSeq = seq)
         attachments[idx] = att
+        // The app's own work: "Restart to update" waits for it (#113).
+        val endWork = dev.supermux.ui.platform.InFlightWork.begin(dev.supermux.ui.platform.InFlightWork.Kind.Upload)
         uploadScope.launch {
             val fileId = up(att.source, att.name, att.mime, att.kind) { sent, total ->
                 val pct = if (total > 0) (sent.toFloat() / total).coerceIn(0f, 1f) else 0f
@@ -823,7 +825,7 @@ fun Composer(
                 if (fileId != null) it.copy(state = UploadState.Done(fileId))
                 else it.copy(state = UploadState.Failed)
             }
-        }
+        }.invokeOnCompletion { endWork() }
     }
 
     /** Stage ONE picked/captured/pasted/dropped file — the single funnel every source shares, so a
