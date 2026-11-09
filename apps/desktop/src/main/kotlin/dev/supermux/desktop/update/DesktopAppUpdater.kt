@@ -34,19 +34,25 @@ import java.nio.file.Files
 class DesktopAppUpdater(
     private val http: HttpClient = HttpClient(CIO) { installerDownloadTimeouts() },
     override val currentVersion: String = DESKTOP_APP_VERSION,
+    /** The remembered "download updates in the background" choice (#113); on until turned off. */
+    private val loadBackground: () -> Boolean = { DesktopUpdateSource.backgroundUpdates() },
+    private val saveBackground: (Boolean) -> Unit = { DesktopUpdateSource.setBackgroundUpdates(it) },
+    /** Whether the installer closes, updates and reopens the app by itself: the Windows MSI's helper. */
+    override val restartsToUpdate: Boolean = DesktopUpdateSource.restartsToUpdate(),
+    /** The version an install was handed off for, kept across the restart so the updated app can say so (#113). */
+    private val loadInstalling: () -> String? = { DesktopUpdateSource.installing() },
+    private val saveInstalling: (String?) -> Unit = { DesktopUpdateSource.setInstalling(it) },
+    /** Hands the installer to the OS; true when the app must quit for it (Windows). */
+    private val openInstaller: (File) -> Boolean = { DesktopUpdateSource.openInstaller(it) },
 ) : AppUpdater {
-    private val state = MutableStateFlow(UpdateStatus())
+    private val state = MutableStateFlow(UpdateStatus(background = loadBackground()))
+
+    /** The release [UpdateStatus.ready] was downloaded for: a newer one makes it stale. */
+    private var readyVersion: String? = null
 
     /** Quits the app (set by Main.kt): the Windows MSI upgrade needs our files released. */
     @Volatile var onQuitForInstaller: (() -> Unit)? = null
 
-    /**
-     * Stops the background service's broker before a Windows MSI replaces its files (set by Main.kt; #113). On Windows
-     * every agent's keeper runs from supermux-broker.exe, and Windows Installer can't replace a running image: the stop
-     * is a plain one, its agents end, and their sessions resume when the updated app starts the service again. False:
-     * it didn't stop, so the install doesn't start.
-     */
-    @Volatile var stopServiceForInstaller: (suspend () -> Boolean)? = null
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
 
     /** Desktop packages carry no version CODE (that is Android's monotonic build counter). */
@@ -59,15 +65,19 @@ class DesktopAppUpdater(
         if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
         val result = runCatching { DesktopUpdateSource.check(http, currentVersion) }
+        val background = state.value.background
         val next = result.fold(
             onSuccess = { s ->
                 UpdateStatus(
                     phase = if (s.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                     release = s,
                     dismissed = s.latestVersion?.let { DesktopUpdateSource.isDismissed(it) } == true,
+                    background = background,
+                    // A download waits only for the release it was made for.
+                    ready = state.value.ready?.takeIf { s.updateAvailable && readyVersion == s.latestVersion },
                 )
             },
-            onFailure = { e -> UpdateStatus(phase = UpdatePhase.Failed, error = e.message) },
+            onFailure = { e -> UpdateStatus(phase = UpdatePhase.Failed, error = e.message, background = background, ready = state.value.ready) },
         )
         state.value = next
         return next
@@ -123,13 +133,11 @@ class DesktopAppUpdater(
 
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.IO) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
+        // Remembered across the restart, so the updated app can say it was updated (#113).
+        val version = state.value.release?.latestVersion
         try {
-            if (installer.kind == "msi" && stopServiceForInstaller?.invoke() == false) {
-                val msg = dev.supermux.desktop.host.BrokerService.WINDOWS_STOP_FAILED
-                state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
-                return@withContext msg
-            }
-            val mustQuit = DesktopUpdateSource.openInstaller(File(installer.location))
+            saveInstalling(version)
+            val mustQuit = openInstaller(File(installer.location))
             // Windows: msiexec replaces the app's files only after this process is gone.
             if (mustQuit) onQuitForInstaller?.invoke()
             // The OS installer is up; this process keeps running until it is replaced, so the page
@@ -138,10 +146,35 @@ class DesktopAppUpdater(
             state.value = state.value.settled()
             null
         } catch (e: Throwable) {
+            saveInstalling(null)
             val msg = e.message ?: "Could not open installer"
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = msg)
             msg
         }
+    }
+
+    override val offersBackgroundUpdates: Boolean = true
+
+    override val justUpdatedTo: String?
+        get() = loadInstalling()?.takeIf { it == currentVersion }
+
+    override fun acknowledgeUpdated() = saveInstalling(null)
+
+    override fun setBackgroundUpdates(on: Boolean) {
+        saveBackground(on)
+        state.value = state.value.copy(background = on)
+    }
+
+    override suspend fun prepareInBackground() {
+        if (!state.value.background || state.value.busy) return
+        val found = check()
+        val release = found.release ?: return
+        if (found.phase != UpdatePhase.Available || !release.canInstall || found.ready != null) return
+        // Quiet: no card while it downloads (the card shows a background update only once it is ready); a failed
+        // download leaves nothing ready, and the next launch's check tries again.
+        val installer = download { _, _ -> } ?: return
+        readyVersion = release.latestVersion
+        state.value = state.value.copy(ready = installer)
     }
 
     override fun openReleaseNotes() {

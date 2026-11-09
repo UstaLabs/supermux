@@ -16,6 +16,15 @@ function env(body: Record<string, unknown>): CoreNormalizedEvent {
   } as CoreNormalizedEvent
 }
 
+test("models-update reaches onModels, a replayed one too (#102)", () => {
+  const seen: unknown[] = []
+  const b = createNormalizedBridge({ agent: "cursor", emit: () => {}, onModels: (models) => seen.push(models) })
+  const models = [{ value: "default[]", name: "Auto" }, { value: "composer-1[fast=true]", name: "composer-1" }]
+  b.handle(env({ kind: "models-update", models }))
+  b.handle(env({ kind: "models-update", models, replay: true }))
+  expect(seen).toEqual([models, models])
+})
+
 test("maps permission-request to request-open", () => {
   const events: AgentEvent[] = []
   const b = createNormalizedBridge({ agent: "grok", emit: (e) => events.push(e) })

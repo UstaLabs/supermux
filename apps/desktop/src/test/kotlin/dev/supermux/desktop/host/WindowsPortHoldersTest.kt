@@ -112,8 +112,8 @@ class WindowsPortHoldersTest {
         assertTrue(h.env.ran.none { it.firstOrNull() == "taskkill" })
     }
 
-    // The update stops the service; its broker is gone but its leftovers keep the port: they are stopped too.
-    @Test fun anUpdatesServiceStopAlsoStopsTheLeftoversHoldingThePort() = runTest {
+    // A restart stops the service; its broker is gone but its leftovers keep the port: they are stopped too.
+    @Test fun aServiceStopAlsoStopsTheLeftoversHoldingThePort() = runTest {
         val h = Harness(
             this, os = DesktopOs.WINDOWS, prefs = HostingPrefs(background = true),
             captures = mapOf(
@@ -127,8 +127,8 @@ class WindowsPortHoldersTest {
         h.sup.ensure()
         assertEquals(HostSupervisor.Mode.SERVICE, h.sup.mode)
         val killed = { h.env.ran.any { it.take(2) == listOf("taskkill", "/F") && "300" in it } }
-        h.probeFn = { if (killed()) HostProbeResult.PortFree else HostProbeResult.Busy }
-        assertTrue(h.sup.stopServiceForWindowsUpdate())
+        h.probeFn = { if (killed()) h.desktop() else HostProbeResult.Busy }
+        h.sup.setRelay(true) // restarts the service with the relay on
         assertTrue(listOf("taskkill", "/F", "/PID", "300", "/PID", "302", "/PID", "400") in h.env.ran)
     }
 }

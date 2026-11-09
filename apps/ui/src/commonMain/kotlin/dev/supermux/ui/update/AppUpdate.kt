@@ -73,6 +73,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -112,6 +113,13 @@ import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
 import kotlin.math.roundToLong
 import kotlinx.coroutines.launch
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlinx.coroutines.delay
+import dev.supermux.ui.platform.NoticeChannel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 // ── Pure labels ───────────────────────────────────────────────────────────────
 
@@ -304,6 +312,7 @@ private fun AppUpdateBody(
                     Text("versionCode $it", color = cs.onSurfaceVariant, fontSize = 12.sp)
                 }
             }
+            if (updater.offersBackgroundUpdates) BackgroundUpdatesRow(update.background) { updater.setBackgroundUpdates(it) }
 
             when {
                 s == null -> Text(
@@ -475,6 +484,51 @@ private fun AppUpdateBody(
     }
 }
 
+/**
+ * The shell's update check: once per launch, then, where the host downloads updates in the background (desktop,
+ * #113), a quiet prepare now and every [every] while the app runs, so a long-open app still finds a new release.
+ */
+suspend fun AppUpdater.keepUpdated(every: Duration = 6.hours) {
+    check()
+    if (!offersBackgroundUpdates) return
+    while (true) {
+        prepareInBackground()
+        delay(every)
+    }
+}
+
+/**
+ * The updated app's one-time message (#113): "Updated to vX · all sessions reconnected" once [reconnected] says the
+ * sessions are back, or plain "Updated to vX" if they aren't within [waitMs]. Nothing on a launch that wasn't an update.
+ */
+suspend fun AppUpdater.announceUpdate(notices: NoticeChannel, reconnected: Flow<Boolean>, waitMs: Long = 60_000) {
+    val version = justUpdatedTo ?: return
+    val back = withTimeoutOrNull(waitMs) { reconnected.first { it } } == true
+    notices.show(if (back) "Updated to v$version · all sessions reconnected" else "Updated to v$version")
+    acknowledgeUpdated()
+}
+
+/** #113: "Download updates in the background" — on unless turned off; off brings back the plain Install card. */
+@Composable
+private fun BackgroundUpdatesRow(on: Boolean, onChange: (Boolean) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Download updates in the background", color = cs.onSurface, fontSize = 14.sp)
+            Text(
+                "A new version downloads quietly, then asks before restarting. Off: you choose when to download.",
+                color = cs.onSurfaceVariant,
+                fontSize = 12.sp,
+            )
+        }
+        Switch(checked = on, onCheckedChange = onChange, modifier = Modifier.testTag("app_update_background"))
+    }
+}
+
 fun installCaption(kind: String?): String = when (kind) {
     // Android's wording — the notifier that posts this progress lives behind the seam.
     "apk" -> "One-tap installs the latest release APK over this build. " +
@@ -539,9 +593,15 @@ private const val INSTALLER_MIME = "application/octet-stream"
 
 // ── Sidebar card ──────────────────────────────────────────────────────────────
 
-/** Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. */
+/**
+ * Whether [AppUpdateCard] draws for this status: a check found a newer, undismissed release. With background updates
+ * on (#113) it waits, quietly, until that release is downloaded and [UpdateStatus.ready].
+ */
 val UpdateStatus.showsUpdateCard: Boolean
-    get() = release?.updateAvailable == true && !dismissed
+    get() = release?.updateAvailable == true && !dismissed && (!background || ready != null)
+
+/** The ready card's line where the installer reopens the app (#113): the agents carry on through the restart. */
+const val RESTART_CAPTION = "Restart to update: supermux closes, installs it and opens again. Your sessions carry on."
 
 /**
  * The card's one muted line: what pressing Install will actually do on this host. Not a warning —
@@ -600,7 +660,10 @@ private fun UpdateCardBody(
     val scope = rememberCoroutineScope()
     val downloads = rememberDownloads()
     val installing = update.busy
-    val canInstall = release.canInstall && release.downloadUrl != null
+    // #113: downloaded in the background; Windows' installer then closes, updates and reopens the app by itself.
+    val ready = update.ready
+    val restarts = ready != null && updater.restartsToUpdate
+    val canInstall = ready != null || (release.canInstall && release.downloadUrl != null)
     val shape = RoundedCornerShape(Radii.md)
     Column(
         Modifier
@@ -621,7 +684,7 @@ private fun UpdateCardBody(
             )
             Spacer(Modifier.width(10.dp))
             Text(
-                "Update available",
+                if (ready != null) "Update ready" else "Update available",
                 color = cs.onSurface,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
@@ -644,7 +707,7 @@ private fun UpdateCardBody(
         Spacer(Modifier.height(Space.sm))
         Column(Modifier.padding(end = Space.sm)) {
             Text(
-                "v${release.latestVersion} is ready to install.",
+                if (ready != null) "v${release.latestVersion} is downloaded." else "v${release.latestVersion} is ready to install.",
                 color = cs.onSurface,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -653,7 +716,7 @@ private fun UpdateCardBody(
             if (canInstall) {
                 Spacer(Modifier.height(Space.sm))
                 Text(
-                    updateCardCaption(installerKindFrom(release.downloadUrl)),
+                    if (restarts) RESTART_CAPTION else updateCardCaption(installerKindFrom(release.downloadUrl)),
                     color = cs.onSurfaceVariant,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -670,6 +733,12 @@ private fun UpdateCardBody(
                     Button(
                         onClick = {
                             scope.launch {
+                                if (ready != null) {
+                                    // Downloaded in the background (#113): no second download. The card has no
+                                    // room for an error: a failed hand-off opens the page.
+                                    if (updater.install(ready) != null) onOpenPage()
+                                    return@launch
+                                }
                                 downloadUpdate(downloads, updater, release) {
                                     val after = updater.status.value
                                     when {
@@ -695,7 +764,11 @@ private fun UpdateCardBody(
                         modifier = buttonHeight.weight(1f).testTag("app_update_card_update"),
                     ) {
                         Text(
-                            if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else "Install",
+                            when {
+                                installing -> formatUpdateProgress(update.bytesReceived, update.contentLength)
+                                restarts -> "Restart to update"
+                                else -> "Install"
+                            },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             maxLines = 1,

@@ -61,6 +61,10 @@ data class UpdateStatus(
     val needsInstallPermission: Boolean = false,
     /** The user dismissed the banner for [ClientUpdateStatus.latestVersion] (persisted per host). */
     val dismissed: Boolean = false,
+    /** Desktop (#113): updates download in the background ([AppUpdater.setBackgroundUpdates]). */
+    val background: Boolean = false,
+    /** Desktop (#113): a newer release already downloaded in the background, ready for [AppUpdater.install]. */
+    val ready: DownloadedInstaller? = null,
 ) {
     /** True while a download/install round trip is in flight — both CTAs disable on it. */
     val busy: Boolean get() = phase == UpdatePhase.Downloading || phase == UpdatePhase.Installing
@@ -133,6 +137,27 @@ interface AppUpdater {
 
     /** Remember that the banner was dismissed for the currently-known latest version. */
     fun dismiss()
+
+    /** Desktop (#113): the host can download updates in the background (the page's switch). */
+    val offersBackgroundUpdates: Boolean get() = false
+
+    /** Desktop (#113): installing a ready update closes the app, updates it and opens it again by itself. */
+    val restartsToUpdate: Boolean get() = false
+
+    /** Desktop (#113): download updates in the background ([UpdateStatus.background]); remembered. No-op elsewhere. */
+    fun setBackgroundUpdates(on: Boolean) {}
+
+    /**
+     * Desktop (#113): with background updates on, check and download a newer release quietly; it then waits in
+     * [UpdateStatus.ready]. No-op elsewhere.
+     */
+    suspend fun prepareInBackground() {}
+
+    /** Desktop (#113): the version this launch was updated to by the app's own install; null otherwise. */
+    val justUpdatedTo: String? get() = null
+
+    /** The update was announced ([justUpdatedTo]): forget it. */
+    fun acknowledgeUpdated() {}
 }
 
 // ── OS notifications ──────────────────────────────────────────────────────────
