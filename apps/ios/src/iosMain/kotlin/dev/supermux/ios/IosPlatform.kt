@@ -207,6 +207,9 @@ class IosPlatform(
 
     override val tts: TtsEngine = IosTtsEngine(bridge)
 
+    /** AVAudioPlayer for the app's audio (#118), as on the Mac: the library's AVPlayer wants a video track. */
+    override val audioOutputs: dev.supermux.work.AudioOutputs = IosAudioOutputs()
+
 }
 
 /**

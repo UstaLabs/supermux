@@ -111,7 +111,9 @@ object MessageTts {
         val g = gen.incrementAndGet()
         speakingKey = plain
         val urlFor = speakRemoteUrl
-        val inPlayer = at != null && at.player.hasOutputs
+        // Only where the player's outputs stream a URL: AVAudioPlayer (macOS, iOS) plays local files, so there the
+        // engine's own URL player (or the chunk stream) plays it, shown in the dock with ✕ as the OS voice is.
+        val inPlayer = at != null && at.player.canStreamUrl
         if ((tts.canPlayUrl || inPlayer) && urlFor != null) {
             // A failed start (older broker: null; anything else: thrown) falls through to the
             // chunk stream below rather than leaving the message silent.

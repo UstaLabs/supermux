@@ -2289,7 +2289,8 @@ private fun AudioCardControl(
     val now by player.state.collectAsState()
     // What names this note in the player: its download key, or — a preview's media has none — its file id.
     val identity = media.downloadKey(att) ?: "att:${att.file_id}"
-    val mine = now?.takeIf { it.item.key == identity }
+    // A note that could not play shows ▶ again here: a tap tries it anew (the dock says why it stopped).
+    val mine = now?.takeIf { it.item.key == identity && it.failed == null }
     var fetching by remember(att.file_id) { mutableStateOf(false) }
     val state = download?.state
     when {

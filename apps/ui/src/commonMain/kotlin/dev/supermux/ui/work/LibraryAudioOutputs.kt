@@ -39,9 +39,18 @@ import kotlinx.coroutines.launch
  * the thread that made it), off the AWT thread on the desktop (macOS's error path blocks on it, and Linux's
  * position read is a blocking native call).
  *
+ * An item the library cannot play says so ([AudioOutput.Events.onError]) however the library fails: an error it
+ * sets (macOS's backend on an audio-only file, after ~7 s of loading: "Failed to retrieve video size"), an open that
+ * throws, or a load that never ends ([loadTimeoutMs]).
+ *
  * @param scope the fleet's: the commands and the position reads run there, and end with it.
+ * @param make the library's player state, made on first use (a test's fake).
  */
-internal class LibraryAudioOutputs(private val scope: CoroutineScope) : AudioOutputs {
+internal class LibraryAudioOutputs(
+    private val scope: CoroutineScope,
+    private val make: () -> VideoPlayerState = { createVideoPlayerState() },
+    private val loadTimeoutMs: Long = LOAD_TIMEOUT_MS,
+) : AudioOutputs {
     private val held = MutableStateFlow<VideoPlayerState?>(null)
     private val commands = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private var worker: Job? = null
@@ -76,7 +85,7 @@ internal class LibraryAudioOutputs(private val scope: CoroutineScope) : AudioOut
         commands.close()
     }
 
-    private fun state(): VideoPlayerState = made ?: createVideoPlayerState().also { made = it }
+    private fun state(): VideoPlayerState = made ?: make().also { made = it }
 
     private inner class Item(private val events: AudioOutput.Events) : AudioOutput {
         private var released = false
@@ -89,12 +98,31 @@ internal class LibraryAudioOutputs(private val scope: CoroutineScope) : AudioOut
         override fun open(uri: String) {
             queue { player ->
                 player.onPlaybackEnded = { if (!released) events.onEnded() }
-                player.openUri(uri, InitialPlayerState.PLAY)
                 held.value = player
+                // The last item's error is not this one's.
+                runCatching { player.clearError() }
+                // Watched from before the open: an open that blocks until it fails is still heard.
                 poll?.cancel()
                 poll = scope.launch(VideoOpenContext) { watch(player) }
+                try {
+                    player.openUri(uri, InitialPlayerState.PLAY)
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (t: Throwable) {
+                    fail(t.message ?: t.toString())
+                }
             }
         }
+
+        /** Said once, and the watching ends. */
+        private fun fail(message: String) {
+            if (released || failed) return
+            failed = true
+            poll?.cancel()
+            events.onError(message)
+        }
+
+        private var failed = false
 
         override fun play() = queue { it.play() }
 
@@ -123,14 +151,22 @@ internal class LibraryAudioOutputs(private val scope: CoroutineScope) : AudioOut
         /** The position, its length, a stop or an end on the player's own: read every [POLL_MS] while open. */
         private suspend fun watch(player: VideoPlayerState) {
             var said: Boolean? = null
-            while (currentCoroutineContext().isActive && !released) {
+            var waited = 0L
+            while (currentCoroutineContext().isActive && !released && !failed) {
                 delay(POLL_MS)
                 if (released) return
                 player.error?.let {
-                    events.onError(it.toString())
+                    fail(it.toString())
                     return
                 }
-                if (player.isLoading || !player.hasMedia) continue
+                if (player.isLoading || !player.hasMedia) {
+                    waited += POLL_MS
+                    if (waited >= loadTimeoutMs) {
+                        fail("Still loading after ${loadTimeoutMs / 1000} s")
+                        return
+                    }
+                    continue
+                }
                 val length = player.duration
                 val at = player.currentTime
                 events.onProgress((at * 1000).toLong(), (length * 1000).toLong())
@@ -144,6 +180,7 @@ internal class LibraryAudioOutputs(private val scope: CoroutineScope) : AudioOut
 
     private companion object {
         const val POLL_MS = 250L
+        const val LOAD_TIMEOUT_MS = 30_000L
     }
 }
 
