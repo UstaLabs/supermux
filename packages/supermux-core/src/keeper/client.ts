@@ -12,6 +12,7 @@ import { KEEPER_ENV, type KeeperLimits, type KeeperSpec, type KeeperStatus, type
 import { keeperSocketPaths } from './socket.js'
 import { files, proc } from '@supermux/platform'
 import { msSince, perfMark } from '../perf-marks.js'
+import { files as platformFiles } from "@supermux/platform"
 
 /**
  * What `connectKeeper` takes: the core's state directory (the keeper lives in `<state>/keepers/<sessionId>`), the agent to
@@ -111,7 +112,7 @@ const alive = (pid: number): boolean => proc.isAlive(pid)
 function keeperDirectory(stateDirectory: string, sessionId: string, create: true): string
 function keeperDirectory(stateDirectory: string, sessionId: string, create: false): string | undefined
 function keeperDirectory(stateDirectory: string, sessionId: string, create: boolean): string | undefined {
-  if (create) mkdirSync(stateDirectory, { recursive: true, mode: 0o700 })
+  if (create) platformFiles.mkdirPrivate(stateDirectory)
   else if (!present(stateDirectory)) return undefined
   const state = realpathSync(stateDirectory)
   let dir: string

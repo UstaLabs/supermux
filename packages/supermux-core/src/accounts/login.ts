@@ -202,12 +202,12 @@ export function loginPlan(kind: LoginKind, directory: string, command: string, e
         acceptNonZeroExit: true,
         userWindowMs: ANTIGRAVITY_CODE_WINDOW_MS,
         prepare: async dir => {
-          await mkdir(join(dir, ".login-home", ".gemini"), { recursive: true, mode: 0o700 })
+          await files.mkdirPrivateAsync(join(dir, ".login-home", ".gemini"))
           // A junction needs no privilege on Windows (a "dir" symlink needs Developer Mode or admin).
           files.linkDirectory(dir, join(dir, ".login-home", ".gemini", "antigravity-cli"))
-          await mkdir(join(dir, ".login-home", ".bin"), { mode: 0o700 })
+          await files.mkdirPrivateAsync(join(dir, ".login-home", ".bin"), { recursive: false })
           // Windows opens URLs through the shell, not a PATH command: there agy may open the host's browser.
-          if (!host.windows()) for (const name of BROWSER_OPENERS) await writeFile(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+          if (!host.windows()) for (const name of BROWSER_OPENERS) files.writeExecutable(join(dir, ".login-home", ".bin", name), "#!/bin/sh\nexit 0\n", { private: true })
         },
         finalize: async dir => {
           await unlinkLink(join(dir, ".login-home", ".gemini", "antigravity-cli"))
@@ -441,14 +441,14 @@ export function startLogin(deps: LoginDeps): LoginHandle {
 
   const run = async () => {
     await deps.precheck()
-    await mkdir(deps.pendingDirectory, { recursive: true, mode: 0o700 })
-    await chmod(deps.pendingDirectory, 0o700)
+    await files.mkdirPrivateAsync(deps.pendingDirectory)
+    files.makePrivate(deps.pendingDirectory)
     const dir = join(deps.pendingDirectory, randomUUID())
-    await mkdir(dir, { mode: 0o700 })
+    await files.mkdirPrivateAsync(dir, { recursive: false })
     directory = dir
     if (finished) { await rm(dir, { recursive: true, force: true }); return }
     const plan = loginPlan(deps.kind, dir, deps.command, deps.options.email)
-    if (deps.kind === "cursor") await mkdir(join(dir, "xdg"), { mode: 0o700 })
+    if (deps.kind === "cursor") await files.mkdirPrivateAsync(join(dir, "xdg"), { recursive: false })
     await plan.prepare?.(dir)
     const child = deps.runner(plan.spawn)
     proc = child

@@ -30,7 +30,7 @@ export function copiedCredentials(options: CopiedCredentialsOptions): AuthProvid
       context.signal.throwIfAborted()
       if (!/^[a-zA-Z0-9_-]{1,128}$/.test(context.sessionId)) throw new CoreError('invalid_session_id', 'Invalid auth session identity')
       const home = join(options.homesDirectory, context.sessionId)
-      await mkdir(home, { recursive: true, mode: 0o700 })
+      await files.mkdirPrivateAsync(home)
       const lockPath = join(home, '.auth.lock')
       let lock
       try { lock = await open(lockPath, 'wx', 0o600) } catch (cause) {
@@ -99,7 +99,7 @@ async function readAuth(path: string): Promise<Buffer> {
 }
 
 async function atomicWrite(path: string, data: Buffer): Promise<void> {
-  await mkdir(dirname(path), {recursive:true,mode:0o700})
+  await files.mkdirPrivateAsync(dirname(path))
   const temp = `${path}.${randomUUID()}.tmp`
   try {
     const file = await open(temp, 'wx', 0o600)

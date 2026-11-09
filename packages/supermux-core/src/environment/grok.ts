@@ -4,13 +4,14 @@ import { grokCredentialExpiry, promoteCredential } from "./credentials.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { GrokEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { lstatSafe, writeFileNoFollow } from "./write.js"
+import { files as platformFiles } from "@supermux/platform"
 
 function tomlStr(v: string): string {
   return JSON.stringify(v)
 }
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(home)
 }
 
 function renderGrokConfig(spec: GrokEnvironmentSpec): string {
@@ -68,7 +69,7 @@ export async function prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise
   validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
   const sessionGrokDir = join(spec.home, ".grok")
-  mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(sessionGrokDir)
   const files: string[] = []
 
   const src = spec.credentials.canonicalAuthPath
@@ -113,10 +114,10 @@ function finishGrok(
   credentials: PreparedEnvironment["credentials"],
 ): PreparedEnvironment {
   const grokDir = join(spec.home, ".grok")
-  mkdirSync(grokDir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(grokDir)
   const configPath = join(grokDir, "config.toml")
-  writeFileNoFollow(configPath, renderGrokConfig(spec), 0o600)
-  chmodSync(configPath, 0o600)
+  writeFileNoFollow(configPath, renderGrokConfig(spec))
+  platformFiles.makePrivate(configPath)
   files.push(configPath)
   return { env, files, credentials }
 }

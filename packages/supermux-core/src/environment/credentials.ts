@@ -43,11 +43,11 @@ export type FreshnessReader = (path: string) => number
  * The rename is atomic only inside one filesystem, so the temp file is a
  * sibling of the target and never lives in /tmp. */
 export function promoteCredential(from: string, canonical: string): void {
-  mkdirSync(dirname(canonical), { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dirname(canonical))
   const temp = `${canonical}.mux-${process.pid}-${randomUUID()}.tmp`
   try {
     copyFileSync(from, temp)
-    chmodSync(temp, 0o600)
+    files.makePrivate(temp)
     files.replaceSync(temp, canonical)
   } finally {
     rmSync(temp, { force: true })
@@ -156,11 +156,11 @@ export function refreshSessionCredential(opts: {
 }): boolean {
   promoteIfNewer(opts)
   if (!existsSync(opts.canonical)) return false
-  mkdirSync(dirname(opts.sessionCopy), { recursive: true, mode: 0o700 })
+  files.mkdirPrivate(dirname(opts.sessionCopy))
   const temp = `${opts.sessionCopy}.mux-${process.pid}-${randomUUID()}.tmp`
   try {
     copyFileSync(opts.canonical, temp)
-    chmodSync(temp, 0o600)
+    files.makePrivate(temp)
     files.replaceSync(temp, opts.sessionCopy)
   } finally {
     rmSync(temp, { force: true })

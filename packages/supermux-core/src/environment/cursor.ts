@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { paths } from "@supermux/platform"
+import { files as platformFiles, paths } from "@supermux/platform"
 import { cursorCredentialFreshness, promoteIfNewer, releaseSessionCredential } from "./credentials.js"
 import { ensureSharedCursorRuntime } from "./cursor-runtime.js"
 import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
@@ -16,7 +16,7 @@ function pathJoin(platform: NodeJS.Platform): (...parts: string[]) => string {
 }
 
 function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(home)
 }
 
 function renderCursorMcp(servers: McpServerSpec[]): string {
@@ -73,8 +73,8 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
       freshness: cursorCredentialFreshness,
     })
     const destCursorDir = j(spec.home, ".cursor")
-    mkdirSync(destCursorDir, { recursive: true, mode: 0o700 })
-    chmodSync(destCursorDir, 0o700)
+    platformFiles.mkdirPrivate(destCursorDir)
+    platformFiles.makePrivate(destCursorDir)
     for (const f of CURSOR_DIR_FILES) {
       const src = j(spec.credentials.userCursorDir, f)
       if (existsSync(src)) {
@@ -109,8 +109,8 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
     }
 
     const destCursorDir = j(spec.home, ".cursor")
-    mkdirSync(destCursorDir, { recursive: true, mode: 0o700 })
-    chmodSync(destCursorDir, 0o700)
+    platformFiles.mkdirPrivate(destCursorDir)
+    platformFiles.makePrivate(destCursorDir)
     for (const f of CURSOR_DIR_FILES) {
       const src = j(spec.credentials.userCursorDir, f)
       if (existsSync(src)) {
@@ -122,7 +122,7 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
 
     if (existsSync(xdgAuthSrc)) {
       const destAuthDir = j(sessionConfigBase, "cursor")
-      mkdirSync(destAuthDir, { recursive: true, mode: 0o700 })
+      platformFiles.mkdirPrivate(destAuthDir)
       copyFileReplace(xdgAuthSrc, sessionAuth)
       files.push(sessionAuth)
     }
@@ -130,11 +130,11 @@ export async function prepareCursorEnvironment(spec: CursorEnvironmentSpec): Pro
   }
 
   const cursorDir = j(spec.home, ".cursor")
-  mkdirSync(cursorDir, { recursive: true, mode: 0o700 })
-  chmodSync(cursorDir, 0o700)
+  platformFiles.mkdirPrivate(cursorDir)
+  platformFiles.makePrivate(cursorDir)
   const mcpPath = j(cursorDir, "mcp.json")
-  writeFileSync(mcpPath, renderCursorMcp(spec.mcpServers), { encoding: "utf8", mode: 0o600 })
-  chmodSync(mcpPath, 0o600)
+  platformFiles.writePrivate(mcpPath, renderCursorMcp(spec.mcpServers), { encoding: "utf8" })
+  platformFiles.makePrivate(mcpPath)
   files.push(mcpPath)
 
   return { env, files, credentials }
