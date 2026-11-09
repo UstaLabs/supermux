@@ -10,6 +10,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasProgressBarRangeInfo
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -20,10 +21,13 @@ import dev.supermux.proto.Attachment
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.AttachmentList
+import dev.supermux.ui.chat.LocalChatSessionId
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.FileAction
 import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadOrigin
 import dev.supermux.work.DownloadState
 import dev.supermux.work.DownloadedFile
 import kotlinx.coroutines.CompletableDeferred
@@ -192,10 +196,14 @@ class FileCardDownloadTest {
         // A new card for the same attachment, never tapped, while the download is still under way.
         shown = true
         waitForIdle()
+        // The ring is the card's ↓ icon; the file's own preview (its badge, its name) stays as it was.
         onNode(
-            hasTestTag("attachment_progress") and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)),
+            hasTestTag(RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)),
             useUnmergedTree = true,
         ).assertIsDisplayed()
+        onNodeWithTag("attachment_progress", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithText("PDF", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("report.pdf", useUnmergedTree = true).assertIsDisplayed()
         assertEquals(1, media.downloads.get(), "the same download, not a second one")
     }
 
@@ -234,9 +242,116 @@ class FileCardDownloadTest {
         onNodeWithTag("attachment_chip").performClick()
         settle { center.items.value.isNotEmpty() }
         center.cancel("att:rec/f1")
-        settle { onAllNodesWithText("Download failed — tap to retry").fetchSemanticsNodes().isNotEmpty() }
+        settle { onAllNodesWithText("Paused", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
 
         assertEquals(listOf("f1"), media.cancelled.toList())
-        onNodeWithText("Download failed — tap to retry").assertIsDisplayed()
+        // The bar's Pause is no failure: the card says Paused, and its ring resumes it.
+        onNodeWithText("Paused", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("Download failed — tap to retry").assertDoesNotExist()
+    }
+
+    // ── the ring on the card's icon (#95, round 2) ────────────────────────────────────────────
+
+    /** Tap the card's ring and wait for its menu. */
+    private fun ComposeUiTest.openRing() {
+        onNodeWithTag(RING, useUnmergedTree = true).performClick()
+        settle { onAllNodesWithTag(MENU).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    /** The words the ring's menu offers, in order. */
+    private fun ComposeUiTest.menuWords(): List<String> =
+        listOf("pause", "resume", "cancel", "retry", "open", "save", "share").filter {
+            onAllNodesWithTag("attachment_menu_$it").fetchSemanticsNodes().isNotEmpty()
+        }
+
+    @Test fun theRingPausesResumesAndCancels() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope)
+        val media = HostMedia()
+        card(FakePlatform(), center, media)
+        onNodeWithTag("attachment_chip").performClick()
+        settle { center.items.value.isNotEmpty() }
+
+        openRing()
+        assertEquals(listOf("pause", "cancel"), menuWords())
+        onNodeWithTag("attachment_menu_pause").performClick()
+        settle { onAllNodesWithText("Paused", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(DownloadState.Cancelled, center.items.value.single().state)
+        assertEquals(listOf("f1"), media.cancelled.toList(), "the shared transfer is told")
+        onNodeWithText("Paused", useUnmergedTree = true).assertIsDisplayed()
+
+        openRing()
+        assertEquals(listOf("resume", "cancel"), menuWords())
+        onNodeWithTag("attachment_menu_resume").performClick()
+        settle { center.items.value.single().state is DownloadState.Running }
+        assertIs<DownloadState.Running>(center.items.value.single().state)
+        assertEquals(2, media.downloads.get())
+
+        openRing()
+        onNodeWithTag("attachment_menu_cancel").performClick()
+        settle { center.items.value.isEmpty() }
+        assertEquals(emptyList(), center.items.value, "Cancel takes it off the list")
+        onNodeWithTag(RING, useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithText("Paused", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun aFailedRingOffersRetry() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope)
+        val media = HostMedia(fails = true)
+        card(FakePlatform(), center, media)
+        onNodeWithTag("attachment_chip").performClick()
+        settle { center.items.value.singleOrNull()?.state is DownloadState.Failed }
+        openRing()
+        assertEquals(listOf("retry"), menuWords())
+        onNodeWithTag("attachment_menu_retry").performClick()
+        settle { media.downloads.get() == 2 }
+        assertEquals(2, media.downloads.get())
+    }
+
+    @Test fun aDoneRingHandsTheFileOverTheHostsWay() = runDesktopComposeUiTest {
+        val platform = FakePlatform().apply { files.fileActions = setOf(FileAction.Open, FileAction.Save) }
+        val center = DownloadCenter(scope)
+        val media = HostMedia()
+        var shown by mutableStateOf(true)
+        card(platform, center, media, shown = { shown })
+        onNodeWithTag("attachment_chip").performClick()
+        settle { center.items.value.isNotEmpty() }
+        // Away while it finishes, so the card hands nothing over by itself.
+        shown = false
+        waitForIdle()
+        media.gate.complete(Unit)
+        settle { center.items.value.single().state is DownloadState.Done }
+        shown = true
+        waitForIdle()
+
+        openRing()
+        assertEquals(listOf("open", "save"), menuWords())
+        onNodeWithTag("attachment_menu_open").performClick()
+        settle { platform.files.openedFiles.isNotEmpty() }
+        assertEquals(listOf("report.pdf"), platform.files.openedFiles)
+        openRing()
+        onNodeWithTag("attachment_menu_save").performClick()
+        settle { platform.files.savedFiles.isNotEmpty() }
+        assertEquals(listOf("report.pdf"), platform.files.savedFiles)
+    }
+
+    @Test fun aCardInAChatRemembersItsSessionAndMessage() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope)
+        val media = HostMedia()
+        setPlatformContent(FakePlatform()) {
+            CompositionLocalProvider(LocalDownloads provides center, LocalChatSessionId provides "s1") {
+                AttachmentList(attachments = listOf(report), alignEnd = false, media = media, entryId = "m7")
+            }
+        }
+        onNodeWithTag("attachment_chip").performClick()
+        settle { center.items.value.isNotEmpty() }
+        assertEquals(DownloadOrigin(sessionId = "s1", messageId = "m7"), center.items.value.single().origin)
+    }
+
+    private companion object {
+        /** The card's ↓, which is its download's ring while it has one. */
+        const val RING = "attachment_ring"
+
+        /** The ring's menu. */
+        const val MENU = "attachment_menu"
     }
 }

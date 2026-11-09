@@ -777,6 +777,7 @@ fun SupermuxApp(
         dev.supermux.ui.chat.ChatSearchHost(
             searchAll = { q -> fleet.searchMessages(q) },
             openSession = { sid -> ui.focusChatTab(sid) },
+            hasSession = { sid -> fleet.sessions.value.any { it.id == sid } },
         )
     }
     // Staged attachment chips and their uploads, for a host that keeps none of its own (#89):

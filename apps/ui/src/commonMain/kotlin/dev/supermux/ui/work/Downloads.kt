@@ -50,6 +50,7 @@ import androidx.compose.ui.window.PopupProperties
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.LocalChatSearch
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
@@ -170,6 +171,7 @@ private fun DownloadsPanel(
     onDismiss: () -> Unit,
 ) {
     val platform = LocalPlatform.current
+    val search = LocalChatSearch.current
     // A popover with a pointer, as the Usage card is; a wide touch-only host (a tablet, an unfolded Fold) gets the sheet.
     val popover = LocalWindowWidthClass.current != WindowWidthClass.Compact && LocalPointerAvailable.current
     val list: @Composable (Modifier) -> Unit = { modifier ->
@@ -184,6 +186,16 @@ private fun DownloadsPanel(
             onInstall = { item -> scope.launch(start = CoroutineStart.UNDISPATCHED) { install(platform, item) } },
             modifier = modifier,
             onClearFinished = { downloads.clearFinished() },
+            onDismiss = { downloads.dismiss(it.key) },
+            // Where it came from: the list closes, and that chat opens at the message — or says it is gone.
+            onOpenSource = { item ->
+                item.origin?.let { origin ->
+                    onDismiss()
+                    if (search?.reveal(origin.sessionId, origin.messageId) != true) {
+                        platform.notices.show("That chat is no longer available")
+                    }
+                }
+            },
             popover = popover,
         )
     }

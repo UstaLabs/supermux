@@ -6,6 +6,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.performSemanticsAction
+import dev.supermux.ui.chat.ChatJump
+import dev.supermux.ui.chat.ChatSearchHost
+import dev.supermux.ui.chat.LocalChatSearch
+import dev.supermux.work.DownloadOrigin
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -90,14 +98,14 @@ class ActivityPlacementTest {
     }
 
     /** A download that has 42 of its 100 bytes and goes no further until the test ends. Nobody waits for it. */
-    private fun DownloadCenter.running(key: String = "att:h/1", name: String = "big-video.mp4") {
+    private fun DownloadCenter.running(key: String = "att:h/1", name: String = "big-video.mp4", origin: DownloadOrigin? = null) {
         val source = object : DownloadSource {
             override suspend fun fetch(progress: (Long, Long?) -> Unit): DownloadedFile? {
                 progress(42, 100)
                 awaitCancellation()
             }
         }
-        start(key, name, "video/mp4", DownloadPurpose.File, source).release()
+        start(key, name, "video/mp4", DownloadPurpose.File, source, origin).release()
     }
 
     /** A finished download of a real file (the hand-over checks it is there), with nobody waiting. */
@@ -329,14 +337,62 @@ class ActivityPlacementTest {
         val center = DownloadCenter(scope).apply { running() }
         phone(center) { Footer() }
         onNodeWithTag(FOOTER_RING).performClick()
+        waitFor { onNodeWithTag("activity_pause").assertIsDisplayed() }
+        onNodeWithTag("activity_pause").performClick()
+        waitForIdle()
+        assertEquals(DownloadState.Cancelled, center.items.value.single().state)
+        waitFor { onNodeWithTag("activity_resume").assertIsDisplayed() }
+        onNodeWithTag("activity_resume").performClick()
+        waitForIdle()
+        assertEquals(DownloadState.Running(42, 100), center.items.value.single().state)
         waitFor { onNodeWithTag("activity_cancel").assertIsDisplayed() }
         onNodeWithTag("activity_cancel").performClick()
         waitForIdle()
-        assertEquals(DownloadState.Cancelled, center.items.value.single().state)
-        waitFor { onNodeWithTag("activity_retry").assertIsDisplayed() }
-        onNodeWithTag("activity_retry").performClick()
+        assertEquals(emptyList(), center.items.value, "Cancel takes it off the list")
+    }
+
+    // "A way to open the right chat and message when I am downloading" (#95, round 2): a row's name and detail line
+    // jump to where the download came from — the list closes, that chat opens on the message.
+    @Test fun aRowOpensTheChatItCameFromAtTheMessage() = runDesktopComposeUiTest {
+        val opened = mutableListOf<String>()
+        val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it }, hasSession = { it == "s1" })
+        val center = DownloadCenter(scope).apply { running(origin = DownloadOrigin("s1", "m7")) }
+        phone(center) { CompositionLocalProvider(LocalChatSearch provides search) { Footer() } }
+        onNodeWithTag(FOOTER_RING).performClick()
+        waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
+        onNodeWithTag("activity_item").performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
-        assertEquals(DownloadState.Running(42, 100), center.items.value.single().state)
+        assertEquals(listOf("s1"), opened)
+        assertEquals(ChatJump("s1", "m7", reveal = true), search.jump.value)
+        waitFor { onNodeWithTag("activity_list").assertDoesNotExist() }
+        assertIs<DownloadState.Running>(center.items.value.single().state, "the download carries on")
+    }
+
+    @Test fun aRowWhoseChatIsGoneSaysSo() = runDesktopComposeUiTest {
+        val platform = FakePlatform()
+        val opened = mutableListOf<String>()
+        val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it }, hasSession = { false })
+        val center = DownloadCenter(scope).apply { running(origin = DownloadOrigin("gone", "m7")) }
+        phone(center, platform) { CompositionLocalProvider(LocalChatSearch provides search) { Footer() } }
+        onNodeWithTag(FOOTER_RING).performClick()
+        waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
+        onNodeWithTag("activity_item").performSemanticsAction(SemanticsActions.OnClick)
+        waitForIdle()
+        assertEquals(emptyList(), opened)
+        assertEquals(null, search.jump.value)
+        assertEquals(listOf("That chat is no longer available"), platform.notices.shown)
+    }
+
+    // An app update or a Files download has no message: its row is no way in.
+    @Test fun aRowWithNoSourceOpensNothing() = runDesktopComposeUiTest {
+        val opened = mutableListOf<String>()
+        val search = ChatSearchHost(searchAll = { emptyList() }, openSession = { opened += it })
+        val center = DownloadCenter(scope).apply { running() }
+        phone(center) { CompositionLocalProvider(LocalChatSearch provides search) { Footer() } }
+        onNodeWithTag(FOOTER_RING).performClick()
+        waitFor { onNodeWithTag("activity_list").assertIsDisplayed() }
+        onNodeWithTag("activity_item").assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick))
+        assertEquals(emptyList(), opened)
     }
 
     @Test fun aFinishedFilesOpenIsHandedToTheHost() = runDesktopComposeUiTest {

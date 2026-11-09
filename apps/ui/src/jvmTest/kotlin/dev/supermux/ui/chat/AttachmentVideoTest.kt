@@ -1,6 +1,24 @@
 package dev.supermux.ui.chat
 
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.test.hasProgressBarRangeInfo
+import androidx.compose.ui.test.hasTestTag
+import dev.supermux.ui.work.LocalDownloads
+import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadOrigin
+import dev.supermux.work.DownloadState
+import dev.supermux.work.DownloadedFile
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.test.AfterTest
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -206,5 +224,133 @@ class AttachmentVideoTest {
     @Test fun temp_name_strips_directories_and_never_goes_blank() {
         assertEquals("shot.png", attachmentTempName("reports/2026/shot.png", "shot.png", "bin"))
         assertEquals("file.bin", attachmentTempName("", null, "bin"))
+    }
+
+    // ── ▶ through the fleet's downloads (#95, round 2) ───────────────────────────────────────
+
+    /**
+     * A host's clips, keyed `att:rec/<id>`: a download says it has 42 of 100 bytes and waits for [gate]; once it is
+     * done the clip plays from the stored file. [playableReads] counts what played without the center.
+     */
+    private class HostClips : AttachmentMedia {
+        val gate = CompletableDeferred<Unit>()
+        val downloads = AtomicInteger(0)
+        val cancelled = CopyOnWriteArrayList<String>()
+        @Volatile var stored = false
+
+        override suspend fun bytes(att: Attachment, refresh: Boolean): ByteArray? = null
+
+        override suspend fun playableUri(att: Attachment): String? = if (stored) "file:///cache/${att.file_id}.mp4" else null
+
+        override fun downloadKey(att: Attachment): String = "att:rec/${att.file_id}"
+
+        override suspend fun download(att: Attachment, progress: (received: Long, total: Long?) -> Unit): DownloadedFile? {
+            downloads.incrementAndGet()
+            progress(42, 100)
+            gate.await()
+            stored = true
+            return DownloadedFile(att.name ?: att.file_id, att.mime ?: "video/mp4", 100, "/cache/${att.file_id}.mp4")
+        }
+
+        override fun cancelDownload(att: Attachment) {
+            cancelled += att.file_id
+        }
+    }
+
+    private val centerScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    @AfterTest fun endTheCenter() = centerScope.cancel()
+
+    @Test fun play_is_a_download_in_the_center_with_its_chat_and_message() = runComposeUiTest {
+        val center = DownloadCenter(centerScope)
+        val media = HostClips()
+        var shown by mutableStateOf(true)
+        val mounted = AtomicReference<String?>(null)
+        setPlatformContent {
+            CompositionLocalProvider(LocalDownloads provides center, LocalChatSessionId provides "s1", LocalChatMediaEntry provides "m7") {
+                if (shown) {
+                    InlineVideo(
+                        att = videoAtt(),
+                        media = media,
+                        renderPlayer = { uri, _, _ ->
+                            mounted.set(uri)
+                            Text("player", modifier = Modifier.testTag("stub_player"))
+                        },
+                    )
+                }
+            }
+        }
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) { center.items.value.isNotEmpty() }
+        val item = center.items.value.single()
+        assertEquals("att:rec/v1", item.key)
+        assertEquals(DownloadOrigin("s1", "m7"), item.origin)
+        assertEquals(DownloadState.Running(42, 100), item.state)
+        // The loading state is the ring, with the job's progress.
+        onNode(
+            hasTestTag(VIDEO_RING) and hasProgressBarRangeInfo(ProgressBarRangeInfo(0.42f, 0f..1f)),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        onNodeWithTag("attachment_video_loading").assertIsDisplayed()
+
+        // Leaving the chat keeps it going.
+        shown = false
+        waitForIdle()
+        assertEquals(DownloadState.Running(42, 100), center.items.value.single().state)
+        assertEquals(emptyList(), media.cancelled.toList())
+        assertEquals(1, media.downloads.get())
+    }
+
+    @Test fun once_the_download_is_done_the_clip_plays_from_its_file() = runComposeUiTest {
+        val center = DownloadCenter(centerScope)
+        val media = HostClips()
+        val mounted = AtomicReference<String?>(null)
+        setPlatformContent {
+            CompositionLocalProvider(LocalDownloads provides center) {
+                InlineVideo(
+                    att = videoAtt(),
+                    media = media,
+                    renderPlayer = { uri, _, _ ->
+                        mounted.set(uri)
+                        Text("player", modifier = Modifier.testTag("stub_player"))
+                    },
+                )
+            }
+        }
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) { center.items.value.isNotEmpty() }
+        media.gate.complete(Unit)
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("file:///cache/v1.mp4", mounted.get())
+        assertEquals(1, media.downloads.get(), "one transfer")
+    }
+
+    @Test fun a_paused_play_is_the_poster_with_its_ring_not_an_error() = runComposeUiTest {
+        val center = DownloadCenter(centerScope)
+        val media = HostClips()
+        setPlatformContent {
+            CompositionLocalProvider(LocalDownloads provides center) {
+                InlineVideo(att = videoAtt(), media = media, renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) })
+            }
+        }
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag(VIDEO_RING, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag(VIDEO_RING, useUnmergedTree = true).performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_menu_pause").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("attachment_menu_pause").performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_video_poster").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(DownloadState.Cancelled, center.items.value.single().state)
+        assertEquals(listOf("v1"), media.cancelled.toList())
+        assertEquals(0, onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().size, "no error card")
+        // The poster keeps the ring, which resumes it.
+        onNodeWithTag(VIDEO_RING, useUnmergedTree = true).performClick()
+        waitUntil(timeoutMillis = 5_000L) { onAllNodesWithTag("attachment_menu_resume").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithTag("attachment_menu_resume").performClick()
+        waitUntil(timeoutMillis = 5_000L) { center.items.value.single().state is DownloadState.Running }
+        assertEquals(2, media.downloads.get())
+    }
+
+    private companion object {
+        const val VIDEO_RING = "attachment_video_ring"
     }
 }

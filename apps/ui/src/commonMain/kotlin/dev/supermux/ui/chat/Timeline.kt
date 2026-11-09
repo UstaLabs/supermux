@@ -132,8 +132,11 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.work.handOverAsTapped
+import dev.supermux.ui.work.DownloadItemRing
 import dev.supermux.ui.work.rememberDownloads
+import dev.supermux.work.Download
 import dev.supermux.work.DownloadCenter
+import dev.supermux.work.DownloadOrigin
 import dev.supermux.work.DownloadPurpose
 import dev.supermux.work.DownloadSource
 import dev.supermux.work.DownloadState
@@ -1113,7 +1116,7 @@ private fun AttachmentItem(
             return
         }
         FilePreviewKind.Video -> {
-            InlineVideo(att, media, onOpenViewer = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Video)); true })
+            InlineVideo(att, media, onOpenViewer = { open(ChatMediaItem.FromAttachment(entryId, att, FilePreviewKind.Video)); true }, entryId = entryId)
             return
         }
         null -> Unit
@@ -1127,7 +1130,7 @@ private fun AttachmentItem(
         isAudio -> MediaIcons.Volume
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
-    AttachmentFileCard(icon, label, att, media)
+    AttachmentFileCard(icon, label, att, media, entryId)
 }
 
 /**
@@ -1482,6 +1485,7 @@ internal fun InlineVideo(
     att: Attachment,
     media: AttachmentMedia,
     onOpenViewer: (() -> Boolean)? = null,
+    entryId: String = "",
     renderPlayer: @Composable (uri: String, onExternal: () -> Unit, onError: () -> Unit) -> Unit =
         { uri, onExternal, onError ->
             MountedVideoPlayer(uri, onError = onError, onExternal = onExternal, expandsInViewer = onOpenViewer != null)
@@ -1496,15 +1500,19 @@ internal fun InlineVideo(
     var uri by remember(att.file_id) { mutableStateOf<String?>(null) }
     var staged by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
+    val origin = rememberDownloadOrigin(entryId)
+    val download = rememberListedDownload(downloads, media.downloadKey(att))
 
     LaunchedEffect(att.file_id, playing) {
         if (!playing || uri != null || failed) return@LaunchedEffect
-        val clip = resolvePlayableClip(att, media, platform)
-        if (clip == null) {
-            failed = true
-        } else {
-            staged = clip.staged
-            uri = clip.uri
+        when (val fetched = fetchClip(downloads, media, att, platform, origin)) {
+            is ClipFetch.Ready -> {
+                staged = fetched.clip.staged
+                uri = fetched.clip.uri
+            }
+            ClipFetch.Failed -> failed = true
+            // Paused or cancelled: back to the poster, its ring offering Resume.
+            ClipFetch.Stopped -> playing = false
         }
     }
 
@@ -1541,6 +1549,10 @@ internal fun InlineVideo(
             att.duration_ms?.let {
                 ClipDurationBadge(it, Modifier.align(Alignment.BottomEnd).padding(Space.sm).testTag("attachment_video_duration"))
             }
+            // A paused clip (or one fetching for the card or the list): its ring, to resume or cancel it.
+            if (download?.state is DownloadState.Running || download?.state == DownloadState.Cancelled) {
+                DownloadItemRing(download, VIDEO_RING_TAG, Modifier.align(Alignment.TopEnd).padding(Space.xs))
+            }
         }
         located == null -> Box(
             modifier = surface
@@ -1550,11 +1562,8 @@ internal fun InlineVideo(
                 .testTag("attachment_video_loading"),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                Modifier.size(MdImageDimens.SpinnerSize),
-                color = cs.onSurfaceVariant,
-                strokeWidth = MdImageDimens.SpinnerStroke,
-            )
+            // The clip's download, as the card's ↓ and the sidebar draw it; a preview's bytes just turn it.
+            DownloadItemRing(download?.takeIf { it.state !is DownloadState.Done }, VIDEO_RING_TAG, busy = true)
         }
         else -> Box(surface) {
             renderPlayer(
@@ -1563,7 +1572,7 @@ internal fun InlineVideo(
                     if (onOpenViewer?.invoke() != true) {
                         scope.launch {
                             // The clip's FILE, through the fleet's downloads: leaving the chat lets go of it, and it waits in the bar.
-                            if (startDownload(downloads, media, att, platform, pointer)) return@launch
+                            if (startDownload(downloads, media, att, platform, pointer, origin = origin)) return@launch
                             // No download here (a preview): the staged bytes, else read them now.
                             val body = staged ?: runCatching { media.bytes(att) }.getOrNull()
                             if (body != null) saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body)
@@ -1574,6 +1583,55 @@ internal fun InlineVideo(
             )
         }
     }
+}
+
+/** The tag of a clip's download ring: on its loading state, and on its poster while paused. */
+internal const val VIDEO_RING_TAG = "attachment_video_ring"
+
+/** [key]'s listed download in [downloads], as it changes; null without a key or while nothing is listed. */
+@Composable
+internal fun rememberListedDownload(downloads: DownloadCenter, key: String?): Download? {
+    val listed by remember(downloads, key) { downloads.items.map { all -> all.firstOrNull { it.key == key } } }
+        .collectAsState(downloads.items.value.firstOrNull { it.key == key })
+    return if (key == null) null else listed
+}
+
+/** What ▶ got: a clip to play, nothing (failed), or a download the user paused or cancelled. */
+internal sealed interface ClipFetch {
+    class Ready(val clip: PlayableClip) : ClipFetch
+
+    data object Failed : ClipFetch
+
+    data object Stopped : ClipFetch
+}
+
+/**
+ * ▶ (#95, round 2): a host's clip downloads as a job of the fleet's [downloads] — the same key and
+ * source as its file card, so one transfer in the media cache — listed in the downloads with
+ * [origin], and played once its file is whole, from the stored file ([resolvePlayableClip] answers
+ * from disk then). Leaving lets go; the download carries on. No streaming while it downloads.
+ * Media without a download key (a preview) keeps [resolvePlayableClip]'s own route.
+ */
+internal suspend fun fetchClip(
+    downloads: DownloadCenter,
+    media: AttachmentMedia,
+    att: Attachment,
+    platform: Platform,
+    origin: DownloadOrigin?,
+): ClipFetch {
+    val key = media.downloadKey(att)
+        ?: return resolvePlayableClip(att, media, platform)?.let { ClipFetch.Ready(it) } ?: ClipFetch.Failed
+    val claim = downloads.start(key, att.name ?: att.file_id, att.mime ?: "video/mp4", DownloadPurpose.File, AttachmentDownload(media, att), origin)
+    val file = try {
+        claim.await()
+    } finally {
+        claim.release()
+    }
+    if (file == null) {
+        val state = downloads.items.value.firstOrNull { it.key == key }?.state
+        return if (state is DownloadState.Failed) ClipFetch.Failed else ClipFetch.Stopped
+    }
+    return resolvePlayableClip(att, media, platform)?.let { ClipFetch.Ready(it) } ?: ClipFetch.Failed
 }
 
 /** A URI the platform's player opens, and the bytes behind it when they had to be staged. */
@@ -2036,12 +2094,14 @@ internal object VideoControls {
  *
  * A host's attachment downloads in the fleet's [DownloadCenter] (#95, [startDownload]), by its
  * key: leaving the chat lets go of it and it carries on, waiting in the activity bar; the card
- * draws the download whenever there is one — its ring on the badge while it runs, so coming back
- * shows the same download. A preview's in-memory media has no key and keeps the bytes path.
+ * draws the download whenever there is one, so coming back shows the same download. The file's own
+ * preview (badge, name, meta) stays; only the trailing ↓ becomes the download's ring
+ * ([DownloadItemRing]), whose menu pauses, resumes, cancels, retries or hands the file over. The
+ * download remembers this chat and message ([DownloadOrigin]), so the downloads list opens them.
+ * A preview's in-memory media has no key and keeps the bytes path.
  *
- * A failed DOWNLOAD (or one cancelled in the bar) turns the second line into "Download failed — tap
- * to retry"; a cancelled save does not (cancel is not an error, and a red card on cancel would be
- * worse than a silent one).
+ * A failed DOWNLOAD turns the second line into "Download failed — tap to retry"; a paused one reads
+ * "Paused"; a cancelled save says nothing (cancel is not an error).
  */
 @Composable
 private fun AttachmentFileCard(
@@ -2049,15 +2109,16 @@ private fun AttachmentFileCard(
     label: String,
     att: Attachment,
     media: AttachmentMedia,
+    entryId: String = "",
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val downloads = rememberDownloads()
+    val origin = rememberDownloadOrigin(entryId)
     val key = media.downloadKey(att)
-    val download by remember(downloads, key) { downloads.items.map { all -> all.firstOrNull { it.key == key } } }
-        .collectAsState(downloads.items.value.firstOrNull { it.key == key })
+    val download = rememberListedDownload(downloads, key)
     val running = download?.state as? DownloadState.Running
     var busy by remember(att.file_id) { mutableStateOf(false) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
@@ -2077,7 +2138,7 @@ private fun AttachmentFileCard(
                     waiting = true
                     scope.launch {
                         try {
-                            startDownload(downloads, media, att, platform, pointer)
+                            startDownload(downloads, media, att, platform, pointer, origin = origin)
                         } finally {
                             waiting = false
                         }
@@ -2106,8 +2167,6 @@ private fun AttachmentFileCard(
             contentAlignment = Alignment.Center,
         ) {
             when {
-                running != null -> DownloadRing(running)
-                busy -> CircularProgressIndicator(Modifier.size(18.dp).testTag("attachment_progress"), color = Color.White, strokeWidth = 2.dp)
                 badge != null -> Text(badge, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 else -> Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
@@ -2122,8 +2181,12 @@ private fun AttachmentFileCard(
                 overflow = TextOverflow.MiddleEllipsis,
             )
             val state = download?.state
-            val retry = failed || state is DownloadState.Failed || state == DownloadState.Cancelled
-            val second = if (retry) "Download failed — tap to retry" else meta
+            val retry = failed || state is DownloadState.Failed
+            val second = when {
+                retry -> "Download failed — tap to retry"
+                state == DownloadState.Cancelled -> "Paused"
+                else -> meta
+            }
             if (second.isNotEmpty()) {
                 Text(
                     text = second,
@@ -2134,39 +2197,30 @@ private fun AttachmentFileCard(
                 )
             }
         }
-        Icon(
-            imageVector = MediaIcons.Save,
-            contentDescription = "Download",
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
-/** The badge's ring while the file downloads: how far it got once the total is known, else turning. */
-@Composable
-private fun DownloadRing(state: DownloadState.Running) {
-    val modifier = Modifier.size(18.dp).testTag("attachment_progress")
-    val total = state.total?.takeIf { it > 0 }
-    if (total == null) {
-        CircularProgressIndicator(modifier, color = Color.White, strokeWidth = 2.dp)
-    } else {
-        val fraction = (state.received.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-        CircularProgressIndicator(
-            progress = { fraction },
-            modifier = modifier,
-            color = Color.White,
-            trackColor = Color.White.copy(alpha = FileCard.TrackAlpha),
-            strokeWidth = 2.dp,
-        )
+        DownloadItemRing(item = download, tag = "attachment_ring", busy = busy) {
+            Icon(
+                imageVector = MediaIcons.Save,
+                contentDescription = "Download",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
     }
 }
 
 private object FileCard {
     val BadgeSize = 40.dp
+}
 
-    /** The ring's track on the badge's colour. */
-    const val TrackAlpha = 0.3f
+/**
+ * The chat message a download here starts from: this chat's session ([LocalChatSessionId]) and
+ * [entryId], else the message the row draws ([LocalChatMediaEntry]). Null outside a chat.
+ */
+@Composable
+internal fun rememberDownloadOrigin(entryId: String): DownloadOrigin? {
+    val session = LocalChatSessionId.current
+    val entry = entryId.ifEmpty { LocalChatMediaEntry.current.orEmpty() }
+    return remember(session, entry) { if (session == null || entry.isEmpty()) null else DownloadOrigin(session, entry) }
 }
 
 /**
@@ -2184,10 +2238,11 @@ internal suspend fun startDownload(
     platform: Platform,
     pointer: Boolean,
     onFailed: () -> Unit = {},
+    origin: DownloadOrigin? = null,
 ): Boolean {
     val key = media.downloadKey(att) ?: return false
     val name = att.name ?: att.file_id
-    val claim = downloads.start(key, name, att.mime ?: "application/octet-stream", DownloadPurpose.File, AttachmentDownload(media, att))
+    val claim = downloads.start(key, name, att.mime ?: "application/octet-stream", DownloadPurpose.File, AttachmentDownload(media, att), origin)
     try {
         val file = claim.await()
         val item = downloads.items.value.firstOrNull { it.key == key }
