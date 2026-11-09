@@ -14,6 +14,7 @@ import { AgentKind } from "../../../shared/agents"
 import { resolvePermissionMode } from "../permission-modes"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 import { systemAccountId } from "../../../../packages/supermux-core/src/accounts/registry.js"
+import { host as thisHost } from "@supermux/platform"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
  * A session uses its own adapter's client; a launcher preview (no session of
@@ -50,7 +51,7 @@ export function brokerCodexArgs(_sessionName: string): string[] {
 /** Codex as found on the broker's PATH now: on Windows an npm install's codex.cmd, which the keeper starts through
  *  cmd.exe only when it is named (a bare `codex` it cannot wrap). The bare name when there is none. */
 function resolveCodexCommand(env: CommandEnvironment = process.env): string {
-  return resolveCommand(["codex"], env, process.platform) ?? "codex"
+  return resolveCommand(["codex"], env, thisHost.os()) ?? "codex"
 }
 
 function persistNativeId(

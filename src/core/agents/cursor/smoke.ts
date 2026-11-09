@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "fs"
 import { resolveCommand, spawnCommand } from "../../process/launcher"
+import { host } from "@supermux/platform"
 
 // Quick "does cursor-agent run at all" check. Confirms the binary is on PATH
 // and the env-isolated HOME is readable. Anything else (auth failures, model
@@ -10,9 +11,9 @@ export async function smokeCursorAgent(opts: { home: string; authEnv: Record<str
       ...(process.env as Record<string, string>),
       ...opts.authEnv,
       HOME: opts.home,
-      ...(process.platform === "win32" ? { USERPROFILE: opts.home } : {}),
+      ...(host.windows() ? { USERPROFILE: opts.home } : {}),
     }
-    const command = resolveCommand(["cursor-agent"], env, process.platform) ?? "cursor-agent"
+    const command = resolveCommand(["cursor-agent"], env, host.os()) ?? "cursor-agent"
     const child = spawnCommand(command, ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] })
     let out = ""
     child.stdout!.on("data", (c: Buffer) => { out += c.toString("utf8") })

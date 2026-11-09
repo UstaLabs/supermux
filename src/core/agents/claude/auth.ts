@@ -19,7 +19,7 @@
  */
 import { spawnCommandSync } from "../../process/launcher"
 import { existsSync } from "fs"
-import { paths } from "@supermux/platform"
+import { host, paths } from "@supermux/platform"
 import type { AgentAuthResult } from "../auth-result"
 import { claudeLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 
@@ -56,7 +56,7 @@ const runAuthStatus: AuthStatusRunner = (command, args) => {
  * unauthenticated.
  */
 export function claudeCliIsAuthenticated(
-  platform = process.platform,
+  platform = host.os(),
   runner: AuthStatusRunner = runAuthStatus,
 ): boolean {
   if (platform !== "darwin") return false
@@ -69,7 +69,7 @@ export function claudeCliIsAuthenticated(
 
 /** Absolute path of the credential file `claude login` writes. */
 export function claudeCredentialsPath(opts: { home: string; platform?: NodeJS.Platform }): string {
-  const pathJoin = paths.flavor(opts.platform ?? process.platform).join
+  const pathJoin = paths.flavor(opts.platform ?? host.os()).join
   return pathJoin(opts.home, ".claude", ".credentials.json")
 }
 
@@ -101,7 +101,7 @@ export function claudeAuthMode(opts: ClaudeAuthProbe): ClaudeAuthMode {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   if (exists(claudeCredentialsPath(opts))) return "credentials_file"
   if (opts.storedLogin?.()) return "credential_manager"
-  if (claudeCliIsAuthenticated(opts.platform ?? process.platform, opts.runner ?? runAuthStatus)) {
+  if (claudeCliIsAuthenticated(opts.platform ?? host.os(), opts.runner ?? runAuthStatus)) {
     return "cli_keychain"
   }
   return "none"

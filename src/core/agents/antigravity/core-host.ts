@@ -13,6 +13,7 @@ import { makeLogger } from "../../../shared/log"
 import { SESSION_INBOX_DIR } from "../../../shared/paths"
 import { driverSettingsFor, extraPermissionMode } from "../permission-modes"
 import { home } from "../../../shared/home"
+import { host } from "@supermux/platform"
 
 const log = makeLogger("agents/antigravity/core-host")
 
@@ -88,7 +89,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       if (settings.initial.kind !== "antigravity") throw new Error("antigravity driver settings mismatch")
       const opts: AntigravityOptions = {
         id: "antigravity",
-        command: resolveCommand(["agy"], process.env, process.platform) ?? "agy",
+        command: resolveCommand(["agy"], process.env, host.os()) ?? "agy",
         // agy has no read-only flag: --add-dir makes the inbox folder part of its workspace (edits there too, in accept-edits mode).
         args: ["--add-dir", SESSION_INBOX_DIR],
         env: registration.env,
@@ -112,7 +113,7 @@ export function createAntigravityCoreHost(options: AntigravityCoreHostOptions): 
       const prepared = await prepareAntigravityEnvironment({
         home: antigravityShadowHome(extra.sessionHome),
         userHome,
-        platform: process.platform,
+        platform: host.os(),
       })
       return {
         env: prepared.env,
