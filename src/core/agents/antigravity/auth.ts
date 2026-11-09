@@ -4,7 +4,7 @@ import { delimiter, join } from "node:path"
 import { resolveCommand } from "../../process/launcher"
 import { ptyLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 import { antigravityUpdaterEnv } from "../../../../packages/supermux-core/src/antigravity/updater.js"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 /** No-op stand-ins for the browser openers agy calls directly (xdg-open on Linux, open on macOS);
  * BROWSER/DISPLAY do not stop it. The user opens the URL on their own device, never the broker host. */
@@ -31,9 +31,9 @@ export function browserlessScratch(
   const cwd = join(root, "cwd")
   const bin = join(root, ".bin")
   try {
-    mkdirSync(cwd, { mode: 0o700 })
-    mkdirSync(bin, { mode: 0o700 })
-    if (platform !== "win32") for (const name of BROWSER_OPENERS) writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", { mode: 0o700 })
+    files.mkdirPrivate(cwd, { recursive: false })
+    files.mkdirPrivate(bin, { recursive: false })
+    if (platform !== "win32") for (const name of BROWSER_OPENERS) files.writeExecutable(join(bin, name), "#!/bin/sh\nexit 0\n", { private: true })
   } catch (err) {
     rmSync(root, { recursive: true, force: true })
     throw err

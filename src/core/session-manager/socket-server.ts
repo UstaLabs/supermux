@@ -5,6 +5,7 @@ import { encodeFrame, decodeFrames } from "../../shared/frame-codec"
 import { makeLogger } from "../../shared/log"
 import { TickGap } from "../power/wake"
 import { parseSocketFrame, type OrchestrationFrame, type OutboundFrame, type RegisterFrame, type ShimTool, type SocketFrame } from "../../shared/socket-frames"
+import { files } from "@supermux/platform"
 
 const log = makeLogger("socket-server")
 
@@ -75,7 +76,7 @@ export async function startSocketServer(opts: {
 }): Promise<SocketServer> {
   const usesFilesystem = usesFilesystemEndpoint()
   if (usesFilesystem) {
-    mkdirSync(opts.socketsDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(opts.socketsDir)
   }
   // A session can have MORE THAN ONE shim connection on the same session_id (an external-mode
   // Claude session also starts the zero-tools `mux-channel` copy from ~/.claude.json), so every
@@ -107,7 +108,7 @@ export async function startSocketServer(opts: {
     await new Promise<void>((res, rej) => {
       s.once("error", rej)
       s.listen(sockPath, () => {
-        if (usesFilesystem) chmodSync(sockPath, 0o600)
+        if (usesFilesystem) files.makePrivate(sockPath)
         res()
       })
     })

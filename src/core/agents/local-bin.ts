@@ -1,10 +1,10 @@
 // ~/.local/bin links made by the broker (macOS/Linux): OpenCode's after any install, and Cursor's
 // two from the Linux builtin. Never clobbers what someone else put there: a regular file, or a
 // symlink that points outside what we own, stays and the install log says so.
-import { existsSync, lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from "fs"
+import { existsSync, lstatSync, mkdirSync, readlinkSync, unlinkSync } from "fs"
 // platform-ok: ~/.local/bin links exist on macOS and Linux only, posix on any host so the tests run anywhere
 import { posix } from "path"
-import { paths } from "@supermux/platform"
+import { files, paths } from "@supermux/platform"
 
 export interface LocalBinLink {
   /** The name in ~/.local/bin. */
@@ -26,7 +26,8 @@ export interface LinkFs {
   readlink: (p: string) => string
   mkdir: (p: string) => void
   unlink: (p: string) => void
-  symlink: (target: string, path: string) => void
+  /** Link the file [path] → [target] (files.linkFile). */
+  linkFile: (target: string, path: string) => void
 }
 
 export const realLinkFs: LinkFs = {
@@ -41,7 +42,7 @@ export const realLinkFs: LinkFs = {
   readlink: (p) => readlinkSync(p),
   mkdir: (p) => { mkdirSync(p, { recursive: true }) },
   unlink: (p) => unlinkSync(p),
-  symlink: (target, path) => symlinkSync(target, path),
+  linkFile: (target, path) => files.linkFile(target, path),
 }
 
 /**
@@ -67,7 +68,7 @@ export function linkIntoLocalBin(home: string, link: LocalBinLink, fs: LinkFs): 
     fs.unlink(path)
   }
   fs.mkdir(dir)
-  fs.symlink(target, path)
+  fs.linkFile(target, path)
   return `Linked ${path} -> ${target}, so ${link.name} also works in your own terminals.`
 }
 

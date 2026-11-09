@@ -19,7 +19,7 @@ import { muxHomeNow } from "./shared/paths"
 import { IS_COMPILED } from "./shared/build-info"
 import { home, username } from "./shared/home"
 import { spawnProcessSync } from "./core/process/launcher"
-import { host } from "@supermux/platform"
+import { files, host } from "@supermux/platform"
 
 // Agent CLIs we report on (PATH presence only — the user owns these logins).
 const AGENT_CLIS = ["claude", "codex", "cursor-agent", "opencode", "grok", "agy"] as const
@@ -364,7 +364,7 @@ export async function runSetupCommand(
   const stateDir = resolveStateDir()
   const envPath = join(stateDir, ".env")
   try {
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(stateDir)
   } catch (e) {
     println(`error: could not create state dir ${stateDir}: ${String(e)}`)
     return 1
@@ -403,7 +403,7 @@ export async function runSetupCommand(
     writeFileSync(envPath, envText(map))
   }
   // Always tighten perms (cheap, and fixes a stray loose mode on re-run).
-  chmodSync(envPath, 0o600)
+  files.makePrivate(envPath)
 
   // ── always-on service (systemd unit on Linux, LaunchAgent on macOS) ───────
   if (flags.noService) {

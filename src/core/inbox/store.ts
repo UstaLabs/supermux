@@ -1,5 +1,6 @@
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs"
 import { inboxFilePath } from "../../shared/paths"
+import { files } from "@supermux/platform"
 
 export type InboxSender = { name: string; id: string }
 export type InboxCouncilTag = { id: string; round: number; letter: string }
@@ -74,10 +75,10 @@ export class InboxStore {
       text: input.text,
       ...(input.council ? { council: { ...input.council } } : {}),
     }
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(this.dir)
     // A crash mid-write can leave a torn last line: start on a fresh line so this one stays whole.
     const prefix = endsWithNewline(path) ? "" : "\n"
-    appendFileSync(path, `${prefix}${JSON.stringify(message)}\n`, { mode: 0o600 })
+    files.appendPrivate(path, `${prefix}${JSON.stringify(message)}\n`)
     return message
   }
 

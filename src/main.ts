@@ -259,7 +259,7 @@ import { deriveName, ensureUnique } from "./core/session-manager/naming"
 import { InboxStore } from "./core/inbox/store"
 import { InboxCursorStore } from "./core/inbox/cursor"
 import { InboxDelivery } from "./core/inbox/delivery"
-import { host, paths, proc } from "@supermux/platform"
+import { files as platformFiles, host, paths, proc } from "@supermux/platform"
 
 const log = makeLogger("main")
 // Under the desktop app's Windows Scheduled Task loop? Captured once and removed from the env so
@@ -378,8 +378,8 @@ if (preflight.fatal.length) {
 // only when it is wrong, so the common path does no syscall it does not need.
 const tighten = (dir: string): void => {
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700)
+    platformFiles.mkdirPrivate(dir)
+    if ((statSync(dir).mode & 0o077) !== 0) platformFiles.makePrivate(dir)
   } catch (error) {
     log.warn("state_dir_mode", { dir, error: error instanceof Error ? error.message : String(error) })
   }
@@ -1199,7 +1199,7 @@ const channels: Record<string, Channel> = {
 // Session inboxes (inbox spec §1). Created up front: Antigravity gets it as --add-dir (agy has no
 // read-only flag), Claude a read-only --allowedTools Read rule and OpenCode an external_directory
 // allow, so it must exist before any session launches.
-mkdirSync(SESSION_INBOX_DIR, { recursive: true, mode: 0o700 })
+platformFiles.mkdirPrivate(SESSION_INBOX_DIR)
 // Assigned right after the SessionManager below (its deps need the manager); the getInbox port is a lazy thunk.
 let inboxDelivery: InboxDelivery | undefined
 const inboxStore = new InboxStore(SESSION_INBOX_DIR)
@@ -2208,7 +2208,7 @@ function announceAgentAvatar(id: string): void {
 // Hand edits (an editor, git pull) are picked up too: watch agent-memory/ for *.avatar.json.
 try {
   const dir = join(getMuxHome(), "agent-memory")
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  platformFiles.mkdirPrivate(dir)
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   watchDir(dir, (file) => {
     const m = file ? /^([A-Za-z0-9_-]+)\.avatar\.json$/.exec(file) : null
@@ -3495,7 +3495,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         mkdirSync(dir, { recursive: true })
         const p = join(dir, "verify.sh")
         writeFileSync(p, content.endsWith("\n") ? content : content + "\n")
-        chmodSync(p, 0o755)
+        platformFiles.makeExecutable(p)
         return { ok: true }
       } catch (err: any) { return { ok: false, reason: err?.message ?? String(err) } }
     },

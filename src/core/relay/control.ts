@@ -44,11 +44,11 @@ export class FileKnownHostRegistry extends MapKnownHostRegistry {
   }
 
   private persist(): void {
-    mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
+    files.mkdirPrivate(dirname(this.path))
     const tmp = `${this.path}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.hosts), null, 2) + "\n", { mode: 0o600 })
+    files.writePrivate(tmp, JSON.stringify(Object.fromEntries(this.hosts), null, 2) + "\n")
     files.replaceSync(tmp, this.path)
-    chmodSync(this.path, 0o600)
+    files.makePrivate(this.path)
   }
 }
 

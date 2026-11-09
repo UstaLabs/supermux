@@ -6,6 +6,7 @@ import { mkdirSync, existsSync, readFileSync } from "fs"
 import { STATE_DIR } from "../../../shared/paths"
 import { home } from "../../../shared/home"
 import { openCodeDataDir } from "./auth"
+import { files } from "@supermux/platform"
 
 const log = makeLogger("agents/opencode/auth-ops")
 
@@ -25,7 +26,7 @@ async function getClient(): Promise<RealClient> {
   if (!bootPromise) {
     bootPromise = (async () => {
       const dir = join(STATE_DIR, "agents", "opencode", "_control")
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      files.mkdirPrivate(dir)
       // Neutral config home (no mux-shim MCP — this server only does auth). We do
       // NOT override XDG_DATA_HOME, so it reads/writes the user's real auth.json.
       const handle = await spawnOpenCodeServer({ workdir: dir, configHome: join(dir, "config"), authEnv: {} })
