@@ -160,8 +160,8 @@ class WorkspaceUiStateTest {
         val ui = ShellUiState()
         ui.openSettings()
         assertEquals(null, ui.settingsSection)
-        ui.openSettings(SettingsSection.Machine, sub = "devices")
-        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
+        ui.openSettings(SettingsSection.Providers, sub = "claude", anchor = "auto-switch")
+        assertEquals(Route.Settings(SettingsSection.Providers, sub = "claude", anchor = "auto-switch"), ui.currentRoute)
         ui.settingsSection = SettingsSection.Voice
         assertEquals(Route.Settings(SettingsSection.Voice), ui.currentRoute)
         // Closed, it remembers the last page for the next open.
@@ -210,9 +210,9 @@ class WorkspaceUiStateTest {
 
     @Test fun navigatePushesOverlayAboveHome() {
         val ui = ShellUiState()
-        ui.navigate(Route.Settings(SettingsSection.Machine, sub = "devices"))
+        ui.navigate(Route.Settings(SettingsSection.Machine, sub = "computer"))
         assertEquals(
-            listOf(Route.Home, Route.Settings(SettingsSection.Machine, sub = "devices")),
+            listOf(Route.Home, Route.Settings(SettingsSection.Machine, sub = "computer")),
             ui.backStack.toList(),
         )
         assertTrue(ui.overlayOpen)
