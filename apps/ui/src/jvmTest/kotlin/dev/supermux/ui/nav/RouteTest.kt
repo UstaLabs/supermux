@@ -92,9 +92,9 @@ class RouteTest {
 
     @Test
     fun settings_sections_keep_the_rail_order_and_labels() {
-        // #97 structure C; Machine last, opened by a machine card rather than listed.
+        // #97 structure C, with #96's Keyboard shortcuts second; Machine last, opened by a machine card rather than listed.
         assertEquals(
-            listOf("General", "Providers & accounts", "Voice", "Coding", "Memory", "Privacy & labs", "Machine"),
+            listOf("General", "Keyboard shortcuts", "Providers & accounts", "Voice", "Coding", "Memory", "Privacy & labs", "Machine"),
             SettingsSection.entries.map { it.label },
         )
     }
