@@ -862,6 +862,8 @@ jobs:
             if ($found.Count -ne 1) { throw "expected one $name in the app image, found $($found.Count)" }
             $found[0].FullName
           }
+          # jpackage leaves its launcher read-only: signtool could not write the signature in ("Access is denied").
+          foreach ($file in $files) { (Get-Item $file).IsReadOnly = $false }
           bun ../scripts/certum-sign/sign.ts @files
           if ($LASTEXITCODE -ne 0) { throw "signing the app image failed" }
       - name: Build the .msi from the signed image
