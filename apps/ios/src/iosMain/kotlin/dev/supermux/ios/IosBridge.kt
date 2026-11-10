@@ -169,10 +169,6 @@ interface IosBridge {
     /** Play one chunk of broker-synthesised audio. [onDone] fires when the chunk has played out. */
     fun playAudioChunk(bytes: ByteArray, onDone: () -> Unit)
 
-    /** Stream the progressive MP3 at [url] with `AVPlayer`. [onDone] fires when it ends, fails
-     *  or is stopped — exactly once. */
-    fun playAudioUrl(url: String, onDone: () -> Unit)
-
     /** Stop whatever is being spoken or played right now. Never fails. */
     fun stopSpeaking()
 
@@ -305,7 +301,6 @@ object NoopIosBridge : IosBridge {
 
     override fun speak(text: String, onDone: () -> Unit) = onDone()
     override fun playAudioChunk(bytes: ByteArray, onDone: () -> Unit) = onDone()
-    override fun playAudioUrl(url: String, onDone: () -> Unit) = onDone()
     override fun stopSpeaking() = Unit
     override fun shutdownSpeech() = Unit
 
