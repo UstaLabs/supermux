@@ -20,7 +20,8 @@ import platform.MediaPlayer.MPNowPlayingInfoPropertyPlaybackRate
 import platform.MediaPlayer.MPRemoteCommand
 import platform.MediaPlayer.MPRemoteCommandCenter
 import platform.MediaPlayer.MPRemoteCommandEvent
-import platform.MediaPlayer.MPRemoteCommandHandlerStatus
+import platform.MediaPlayer.MPRemoteCommandHandlerStatusNoActionableNowPlayingItem
+import platform.MediaPlayer.MPRemoteCommandHandlerStatusSuccess
 import platform.MediaPlayer.MPSkipIntervalCommandEvent
 
 /**
@@ -89,9 +90,9 @@ internal class IosNowPlaying private constructor() : SystemNowPlaying {
         val target = command.addTargetWithHandler { event ->
             val done = map(event)?.let { commands?.invoke(it) } == true
             if (done) {
-                MPRemoteCommandHandlerStatus.MPRemoteCommandHandlerStatusSuccess
+                MPRemoteCommandHandlerStatusSuccess
             } else {
-                MPRemoteCommandHandlerStatus.MPRemoteCommandHandlerStatusNoActionableNowPlayingItem
+                MPRemoteCommandHandlerStatusNoActionableNowPlayingItem
             }
         }
         targets += command to target
