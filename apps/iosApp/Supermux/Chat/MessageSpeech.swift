@@ -80,7 +80,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         u.rate = AVSpeechUtteranceDefaultSpeechRate
         arm(onDone)
         currentUtterance = u
-        activatePlayback()
+        Self.activatePlayback()
         synth.speak(u)
     }
 
@@ -98,7 +98,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         }
         finishBox = box
         player.delegate = box
-        activatePlayback()
+        Self.activatePlayback()
         if !player.play() { finishPending(gen: myGen) }
     }
 
@@ -128,17 +128,19 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             guard item.status == .failed else { return }
             Task { @MainActor in self?.finishPending(gen: myGen) }
         }
-        activatePlayback()
+        Self.activatePlayback()
         player.play()
     }
 
     /// Read-aloud goes on with the app in the background (#118 car 3b): `UIBackgroundModes: audio`
     /// keeps the app running only while its session is a playback one, and active. It also speaks
     /// with the ringer switch on silent, as the audio player's notes do. A recording or dictation in
-    /// progress keeps its own category: the voice is heard through it.
-    private func activatePlayback() {
+    /// progress ([AudioCapture.live]) keeps its own category: the voice is heard through it. Its
+    /// category alone is no sign of one: a dictation that ended once left `.record` behind, which
+    /// cannot sound, and every read-aloud after it was silent.
+    static func activatePlayback() {
         let session = AVAudioSession.sharedInstance()
-        if session.category != .playAndRecord && session.category != .record {
+        if !AudioCapture.live {
             try? session.setCategory(.playback, mode: .spokenAudio)
         }
         try? session.setActive(true)
@@ -252,4 +254,10 @@ private final class FinishBox: NSObject, AVAudioPlayerDelegate {
         done = true
         onFinish()
     }
+}
+
+/// Whether the mic is capturing right now (a dictation or a voice clip): read-aloud is heard through its session then.
+@MainActor
+enum AudioCapture {
+    static var live = false
 }
