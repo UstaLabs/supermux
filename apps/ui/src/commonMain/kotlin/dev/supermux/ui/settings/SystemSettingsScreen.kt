@@ -527,8 +527,6 @@ private fun SystemSettingsBody(
                     )
                 }
                 SettingsCaption("Sessions will reconnect automatically.")
-
-                TelemetrySettingsSection(actions)
             }
         }
     }

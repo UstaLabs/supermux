@@ -211,6 +211,60 @@ class SetupWizardScreenTest {
         onNodeWithTag("setup_next").assertIsEnabled()
     }
 
+    /** #97 restyled Settings; the wizard still embeds the real agents and git-hosting screens and they still work. */
+    @Test fun the_agents_step_still_shows_the_agents() = runComposeUiTest {
+        wizard()
+        advanceTo(1)
+        eventually { onNodeWithTag("agent_settings_screen").assertIsDisplayed() }
+    }
+
+    @Test fun the_git_hosting_step_still_shows_the_accounts_and_opens_the_add_sheet() = runComposeUiTest {
+        wizard()
+        advanceTo(2)
+        eventually { onNodeWithTag("git_hosting_screen").assertIsDisplayed() }
+        eventually { onNodeWithTag("git_hosting_add_account").assertIsDisplayed() }
+        onNodeWithTag("git_hosting_add_account").performClick()
+        eventually { onNodeWithTag("git_hosting_token").assertIsDisplayed() }
+    }
+
+    /** #97 (Task 18): the providers step lists every provider, and an install still starts from it. */
+    @Test fun the_providers_step_lists_the_providers_and_an_install_still_starts() = runComposeUiTest {
+        val installs = CopyOnWriteArrayList<String>()
+        val statuses = listOf(
+            AgentInstallStatus(kind = "claude", installed = true, authed = true),
+            AgentInstallStatus(kind = "codex", installed = false, authed = false),
+            AgentInstallStatus(kind = "opencode", installed = true, authed = false),
+        )
+        wizard(
+            agentsActions = AgentSettingsActions(
+                agentStatuses = { statuses },
+                agentStartInstall = { kind -> installs += kind; dev.supermux.net.AgentInstallJob(state = "running") },
+                // Nothing runs until the click starts it.
+                agentPollInstall = { kind -> if (kind in installs) dev.supermux.net.AgentInstallJob(state = "running") else null },
+            ),
+        )
+        advanceTo(1)
+        for (kind in listOf("claude", "codex", "opencode")) eventually { onNodeWithTag("agent_row_$kind").assertIsDisplayed() }
+        onNodeWithTag("agent_install_start_codex").performClick()
+        eventually { assertEquals(listOf("codex"), installs.toList()) }
+        eventually { onNodeWithTag("agent_install_running_codex").assertExists() }
+    }
+
+    @Test fun a_provider_page_in_the_wizard_has_no_add_a_login() = runComposeUiTest {
+        wizard()
+        advanceTo(1)
+        eventually { onNodeWithTag("agent_row_claude").assertIsDisplayed() }
+        onNodeWithTag("agent_row_claude").performClick()
+        eventually { onNodeWithTag("provider_login_claude:system").assertExists() }
+        onNodeWithText("Add a login").assertDoesNotExist()
+    }
+
+    @Test fun the_git_step_offers_to_add_a_github_or_gitlab_account() = runComposeUiTest {
+        wizard()
+        advanceTo(2)
+        eventually { onNodeWithText("Add a GitHub or GitLab account").assertIsDisplayed() }
+    }
+
     @Test fun phone_step_is_step_four_and_skippable() = runComposeUiTest {
         wizard()
         advanceTo(3)

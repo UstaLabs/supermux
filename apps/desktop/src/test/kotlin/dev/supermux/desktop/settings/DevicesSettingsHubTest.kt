@@ -16,6 +16,8 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.nav.Route
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.host.HostPersistence
@@ -111,7 +113,8 @@ class DevicesSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_devices_section_and_loads() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
+        // #97: Devices is a screen of the machine page.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         val harness = appForDevices()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -130,11 +133,13 @@ class DevicesSettingsHubTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_devices").assertIsDisplayed()
+        // The machine page is opened by a machine card, never from a rail row.
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         harness.client.close()
     }
 
-    @Test fun rail_switches_from_agents_to_devices() = runComposeUiTest {
+    @Test fun the_machine_page_opens_devices_from_agents() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -164,7 +169,7 @@ class DevicesSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -176,9 +181,13 @@ class DevicesSettingsHubTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_devices").performClick()
+        // What a machine card does; then the machine page's Devices row.
+        ui.openSettings(SettingsSection.Machine)
         waitForIdle()
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        onNodeWithTag("machine_page").assertIsDisplayed()
+        onNodeWithTag("machine_row_devices").performClick()
+        waitForIdle()
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
@@ -248,7 +257,7 @@ class DevicesSettingsHubTest {
                 )
             },
         )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -279,9 +288,10 @@ class DevicesSettingsHubTest {
 
     @Test fun open_settings_devices_selects_section() {
         val ui = ShellUiState()
-        ui.openSettings(SettingsSection.Devices)
+        ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = MachineSub.DEVICES), ui.currentRoute)
         assertTrue(ui.overlayOpen)
         assertFalse(ui.launcherOpen)
     }

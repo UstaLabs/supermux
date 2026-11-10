@@ -26,7 +26,7 @@ import java.nio.file.Files
  * The desktop client updating itself against supermux.dev/versions.json (GitHub fallback):
  * downloads the platform installer (.deb / .msi / .dmg) and opens it with the OS.
  *
- * The phases map 1:1 onto what the shared `AppUpdateScreen` kept in local `remember`s before the seam existed —
+ * The phases map 1:1 onto what the old shared update page kept in local `remember`s before the seam existed —
  * `loading` is [UpdatePhase.Checking], `installing` covers Downloading+Installing, `actionError` is
  * [UpdateStatus.error], and a check that could not produce a status at all leaves
  * [UpdateStatus.release] null, which is desktop's "Couldn't check for updates." case.

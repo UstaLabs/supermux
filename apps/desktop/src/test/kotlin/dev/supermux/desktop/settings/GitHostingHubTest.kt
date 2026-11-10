@@ -83,16 +83,17 @@ class GitHostingHubTest {
         val body = """
             {"connections":[{"id":"live1","kind":"github","host":"github.com","account":{"login":"liveuser"},"source":"pat","transport":"https","status":"ok"}],"cli":null}
         """.trimIndent()
-        val ui = ShellUiState().apply { openSettings(SettingsSection.GitHosting) }
+        // #97: Git hosting is Coding's GitHub row (the old slug, menu hook and links land there).
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Coding, anchor = "github") }
         val app = appWithForges(body)
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
         onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("settings_section_githosting").assertIsDisplayed()
+        onNodeWithTag("settings_section_coding").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("git_hosting_screen").assertIsDisplayed()
@@ -103,22 +104,23 @@ class GitHostingHubTest {
             }
         }
         onNodeWithText("@liveuser").assertIsDisplayed()
-        assertEquals(SettingsSection.GitHosting, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
     }
 
-    @Test fun rail_can_switch_to_git_hosting_from_agents() = runComposeUiTest {
+    @Test fun a_link_to_github_lands_on_coding_from_another_page() = runComposeUiTest {
         val body = """{"connections":[],"cli":null}"""
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val app = appWithForges(body)
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_section_githosting").performClick()
+        // The open hub lands on the new place in place (the SM_GIT_HOSTING hook's path).
+        ui.openSettings(SettingsSection.Coding, anchor = "github")
         waitForIdle()
-        assertEquals(SettingsSection.GitHosting, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("git_hosting_screen").assertIsDisplayed()
@@ -127,6 +129,6 @@ class GitHostingHubTest {
                 false
             }
         }
-        onNodeWithText("Connect a Git host").assertIsDisplayed()
+        onNodeWithText("Add a GitHub or GitLab account").assertIsDisplayed()
     }
 }

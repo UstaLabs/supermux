@@ -71,6 +71,7 @@ import dev.supermux.ui.display.DisplaysScreen
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.ui.intro.testPairing
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.prefs.UiPrefs
@@ -239,19 +240,31 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_settings_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
         val activity = phoneShell(devicesHost(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_devices", "devices_settings_screen")
+        openFromTheIndex("settings_row_memory", "curator_settings_screen")
 
         activity.recreate()
 
-        // Back on Devices, not on the index it used to land on.
+        // Back on Memory, not on the index it used to land on.
+        await("curator_settings_screen")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun a_machine_sub_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        // #97: Devices is a sub-page of the machine page; the hub saves the sub-page with its place.
+        val activity = phoneShell(devicesHost(), settings = true) { openSettings(SettingsSection.Machine) }
+        openFromTheIndex("machine_row_devices", "devices_settings_screen")
+
+        activity.recreate()
+
         await("devices_settings_screen")
+        onNodeWithTag("machine_page").assertDoesNotExist()
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
     @Test fun the_settings_page_open_on_a_phone_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
         val ui = ShellUiState()
-        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings() }
-        openFromTheIndex("settings_row_devices", "devices_settings_screen")
+        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings(SettingsSection.Machine) }
+        openFromTheIndex("machine_row_devices", "devices_settings_screen")
 
         unfold(width)
 
@@ -259,14 +272,12 @@ class ConfigurationChangeWorkTest {
         // its rail says so.
         await("settings_hub_rail")
         await("devices_settings_screen")
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
-    private fun withAppearance() = FakePlatform(caps = NO_CAPS.copy(appearanceControls = true))
-
-    @Test fun an_extra_settings_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(testHostStore(), platform = withAppearance(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_appearance", "appearance_settings_screen")
+    @Test fun general_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val activity = phoneShell(testHostStore(), settings = true) { openSettings() }
+        openFromTheIndex("settings_row_general", "appearance_settings_screen")
 
         activity.recreate()
 
@@ -274,55 +285,112 @@ class ConfigurationChangeWorkTest {
         onNodeWithTag("settings_index").assertDoesNotExist()
     }
 
-    @Test fun an_extra_settings_page_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(testHostStore(), platform = withAppearance(), settings = true) { openSettings() }
-        openFromTheIndex("settings_row_appearance", "appearance_settings_screen")
+    @Test fun general_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val width = flippablePhone(testHostStore(), settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_general", "appearance_settings_screen")
 
         unfold(width)
 
         await("settings_hub_rail")
         await("appearance_settings_screen")
+        assertEquals(SettingsSection.General, ui.settingsSection)
     }
 
-    // ── Settings › Providers: a pasted API key, the OpenCode code step, an agent's login code ────
+    private fun privacyHost() = testHostStore(Broker(mapOf("GET /settings/telemetry" to """{"enabled":true}""")).handler)
+
+    @Test fun privacy_and_labs_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val host = privacyHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings() }
+        openFromTheIndex("settings_row_privacylabs", "privacy_settings_screen")
+        await("system_telemetry_switch")
+
+        activity.recreate()
+
+        await("privacy_settings_screen")
+        await("system_telemetry_switch")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun privacy_and_labs_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val host = privacyHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_privacylabs", "privacy_settings_screen")
+
+        unfold(width)
+
+        await("settings_hub_rail")
+        await("privacy_settings_screen")
+        await("system_telemetry_switch")
+        assertEquals(SettingsSection.PrivacyLabs, ui.settingsSection)
+    }
+
+    // A tablet with a keyboard: the only phone that lists Keyboard shortcuts.
+    @Test fun keyboard_shortcuts_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val activity = phoneShell(testHostStore(), keyboard = true, settings = true) { openSettings() }
+        openFromTheIndex("settings_row_keyboardshortcuts", "shortcuts_page")
+
+        activity.recreate()
+
+        await("shortcuts_page")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun keyboard_shortcuts_stay_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val width = flippablePhone(testHostStore(), keyboard = true, settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_keyboardshortcuts", "shortcuts_page")
+
+        unfold(width)
+
+        await("settings_hub_rail")
+        await("shortcuts_page")
+        assertEquals(SettingsSection.KeyboardShortcuts, ui.settingsSection)
+    }
+
+    // ── Settings › Providers: a pasted token, the OpenCode code step, an agent's login code ────────
 
     private val claudeToSignIn = """[{"kind":"claude","installed":true,"authed":false}]"""
     private val openCodeToSignIn = """[{"kind":"opencode","installed":true,"authed":false}]"""
 
-    private fun ComposeUiTest.openProviders() {
-        await("settings_row_providers")
-        onNodeWithTag("settings_row_providers").performScrollTo().performClick()
-    }
+    /** A provider's page (#97: what each Agents row held is on its provider's page now). */
+    private fun provider(agent: String): ShellUiState.() -> Unit = { openSettings(SettingsSection.Providers, sub = agent) }
 
+    /** The phone's shell with its machine online: a provider's page loads only for a machine that answers (#97). */
+    private fun ComposeUiTest.onlinePhone(app: HostStore, platform: FakePlatform = FakePlatform(), initial: ShellUiState.() -> Unit) =
+        phoneShell(app, testFleet(app, online = true), platform = platform, settings = true, initial = initial)
+
+    private fun ComposeUiTest.onlineFlippable(app: HostStore, platform: FakePlatform = FakePlatform(), initial: ShellUiState.() -> Unit) =
+        flippablePhone(app, testFleet(app, online = true), platform = platform, settings = true, initial = initial)
+
+    /** "Use a token instead": the machine's own token, in a sheet on the provider's page. */
     private fun ComposeUiTest.pasteAnApiKey(key: String) {
-        openProviders()
-        await("agent_secret_claude")
-        onNodeWithTag("agent_secret_claude").performTextInput(key)
+        await("provider_use_token")
+        onNodeWithTag("provider_use_token").performClick()
+        await("provider_secret")
+        onNodeWithTag("provider_secret").performTextInput(key)
         waitForIdle()
     }
 
     @Test fun a_pasted_api_key_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), settings = true) {
-            openSettings()
-        }
+        val activity = onlinePhone(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), initial = provider("claude"))
         pasteAnApiKey("sk-ant-api-key")
 
         activity.recreate()
 
-        await("agent_secret_claude")
-        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("agent_secret_claude").editableText())
+        await("provider_secret")
+        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("provider_secret").editableText())
     }
 
     @Test fun a_pasted_api_key_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), settings = true) {
-            openSettings()
-        }
+        val width = onlineFlippable(testHostStore(Broker(mapOf("GET /agents/status" to claudeToSignIn)).handler), initial = provider("claude"))
         pasteAnApiKey("sk-ant-api-key")
 
         unfold(width)
 
-        await("agent_secret_claude")
-        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("agent_secret_claude").editableText())
+        await("provider_secret")
+        assertEquals(masked("sk-ant-api-key"), onNodeWithTag("provider_secret").editableText())
     }
 
     private fun openCodeHost(providers: String) = testHostStore(
@@ -336,14 +404,13 @@ class ConfigurationChangeWorkTest {
     )
 
     private fun ComposeUiTest.pasteAnOpenCodeKey(key: String) {
-        openProviders()
         await("opencode_zen_key_field")
         onNodeWithTag("opencode_zen_key_field").performTextInput(key)
         waitForIdle()
     }
 
     @Test fun a_pasted_opencode_key_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(openCodeHost("[]"), settings = true) { openSettings() }
+        val activity = onlinePhone(openCodeHost("[]"), initial = provider("opencode"))
         pasteAnOpenCodeKey("zen-key")
 
         activity.recreate()
@@ -353,7 +420,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_pasted_opencode_key_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(openCodeHost("[]"), settings = true) { openSettings() }
+        val width = onlineFlippable(openCodeHost("[]"), initial = provider("opencode"))
         pasteAnOpenCodeKey("zen-key")
 
         unfold(width)
@@ -366,7 +433,6 @@ class ConfigurationChangeWorkTest {
 
     /** "Login via browser": the browser opens on the provider's page, and the code it gives is pasted back. */
     private fun ComposeUiTest.pasteTheBrowserCode(code: String) {
-        openProviders()
         awaitText("Login via browser")
         onNodeWithText("Login via browser").performClick()
         await("opencode_oauth_code_openrouter")
@@ -376,7 +442,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_opencode_paste_code_step_survives_a_recreation() = runComposeUiTest {
         val platform = FakePlatform()
-        val activity = phoneShell(openCodeHost(browserProvider), platform = platform, settings = true) { openSettings() }
+        val activity = onlinePhone(openCodeHost(browserProvider), platform = platform, initial = provider("opencode"))
         pasteTheBrowserCode("CODE-FROM-BROWSER")
 
         activity.recreate()
@@ -390,7 +456,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_opencode_paste_code_step_survives_the_compact_to_wide_swap() = runComposeUiTest {
         val platform = FakePlatform()
-        val width = flippablePhone(openCodeHost(browserProvider), platform = platform, settings = true) { openSettings() }
+        val width = onlineFlippable(openCodeHost(browserProvider), platform = platform, initial = provider("opencode"))
         pasteTheBrowserCode("CODE-FROM-BROWSER")
 
         unfold(width)
@@ -417,7 +483,6 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteALoginCode(code: String) {
-        openProviders()
         await("agent_login_start_claude")
         onNodeWithTag("agent_login_start_claude").performClick()
         await("agent_login_code_field")
@@ -426,7 +491,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_login_code_being_pasted_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(signingInHost(), settings = true) { openSettings() }
+        val activity = onlinePhone(signingInHost(), initial = provider("claude"))
         pasteALoginCode("LOGIN-CODE")
 
         activity.recreate()
@@ -437,7 +502,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun a_login_code_being_pasted_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(signingInHost(), settings = true) { openSettings() }
+        val width = onlineFlippable(signingInHost(), initial = provider("claude"))
         pasteALoginCode("LOGIN-CODE")
 
         unfold(width)
@@ -446,22 +511,23 @@ class ConfigurationChangeWorkTest {
         assertEquals("LOGIN-CODE", onNodeWithTag("agent_login_code_field").editableText())
     }
 
-    // ── Settings › Git hosting: a token being pasted into the add form ──────────────────────────
+    // ── Settings › Coding: a token being pasted into the GitHub add sheet ──────────────────────────
 
     private fun gitHost() = testHostStore(
         Broker(mapOf("GET /forge/connections" to """{"connections":[],"cli":{"github":{"available":false},"gitlab":{"available":false}}}""")).handler,
     )
 
     private fun ComposeUiTest.pasteAGitToken(token: String) {
-        await("git_hosting_manual_github")
-        onNodeWithTag("git_hosting_manual_github").performClick()
+        await("git_hosting_add_account")
+        onNodeWithTag("git_hosting_add_account").performScrollTo().performClick()
         await("git_hosting_token")
         onNodeWithTag("git_hosting_token").performTextInput(token)
         waitForIdle()
     }
 
     @Test fun the_git_account_form_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(gitHost(), settings = true) { openSettings(SettingsSection.GitHosting) }
+        val host = gitHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         activity.recreate()
@@ -471,7 +537,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_git_account_form_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(gitHost(), settings = true) { openSettings(SettingsSection.GitHosting) }
+        val host = gitHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         unfold(width)
@@ -480,11 +547,12 @@ class ConfigurationChangeWorkTest {
         assertEquals(masked("ghp_token"), onNodeWithTag("git_hosting_token").editableText())
     }
 
-    // ── Settings › Accounts: the add sheet, a token pasted into it, a sign-in in flight ──────────
+    // ── Settings › Providers › Claude Code: Add a login, a token pasted into it, a sign-in in flight
 
     private fun accountsHost(gate: Gate? = null): Pair<HostStore, Broker> {
         val broker = Broker(
             mapOf(
+                "GET /agents/status" to claudeToSignIn,
                 "GET /accounts" to """{"accounts":[{"id":"claude:system","agent":"claude","method":"system","label":"This machine","system":true}]}""",
                 "GET /settings/accounts" to """{"autoSwitch":false}""",
                 "POST /accounts/login" to """{"loginId":"L1","agent":"claude","phase":"awaiting_user","url":"https://claude.ai/oauth","needsCode":true}""",
@@ -495,8 +563,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteAnAccountToken(token: String) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:token")
         onNodeWithTag("account-add-option:token").performClick()
         await("account-token-field")
@@ -505,7 +573,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(accountsHost().first, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = onlinePhone(accountsHost().first, initial = provider("claude"))
         pasteAnAccountToken("sk-ant-oat01-token")
 
         activity.recreate()
@@ -515,7 +583,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_account_sheet_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(accountsHost().first, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = onlineFlippable(accountsHost().first, initial = provider("claude"))
         pasteAnAccountToken("sk-ant-oat01-token")
 
         unfold(width)
@@ -525,8 +593,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.startAnAccountSignIn(gate: Gate) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:login")
         onNodeWithTag("account-add-option:login").performClick()
         awaitHeld(gate)
@@ -535,7 +603,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = onlinePhone(app, initial = provider("claude"))
         startAnAccountSignIn(gate)
 
         activity.recreate()
@@ -549,7 +617,7 @@ class ConfigurationChangeWorkTest {
     @Test fun an_account_sign_in_in_flight_lands_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = accountsHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = onlineFlippable(app, initial = provider("claude"))
         startAnAccountSignIn(gate)
 
         unfold(width)
@@ -560,8 +628,8 @@ class ConfigurationChangeWorkTest {
     }
 
     private fun ComposeUiTest.pasteASignInCode(code: String) {
-        await("account-add:claude")
-        onNodeWithTag("account-add:claude").performClick()
+        await("provider_login_add")
+        onNodeWithTag("provider_login_add").performClick()
         await("account-add-option:login")
         onNodeWithTag("account-add-option:login").performClick()
         await("account-login-code")
@@ -571,7 +639,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_a_recreation() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val activity = onlinePhone(app, initial = provider("claude"))
         pasteASignInCode("CODE#1")
 
         activity.recreate()
@@ -583,7 +651,7 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_code_pasted_into_an_account_sign_in_survives_the_compact_to_wide_swap() = runComposeUiTest {
         val (app, broker) = accountsHost()
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Accounts) }
+        val width = onlineFlippable(app, initial = provider("claude"))
         pasteASignInCode("CODE#1")
 
         unfold(width)
@@ -615,7 +683,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         fillTheExposeForm()
 
         activity.recreate()
@@ -624,7 +692,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_expose_port_form_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         fillTheExposeForm()
 
         unfold(width)
@@ -639,7 +707,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToRemoveTheProxy()
 
         activity.recreate()
@@ -649,7 +717,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_remove_proxy_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToRemoveTheProxy()
 
         unfold(width)
@@ -665,7 +733,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_make_public_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val activity = phoneShell(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToMakeTheProxyPublic()
 
         activity.recreate()
@@ -674,7 +742,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_make_public_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Proxies) }
+        val width = flippablePhone(proxiesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         askToMakeTheProxyPublic()
 
         unfold(width)
@@ -682,7 +750,7 @@ class ConfigurationChangeWorkTest {
         await("proxies_public_dialog")
     }
 
-    // ── Settings › Editor: the "Add language server" form ────────────────────────────────────────
+    // ── Settings › Coding: the "Add your own language server" fold ────────────────────────────────────────
 
     private fun lspHost() = testHostStore(Broker(mapOf("GET /settings/editor" to """{"lsp":{"servers":[]}}""")).handler)
 
@@ -702,7 +770,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_language_server_form_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(lspHost(), settings = true) { openLspSettings() }
+        val host = lspHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openLspSettings() }
         describeALanguageServer()
 
         activity.recreate()
@@ -711,7 +780,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_language_server_form_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(lspHost(), settings = true) { openLspSettings() }
+        val host = lspHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openLspSettings() }
         describeALanguageServer()
 
         unfold(width)
@@ -719,21 +789,24 @@ class ConfigurationChangeWorkTest {
         assertTheLanguageServer()
     }
 
-    // ── Settings › Voice: the open glossary and the term being typed ─────────────────────────────
+    // ── Settings › Voice: the open word list and the word being typed ───────────────────────────
 
     private fun voiceHost() = testHostStore(Broker(mapOf("GET /config/voice-glossary" to """{"glossary":["supermux"]}""")).handler)
 
     private fun ComposeUiTest.typeAGlossaryTerm(term: String) {
         await("voice_glossary_link")
         onNodeWithTag("voice_glossary_link").performScrollTo().performClick()
-        await("voice_glossary_input")
+        await("voice_glossary_add_item")
         awaitText("supermux")
+        onNodeWithTag("voice_glossary_add_item").performScrollTo().performClick()
+        await("voice_glossary_input")
         onNodeWithTag("voice_glossary_input").performTextInput(term)
         waitForIdle()
     }
 
     @Test fun the_voice_glossary_and_its_new_term_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(voiceHost(), settings = true) { openSettings(SettingsSection.Voice) }
+        val host = voiceHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Voice) }
         typeAGlossaryTerm("Kotlin")
 
         activity.recreate()
@@ -743,48 +816,55 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_voice_glossary_and_its_new_term_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(voiceHost(), settings = true) { openSettings(SettingsSection.Voice) }
+        val host = voiceHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Voice) }
         typeAGlossaryTerm("Kotlin")
 
         unfold(width)
 
-        // On a wide hub the glossary opens in place instead of as a page of its own.
+        // The wide hub shows the word list as Voice's sub-page too, with "‹ Voice" above it.
         await("voice_glossary_input")
         assertEquals("Kotlin", onNodeWithTag("voice_glossary_input").editableText())
     }
 
-    // ── Settings › Curator: a schedule changed and not yet saved ─────────────────────────────────
+    // ── Settings › Memory: a change saved at once, and the page that showed it ──────────────────
 
     private fun curatorHost() = testHostStore(
-        Broker(mapOf("GET /settings/curator" to """{"config":{"enabled":false,"hour":1,"minute":0,"agent":"claude"}}""")).handler,
+        Broker(
+            mapOf(
+                "GET /settings/curator" to """{"config":{"enabled":false,"hour":1,"minute":0,"agent":"claude"}}""",
+                "PUT /settings/curator" to """{"config":{"enabled":true,"hour":1,"minute":0,"agent":"claude"}}""",
+            ),
+        ).handler,
     )
 
     private fun ComposeUiTest.switchTheCuratorOn() {
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").performClick()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").performClick()
         waitForIdle()
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
-    @Test fun an_unsaved_curator_change_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(curatorHost(), settings = true) { openSettings(SettingsSection.Curator) }
+    @Test fun a_curator_change_survives_a_recreation() = runComposeUiTest {
+        val host = curatorHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         activity.recreate()
 
-        // Not reloaded from the host (where it is still off) over the user's change.
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
-    @Test fun an_unsaved_curator_change_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(curatorHost(), settings = true) { openSettings(SettingsSection.Curator) }
+    @Test fun a_curator_change_survives_the_compact_to_wide_swap() = runComposeUiTest {
+        val host = curatorHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Memory) }
         switchTheCuratorOn()
 
         unfold(width)
 
-        await("assistant_curator_enabled")
-        onNodeWithTag("assistant_curator_enabled").assertIsOn()
+        await("memory_memory-nightly")
+        onNodeWithTag("memory_memory-nightly").assertIsOn()
     }
 
     // ── Settings › Devices: a pairing link minted mid-change ────────────────────────────────────
@@ -812,7 +892,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_pairing_link_minted_during_a_recreation_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Devices) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         mintAPairingLink(gate)
 
         activity.recreate()
@@ -827,7 +907,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_pairing_link_minted_during_the_compact_to_wide_swap_is_shown() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = mintingHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Devices) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         mintAPairingLink(gate)
 
         unfold(width)
@@ -847,7 +927,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Devices) }
+        val activity = phoneShell(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         askToRevokeTheDevice()
 
         activity.recreate()
@@ -857,7 +937,7 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_revoke_device_confirm_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Devices) }
+        val width = flippablePhone(pairedDeviceHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
         askToRevokeTheDevice()
 
         unfold(width)
@@ -898,7 +978,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_worktree_batch_delete_finishes_through_a_recreation() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Worktrees) }
+        val activity = phoneShell(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
         deleteEveryWorktree(gate)
 
         activity.recreate()
@@ -913,7 +993,7 @@ class ConfigurationChangeWorkTest {
     @Test fun a_worktree_batch_delete_finishes_through_the_compact_to_wide_swap() = runComposeUiTest {
         val gate = Gate()
         val (app, broker) = worktreesHost(gate)
-        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Worktrees) }
+        val width = flippablePhone(app, settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.WORKTREES) }
         deleteEveryWorktree(gate)
 
         unfold(width)

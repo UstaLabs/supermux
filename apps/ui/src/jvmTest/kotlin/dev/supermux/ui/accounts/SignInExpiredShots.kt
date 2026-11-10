@@ -39,6 +39,7 @@ import dev.supermux.ui.chat.SessionAccountSwitch
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.settings.AgentSettingsActions
 import dev.supermux.ui.settings.AgentSettingsScreen
+import dev.supermux.ui.settings.pages.ProviderPageHarness
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.usage.UsageScreen
@@ -93,14 +94,14 @@ class SignInExpiredShots {
             UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null }, onSignIn = { _, _ -> }, topBarShown = true)
         }
         shot(dir, "accounts", 760, 560) {
-            AccountsSettingsScreen(
+            ProviderPageHarness(
+                "cursor",
+                AgentSettingsActions(agentStatuses = { listOf(AgentInstallStatus(kind = "cursor", installed = true, authed = false, signInExpired = true)) }),
                 AccountsActions(accounts = flowOf(listOf(claudeSystem, cursorSystem, cursorWork))),
-                topBarShown = true,
-                onSignInAgain = {},
             )
         }
         shot(dir, "providers", 760, 520, then = {
-            waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("agent_row_cursor")).fetchSemanticsNodes().isNotEmpty() }
+            waitUntil(timeoutMillis = 5_000) { onAllNodes(hasTestTag("providers_cursor")).fetchSemanticsNodes().isNotEmpty() }
             waitForIdle()
         }) {
             AgentSettingsScreen(

@@ -387,9 +387,15 @@ jobs:
         env:
           ST_ZIG_JOBS: "4"
         run: bash apps/terminal-core/wasm/build.sh
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      # The tag is the web app's own version too (General > App version), as it is desktop's.
       - name: Build the web client
         working-directory: apps
-        run: ./gradlew :web:stageForBroker --console=plain
+        run: ./gradlew :web:stageForBroker --console=plain -PsupermuxVersion="${{ steps.ver.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: web-client

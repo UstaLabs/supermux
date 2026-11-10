@@ -1096,7 +1096,7 @@ class AssistantOverlayService : Service(), LifecycleOwner, SavedStateRegistryOwn
                 endScreen(session, "glasses off")
             }
             sharing -> Unit
-            !ui.screenWithVoice -> AndroidNotices(applicationContext).show("Showing your screen is off in Settings › Appearance.")
+            !ui.screenWithVoice -> AndroidNotices(applicationContext).show("Showing your screen is off in Settings › Privacy & labs.")
             else -> {
                 sharing = true
                 if (!runBridge(OverlayBridgeActivity.share(this))) sharing = false

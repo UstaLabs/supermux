@@ -21,7 +21,6 @@ import dev.supermux.state.SettingsKeys
 import dev.supermux.state.liveRepliesOn
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
-import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.chat.DictationMode
 import dev.supermux.ui.sanitizeSetLevel
 import dev.supermux.ui.terminal.TerminalAppearance
@@ -199,19 +198,6 @@ class UiPrefs(private val settings: SettingsStore) {
 
     suspend fun putAppearance(mode: AppearanceMode) =
         settings.putString(SettingsKeys.APPEARANCE, mode.name)
-
-    /**
-     * Material You opt-in. A NO-OP as far as colour goes — the brand OKLCH palette is the only
-     * palette on every platform (`ThemeDefaults.DYNAMIC_COLOR_ENABLED`) — but still stored so a
-     * user who turned it on does not silently lose the preference.
-     */
-    val dynamicColor: Flow<Boolean> =
-        settings.string(SettingsKeys.DYNAMIC_COLOR).map {
-            ThemeDefaults.dynamicColorEnabled(it?.toBooleanStrictOrNull())
-        }
-
-    suspend fun putDynamicColor(value: Boolean) =
-        settings.putString(SettingsKeys.DYNAMIC_COLOR, value.toString())
 
     /** The assistant overlay (#62, experimental): the default Agent floating over other apps. Off unless turned on. */
     val assistantOverlay: Flow<Boolean> =

@@ -164,17 +164,20 @@ import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.withWorkspaceOps
-import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.SettingsExtra
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
+import dev.supermux.ui.settings.kit.KitMachine
+import dev.supermux.ui.settings.kit.SettingsMachines
+import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
+import dev.supermux.host.formatLastSeen
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.update.AppUpdateCard
-import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.update.announceUpdate
 import dev.supermux.ui.update.keepUpdated
 import dev.supermux.ui.usage.UsagePopover
@@ -305,8 +308,9 @@ fun SupermuxApp(
     onAddedHost: () -> Unit = {},
     /** Whether a broker identity (`GET /host` hostId) is the broker this app runs itself. */
     isLocalHost: (hostId: String?) -> Boolean = { false },
-    settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
-    settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
+    settingsSection: @Composable (SettingsPlace, SettingsSlotScope) -> Unit = { _, _ -> },
+    /** The text of the key that focuses Settings' search ("⌘F" on a Mac); null where there is no keyboard shortcut. */
+    settingsSearchShortcut: String? = null,
     /** This window's keyboard. A desktop host passes its own, to drive its menu bar through it. */
     shortcuts: ShortcutDispatcher = remember { ShortcutDispatcher() },
 ) {
@@ -346,6 +350,35 @@ fun SupermuxApp(
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
+    // The machines Settings shows as cards and its pages' scope lines pick from (#97).
+    val localBrokerCap = LocalPlatform.current.caps.localBroker
+    // "last seen 2h ago" moves on with the clock, nudged once a minute.
+    val settingsClock = rememberRailClock()
+    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock) {
+        val now = settingsClock
+        val paired = hostViews.map { h ->
+            val seen = formatLastSeen(now, h.lastSeenAt)
+            KitMachine(
+                id = h.recordId,
+                name = h.displayLabel,
+                local = isLocalHost(h.hostId),
+                online = h.online,
+                status = when {
+                    h.online -> "Running"
+                    seen.isEmpty() -> "Offline"
+                    else -> "Offline · last seen $seen"
+                },
+                lastSeen = seen,
+            )
+        }
+        // Desktop can always host: with no local host paired, a "This computer" card still opens Hosting (spec §11).
+        val all = if (localBrokerCap && paired.none { it.local }) {
+            listOf(KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")) + paired
+        } else {
+            paired
+        }
+        SettingsMachines(all, activeHostId, onPick = fleet::setActiveHost)
+    }
     // Hosts whose broker refuses agent sessions until git is installed (`host_requirements`).
     val hostRequirements by fleet.hostRequirements.collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
@@ -834,6 +867,12 @@ fun SupermuxApp(
                 true
             }
             RegisterCommand(AppCommands.OpenSettings, enabled = !ui.settingsOpen) { ui.openSettings(); true }
+            // ⌘/ (Ctrl+/): Settings › Keyboard shortcuts. The editor's "comment line" and a terminal's own Ctrl+/ win
+            // where they have the focus (the registry's scopes, #96).
+            RegisterCommand(AppCommands.ShowShortcuts, enabled = ui.settingsSection != SettingsSection.KeyboardShortcuts || !ui.settingsOpen) {
+                ui.openSettings(SettingsSection.KeyboardShortcuts)
+                true
+            }
             // One update check per launch, here rather than in the sidebar's card: on a phone the
             // sidebar comes and goes with every chat, and each return would be another poll.
             val appUpdater = LocalPlatform.current.updates
@@ -845,10 +884,10 @@ fun SupermuxApp(
                 Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
-                    // A card whose login was refused: the system login signs in again under
-                    // Providers (the CLI's own login flow), an added account under Accounts.
-                    val usageSignIn: (String, String?) -> Unit = { _, accountId ->
-                        ui.openSettings(if (accountId == null) SettingsSection.Providers else SettingsSection.Accounts)
+                    // A card whose login was refused signs in again on that provider's page, which
+                    // holds both its own login and the added ones (#97).
+                    val usageSignIn: (String, String?) -> Unit = { agent, _ ->
+                        ui.openSettings(SettingsSection.Providers, sub = agent)
                     }
                     // Body shared by the wide footer-anchored popover and the Compact destination.
                     val usagePopoverBody: @Composable () -> Unit = {
@@ -981,7 +1020,7 @@ fun SupermuxApp(
                                             appearance = appearance,
                                             onToggleTheme = onToggleTheme,
                                             onUsage = { ui.openUsage() },
-                                            onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                            onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
                                             onSettings = { ui.openSettings() },
                                             usageOpen = ui.usageOpen,
                                             onUsageDismiss = { ui.closeUsage() },
@@ -1063,7 +1102,7 @@ fun SupermuxApp(
                                     appearance = appearance,
                                     onToggleTheme = onToggleTheme,
                                     onUsage = { ui.openUsage() },
-                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onDevices = { ui.openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) },
                                     onSettings = { ui.openSettings() },
                                     usageOpen = ui.usageOpen,
                                     onUsageDismiss = { ui.closeUsage() },
@@ -1193,31 +1232,26 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
                                 EscapeBox(
-                                    tag = when (route.section) {
-                                        SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                                        else -> "settings_overlay"
-                                    },
+                                    tag = if (route.section == SettingsSection.Coding) "lsp_settings_overlay" else "settings_overlay",
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
                                 ) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        // Keyed on the HOST only: `route.section` here would
-                                        // remount the hub on every section change — the same
-                                        // mistake the `clazzContentKey` above exists to prevent
-                                        // one level up (E1 review).
-                                        key(activeHostId) {
-                                            SettingsHub(
-                                                section = route.section,
-                                                onSectionChange = { ui.settingsSection = it },
-                                                onBack = { ui.goBack() },
-                                                onRegisterCloseHandler = { settingsTryClose = it },
-                                                // Already inside `key(activeHostId)`, so the hub's
-                                                // own host scoping has nothing left to reset.
-                                                hostKey = null,
-                                                extraContent = settingsExtra,
-                                                content = settingsSection,
-                                            )
-                                        }
-                                    }
+                                    // No hub-wide host picker and no `key(activeHostId)` (#97): every machine is a card in the
+                                    // hub, a page about one machine names it in its scope line, and a pick reloads only the
+                                    // page (the hub keys its slot by the machine). Never `route.section` as a key either —
+                                    // that would remount the hub on every page change, the mistake `clazzContentKey`
+                                    // above exists to prevent (E1 review).
+                                    SettingsHub(
+                                        section = route.section,
+                                        sub = route.sub,
+                                        anchor = route.anchor,
+                                        onSectionChange = { ui.settingsSection = it },
+                                        onPlaceChange = { s, sub -> ui.moveSettings(s, sub) },
+                                        onBack = { ui.goBack() },
+                                        onRegisterCloseHandler = { settingsTryClose = it },
+                                        machines = settingsMachines,
+                                        searchShortcut = settingsSearchShortcut,
+                                        content = settingsSection,
+                                    )
                                 }
                             }
 
@@ -1259,7 +1293,7 @@ fun SupermuxApp(
                                                 onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
-                                                // `Route.AppUpdate`, now applied to all of them):
+                                                // the old update page, now applied to all of them):
                                                 // Escape is not an affordance on a phone, and a
                                                 // wide window with no visible way out was the G4
                                                 // review's blocker.
@@ -1326,24 +1360,6 @@ fun SupermuxApp(
                                             }
                                         }
                                     }
-                                }
-                            }
-
-                            entry<Route.Appearance>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("appearance_overlay", onEscape = { ui.goBack() }) {
-                                    AppearanceSettingsScreen(onBack = { ui.goBack() }, standalone = true)
-                                }
-                            }
-
-                            entry<Route.AppUpdate>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                            ) {
-                                EscapeBox("app_update_overlay", onEscape = { ui.goBack() }) {
-                                    // `standalone`: a full-pane ROUTE, not a hub detail, so the
-                                    // page paints its own title + Back at every width.
-                                    AppUpdateScreen(onBack = { ui.goBack() }, standalone = true)
                                 }
                             }
                         },

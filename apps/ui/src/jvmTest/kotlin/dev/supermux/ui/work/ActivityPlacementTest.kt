@@ -279,8 +279,17 @@ class ActivityPlacementTest {
 
     @Test fun onAPhoneSettingsShowsNoDownloads() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
-        phone(center) { SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
+        // Plain Settings: the index (#97 — a section is a destination now and would push its page).
+        phone(center) { SettingsHub(section = null, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
         onNodeWithTag("settings_hub_back").assertIsDisplayed()
+        onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun onAPhoneASettingsPageShowsNoDownloads() = runDesktopComposeUiTest {
+        val center = DownloadCenter(scope).apply { running() }
+        // A pushed page: under its own bar, no downloads either.
+        phone(center) { SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
+        onNodeWithTag("settings_detail_back").assertIsDisplayed()
         onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
     }
 

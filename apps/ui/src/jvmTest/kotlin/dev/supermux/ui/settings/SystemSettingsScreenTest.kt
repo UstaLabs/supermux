@@ -977,4 +977,23 @@ class SystemSettingsScreenTest {
                 .assertDoesNotExist()
         }
     }
+
+    /** #97: telemetry lives on Privacy & labs now; the machine's System screen no longer carries it. */
+    @Test fun the_system_screen_no_longer_shows_the_telemetry_switch() = runComposeUiTest {
+        systemContent {
+            SystemSettingsScreen(
+                actions = SystemSettingsActions(
+                    updateStatus = { sampleStatus() },
+                    checkUpdate = { sampleStatus() },
+                    getTelemetry = { dev.supermux.net.TelemetryState(enabled = true) },
+                ),
+                onBack = {},
+                topBarShown = true,
+            )
+        }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("system_restart_broker").fetchSemanticsNodes().isNotEmpty() }
+        waitForIdle()
+        assertTrue(onAllNodesWithTag("system_telemetry_switch").fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithTag("system_telemetry_row").fetchSemanticsNodes().isEmpty())
+    }
 }

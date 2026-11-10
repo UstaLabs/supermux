@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import dev.supermux.ui.platform.LocalPlatform
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AgentInstallStatus
@@ -294,10 +295,12 @@ private fun SetupDoneStep(
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        // The first-run telemetry notice (TELEMETRY.md); the switch is in Settings → System.
+        // The first-run telemetry notice (TELEMETRY.md); the switch is in Settings → Privacy & labs
+        // (Settings → Privacy where the device has no assistant overlay).
         Text(
             "supermux sends anonymous usage events: no prompts, code, paths or names. " +
-                "You can turn this off in Settings → System.",
+                "You can turn this off in Settings → " +
+                    (if (LocalPlatform.current.caps.assistantOverlay) "Privacy & labs" else "Privacy") + ".",
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurfaceVariant,
             textAlign = TextAlign.Center,

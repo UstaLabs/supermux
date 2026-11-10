@@ -78,12 +78,25 @@ internal fun testFleet(
      */
     scope: CoroutineScope = TestScope(UnconfinedTestDispatcher()),
     settings: SettingsStore = ShellFakeSettings(),
-): FleetStore = FleetStore(
-    store = testPairedHostStore(),
-    scope = scope,
-    deps = shellTestDeps(settings),
-    appFactory = { _, _, _ -> app },
-)
+    /**
+     * Report the host's socket as up once the fleet has dialled it, as a real connection would: Settings' machine
+     * pages show an offline machine's note instead of loading (#97), so a test of their rows needs it online.
+     */
+    online: Boolean = false,
+): FleetStore {
+    var connection: ((Boolean) -> Unit)? = null
+    val fleet = FleetStore(
+        store = testPairedHostStore(),
+        scope = scope,
+        deps = shellTestDeps(settings),
+        appFactory = { _, _, onConnectionChange ->
+            connection = onConnectionChange
+            app
+        },
+    )
+    if (online) checkNotNull(connection) { "the fleet did not dial its host" }(true)
+    return fleet
+}
 
 /**
  * The composable form. A `FleetStore` built in a composable BODY is rebuilt on every

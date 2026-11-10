@@ -138,7 +138,54 @@ class WorkspaceUiStateTest {
         ui.openLspSettings()
         assertTrue(ui.settingsOpen)
         assertTrue(ui.lspSettingsOpen)
-        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
+        assertEquals(Route.Settings(SettingsSection.Coding, anchor = "code-intelligence"), ui.currentRoute)
+    }
+
+    /** The update page is General's "App version" row now (#97): File ▸ "Check for Updates…" and the card land there. */
+    @Test fun openAppUpdateLandsOnGeneralsAppVersion() {
+        val ui = ShellUiState()
+        ui.openAppUpdate()
+        assertTrue(ui.settingsOpen)
+        assertEquals(Route.Settings(SettingsSection.General, anchor = "app-version"), ui.currentRoute)
+    }
+
+    @Test fun theOldAppearanceNameOpensGeneral() {
+        val ui = ShellUiState()
+        ui.navigateByName("appearance")
+        assertEquals(Route.Settings(SettingsSection.General), ui.currentRoute)
+    }
+
+    @Test fun plainSettingsIsNoSectionAndARailClickDropsTheSubPageAndAnchor() {
+        val ui = ShellUiState()
+        ui.openSettings()
+        assertEquals(null, ui.settingsSection)
+        ui.openSettings(SettingsSection.Machine, sub = "devices")
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
+        ui.settingsSection = SettingsSection.Voice
+        assertEquals(Route.Settings(SettingsSection.Voice), ui.currentRoute)
+        // Closed, it remembers the last page for the next open.
+        ui.goBack()
+        assertEquals(SettingsSection.Voice, ui.settingsSection)
+    }
+
+    @Test fun aWideHubsSubPageMoveRewritesTheRouteWithItsSubPage() {
+        val ui = ShellUiState()
+        ui.openSettings(SettingsSection.Providers)
+        ui.moveSettings(SettingsSection.Providers, "claude")
+        assertEquals(Route.Settings(SettingsSection.Providers, sub = "claude"), ui.currentRoute)
+        assertEquals("claude", ui.settingsSub)
+        ui.moveSettings(SettingsSection.Providers, null)
+        assertEquals(Route.Settings(SettingsSection.Providers), ui.currentRoute)
+        assertEquals(listOf(Route.Home, Route.Settings(SettingsSection.Providers)), ui.backStack.toList())
+    }
+
+    @Test fun plainSettingsReadsAsNoSectionEvenAfterAnEarlierOne() {
+        val ui = ShellUiState()
+        ui.openSettings(SettingsSection.Voice)
+        ui.goBack()
+        ui.openSettings()
+        assertEquals(null, ui.settingsSection)
     }
 
     // ── Nav3 back stack is the source of truth ──────────────────────────────────────────────────
@@ -163,14 +210,14 @@ class WorkspaceUiStateTest {
 
     @Test fun navigatePushesOverlayAboveHome() {
         val ui = ShellUiState()
-        ui.navigate(Route.Settings(SettingsSection.Devices))
+        ui.navigate(Route.Settings(SettingsSection.Machine, sub = "devices"))
         assertEquals(
-            listOf(Route.Home, Route.Settings(SettingsSection.Devices)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Machine, sub = "devices")),
             ui.backStack.toList(),
         )
         assertTrue(ui.overlayOpen)
         assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        assertEquals(SettingsSection.Machine, ui.settingsSection)
     }
 
     @Test fun goBackPopsToHome() {
@@ -276,9 +323,8 @@ class WorkspaceUiStateTest {
         // still REPLACES whatever was open — the exclusivity rule that guard sat next to.
         val ui = ShellUiState()
         listOf(
-            Route.NewSession("d1"), Route.Usage, Route.Appearance, Route.Devices, Route.Proxies,
+            Route.NewSession("d1"), Route.Usage, Route.Devices, Route.Proxies,
             Route.AddHost, Route.Displays, Route.Settings(SettingsSection.Voice), Route.Archived,
-            Route.AppUpdate,
         ).forEach {
             ui.navigate(it)
             assertEquals(listOf(Route.Home, it), ui.backStack.toList())

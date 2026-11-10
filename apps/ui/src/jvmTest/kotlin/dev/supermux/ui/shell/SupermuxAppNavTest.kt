@@ -24,6 +24,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -45,6 +47,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.state.HostStore
+import dev.supermux.state.FleetStore
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.testHostStore
@@ -356,12 +359,12 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ -> Text("body:" + section.name) },
+                settingsSection = { place, _ -> Text("body:" + place.section.name) },
             )
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Providers)
+        ui.openSettings()
         waitForIdle()
         onNodeWithTag("settings_row_voice").assertIsDisplayed()
 
@@ -371,8 +374,9 @@ class SupermuxAppNavTest {
         onNodeWithTag("settings_row_voice").assertDoesNotExist()
         // The CAUSE, not just the symptom: the route was never rewritten. `settingsSection` reads
         // the live `Route.Settings` off the stack, so anything other than the section it was
-        // opened with means the compact push reported itself back and the entry was re-keyed.
-        assertEquals(SettingsSection.Providers, ui.settingsSection)
+        // opened with (none: plain Settings) means the compact push reported itself back and the
+        // entry was re-keyed.
+        assertEquals(null, ui.settingsSection)
     }
 
     /**
@@ -380,7 +384,7 @@ class SupermuxAppNavTest {
      * phone, not on the index with `ShellUiState.lspSettingsOpen` claiming otherwise.
      *
      * The hub seeds its compact push stack from `section` for exactly this, treating the
-     * `Route.Settings` default ([SettingsSection.Providers]) as "just Settings" and anything else as a
+     * `Route.Settings` default (no section, #97) as "just Settings" and anything else as a
      * destination. That seeding is only safe because the settings entry has a stable content key;
      * while the route WAS the key, a rewrite would have re-seeded and reopened the section under
      * the user.
@@ -392,7 +396,7 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ -> Text("body:" + section.name) },
+                settingsSection = { place, _ -> Text("body:" + place.section.name) },
             )
         }
         waitForIdle()
@@ -401,7 +405,7 @@ class SupermuxAppNavTest {
         waitForIdle()
 
         onNodeWithTag("settings_hub_detail").assertIsDisplayed()
-        onNodeWithText("body:" + SettingsSection.EditorLsp.name).assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Coding.name).assertIsDisplayed()
         // The index is BEHIND us, not under us.
         onNodeWithTag("settings_row_voice").assertDoesNotExist()
         assertTrue(ui.lspSettingsOpen)
@@ -412,6 +416,36 @@ class SupermuxAppNavTest {
         onNodeWithTag("settings_row_voice").assertIsDisplayed()
         assertTrue(ui.settingsOpen)
     }
+
+    /**
+     * Usage's "Sign in again" and the composer's "Open Accounts" open `Providers/‹agent›` (#97 spec §10.1, §11): on a
+     * phone that is the provider's page itself, not the Settings index, and Back goes to the provider list.
+     */
+    private fun landsOnTheProvidersPage(agent: String) = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name + "/" + place.sub) },
+            )
+        }
+        waitForIdle()
+        ui.openSettings(SettingsSection.Providers, sub = agent)
+        waitForIdle()
+        onNodeWithText("body:Providers/$agent").assertIsDisplayed()
+        onNodeWithTag("settings_row_voice").assertDoesNotExist()
+        onNodeWithTag("settings_detail_back").performClick()
+        waitForIdle()
+        onNodeWithText("body:Providers/null").assertIsDisplayed()
+    }
+
+    /** What Usage's card calls for a refused Codex login. */
+    @Test fun compact_usages_sign_in_again_lands_on_the_codex_page() = landsOnTheProvidersPage("codex")
+
+    /** What a Claude chat's "Open Accounts" calls. */
+    @Test fun compact_the_composers_open_accounts_lands_on_the_claude_page() = landsOnTheProvidersPage("claude")
 
     /**
      * A rail click must not rebuild the hub.
@@ -436,10 +470,10 @@ class SupermuxAppNavTest {
             SupermuxApp(
                 fleet = rememberTestFleet(app),
                 ui = ui,
-                settingsSection = { section, _ ->
+                settingsSection = { place, _ ->
                     var alive by remember { mutableStateOf(0) }
                     Text(
-                        "body:" + section.name + ":" + alive,
+                        "body:" + place.section.name + ":" + alive,
                         Modifier.testTag("probe").clickable { alive++ },
                     )
                 },
@@ -457,12 +491,107 @@ class SupermuxAppNavTest {
         waitForIdle()
         onNodeWithText("body:" + SettingsSection.Providers.name + ":2").assertIsDisplayed()
 
-        onNodeWithTag("settings_section_devices").performClick()
+        onNodeWithTag("settings_section_coding").performClick()
         waitForIdle()
 
         // The section changed — and the hub did not.
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
-        onNodeWithText("body:" + SettingsSection.Devices.name + ":2").assertIsDisplayed()
+        assertEquals(SettingsSection.Coding, ui.settingsSection)
+        onNodeWithText("body:" + SettingsSection.Coding.name + ":2").assertIsDisplayed()
+    }
+
+    /**
+     * The footer's Devices icon opens the active machine's Devices screen (#97: Devices lives on the machine
+     * page now), and the hub lands on it rather than on General.
+     */
+    @Test fun wide_the_footers_devices_icon_opens_the_machines_devices_screen() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name + "/" + place.sub) },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("sidebar_footer_devices").performClick()
+        waitForIdle()
+        assertEquals(Route.Settings(SettingsSection.Machine, sub = "devices"), ui.currentRoute)
+        onNodeWithText("body:Machine/devices").assertIsDisplayed()
+    }
+
+    /** A fleet of two paired hosts, both served by [app]. */
+    private fun twoHostFleet(app: HostStore): FleetStore = FleetStore(
+        store = dev.supermux.host.PairedHostStore(
+            object : dev.supermux.host.HostPersistence {
+                private var hosts = listOf("h1" to "Ahmet's MacBook", "h2" to "studio-mini").map { (id, name) ->
+                    dev.supermux.host.PairedHost(
+                        recordId = id,
+                        hostId = "host-$id",
+                        displayName = name,
+                        token = "t",
+                        relayUrl = "https://test.relay.supermux.dev",
+                    )
+                }
+                override fun loadAll() = hosts
+                override fun saveAll(hosts: List<dev.supermux.host.PairedHost>) { this.hosts = hosts }
+            },
+        ) { "rec-unused" },
+        scope = kotlinx.coroutines.test.TestScope(kotlinx.coroutines.test.UnconfinedTestDispatcher()),
+        deps = shellTestDeps(),
+        appFactory = { _, _, _ -> app },
+    )
+
+    /**
+     * Settings has no hub-wide host picker any more (#97): each machine is a card in the hub, and a page that is
+     * about one machine says which in its own scope line.
+     */
+    @Test fun settings_has_machine_cards_and_no_hub_wide_host_picker() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            SupermuxApp(
+                fleet = remember(app) { twoHostFleet(app) },
+                ui = ui,
+                settingsSection = { place, _ -> Text("body:" + place.section.name) },
+            )
+        }
+        waitForIdle()
+        ui.openSettings()
+        waitForIdle()
+        onNodeWithTag("settings_hub").assertIsDisplayed()
+        onNodeWithTag("settings_machine_card_h1").assertExists()
+        onNodeWithTag("settings_machine_card_h2").assertExists()
+        onNode(hasTestTag("host_scope_picker") and hasAnyAncestor(hasTestTag("settings_overlay"))).assertDoesNotExist()
+    }
+
+    /** A wide hub's sub-page is in the route (so the web's address bar and Back follow it); back pops it. */
+    @Test fun wide_a_sub_page_is_in_the_route_and_back_takes_it_out() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { place, scope ->
+                    Text(
+                        "body:" + place.section.name + "/" + place.sub,
+                        Modifier.testTag("open_sub").clickable { scope.onOpen(dev.supermux.ui.settings.SettingsPlace(SettingsSection.Providers, "claude")) },
+                    )
+                },
+            )
+        }
+        waitForIdle()
+        ui.openSettings(SettingsSection.Providers)
+        waitForIdle()
+        onNodeWithTag("open_sub").performClick()
+        waitForIdle()
+        assertEquals(Route.Settings(SettingsSection.Providers, sub = "claude"), ui.currentRoute)
+        onNodeWithText("body:Providers/claude").assertIsDisplayed()
+        onNodeWithTag("settings_hub_back").performClick()
+        waitForIdle()
+        assertEquals(Route.Settings(SettingsSection.Providers), ui.currentRoute)
+        onNodeWithText("body:Providers/null").assertIsDisplayed()
     }
 
     /**

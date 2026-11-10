@@ -237,6 +237,15 @@ interface PushRegistrar {
     fun cancelForSession(sessionId: String)
 }
 
+/**
+ * [NoAppUpdater] that still knows the running build's version, for a build something else updates (iOS's App Store,
+ * the web app its machine serves): General's App version row shows it.
+ */
+class VersionOnlyUpdater(
+    override val currentVersion: String,
+    override val currentVersionCode: Int? = null,
+) : AppUpdater by NoAppUpdater
+
 /** The "this build does not update itself" updater: nothing to check, nothing to download. */
 object NoAppUpdater : AppUpdater {
     private val state = kotlinx.coroutines.flow.MutableStateFlow(UpdateStatus(phase = UpdatePhase.UpToDate))

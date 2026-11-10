@@ -13,6 +13,7 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.desktop.shell.TestAppShell
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.net.BrokerApi
@@ -95,7 +96,8 @@ class ProxiesSettingsHubTest {
     }
 
     @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Proxies) }
+        // #97: Proxies is the machine page's "Shared links" screen.
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Machine, sub = MachineSub.LINKS) }
         val (app, _) = appForProxies()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -104,7 +106,7 @@ class ProxiesSettingsHubTest {
         }
         waitForIdle()
         onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_section_proxies").assertIsDisplayed()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("proxies_settings_screen").assertIsDisplayed()

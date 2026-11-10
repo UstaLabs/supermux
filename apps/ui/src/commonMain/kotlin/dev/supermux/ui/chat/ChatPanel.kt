@@ -331,9 +331,9 @@ class ChatActions(
     /** POST /sessions/<id>/account — a refusal keeps the broker's code (session_busy, …). */
     val setAccount: suspend (accountId: String) -> dev.supermux.state.AccountResult<dev.supermux.net.SessionAccountResult> =
         { dev.supermux.state.AccountResult.Failed(null, null, "Not available on this client") },
-    /** Opens Settings ▸ Accounts (the Account list's link when the session's account is unavailable); null = no link. */
+    /** Opens Settings ▸ Providers & accounts (the Account list's link when the session's account is unavailable); null = no link. */
     val openAccounts: (() -> Unit)? = null,
-    /** Opens the agent's own sign-in, Settings ▸ Providers (the link when the system login's sign-in expired); null = none. */
+    /** Opens the agent's own sign-in, Settings ▸ Providers & accounts (the link when the system login's sign-in expired); null = none. */
     val openSignIn: (() -> Unit)? = null,
     /** #92: the wait for a usage-limit reset — drop it, or resume now. */
     val cancelLimitWait: suspend () -> Unit = {},

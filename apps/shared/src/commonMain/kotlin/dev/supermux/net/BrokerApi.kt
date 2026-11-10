@@ -1487,6 +1487,15 @@ data class AccountLoginStateDto(
     val account: AccountDto? = null,
 )
 
+/** GET /accounts/<id>/removal: removing [account] moves its [sessions] chats to [to] ([toLabel] for display). */
+@Serializable
+data class AccountRemovalPlanDto(
+    val account: String = "",
+    val sessions: Int = 0,
+    val to: String = "",
+    val toLabel: String = "",
+)
+
 /** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off).
  *  [autoResume] (#92): when every account is out, wait for the first reset and carry on (default on). */
 @Serializable
@@ -2611,6 +2620,9 @@ class BrokerApi(
         val q = if (deleteHome) "?deleteHome=1" else ""
         ensureMutationSuccess(http.delete("$httpBase/accounts/${urlEncode(id)}$q") { authHeader() })
     }
+
+    /** GET /accounts/<id>/removal → how many chats removing it moves, and to which account (#106). */
+    suspend fun accountRemovalPlan(id: String): AccountRemovalPlanDto = getJson("$httpBase/accounts/${urlEncode(id)}/removal")
 
     /** POST /accounts/login — start a guided login (`loginAs`: subscription | token; Codex defaults to token). */
     suspend fun startAccountLogin(agent: String, loginAs: String? = null, email: String? = null, label: String? = null): AccountLoginStateDto =

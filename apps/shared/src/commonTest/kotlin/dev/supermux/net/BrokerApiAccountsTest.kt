@@ -89,6 +89,18 @@ class BrokerApiAccountsTest {
         assertEquals("""{"account":"k"}""", sink.last().bodyText())
     }
 
+    @Test fun removal_plan_and_sign_in_again_have_the_broker_shapes() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        val plan = captured("""{"account":"claude-a","sessions":3,"to":"claude-b","toLabel":"4@supermux.dev"}""", sink)
+            .accountRemovalPlan("claude-a")
+        assertEquals(HttpMethod.Get, sink.last().method)
+        assertEquals("http://h/accounts/claude-a/removal", sink.last().url.toString())
+        assertEquals(AccountRemovalPlanDto("claude-a", 3, "claude-b", "4@supermux.dev"), plan)
+        // Sign in again (#106): the same guided login, naming the account's email; the broker repairs that account.
+        captured("""{"loginId":"l1","agent":"claude","phase":"starting"}""", sink).startAccountLogin("claude", email = "support@supermux.dev")
+        assertEquals("""{"agent":"claude","email":"support@supermux.dev"}""", sink.last().bodyText())
+    }
+
     @Test fun spawn_request_account_defaults_to_absent() {
         val encoder = Json { encodeDefaults = false }
         assertTrue(!encoder.encodeToString(SpawnRequest(workdir = "/w")).contains("account"))

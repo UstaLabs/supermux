@@ -8,137 +8,143 @@ package dev.supermux.desktop.settings
 
 import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
-import dev.supermux.ui.accounts.AccountsSettingsScreen
 import dev.supermux.ui.accounts.rememberAccountsActions
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.settings.AgentSettingsScreen
-import dev.supermux.ui.settings.CuratorSettingsScreen
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.DevicesSettingsScreen
+import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.GitHostingScreen
-import dev.supermux.ui.settings.AppearanceSettingsScreen
-import dev.supermux.ui.settings.EditorSettingsScreen
-import dev.supermux.ui.settings.StorageSettingsScreen
+import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SystemSettingsScreen
-import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
+import dev.supermux.ui.settings.GLOSSARY_SUB
+import dev.supermux.ui.settings.pages.CodingPage
+import dev.supermux.ui.settings.pages.GeneralPage
+import dev.supermux.ui.settings.pages.GlossaryPage
+import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
+import dev.supermux.ui.settings.pages.MemoryPage
+import dev.supermux.ui.settings.pages.PrivacyLabsPage
+import dev.supermux.ui.settings.pages.ProviderDetailPage
+import dev.supermux.ui.settings.pages.ProvidersPage
+import dev.supermux.ui.settings.pages.rememberProvidersState
+import dev.supermux.ui.settings.pages.VoicePage
+import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberAgentSettingsActions
-import dev.supermux.ui.settings.rememberCuratorSettingsActions
+import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
+import dev.supermux.ui.settings.rememberCodeIntelligenceActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
-import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.rememberWorktreesSettingsActions
-import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateScreen
 
-/** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
+/**
+ * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
+ *
+ * #97, the same mapping as `FleetSettingsSection`: every section is its page, the machine's own screens are on the
+ * interim machine page; accounts live on each provider's page, and Git hosting is Coding's `github` anchor.
+ */
 @Composable
 fun DesktopSettingsSection(
-    section: SettingsSection,
+    place: SettingsPlace,
     scope: SettingsSlotScope,
     host: HostStore,
 ) {
-    when (section) {
-        SettingsSection.Providers -> AgentSettingsScreen(
-            actions = rememberAgentSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Accounts -> AccountsSettingsScreen(
-            actions = rememberAccountsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-            onSignInAgain = { scope.onOpenSection(SettingsSection.Providers) },
-        )
-        SettingsSection.Devices -> DevicesSettingsScreen(
-            actions = rememberDevicesSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.System -> SystemSettingsScreen(
-            actions = rememberSystemSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Proxies -> ProxiesSettingsScreen(
-            actions = rememberProxiesSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Worktrees -> WorktreesSettingsScreen(
-            actions = rememberWorktreesSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Curator -> CuratorSettingsScreen(
-            actions = rememberCuratorSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.Voice -> VoiceSettingsScreen(
-            actions = rememberVoiceSettingsActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        // E7: the section is the shared Editor page, which is the wrap/font steppers ABOVE the
-        // same `LspSettingsScreen` desktop used to reach bare here. The steppers write the
-        // `SettingsKeys.EDITOR_*` values `WebCodeEditor`/`DiffView` already read, so desktop's
-        // editor behaviour is unchanged — it just gained a way to change them from Settings.
-        SettingsSection.EditorLsp -> EditorSettingsScreen(
-            lspLoad = { host.lspLoad() },
-            lspToggle = { id, enabled -> host.lspToggle(id, enabled) },
-            lspInstall = { id -> host.lspInstall(id) },
-            lspInstallLog = host.lspInstallLog,
-            lspInstallDone = host.lspInstallDone,
-            lspAddCustom = { args ->
-                host.lspAddCustom(
-                    args.id, args.label, args.command, args.extensions, args.args,
-                    args.languageId, args.installCmd,
-                )
-            },
-            lspRemoveCustom = { id -> host.lspRemoveCustom(id) },
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsSection.GitHosting -> GitHostingScreen(
-            actions = rememberGitHostingActions(host),
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-    }
-}
-
-/**
- * Renders one host-local [SettingsExtra] row's page (cluster E7 — desktop shows both rows now).
- *
- * Appearance is the shared screen, reading and writing the same `SettingsKeys.APPEARANCE` the
- * sidebar's theme toggle does. The updater is the shared screen too since cluster G5.
- */
-@Composable
-fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
-    when (extra) {
-        // The supervisor, host store and session count come in through `LocalHostSupervisor` & co.
-        SettingsExtra.Hosting -> DesktopHostingSettings(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
-        )
-        SettingsExtra.Appearance -> AppearanceSettingsScreen(
-            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies.
+    when (place.section) {
+        SettingsSection.General -> GeneralPage(
+            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies (spec §10.6).
             defaultAppearance = AppearanceMode.DARK,
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsExtra.AppUpdate -> AppUpdateScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+        SettingsSection.KeyboardShortcuts -> KeyboardShortcutsPage(
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
-        SettingsExtra.Storage -> StorageSettingsScreen(
-            onBack = scope.onClose,
-            topBarShown = scope.topBarShown,
+        SettingsSection.Providers -> {
+            val agents = rememberAgentSettingsActions(host)
+            val accounts = rememberAccountsActions(host)
+            // Above the list and the provider pages, so a login or an install keeps going between them.
+            val providers = rememberProvidersState(agents)
+            when (val agent = place.sub) {
+                null -> ProvidersPage(
+                    providers,
+                    accounts,
+                    onOpenProvider = { scope.onOpen(SettingsPlace(SettingsSection.Providers, it)) },
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                )
+                else -> ProviderDetailPage(agent, providers, agents, accounts, onBack = scope.onClose)
+            }
+        }
+        SettingsSection.Voice -> {
+            val voice = rememberVoiceSettingsActions(host)
+            if (place.sub == GLOSSARY_SUB) {
+                GlossaryPage(voice, onBack = scope.onClose)
+            } else {
+                VoicePage(
+                    actions = voice,
+                    anchor = place.anchor,
+                    onAnchorShown = scope.onAnchorShown,
+                    onOpenSub = { scope.onOpen(SettingsPlace(SettingsSection.Voice, it)) },
+                )
+            }
+        }
+        SettingsSection.Coding -> CodingPage(
+            forges = rememberGitHostingActions(host),
+            lsp = rememberCodeIntelligenceActions(host),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
         )
+        SettingsSection.Memory -> MemoryPage(
+            actions = rememberCuratorSettingsActions(host),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.PrivacyLabs -> PrivacyLabsPage(
+            system = rememberSystemSettingsActions(host),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.Machine -> when (place.sub) {
+            MachineSub.STATUS -> SystemSettingsScreen(
+                actions = rememberSystemSettingsActions(host),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            // The supervisor, host store and session count come in through `LocalHostSupervisor` & co.
+            MachineSub.COMPUTER -> DesktopHostingSettings(
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            MachineSub.DEVICES -> DevicesSettingsScreen(
+                actions = rememberDevicesSettingsActions(host),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            MachineSub.LINKS -> ProxiesSettingsScreen(
+                actions = rememberProxiesSettingsActions(host),
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
+            MachineSub.WORKTREES -> WorktreesSettingsScreen(
+                actions = rememberWorktreesSettingsActions(host),
+                onBack = scope.onClose,
+                // Always: the hub (phone) or the rail (wide) owns the title, never this screen (inventory bug 7).
+                topBarShown = true,
+            )
+            else -> InterimMachinePage(
+                onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
+                // This computer's hosting, on this computer's own page (or with no machine known yet): a remote
+                // machine's page has none, and the hub would not show it there.
+                showComputer = LocalPlatform.current.caps.localBroker &&
+                    dev.supermux.ui.settings.kit.LocalSettingsMachines.current?.current?.local != false,
+                anchor = place.anchor,
+                onAnchorShown = scope.onAnchorShown,
+            )
+        }
     }
 }

@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 
 /**
  * The assistant overlay's system side (#62): on Android, "Display over other apps" and the mic it
- * needs for hold-to-talk. Null where the platform has no overlay; the Appearance switch is gated by
+ * needs for hold-to-talk. Null where the platform has no overlay; the Privacy & labs switch is gated by
  * [Caps.assistantOverlay].
  */
 interface AssistantOverlayHost {

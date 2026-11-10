@@ -107,6 +107,8 @@ import dev.supermux.pairing.PairingTokenStore
 import dev.supermux.ui.intro.OnboardingScreen
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
@@ -118,7 +120,6 @@ import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.windows.tearOutTabLive
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
-import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.LocalHostSupervisor
 import dev.supermux.desktop.settings.LocalHostingFleet
 import dev.supermux.desktop.settings.LocalHostingSessions
@@ -294,21 +295,23 @@ private val desktopBindTts: (
 //                                  ArchivedScreen's Resume button uses: app.resume(id) fire-and-
 //                                  forget + close the overlay (M4e). SPAWNS/UN-ARCHIVES a real
 //                                  session — point it at a throwaway you archived yourself.  [main]
-//   SM_SETTINGS=1                 — open the Settings hub on Providers (File ▸ "Settings…"'s SAME
-//                                  ui.openSettings()) on start, loading real app.agentStatuses()
-//                                  (GET /agents/status, read-only) from the active host          [main]
-//   SM_DEVICES=1                  — open the Settings hub on Devices via ui.openSettings(Devices)
-//                                  on start, loading real app.devices() (GET /devices, read-only)
-//                                  from the active host. Off by default; never mints/revokes.    [main]
-//   SM_GIT_HOSTING=1              — open the Settings hub on Git hosting (Task 4) via the SAME
-//                                  ui.openSettings(GitHosting), loading real app.forgesLoad()
-//                                  (GET /forge/connections, read-only). Off by default.       [main]
-//   SM_SYSTEM=1                   — open the Settings hub on System via ui.openSettings(System)
-//                                  on start, loading real app.updateStatus() (GET /api/update/status,
+//   SM_SETTINGS=1                 — open the Settings hub (File ▸ "Settings…"'s SAME
+//                                  ui.openSettings(): General on a wide window) on start, loading
+//                                  real app.agentStatuses() (GET /agents/status, read-only)      [main]
+//   SM_DEVICES=1                  — open the Settings hub on the machine page's Devices via
+//                                  ui.openSettings(Machine, sub = "devices") on start, loading real
+//                                  app.devices() (GET /devices, read-only) from the active host. Off
+//                                  by default; never mints/revokes.                              [main]
+//   SM_GIT_HOSTING=1              — open the Settings hub on Coding's GitHub row via
+//                                  ui.openSettings(Coding, anchor = "github"), loading real
+//                                  app.forgesLoad() (GET /forge/connections, read-only).        [main]
+//   SM_SYSTEM=1                   — open the Settings hub on the machine page's Status & updates via
+//                                  ui.openSettings(Machine, sub = "status") on start, loading real
+//                                  app.updateStatus() (GET /api/update/status,
 //                                  read-only) from the active host. Off by default; never calls
 //                                  runUpdate/restartBroker (those kill/update the live broker).  [main]
-//   SM_PROXIES=1                  — open the Settings hub on Proxies via ui.openSettings(Proxies)
-//                                  on start, loading real app.proxiesForSettings() (GET /proxies,
+//   SM_PROXIES=1                  — open the Settings hub on the machine page's Shared links via
+//                                  ui.openSettings(Machine, sub = "links") on start, loading real app.proxiesForSettings() (GET /proxies,
 //                                  read-only). Never creates/removes/toggles. Off by default.    [main]
 //   SM_VOICE=1                    — open the Settings hub on Voice via ui.openSettings(Voice) on
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
@@ -319,7 +322,7 @@ private val desktopBindTts: (
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
 //                                  real banked Codex reset; the redeem path stays UI-test-covered
 //                                  only). Off by default.                                    [main]
-//   SM_LSP_SETTINGS=1             — open the LSP settings overlay (File ▸ "Editor / LSP…"'s SAME
+//   SM_LSP_SETTINGS=1             — open Settings on Coding's code intelligence (File ▸ "Coding…"'s SAME
 //                                  ui.openLspSettings()) on start, loading the real app.lspLoad()
 //                                  (GET /settings/editor, read-only) (M4g-4). Read-only — never
 //                                  calls lspInstall/lspToggle/lspAddCustom/lspRemoveCustom. Off by
@@ -812,6 +815,8 @@ fun main() {
         }
         val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
         val themeScope = rememberCoroutineScope()
+        // The theme's own dark check: what System paints here, for the sidebar's theme shortcut.
+        val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
         // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
         // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
@@ -1012,8 +1017,9 @@ fun main() {
                         MainMenuEntry.Action("Usage…") { ui.openUsage() },
                         MainMenuEntry.Action("Settings…", menuShortcutFor(AppCommands.OpenSettings), enabled = shortcuts.rememberCanInvoke(AppCommands.OpenSettings)) { shortcuts.invokeFromMenu(AppCommands.OpenSettings) },
                         // Existing items keep working — they open the Settings hub focused on
-                        // that section (same overlay as Settings…, not a separate stack).
-                        MainMenuEntry.Action("Editor / LSP…") { ui.openLspSettings() },
+                        // that page (same overlay as Settings…, not a separate stack): Coding, at
+                        // its code-intelligence row (#97; once "Editor / LSP…").
+                        MainMenuEntry.Action("Coding…") { ui.openLspSettings() },
                         MainMenuEntry.Action("Check for Updates…") { ui.openAppUpdate() },
                         MainMenuEntry.Separator,
                         MainMenuEntry.Action("Unpair…") { showUnpairConfirm = true },
@@ -1757,7 +1763,7 @@ fun main() {
                     }
 
                     // Headless Settings-hub / Agents verification hook (desktop-parity Task 1):
-                    // SM_SETTINGS=1 opens the Settings hub on Agents via the SAME
+                    // SM_SETTINGS=1 opens the Settings hub (General) via the SAME
                     // `ui.openSettings()` the File ▸ "Settings…" menu item calls, so the hub loads
                     // real `app.agentStatuses()` (GET /agents/status) under Xvfb. Read-only by
                     // construction — never starts install/login. Off by default; harmless in prod.
@@ -1765,8 +1771,8 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Providers)
-                            println("[settings] opened the Settings hub (Providers)")
+                            ui.openSettings()
+                            println("[settings] opened the Settings hub (General)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
                             println("[settings] agentStatuses count=${statuses?.size ?: "null"} kinds=${statuses?.joinToString { "${it.kind}:${if (it.installed) "inst" else "miss"}:${if (it.authed) "auth" else "noauth"}" } ?: "(load failed)"}")
@@ -1774,16 +1780,16 @@ fun main() {
                     }
 
                     // Headless Devices verification hook (desktop-parity Task 2): SM_DEVICES=1 opens
-                    // the Settings hub on Devices via the SAME `ui.openSettings(Devices)` path the
-                    // rail uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
+                    // the machine page's Devices via `ui.openSettings(Machine, sub = "devices")`, the path the
+                    // machine page's row uses, so DevicesSettingsScreen loads real `app.devices()` (GET /devices)
                     // under Xvfb. Read-only by construction — never calls addDevice/revokeDevice.
                     // Off by default; harmless in prod.
                     val devicesHook = System.getenv("SM_DEVICES") == "1"
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Devices)
-                            println("[devices] opened the Settings hub (Devices)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "devices")
+                            println("[devices] opened the Settings hub (machine page › Devices)")
                             val devices = app.devices()
                             println(
                                 "[devices] devices count=${devices?.size ?: "null"} " +
@@ -1793,16 +1799,16 @@ fun main() {
                     }
 
                     // Headless Git-hosting verification hook (desktop-parity Task 4):
-                    // SM_GIT_HOSTING=1 opens the Settings hub on the Git hosting section via the
-                    // SAME ui.openSettings(GitHosting) path, then loads real app.forgesLoad()
+                    // SM_GIT_HOSTING=1 opens Coding at its GitHub row (once the Git hosting section) via the
+                    // ui.openSettings(Coding, anchor = "github") path, then loads real app.forgesLoad()
                     // (GET /forge/connections) under Xvfb. Read-only by construction — never
                     // add/import/remove. Off by default; harmless in production.
                     val gitHostingHook = System.getenv("SM_GIT_HOSTING") == "1"
                     if (gitHostingHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.GitHosting)
-                            println("[git-hosting] opened the Settings hub (Git hosting)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Coding, anchor = "github")
+                            println("[git-hosting] opened the Settings hub (Coding › GitHub & GitLab)")
                             val forges = app.forgesLoad()
                             val conns = forges?.connections.orEmpty()
                             val cli = forges?.cli
@@ -1815,14 +1821,14 @@ fun main() {
                     }
 
                     // Headless Proxies verification hook (desktop-parity Task 5): SM_PROXIES=1 opens
-                    // the Settings hub on Proxies via the SAME ui.openSettings(Proxies) path the
-                    // rail uses. Read-only — never createProxy/setProxyPublic/removeProxy.
+                    // the machine page's Shared links via ui.openSettings(Machine, sub = "links"), the path the
+                    // machine page's row uses. Read-only — never createProxy/setProxyPublic/removeProxy.
                     val proxiesHook = System.getenv("SM_PROXIES") == "1"
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Proxies)
-                            println("[proxies] opened the Settings hub (Proxies)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "links")
+                            println("[proxies] opened the Settings hub (machine page › Shared links)")
                             val proxies = app.proxiesForSettings()
                             println(
                                 "[proxies] proxies count=${proxies?.size ?: "null"} " +
@@ -1832,7 +1838,7 @@ fun main() {
                     }
 
                     // Headless System verification hook (desktop-parity Task 3): SM_SYSTEM=1 opens
-                    // the Settings hub on System via ui.openSettings(System) so SystemSettingsScreen
+                    // the machine page's Status & updates (ui.openSettings(Machine, sub = "status")) so SystemSettingsScreen
                     // loads real `app.updateStatus()` (GET /api/update/status) under Xvfb.
                     // Read-only by construction — never calls runUpdate/restartBroker (those mutate
                     // the live broker). Distinct from File ▸ "Check for Updates…" (desktop app).
@@ -1841,8 +1847,8 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.System)
-                            println("[system] opened the Settings hub (System)")
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Machine, sub = "status")
+                            println("[system] opened the Settings hub (machine page › Status & updates)")
                             val st = app.updateStatus()
                             println(
                                 "[system] updateStatus current=${st?.current ?: "null"} " +
@@ -1905,7 +1911,7 @@ fun main() {
                         LaunchedEffect(app) {
                             delay(3_000)
                             ui.openLspSettings()
-                            println("[lsp-settings] opened the LSP settings overlay")
+                            println("[lsp-settings] opened the Settings hub (Coding › code intelligence)")
                         }
                     }
 
@@ -2002,6 +2008,8 @@ fun main() {
                             // The broker this app supervises is "this computer": its folders get
                             // the native folder dialog in the launcher.
                             isLocalHost = { id -> id != null && id == supervisor.hostId.value },
+                            // Settings' search field shows its shortcut, and that key focuses it.
+                            settingsSearchShortcut = if (isMacOs()) "⌘F" else "Ctrl+F",
                             stripChrome = DesktopStripChrome,
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded
@@ -2067,20 +2075,17 @@ fun main() {
                             autoSelectName = System.getenv("SM_SMOKE_SEND")
                                 ?.substringBefore(':')?.takeIf { it.isNotBlank() },
                             defaultDeviceName = remember { desktopDeviceName() },
-                            settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
-                            settingsSection = { section, scope ->
-                                DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
+                            settingsSection = { place, scope ->
+                                DesktopSettingsSection(place, scope, fleet.activeApp() ?: app)
                             },
-                            appearance = ui.appearance,
-                            // The toggle writes the SAME stored value the Appearance screen does
+                            // What is painted (System resolved by the OS's dark check), so the icon and the flip
+                            // match the screen.
+                            appearance = paintedAppearance(ui.appearance, AppearanceMode.DARK, systemDark),
+                            // The toggle writes the SAME stored value General's Theme row does
                             // (the collector above mirrors it back onto `ui.appearance`), so the
-                            // two never drift apart.
+                            // two never drift apart — the opposite of what is painted (#97 spec §10.6).
                             onToggleTheme = {
-                                val next = if (ui.appearance == AppearanceMode.DARK) {
-                                    AppearanceMode.LIGHT
-                                } else {
-                                    AppearanceMode.DARK
-                                }
+                                val next = nextAppearance(ui.appearance, AppearanceMode.DARK, systemDark)
                                 ui.appearance = next
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },

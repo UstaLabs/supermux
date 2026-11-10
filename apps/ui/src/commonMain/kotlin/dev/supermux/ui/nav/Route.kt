@@ -49,10 +49,18 @@ sealed interface Route {
     @SerialName("add_host")
     data object AddHost : Route
 
-    /** [section] is the rail selection inside the hub; desktop reads/writes it, Android defaults it. */
+    /**
+     * Settings. [section] null = "just Settings" (the phone's index; General on a wide window). [sub] is a
+     * second-level page inside the section (a provider, the glossary, a machine screen); [anchor] a row to scroll
+     * to and flash once. See `ui/settings/SettingsPlace.kt`.
+     */
     @Serializable
     @SerialName("settings")
-    data class Settings(val section: SettingsSection = SettingsSection.Providers) : Route
+    data class Settings(
+        val section: SettingsSection? = null,
+        val sub: String? = null,
+        val anchor: String? = null,
+    ) : Route
 
     @Serializable
     @SerialName("usage")
@@ -74,12 +82,6 @@ sealed interface Route {
     @SerialName("displays")
     data object Displays : Route
 
-    @Serializable
-    @SerialName("appearance")
-    data object Appearance : Route
-
-    /** Desktop-only today: the in-app updater's full-pane screen. */
-    @Serializable
-    @SerialName("app_update")
-    data object AppUpdate : Route
+    // Appearance and the updater's page are General's rows since #97 (`openSettings(General)`,
+    // `ShellUiState.openAppUpdate`); a saved back stack naming them decodes to Home.
 }

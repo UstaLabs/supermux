@@ -2371,10 +2371,10 @@ private fun OverflowNav(
             NavItem("Usage", Icons.Filled.BarChart, "nav_usage") {
                 onExpandedChange(false); onNavigate("usage")
             }
-            NavItem("Proxies", Icons.Filled.Hub, "nav_proxies") {
+            NavItem("Shared links", Icons.Filled.Hub, "nav_proxies") {
                 onExpandedChange(false); onNavigate("proxies")
             }
-            NavItem("Appearance", Icons.Filled.Monitor, "nav_appearance") {
+            NavItem("General", Icons.Filled.Monitor, "nav_appearance") {
                 onExpandedChange(false); onNavigate("appearance")
             }
             NavItem("Settings", Icons.Filled.Settings, "nav_settings") {

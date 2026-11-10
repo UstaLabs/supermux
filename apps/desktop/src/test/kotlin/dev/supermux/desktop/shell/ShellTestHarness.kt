@@ -7,8 +7,12 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.platform.AppUpdater
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.platform.VersionOnlyUpdater
 import androidx.compose.runtime.remember
-import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.desktop.testDeps
 import dev.supermux.host.HostPersistence
@@ -49,12 +53,27 @@ internal fun testPairedHostStore(): PairedHostStore = PairedHostStore(
  * store's lock — this suite deadlocked on it. The store publishes outside its lock now
  * (`FleetStoreLockingTest`), so the fold can run off-thread the way it does in production.
  */
-internal fun testFleet(app: HostStore): FleetStore = FleetStore(
-    store = testPairedHostStore(),
-    scope = CoroutineScope(Dispatchers.Default),
-    deps = testDeps(),
-    appFactory = { _, _, _ -> app },
-)
+internal fun testFleet(
+    app: HostStore,
+    /**
+     * Report the host's socket as up once the fleet has dialled it: Settings' machine sections show an offline
+     * machine's note instead of loading (#97), so a suite that drives their rows needs it online.
+     */
+    online: Boolean = false,
+): FleetStore {
+    var connection: ((Boolean) -> Unit)? = null
+    val fleet = FleetStore(
+        store = testPairedHostStore(),
+        scope = CoroutineScope(Dispatchers.Default),
+        deps = testDeps(),
+        appFactory = { _, _, onConnectionChange ->
+            connection = onConnectionChange
+            app
+        },
+    )
+    if (online) checkNotNull(connection) { "the fleet did not dial its host" }(true)
+    return fleet
+}
 
 /** The desktop-shaped root: one host, the workspace sidebar, no window seam. */
 @Composable
@@ -63,8 +82,19 @@ internal fun TestAppShell(
     ui: ShellUiState,
     fleet: FleetStore? = null,
     notify: NotificationController = remember { NotificationController(NoopNotificationManager) },
+    /** The host's socket is up (see [testFleet]); only used when no [fleet] is given. */
+    online: Boolean = false,
 ) {
-    val store = fleet ?: remember(app) { testFleet(app) }
+    val store = fleet ?: remember(app) { testFleet(app, online = online) }
+    // The real platform but not its updater: General's App version row checks the release feed when it opens, and a
+    // hub suite must not reach the network (#97, Unit E).
+    val base = LocalPlatform.current
+    val platform = remember(base) { object : Platform by base { override val updates: AppUpdater = VersionOnlyUpdater("1.0.0") } }
+    CompositionLocalProvider(LocalPlatform provides platform) { Shell(store, app, ui, notify) }
+}
+
+@Composable
+private fun Shell(store: FleetStore, app: HostStore, ui: ShellUiState, notify: NotificationController) {
     SupermuxApp(
         fleet = store,
         ui = ui,
@@ -73,9 +103,8 @@ internal fun TestAppShell(
         persistSelection = true,
         // Desktop's own Settings wiring — the same one `Main.kt` passes, so a hub suite drives
         // the real sections rather than an empty slot.
-        settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
-        settingsSection = { section, scope ->
-            DesktopSettingsSection(section, scope, store.activeApp() ?: app)
+        settingsSection = { place, scope ->
+            DesktopSettingsSection(place, scope, store.activeApp() ?: app)
         },
     )
 }

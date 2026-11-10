@@ -55,7 +55,7 @@ class AgentsTest {
         assertEquals("That name can't be used.", agentFailureText(AccountResult.Failed(400, "name_invalid", null), "create the agent"))
         assertEquals("An agent with that name already exists.", agentFailureText(AccountResult.Failed(409, "name_taken", null), "create the agent"))
         assertEquals(
-            "That provider isn't installed. Install it in Settings ▸ Providers.",
+            "That provider isn't installed. Install it in Settings ▸ Providers & accounts.",
             agentFailureText(AccountResult.Failed(409, "agent_not_installed", null), "create the agent"),
         )
     }
