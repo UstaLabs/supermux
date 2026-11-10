@@ -101,7 +101,7 @@ test("the device's push rows and uploads move to the new name", async () => {
   const { rename, push, native, files } = await start()
   push.upsert({ device: "phone", endpoint: "ep", keys: { p256dh: "a", auth: "b" } })
   native.putNative("phone", "android", "rt", "pk")
-  const { file_id } = await files.put({ kind: "image", mime: "image/png", name: "a.png", session: "s", origin: "web-upload", device: "phone", bytes: new Uint8Array([1, 2, 3]) })
+  const { file_id } = await files.put({ kind: "photo", mime: "image/png", name: "a.png", session: "s", origin: "web-upload", device: "phone", bytes: new Uint8Array([1, 2, 3]) })
   expect((await rename("phone", { name: "Pixel" })).status).toBe(200)
   expect(push.all().map((r) => r.device)).toEqual(["Pixel"])
   expect(native.all().map((r) => [r.device, r.routing_token])).toEqual([["Pixel", "rt"]])
