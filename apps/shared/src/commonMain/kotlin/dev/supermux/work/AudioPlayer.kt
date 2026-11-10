@@ -44,6 +44,12 @@ data class NowPlaying(
 interface AudioOutput {
     fun open(uri: String)
 
+    /**
+     * Open [item]: its source, by default. An output that shows what plays to the system (Android's media session:
+     * the notification and the lock screen) takes its title and chat from here.
+     */
+    fun open(item: AudioItem) = open(item.source)
+
     fun play()
 
     fun pause()
@@ -166,7 +172,7 @@ class AudioPlayer(private var outputs: AudioOutputs? = null) {
             onGone?.invoke()
             return
         }
-        out.open(item.source)
+        out.open(item)
         if (speed != 1f) out.setRate(speed)
         out.play()
     }

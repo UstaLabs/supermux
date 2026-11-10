@@ -79,6 +79,9 @@ androidSvg = "1.4"
 # 0.11.4: built with Kotlin 2.4.x, which the 2.3.21 compiler rejected — the 0.10.0 pin is lifted
 # along with the Kotlin bump.
 composeMediaPlayer = "0.11.4"
+# The Android audio player's media session (#118 car 3a): the SAME version as the media3-exoplayer composemediaplayer
+# brings, so the APK carries one ExoPlayer.
+media3 = "1.10.1"
 atomicfu = "0.29.0"
 # The version Ktor 3.5.0 already resolves — the media cache's file store names it directly.
 kotlinxIo = "0.9.0"
@@ -143,6 +146,8 @@ kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.re
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
 compose-media-player = { module = "io.github.kdroidfilter:composemediaplayer", version.ref = "composeMediaPlayer" }
+media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 # JetBrains multiplatform Navigation 3 UI (pulls navigation3-runtime transitively).
 jetbrains-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
 jetbrains-navigationevent-compose = { module = "org.jetbrains.androidx.navigationevent:navigationevent-compose", version.ref = "navigationEvent" }
