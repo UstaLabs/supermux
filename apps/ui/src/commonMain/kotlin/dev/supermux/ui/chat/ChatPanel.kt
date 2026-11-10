@@ -162,6 +162,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.time.Clock
+import dev.supermux.ui.accounts.LimitWaitStrip
 
 /** Reading-width cap for the composer so it lines up with the timeline's own cap. */
 private val CONTENT_MAX_WIDTH = 860.dp
@@ -334,6 +335,9 @@ class ChatActions(
     val openAccounts: (() -> Unit)? = null,
     /** Opens the agent's own sign-in, Settings ▸ Providers (the link when the system login's sign-in expired); null = none. */
     val openSignIn: (() -> Unit)? = null,
+    /** #92: the wait for a usage-limit reset — drop it, or resume now. */
+    val cancelLimitWait: suspend () -> Unit = {},
+    val resumeLimitWait: suspend () -> Unit = {},
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -376,6 +380,8 @@ fun rememberChatActions(
             setAccount = { id -> app.setSessionAccount(session.id, id) },
             openAccounts = openAccounts,
             openSignIn = openSignIn,
+            cancelLimitWait = { app.cancelLimitWait(session.id) },
+            resumeLimitWait = { app.resumeLimitWait(session.id) },
         )
     }
 }
@@ -1441,6 +1447,14 @@ fun ChatPanel(
                                 },
                                 modifier = Modifier.padding(bottom = Space.sm),
                             )
+                            // #92: docked above the composer while every account waits for its reset.
+                            session.limitWait?.let { wait ->
+                                LimitWaitStrip(
+                                    wait = wait,
+                                    onCancel = { scope.launch { actions.cancelLimitWait() } },
+                                    onResumeNow = { scope.launch { actions.resumeLimitWait() } },
+                                )
+                            }
                             composer()
                         }
                     }

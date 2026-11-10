@@ -217,6 +217,9 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         if (state.lastRead[frame.session] == next) state
         else state.copy(lastRead = state.lastRead + (frame.session to next))
     }
+    is ServerFrame.LimitWait -> state.copy(
+        sessions = state.sessions.map { s -> if (s.id == frame.session) s.copy(limitWait = frame.wait) else s },
+    )
     is ServerFrame.SessionState -> state.copy(
         sessions = state.sessions.map { s ->
             if (s.id != frame.session) s

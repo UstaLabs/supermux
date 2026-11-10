@@ -1465,9 +1465,15 @@ data class AccountLoginStateDto(
     val account: AccountDto? = null,
 )
 
-/** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off). */
+/** GET/PUT /settings/accounts. [autoSwitch]: move a session to another account on a usage limit (default off).
+ *  [autoResume] (#92): when every account is out, wait for the first reset and carry on (default on). */
 @Serializable
-data class AccountsSettingsDto(val autoSwitch: Boolean = false)
+data class AccountsSettingsDto(val autoSwitch: Boolean = false, val autoResume: Boolean = true)
+
+/** PUT /settings/accounts body: only the toggle being written. A null field is left out (explicitNulls=false),
+ *  so writing one never resets the other (encodeDefaults would send its default). */
+@Serializable
+private data class AccountsSettingsPatch(val autoSwitch: Boolean? = null, val autoResume: Boolean? = null)
 
 /** POST /sessions/<id>/account → the session's account after the switch. */
 @Serializable
@@ -2612,8 +2618,26 @@ class BrokerApi(
         decode(http.put("$httpBase/settings/accounts") {
             authHeader()
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(AccountsSettingsDto(enabled)))
+            setBody(json.encodeToString(AccountsSettingsPatch(autoSwitch = enabled)))
         })
+
+    /** PUT /settings/accounts {autoResume} (#92). */
+    suspend fun setAccountsAutoResume(enabled: Boolean): AccountsSettingsDto =
+        decode(http.put("$httpBase/settings/accounts") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(AccountsSettingsPatch(autoResume = enabled)))
+        })
+
+    /** DELETE /sessions/<id>/limit-wait — the session no longer resumes by itself (#92). */
+    suspend fun cancelLimitWait(sessionId: String) {
+        ensureMutationSuccess(http.delete("$httpBase/sessions/${urlEncode(sessionId)}/limit-wait") { authHeader() })
+    }
+
+    /** POST /sessions/<id>/limit-wait/resume — resume a waiting session now (#92). */
+    suspend fun resumeLimitWait(sessionId: String) {
+        ensureMutationSuccess(http.post("$httpBase/sessions/${urlEncode(sessionId)}/limit-wait/resume") { authHeader() })
+    }
 
     // ── opencode providers (key + oauth) ───────────────────────────────────────
 
