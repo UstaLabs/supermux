@@ -66,6 +66,9 @@ class SettingsLookGuardTest {
         }
     }
 
+    /** Every Settings file is the kit's by now (#97 Task 18): nothing waits its turn. */
+    @Test fun nothing_is_pending() = assertTrue(pending.isEmpty(), "still pending: $pending")
+
     @Test fun the_pending_list_only_shrinks() {
         val now = hits()
         val clean = pending.filter { it !in now.keys }

@@ -297,6 +297,58 @@ class ConfigurationChangeWorkTest {
         assertEquals(SettingsSection.General, ui.settingsSection)
     }
 
+    private fun privacyHost() = testHostStore(Broker(mapOf("GET /settings/telemetry" to """{"enabled":true}""")).handler)
+
+    @Test fun privacy_and_labs_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val host = privacyHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings() }
+        openFromTheIndex("settings_row_privacylabs", "privacy_settings_screen")
+        await("system_telemetry_switch")
+
+        activity.recreate()
+
+        await("privacy_settings_screen")
+        await("system_telemetry_switch")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun privacy_and_labs_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val host = privacyHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_privacylabs", "privacy_settings_screen")
+
+        unfold(width)
+
+        await("settings_hub_rail")
+        await("privacy_settings_screen")
+        await("system_telemetry_switch")
+        assertEquals(SettingsSection.PrivacyLabs, ui.settingsSection)
+    }
+
+    // A tablet with a keyboard: the only phone that lists Keyboard shortcuts.
+    @Test fun keyboard_shortcuts_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
+        val activity = phoneShell(testHostStore(), keyboard = true, settings = true) { openSettings() }
+        openFromTheIndex("settings_row_keyboardshortcuts", "shortcuts_page")
+
+        activity.recreate()
+
+        await("shortcuts_page")
+        onNodeWithTag("settings_index").assertDoesNotExist()
+    }
+
+    @Test fun keyboard_shortcuts_stay_open_through_the_compact_to_wide_swap() = runComposeUiTest {
+        val ui = ShellUiState()
+        val width = flippablePhone(testHostStore(), keyboard = true, settings = true, ui = ui) { openSettings() }
+        openFromTheIndex("settings_row_keyboardshortcuts", "shortcuts_page")
+
+        unfold(width)
+
+        await("settings_hub_rail")
+        await("shortcuts_page")
+        assertEquals(SettingsSection.KeyboardShortcuts, ui.settingsSection)
+    }
+
     // ── Settings › Providers: a pasted token, the OpenCode code step, an agent's login code ────────
 
     private val claudeToSignIn = """[{"kind":"claude","installed":true,"authed":false}]"""

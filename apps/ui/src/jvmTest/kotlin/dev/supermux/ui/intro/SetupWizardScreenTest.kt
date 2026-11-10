@@ -227,6 +227,35 @@ class SetupWizardScreenTest {
         eventually { onNodeWithTag("git_hosting_token").assertIsDisplayed() }
     }
 
+    /** #97 (Task 18): the providers step lists every provider, and an install still starts from it. */
+    @Test fun the_providers_step_lists_the_providers_and_an_install_still_starts() = runComposeUiTest {
+        val installs = CopyOnWriteArrayList<String>()
+        val statuses = listOf(
+            AgentInstallStatus(kind = "claude", installed = true, authed = true),
+            AgentInstallStatus(kind = "codex", installed = false, authed = false),
+            AgentInstallStatus(kind = "opencode", installed = true, authed = false),
+        )
+        wizard(
+            agentsActions = AgentSettingsActions(
+                agentStatuses = { statuses },
+                agentStartInstall = { kind -> installs += kind; dev.supermux.net.AgentInstallJob(state = "running") },
+                // Nothing runs until the click starts it.
+                agentPollInstall = { kind -> if (kind in installs) dev.supermux.net.AgentInstallJob(state = "running") else null },
+            ),
+        )
+        advanceTo(1)
+        for (kind in listOf("claude", "codex", "opencode")) eventually { onNodeWithTag("agent_row_$kind").assertIsDisplayed() }
+        onNodeWithTag("agent_install_start_codex").performClick()
+        eventually { assertEquals(listOf("codex"), installs.toList()) }
+        eventually { onNodeWithTag("agent_install_running_codex").assertExists() }
+    }
+
+    @Test fun the_git_step_offers_to_add_a_github_or_gitlab_account() = runComposeUiTest {
+        wizard()
+        advanceTo(2)
+        eventually { onNodeWithText("Add a GitHub or GitLab account").assertIsDisplayed() }
+    }
+
     @Test fun phone_step_is_step_four_and_skippable() = runComposeUiTest {
         wizard()
         advanceTo(3)

@@ -312,10 +312,10 @@ class GeneralPageTest {
     }
 }
 
-private fun cacheOf(store: MediaStore) = MediaCache(store, CoroutineScope(Dispatchers.Default))
+internal fun cacheOf(store: MediaStore) = MediaCache(store, CoroutineScope(Dispatchers.Default))
 
 /** Just enough of a store for the cache row: a size, and a Clear that empties it. */
-private class SizedStore(var size: Long, override val persistent: Boolean = true) : MediaStore {
+internal class SizedStore(var size: Long, override val persistent: Boolean = true) : MediaStore {
     var clears = 0
     override val hasFiles: Boolean get() = true
     override suspend fun read(key: MediaKey): ByteArray? = null
