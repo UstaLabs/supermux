@@ -1,8 +1,10 @@
+import { SHOW_HTML_DESCRIPTION, interactiveHtmlInstructions } from "../../src/core/show-html/description"
 // The arms under test: a tool design (A, B, C) × an instruction wording (1, 2). Each arm is the tool list the stub
 // server serves and the text the runner puts where supermux puts its environment prompt.
 export type Variant = "A" | "B" | "C"
-export type Wording = "1" | "2"
+export type Wording = "1" | "2" | "3"
 export type Arm = `${Variant}${Wording}`
+/** The six arms the evals compared. C3 is the product's own text (src/core/show-html/description.ts): run it by name. */
 export const ARMS: Arm[] = ["A1", "A2", "B1", "B2", "C1", "C2"]
 
 export interface ToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
@@ -34,6 +36,7 @@ const html = { type: "string", description: "The page: a whole HTML document or 
 const file = { type: "string", description: "Or a path to an .html file." }
 
 function showHtml(variant: Variant, wording: Wording): ToolSpec {
+  if (wording === "3") return { ...showHtml(variant, "1"), description: SHOW_HTML_DESCRIPTION }
   const what = "Show the user a live HTML page as a card in the chat: a chart, a comparison, a small interactive tool, a mockup."
   // Both wordings say the same things (when, when not, how, send, the result); 1 as terse rules, 2 with reasons.
   const when = wording === "1"
@@ -86,6 +89,7 @@ const DIAGRAMS = "## Diagrams\n\nsupermux renders mermaid: put a diagram in a fe
 /** The "Interactive HTML" section supermux would put in the environment prompt for this arm, after "Diagrams". */
 export function instructionsFor(arm: Arm): string {
   const [variant, wording] = [arm[0] as Variant, arm[1] as Wording]
+  if (wording === "3") return `${DIAGRAMS}\n${interactiveHtmlInstructions()}`
   const check = variant === "C"
     ? "\n\nBefore you finish: read show_html's result. If it lists problems, the user saw nothing: fix the page and call show_html again."
     : variant === "B" ? "\n\nCheck a page with preview_html, fix what it reports, then show it with show_html." : ""
