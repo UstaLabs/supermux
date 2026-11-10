@@ -37,8 +37,8 @@ internal object WebShim {
      * @param secret the document's secret: random, used once.
      * @param parentOrigin the app's origin (`location.origin`), the only place the handshake goes. An app with an
      *   opaque origin (served from a file) sends it to `*`: an iframe's parent can't change while the iframe lives.
-     * @param baseUrl what a relative link resolves against when the document's own base is a `blob:` URL, which is no
-     *   base at all (`new URL('x', 'blob:null/...')` throws). Null: there is none, and such a link is the browser's.
+     * @param baseUrl what a relative link resolves against when the document's own base is a `data:` or `blob:` URL,
+     *   which is no base at all (`new URL('x', 'data:text/html,...')` throws). Null: there is none, and such a link is the browser's.
      * @param trustSyntheticInput for tests only, which can't make trusted input: scroll chaining and link interception
      *   take the page's own synthetic wheels, drags and clicks too. Never set by the engine an app gets.
      */
@@ -158,9 +158,10 @@ internal object WebShim {
     /**
      * A user's click on a link: the nearest `<a>` or `<area>` on the click's composed path, so a link in a shadow root
      * counts, and an SVG `<a>` too (`href`, or the older `xlink:href`), resolved against the document's base.
-     * - `#…` is a place in the page: it moves there (`location.hash`). A srcdoc document's base is the app's own page,
-     *   so the browser would resolve it to the app's URL and load the app in the frame, and the shim would ask the app
-     *   to open itself.
+     * - `#…` is a place in the page: it moves there (`location.hash`), whatever the document's base (a srcdoc's is the
+     *   app's own page, which the browser would load in the frame). In a `blob:` document Chrome refuses that move, as
+     *   any navigation of an opaque document to the app's `blob:` URL, which is why the engine prefers `data:`.
+     * - A relative link resolves against the content's URL ([source]'s `baseUrl`) in a `data:` or `blob:` document.
      * - A link to the document itself, `javascript:` and an empty one are the browser's.
      * - Anything else asks the app ([IframeWebEngine]), in a new window for a `target` other than `_self` or a modifier.
      */
@@ -186,7 +187,7 @@ internal object WebShim {
     var href;
     try {
       var base = Str(document.baseURI);
-      if (base.indexOf('blob:') === 0 && BASE !== null) base = BASE;
+      if ((base.indexOf('data:') === 0 || base.indexOf('blob:') === 0) && BASE !== null) base = BASE;
       href = Str(new URL(raw, base).href);
     } catch (x) { return; }
     if (href.indexOf('javascript:') === 0) return;

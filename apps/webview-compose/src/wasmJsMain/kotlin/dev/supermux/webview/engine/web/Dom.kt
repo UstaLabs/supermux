@@ -39,6 +39,26 @@ internal fun hasAttribute(element: HTMLElement, name: String): Boolean = js("ele
 
 internal fun setSrcdoc(iframe: HTMLElement, html: String): Unit = js("{ iframe.srcdoc = html; }")
 
+/**
+ * A `data:` URL for [html] as a page, which a frame can load as its own document (see [setSrc]). Its UTF-8 bytes go in
+ * as they are where the URL parser keeps them, and as `%XX` otherwise (controls, non-ASCII, `%`, `#`, a final space), so
+ * the URL is hardly longer than the page. Measure it with [parsedUrlLength] before using it.
+ */
+internal fun pageDataUrlOf(html: String): String = js(
+    """(function () {
+      var bytes = new TextEncoder().encode(html), n = bytes.length, out = new Array(n), hex = '0123456789ABCDEF';
+      for (var i = 0; i < n; i++) {
+        var c = bytes[i];
+        var plain = c > 0x20 && c < 0x7F && c !== 0x25 && c !== 0x23 || c === 0x20 && i < n - 1;
+        out[i] = plain ? String.fromCharCode(c) : '%' + hex[c >> 4] + hex[c & 15];
+      }
+      return 'data:text/html;charset=utf-8,' + out.join('');
+    })()""",
+)
+
+/** The length of [url] as the browser's URL parser writes it: what a frame navigates to, and what its length limit counts. */
+internal fun parsedUrlLength(url: String): Int = js("new URL(url).href.length")
+
 /** A `blob:` URL for [html] as a page, which a frame can load as its own document (see [setSrc]). Revoke it when done. */
 internal fun blobUrlOf(html: String): String = js("URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))")
 

@@ -861,11 +861,14 @@ measured the risky parts first. The numbers are below.
   - **Mark everything you draw over a page**, buttons and labels included. Anything unmarked is under the iframe.
 - **Documents.** Every document the app starts gets a fresh iframe. So the engine adds nothing to the browser's history,
   and a page from an earlier view can't come back.
-  - `Html` content is a `blob:` URL in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
+  - `Html` content is a `data:` URL in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
     top-level navigation. It is not a `srcdoc`: measured in WebKit, a sandboxed srcdoc frame sends the app's
-    `SameSite=Lax` cookie and a `blob:` one doesn't. The engine revokes the URL when the document is replaced or the
-    engine is released. A `blob:` document has no usable base, so the shim resolves a relative link against the
-    content's own URL (`content.origin.url`).
+    `SameSite=Lax` cookie and a `data:` or `blob:` one doesn't. It is not a `blob:` URL either while it fits in a
+    `data:` one (2 MiB, Chrome's URL limit): Chrome refuses an opaque document's navigation to the app's `blob:` URL,
+    so a `blob:` demo can't `location.reload()` or move to a `#fragment`. A longer page loads from a `blob:` URL all
+    the same, with those two limits, and the engine revokes it when the document is replaced or the engine is
+    released. Neither has a usable base, so the shim resolves a relative link against the content's own URL
+    (`content.origin.url`).
 
   - `Url` pages keep their own origin (`allow-scripts allow-same-origin allow-forms`). Use them only for pages you trust
     to frame, and only once the app's origin refuses to be framed (**`Url` pages and the app's origin**, below).
@@ -973,7 +976,7 @@ in its frame, after a redirect or a navigation of its own, is the app's, and can
   describes is Chrome's own here, and Chrome holds paint within an origin only: a demo that navigates itself to
   another origin shows a blank frame between the two documents, which the engine, hearing of the new document only at
   its load, can't cover.
-- **Demos inherit the app's Content-Security-Policy.** A `blob:` document (like a `srcdoc` one) takes its creator's, so a `script-src` on the
+- **Demos inherit the app's Content-Security-Policy.** A `data:` or `blob:` document (like a `srcdoc` one) takes its creator's, so a `script-src` on the
   app's page that doesn't allow inline scripts stops every demo's scripts, and the engine's shim with them.
 - **Dialogs, file choosers, permissions and downloads** are denied by the sandbox, and `WebClient` never hears of them.
 - **`userAgentSuffix` and `inspectable` do nothing.** The browser's DevTools always work.

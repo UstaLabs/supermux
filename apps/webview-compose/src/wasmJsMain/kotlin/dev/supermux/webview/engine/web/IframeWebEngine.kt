@@ -65,6 +65,12 @@ private const val GIVE_BACK_CHECK_MILLIS = 30
 private const val GIVE_BACK_TRIES = 3
 
 /**
+ * The longest URL Chrome navigates to (`url::kMaxURLChars`, 2 MiB: one char more and the frame loads blank, measured
+ * in Chrome 156). An `Html` document whose `data:` URL is longer loads from a `blob:` URL instead.
+ */
+private const val MAX_DATA_URL_CHARS = 2 * 1024 * 1024
+
+/**
  * How long a loaded document that may run the web shim has to hand over its port before it counts as one that never
  * speaks. Its handshake comes after its iframe's `load` (the feasibility test: 0 of 30 the other way round), within
  * milliseconds.
@@ -85,9 +91,12 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   meanwhile. That is [EngineEvent.FirstPaint]. Something drawn: a shimmed page's first contentful paint, or its DOM and
  *   two frames, as its shim reports; or the iframe's `load`, which waits for every subresource; or [PAINT_CAP_MILLIS]
  *   since the document started, as on iOS.
- * - **Content.** `Html` is a `blob:` URL in `sandbox="allow-scripts"`: an opaque origin of its own, and not a `srcdoc`,
- *   which WebKit sends the app's `SameSite=Lax` cookie from. The URL is revoked when its navigation ends: the document is
- *   replaced, or the engine released. `Url` is `src` in
+ * - **Content.** `Html` is a `data:` URL in `sandbox="allow-scripts"`: an opaque origin of its own, and not a `srcdoc`,
+ *   which WebKit sends the app's `SameSite=Lax` cookie from. Not a `blob:` URL either while the page fits in a `data:`
+ *   one ([MAX_DATA_URL_CHARS]): Chrome refuses an opaque document's navigations to a `blob:` URL of the app's origin
+ *   ("Not allowed to load local resource"), its own included, so a demo couldn't `location.reload()` or move to a
+ *   `#fragment`. A page too long for a `data:` URL loads from a `blob:` one, where it can't do those two, and that URL is
+ *   revoked when its navigation ends: the document is replaced, or the engine released. `Url` is `src` in
  *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
  *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
  *   [EngineEvent.Error]: `Bundle` (spec §7), `Url` with headers or in an `Ephemeral` engine (the browser can do neither),
@@ -202,7 +211,7 @@ internal class IframeWebEngine(
         var page: Page? = null
         var gone = false
 
-        /** The `blob:` URL the iframe loaded an `Html` document from, revoked when the navigation ends. */
+        /** The `blob:` URL the iframe loaded a long `Html` document from, revoked when the navigation ends. Null for a `data:` one. */
         var blobUrl: String? = null
 
         fun end() {
@@ -771,10 +780,16 @@ internal class IframeWebEngine(
             when (val content = navigation.content) {
                 is WebContent.Html -> {
                     attribute(iframe, "sandbox", if (setup.javaScriptEnabled) "allow-scripts" else "")
-                    // A blob: frame, not a srcdoc: WebKit sends the app's SameSite=Lax cookie from a sandboxed srcdoc frame, and
-                    // from no blob: one (measured, spec Isolation 1).
-                    val url = blobUrlOf(documentOf(navigation, content))
-                    navigation.blobUrl = url
+                    // A data: (or blob:) frame, not a srcdoc: WebKit sends the app's SameSite=Lax cookie from a sandboxed srcdoc
+                    // frame, and from no data: or blob: one (measured, spec Isolation 1). data: first, as Chrome refuses an
+                    // opaque document's reload and fragment navigations of a blob: URL the app made.
+                    val document = documentOf(navigation, content)
+                    val data = pageDataUrlOf(document)
+                    val url = if (parsedUrlLength(data) <= MAX_DATA_URL_CHARS) {
+                        data
+                    } else {
+                        blobUrlOf(document).also { navigation.blobUrl = it }
+                    }
                     setSrc(iframe, url)
                 }
                 is WebContent.Url -> {
