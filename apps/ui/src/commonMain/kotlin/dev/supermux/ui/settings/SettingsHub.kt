@@ -98,6 +98,7 @@ import dev.supermux.ui.settings.search.SettingsSearchEntry
 import dev.supermux.ui.settings.search.SettingsSearchGroup
 import dev.supermux.ui.settings.search.SettingsSearchIndex
 import dev.supermux.ui.settings.search.searchSettings
+import dev.supermux.ui.adaptive.LocalWindowControlsInsets
 import dev.supermux.ui.settings.search.settingsPageTitle
 import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
@@ -704,6 +705,9 @@ fun SettingsHub(
                 computerCard && place.sub == MachineSub.COMPUTER -> false
                 else -> m.id == machines?.current?.id
             }
+            // The OS's own window controls over the top band (macOS traffic lights at the start, Windows' caption
+            // buttons at the end): the rail's head starts below the first, the detail pane below the second.
+            val controls = LocalWindowControlsInsets.current
             Row(
                 Modifier
                     .fillMaxSize()
@@ -715,6 +719,7 @@ fun SettingsHub(
                 // margins) and a list scrolled on its own, 2 dp in from the rail's sides.
                 Column(
                     Modifier
+                        .padding(top = if (controls.start > 0.dp) controls.band else 0.dp)
                         .padding(start = 6.dp)
                         .width(252.dp)
                         .fillMaxHeight()
@@ -760,6 +765,7 @@ fun SettingsHub(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
+                        .padding(top = if (controls.end > 0.dp) controls.band else 0.dp)
                         .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(c.pane)

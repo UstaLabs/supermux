@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import dev.supermux.ui.adaptive.LocalWindowControlsInsets
+import dev.supermux.ui.adaptive.WindowControlsInsets
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -110,6 +113,36 @@ class SettingsHubTest {
         // The compact chrome is NOT on a wide window.
         onNodeWithTag("settings_index").assertDoesNotExist()
         onNodeWithTag("settings_row_providers").assertDoesNotExist()
+    }
+
+    @Test fun the_rail_header_starts_below_macos_traffic_lights() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            CompositionLocalProvider(LocalWindowControlsInsets provides WindowControlsInsets(band = 28.dp, start = 70.dp)) {
+                SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = sectionStub())
+            }
+        }
+        waitForIdle()
+        val back = onNodeWithTag("settings_hub_back").getUnclippedBoundsInRoot()
+        assertTrue(back.top.value >= 28f, "the back arrow starts at ${back.top}, under the traffic lights")
+    }
+
+    @Test fun nothing_in_the_hubs_top_band_sits_under_windows_caption_buttons() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            CompositionLocalProvider(LocalWindowControlsInsets provides WindowControlsInsets(band = 32.dp, end = 138.dp)) {
+                SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = sectionStub())
+            }
+        }
+        waitForIdle()
+        val detail = onNodeWithTag("settings_hub_detail").getUnclippedBoundsInRoot()
+        assertTrue(detail.top.value >= 32f, "the detail pane starts at ${detail.top}, under the caption buttons")
+    }
+
+    @Test fun without_window_controls_the_rail_header_stays_at_the_top() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = sectionStub())
+        }
+        waitForIdle()
+        assertTrue(onNodeWithTag("settings_hub_back").getUnclippedBoundsInRoot().top.value < 20f)
     }
 
     @Test fun a_rail_click_reports_the_new_section_to_the_host() = runComposeUiTest {
