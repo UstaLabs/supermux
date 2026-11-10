@@ -27,6 +27,8 @@ enum class KeyContext(val opaque: Boolean = false) {
     Chat,
     Files,
     Editor,
+    /** A Browser tab: the page goes first, and the app gets the keys the page hands back (not opaque). */
+    Browser,
     Terminal(opaque = true),
     Display(opaque = true),
     Other,

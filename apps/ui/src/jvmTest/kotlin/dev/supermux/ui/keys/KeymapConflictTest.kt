@@ -66,6 +66,10 @@ class KeymapConflictTest {
     private val terminalAllowed = setOf(
         AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
+        // The zoom keys are the terminal's own, but only the Browser pane registers them.
+        AppCommands.BrowserZoomIn.id to "Mod-=",
+        AppCommands.BrowserZoomOut.id to "Mod--",
+        AppCommands.BrowserZoomReset.id to "Mod-0",
     )
 
     /** ⌘/ and ⌘F stay the editor's (the deeper scope wins); paste-image is handled only by a composer. */
@@ -73,6 +77,12 @@ class KeymapConflictTest {
         AppCommands.ShowShortcuts.id to "Mod-/",
         AppCommands.Find.id to "Mod-f",
         AppCommands.PasteImage.id to "Mod-v",
+        // Indent and zoom are the editor's, but only the Browser pane registers these.
+        AppCommands.BrowserBack.id to "Mod-[",
+        AppCommands.BrowserForward.id to "Mod-]",
+        AppCommands.BrowserZoomIn.id to "Mod-=",
+        AppCommands.BrowserZoomOut.id to "Mod--",
+        AppCommands.BrowserZoomReset.id to "Mod-0",
     )
 
     private fun isAllowed(b: AppBinding, os: KeyOs, allowed: Set<Pair<String, String>>) =

@@ -1065,6 +1065,7 @@ fun addTerminalInWindow(ui: ShellUiState, hostId: String, ws: WorkspaceSession, 
 /** A pane's [KeyContext], from its view's kind (ViewHost.kt's switch). */
 internal fun paneKeyContext(view: ViewDto): KeyContext = when (view.kind) {
     "chat" -> KeyContext.Chat
+    "browser" -> KeyContext.Browser
     // A terminal or a remote display is scoped where it is drawn, so every one is, not only a pane's.
     "editor" -> when (view.stateString("mode")) {
         "file", "diff" -> KeyContext.Editor

@@ -72,6 +72,15 @@ val DefaultKeymap = Keymap(
         bind("Mod-Alt-\\", AppCommands.SplitDown),
         bind("Mod-w", AppCommands.CloseTab),
         bindOther("Ctrl-Shift-w", AppCommands.CloseTab, overOwner = true),
+        // The Browser tab's keys: only its pane registers them, so they never reach a chat, editor or terminal.
+        bind("Mod-l", AppCommands.BrowserFocusAddress),
+        bind("Mod-r", AppCommands.BrowserReload),
+        bind("Mod-[", AppCommands.BrowserBack),
+        bind("Mod-]", AppCommands.BrowserForward),
+        bind("Mod-=", AppCommands.BrowserZoomIn),
+        bind("Mod--", AppCommands.BrowserZoomOut),
+        bind("Mod-0", AppCommands.BrowserZoomReset),
+        bind("Mod-Shift-o", AppCommands.BrowserOpenExternally),
     ),
 )
 
