@@ -32,8 +32,8 @@ export type LimitWaitDeps = {
   now: () => number
   setTimer: (fn: () => void, ms: number) => unknown
   clearTimer: (timer: unknown) => void
-  /** Carries the session on. Called once per wait, after it is forgotten. */
-  resume: (wait: LimitWait) => Promise<void>
+  /** Carries the session on. Called once per wait, after it is forgotten: "due" at its time, "now" on Resume now. */
+  resume: (wait: LimitWait, how: "due" | "now") => Promise<void>
   /** A session's wait was made, replaced or dropped (undefined). */
   changed: (sessionId: string, wait: LimitWait | undefined) => void
   /** The host setting ("Resume after a limit reset"). */
@@ -98,7 +98,7 @@ export class LimitWaits {
   async resumeNow(sessionId: string): Promise<boolean> {
     const wait = this.waits.get(sessionId)
     if (!wait) return false
-    await this.fire(wait)
+    await this.fire(wait, "now")
     return true
   }
 
@@ -127,14 +127,14 @@ export class LimitWaits {
       this.timers.delete(wait.sessionId)
       if (this.waits.get(wait.sessionId) !== wait) return
       if (this.deps.now() < Date.parse(wait.resumeAt)) this.arm(wait)
-      else void this.fire(wait)
+      else void this.fire(wait, "due")
     }, delay))
   }
 
-  private async fire(wait: LimitWait): Promise<void> {
+  private async fire(wait: LimitWait, how: "due" | "now"): Promise<void> {
     this.cancel(wait.sessionId)
     try {
-      await this.deps.resume(wait)
+      await this.deps.resume(wait, how)
     } catch (error) {
       this.deps.onError?.(wait.sessionId, error)
     }
@@ -175,6 +175,8 @@ function isWait(value: unknown): value is LimitWait {
 }
 
 export const LIMIT_RESET_CONTINUE_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit, which has now reset."
+/** Resume now, before the reset: the limit may still be there; a limit hit again makes a new wait. */
+export const LIMIT_RESUME_NOW_PROMPT = "Continue from where you stopped. Your previous turn hit a usage limit; the user asked to resume now."
 export const LIMIT_RESET_BACKGROUND_SUFFIX = "Background subagents may have stopped on the limit: check them and resume or restart any unfinished work."
 
 export type ResumeDeps = {
@@ -193,7 +195,7 @@ export type ResumeDeps = {
 }
 
 /** A due wait: on the account that reset when it can, the session carries on with the continuation prompt. */
-export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps): Promise<void> {
+export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps, how: "due" | "now" = "due"): Promise<void> {
   const id = wait.sessionId
   if (!deps.exists(id) || deps.busy(id)) return
   let account = deps.account(id)
@@ -203,10 +205,11 @@ export async function resumeAfterLimit(wait: LimitWait, deps: ResumeDeps): Promi
       account = wait.account
     } catch { /* it carries on where it is; a limit there makes a new wait */ }
   }
-  await deps.notify(id, wait.resetsAt
-    ? `Resumed on ${deps.label(account)} — the usage limit reset`
+  await deps.notify(id, how === "now" ? `Resumed on ${deps.label(account)} — resumed by hand before the reset`
+    : wait.resetsAt ? `Resumed on ${deps.label(account)} — the usage limit reset`
     : `Trying again on ${deps.label(account)} — the usage limit may have reset`)
-  await deps.deliver(id, wait.background ? `${LIMIT_RESET_CONTINUE_PROMPT} ${LIMIT_RESET_BACKGROUND_SUFFIX}` : LIMIT_RESET_CONTINUE_PROMPT)
+  const prompt = how === "now" ? LIMIT_RESUME_NOW_PROMPT : LIMIT_RESET_CONTINUE_PROMPT
+  await deps.deliver(id, wait.background ? `${prompt} ${LIMIT_RESET_BACKGROUND_SUFFIX}` : prompt)
 }
 
 /** "18:13": a wait's time on the host's clock, for the chat notice (the apps show it in their own time zone). */

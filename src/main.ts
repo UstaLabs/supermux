@@ -833,7 +833,7 @@ const limitWaits = new LimitWaits({
   enabled: () => accountsSettings().autoResume,
   changed: (sessionId, wait) => webChannel?.broadcastToAll({ type: "limit_wait", session: sessionId, wait: limitWaitFields(wait) }),
   onError: (sessionId, err) => log.warn("limit_wait_failed", { session: sessionId, err: String(err) }),
-  resume: (wait) => resumeAfterLimit(wait, {
+  resume: (wait, how) => resumeAfterLimit(wait, {
     exists: (id) => !!registry.get(id),
     busy: (id) => { const phase = agentStateStore.get(id).phase; return phase === "thinking" || phase === "running" },
     account: (id) => { const s = registry.get(id); return s?.account || `${s?.agent ?? "claude"}:system` },
@@ -849,7 +849,7 @@ const limitWaits = new LimitWaits({
       const sent = await deliverToSession(id, text, { channel: "web", chat_id: "web", message_id: `limit-reset-${Date.now()}` })
       if (sent.handed) await sent.turn
     },
-  }),
+  }, how),
 })
 /** A session's wait as clients see it (null: none). */
 function limitWaitFields(wait: LimitWait | undefined) {

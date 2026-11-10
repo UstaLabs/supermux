@@ -876,6 +876,7 @@ fun SessionListScreen(
             dozing = !working && !workspaceUnread(w) && agentDozing(sid?.let { lastBySession[it]?.ts }, agentClock),
             rig = sid?.let { agentAvatars[it] },
             sessionId = sid,
+            limitWait = s?.limitWait,
         )
     }
     fun openAgent(w: WorkspaceDto) {
