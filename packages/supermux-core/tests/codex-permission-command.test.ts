@@ -8,7 +8,7 @@ import { createCodexNormalizer } from "../src/codex/normalize.js"
 import type { NormalizedBody } from "../src/events/normalized.js"
 import { createCore } from "../src/index.js"
 import type { PendingRequest } from "../src/types.js"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 import { replayAgent } from "./subagent-fixtures.js"
 
 setDefaultTimeout(20_000)
@@ -72,7 +72,7 @@ async function asked(requests: Record<string, unknown>[]) {
     id: "codex", command: process.execPath, args: [replayAgent, "--replay", file], env: { REPLAY_TRACE: trace }, inheritEnv: true,
     sandbox: "workspace-write", approvalPolicy: "on-request",
     permissions: { kind: "codex", approvalPolicy: "on-request", sandbox: "workspace-write" },
-    setupTimeoutMs: 5000, requestTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024,
+    setupTimeoutMs: FIXTURE_SETUP_MS, requestTimeoutMs: 5000, shutdownTimeoutMs: 200, maxFrameBytes: 16 * 1024 * 1024,
     keeper: { stateDirectory: join(dir, "keeper"), limits: { parkedDeadlineMs: 5000, journalMaxBytes: 5_000_000, connectTimeoutMs: 4000 } },
   })
   const core = createCore({ stateDirectory: join(dir, "core"), agents: [driver], limits: { ...TEST_LIMITS, interruptTimeoutMs: 2000 } })

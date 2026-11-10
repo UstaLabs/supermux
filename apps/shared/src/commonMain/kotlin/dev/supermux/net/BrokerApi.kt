@@ -725,6 +725,51 @@ data class OpenCodeUsage(
     val outputTokens: Long = 0,
     val cacheReadTokens: Long = 0,
     val cacheWriteTokens: Long = 0,
+    /** The OpenCode Go plan's limits (broker ≥ #109); null from an older broker. */
+    val plan: OpenCodePlan? = null,
+)
+
+/** One OpenCode Go window: how much of its allowance is used, and when it resets. */
+@Serializable
+data class OpenCodeGoMeter(
+    val percent: Double = 0.0,
+    /** Go refuses requests until the window resets. */
+    val limited: Boolean = false,
+    val resetsAtIso: String? = null,
+)
+
+/** OpenCode Go's 5-hour ("rolling"), weekly and monthly windows. */
+@Serializable
+data class OpenCodeGoUsage(
+    val rolling: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val weekly: OpenCodeGoMeter = OpenCodeGoMeter(),
+    val monthly: OpenCodeGoMeter = OpenCodeGoMeter(),
+)
+
+/**
+ * The OpenCode login's plan: `status` active (meters in [go]) · none (no Go plan) · signed_out · expired · unavailable
+ * ([error] says why). [via] console = the OpenCode sign-in, api_key = an OpenCode key.
+ */
+@Serializable
+data class OpenCodePlan(
+    val status: String = "",
+    val go: OpenCodeGoUsage? = null,
+    val via: String? = null,
+    val email: String? = null,
+    val error: String? = null,
+    /** The free models' daily limit (broker ≥ #109); null from an older broker. */
+    val free: OpenCodeFreeTier? = null,
+)
+
+/**
+ * OpenCode's free models: a daily limit per network that OpenCode exposes nowhere, so no numbers — only when it
+ * resets and whether a session hit it ([reached]).
+ */
+@Serializable
+data class OpenCodeFreeTier(
+    val resetsAtIso: String? = null,
+    val reached: Boolean = false,
+    val reachedAtIso: String? = null,
 )
 
 /** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
@@ -1823,6 +1868,13 @@ class BrokerApi(
 
     /** This client's bearer, or nothing at all when the token is blank — see [bearer]. */
     private fun HttpRequestBuilder.authHeader() = bearer(token)
+
+    /**
+     * [authHeader] as plain headers, for a request this client does not make itself: the web's browser download
+     * (#95). Empty for a blank token, as there — the browser sends its own cookie.
+     */
+    internal fun authHeaders(): Map<String, String> =
+        if (token.isNotBlank()) mapOf(HttpHeaders.Authorization to "Bearer $token") else emptyMap()
 
     /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
@@ -3053,11 +3105,14 @@ class BrokerApi(
 
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
-        val resp = http.get("$httpBase/files/${urlEncode(fileId)}") {
+        val resp = http.get(fileUrl(fileId)) {
             authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
+
+    /** Where a stored attachment is served: also what the web's browser download fetches (#95). */
+    internal fun fileUrl(fileId: String): String = "$httpBase/files/${urlEncode(fileId)}"
 
     /**
      * POST /files/<clip>/poster — make an uploaded picture an uploaded clip's poster (both this
@@ -3083,7 +3138,7 @@ class BrokerApi(
         var end = to
         repeat(2) {
             var retryEnd: Long? = null
-            val result = http.prepareGet("$httpBase/files/${urlEncode(fileId)}") {
+            val result = http.prepareGet(fileUrl(fileId)) {
                 authHeader()
                 header(HttpHeaders.Range, "bytes=$from-$end")
             }.execute { resp ->
@@ -3342,7 +3397,7 @@ class BrokerApi(
 
     /** GET /fs/raw?path=<abs> → the file's bytes (image/binary previews). Throws FsException on non-2xx (413 over 64 MB / 404 / 403). */
     suspend fun hostFsRaw(path: String): ByteArray {
-        val resp = http.get("$httpBase/fs/raw?path=${urlEncode(path)}") {
+        val resp = http.get(hostFsRawUrl(path)) {
             authHeader()
         }
         if (!resp.status.isSuccess()) {
@@ -3350,6 +3405,21 @@ class BrokerApi(
         }
         return resp.bodyAsBytes()
     }
+
+    /**
+     * [hostFsRaw] streamed to [sink] as it arrives, for a download to a file (#95): the file is never held in memory
+     * whole. Answers how many bytes came. Throws FsException on non-2xx, as [hostFsRaw] does.
+     */
+    suspend fun hostFsRawTo(path: String, sink: suspend (ByteArray, Int) -> Unit): Long =
+        http.prepareGet(hostFsRawUrl(path)) { authHeader() }.execute { resp ->
+            if (!resp.status.isSuccess()) {
+                throw FsException(resp.status.value, hostFsErrorMessage(resp.bodyAsText()) ?: "read failed (${resp.status.value})")
+            }
+            pump(resp.bodyAsChannel(), sink)
+        }
+
+    /** Where [hostFsRaw] reads [path]: also what the web's browser download fetches (#95). */
+    internal fun hostFsRawUrl(path: String): String = "$httpBase/fs/raw?path=${urlEncode(path)}"
 
     /** A host fs route's `{ error, message }` body as its message (what the editor shows); null when blank. */
     private fun hostFsErrorMessage(body: String): String? {

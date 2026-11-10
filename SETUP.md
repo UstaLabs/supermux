@@ -167,6 +167,7 @@ Relevant env vars (all optional, sensible defaults):
 | `MUX_STATE_DIR` | `$MUX_HOME/state` | Broker DB, keys, `.env`, sockets |
 | `MUX_TMUX_SESSION` | `supermux` | tmux session name the broker uses |
 | `MUX_TELEGRAM_BOT_TOKEN` | — | Set to enable the Telegram channel |
+| `MUX_TELEGRAM_API_ROOT` | `https://api.telegram.org` | Bot API server for the bot's calls and files (a self-hosted `telegram-bot-api`) |
 | `MUX_RELAY_DOMAIN` | `relay.supermux.dev` in native setup | Hosted connectivity relay; empty disables it |
 | `MUX_RELAY_TLS_VERIFY` | `1` | `0` skips checking the relay's TLS certificate (a self-hosted frps without a real one) |
 

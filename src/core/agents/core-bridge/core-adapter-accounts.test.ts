@@ -33,6 +33,7 @@ function fakeDriver(kind: AgentKind) {
   const opens: DriverContext[] = []
   let hold: (() => void) | undefined
   let holdNext = false
+  let limitNext: number | undefined
   const driver: AgentDriver = {
     id: kind,
     async open(ctx) {
@@ -41,6 +42,10 @@ function fakeDriver(kind: AgentKind) {
         agentSessionId: ctx.resumeId ?? `native-${opens.length}`,
         capabilities: { resume: true, steer: kind === "codex", fork: false, detach: false, configure: true, history: false, permissions: true },
         async prompt(_content, signal) {
+          if (limitNext !== undefined) {
+            ctx.onUpdate({ protocol: "native", value: { type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt: limitNext } } })
+            limitNext = undefined
+          }
           if (holdNext) {
             holdNext = false
             await new Promise<void>((resolve) => { hold = resolve; signal.addEventListener("abort", () => resolve(), { once: true }) })
@@ -52,11 +57,15 @@ function fakeDriver(kind: AgentKind) {
         async configure() {},
         configuration: () => ({}),
         async setPermissions() { return { applied: "now" as const } },
+        normalize: (update) => {
+          const value = update.value as { type?: unknown; rate_limit_info?: unknown }
+          return value?.type === "rate_limit_event" ? [{ kind: "usage", rateLimits: value.rate_limit_info }] : []
+        },
       }
       return runtime
     },
   }
-  return { driver, opens, holdNextPrompt() { holdNext = true }, release() { hold?.() } }
+  return { driver, opens, holdNextPrompt() { holdNext = true }, limitNextPrompt(resetsAt: number) { limitNext = resetsAt }, release() { hold?.() } }
 }
 
 async function setup(kind: AgentKind) {
@@ -161,4 +170,17 @@ test("codex: a session on an api_key account gets no copy of the user's auth.jso
   expect(fake.opens[0]!.profile?.env).toEqual({ CODEX_API_KEY: "sk-codex", OPENAI_API_KEY: "sk-codex" })
   expect(existsSync(join(sessionHome, "auth.json"))).toBe(false)
   expect(existsSync(join(sessionHome, "config.toml"))).toBe(true)
+})
+
+test("claude: a turn stopped on a limit with nowhere to go reaches the broker as account waiting (#92)", async () => {
+  const { host, fake, workdir } = await setup("claude")
+  const adapter = makeAdapter("claude", host, workdir, await tmp("claude-home-"))
+  const events: Array<Record<string, unknown>> = []
+  adapter.on("account", (e) => events.push(e))
+  await adapter.start()
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600
+  fake.limitNextPrompt(resetsAt)
+  await adapter.send("hit the limit")
+  for (let i = 0; i < 200 && !events.some((e) => e.event === "waiting"); i++) await new Promise((r) => setTimeout(r, 5))
+  expect(events.find((e) => e.event === "waiting")).toEqual({ kind: "account", event: "waiting", account: "claude:system", resetsAt: new Date(resetsAt * 1000), background: false })
 })

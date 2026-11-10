@@ -1,5 +1,5 @@
 import { expect, test, setDefaultTimeout } from "bun:test"
-import { TEST_LIMITS, nextId, WORKDIR } from "./helpers.js"
+import { TEST_LIMITS, nextId, WORKDIR, FIXTURE_SETUP_MS } from "./helpers.js"
 
 // Real ACP subprocess: handshake + resume across two cores; explicit budget for loaded hosts.
 setDefaultTimeout(30_000)
@@ -18,7 +18,7 @@ test("public core lifecycle works through a real ACP subprocess", async () => {
     args: [fileURLToPath(new URL("./fixtures/acp-agent.mjs", import.meta.url))],
     inheritEnv: true,
     mcpServers: [],
-    setupTimeoutMs: 5000,
+    setupTimeoutMs: FIXTURE_SETUP_MS,
     shutdownTimeoutMs: 500,
     maxFrameBytes: 16 * 1024 * 1024,
     maxOutstandingActivity: 256,

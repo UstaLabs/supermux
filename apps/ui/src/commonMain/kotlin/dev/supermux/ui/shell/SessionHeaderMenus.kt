@@ -494,7 +494,7 @@ fun OverflowMenu(
                         onClick = { expanded = false; onUsage() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Editor / LSP…") },
+                        text = { Text("Coding…") },
                         modifier = Modifier.testTag("overflow_lsp_settings"),
                         onClick = { expanded = false; onLspSettings() },
                     )

@@ -102,6 +102,6 @@ fun closeConfirmText(view: ViewDto, sessionName: String?): String = when (view.k
  * an UNKNOWN kind close without a question, which is the wrong way round for a kind this client
  * does not understand yet.
  */
-fun closeNeedsConfirmation(kind: String): Boolean = kind != "editor"
+fun closeNeedsConfirmation(kind: String): Boolean = kind != "editor" && kind != NEW_TAB_KIND
 
 fun ViewDto.closeNeedsConfirmation(): Boolean = closeNeedsConfirmation(kind)

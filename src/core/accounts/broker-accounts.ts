@@ -29,11 +29,12 @@ export const SYSTEM_ACCOUNT_LABEL = "System login"
 
 /** Settings key "accounts": the user's toggles plus the one-time migration marker. */
 export const SETTINGS_KEY_ACCOUNTS = "accounts"
-export type AccountsSettings = { autoSwitch: boolean; settingsMigrated?: boolean }
+export type AccountsSettings = { autoSwitch: boolean; autoResume: boolean; settingsMigrated?: boolean }
 
+/** autoSwitch is off unless turned on; autoResume (#92: wait for a limit reset, then carry on) is on unless turned off. */
 export function parseAccountsSettings(value: unknown): AccountsSettings {
   const o = (value ?? {}) as Record<string, unknown>
-  return { autoSwitch: o.autoSwitch === true, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
+  return { autoSwitch: o.autoSwitch === true, autoResume: o.autoResume !== false, ...(o.settingsMigrated === true ? { settingsMigrated: true } : {}) }
 }
 
 export function isAccountAgent(agent: unknown): agent is AccountAgent {
@@ -225,6 +226,12 @@ export type BrokerAccountsDeps = {
   onChanged?(): void
   /** Fetches the agent's usage where stale; Auto starts it in the background, for the next pick. */
   refreshUsage?(agent: AccountAgent): Promise<void>
+  /** Sessions (archived ones included) on `account`, which a removal moves first (#106). */
+  sessionsOn?(account: string): Array<{ id: string; agent: string }>
+  /** Moves a session to `account`: a running one now, a sleeping or archived one for its next wake. */
+  rehome?(sessionId: string, account: string): Promise<void>
+  /** The account is gone (e.g. #92's limit waits on it are dropped). */
+  onRemoved?(accountId: string): void
   now?: () => number
 }
 
@@ -296,13 +303,42 @@ export class BrokerAccounts {
     return toAccountView(account, this.deps.usage)
   }
 
+  /** What removing `id` would do (#106): how many sessions move, and to which account (the remove sheet says it). */
+  async removalPlan(id: string): Promise<{ account: string; sessions: number; to: string; toLabel: string }> {
+    const account = await this.deps.registry.get(id)
+    if (!account) throw new AccountsApiError(404, `Account ${id} was not found`, "unknown_account")
+    const to = await this.removalTarget(account)
+    return { account: id, sessions: this.deps.sessionsOn?.(id).length ?? 0, to: to.id, toLabel: displayLabel(to) }
+  }
+
+  /** Where a removal moves the account's sessions: Auto's pick among the agent's other accounts, else the system login. */
+  private async removalTarget(account: Account): Promise<Account> {
+    await this.deps.usage.load()
+    const rest = (await this.deps.registry.list(account.agent)).filter((a) => a.id !== account.id)
+    return this.choose(account.agent, rest) ?? rest.find((a) => a.method === "system")!
+  }
+
+  /**
+   * Moves every session on the account to the one Auto picks among the rest (else the system login), then
+   * removes it (#106): a session never stays pinned to an account that is gone. A session that cannot move now
+   * (mid-turn) keeps the account, and the removal fails with its error.
+   */
   async remove(id: string, options: { deleteHome?: boolean } = {}): Promise<void> {
     try {
+      const account = await this.deps.registry.get(id)
+      if (account && account.method !== "system") {
+        const pinned = this.deps.sessionsOn?.(id) ?? []
+        if (pinned.length) {
+          const target = (await this.removalTarget(account)).id
+          for (const session of pinned) await this.deps.rehome?.(session.id, target)
+        }
+      }
       await this.deps.registry.remove(id, options)
     } catch (err) {
       throw toApiError(err)
     }
     this.deps.usage.delete(id)
+    this.deps.onRemoved?.(id)
     await this.changed()
   }
 

@@ -27,6 +27,14 @@ export type PlanEntryStatus = "pending" | "in_progress" | "completed"
 export type PlanEntryPriority = "high" | "medium" | "low"
 
 /** One command an agent says it accepts as `/name`. The optional fields are the agent's own, passed through. */
+/** One model an agent offers, as its own picker lists it (an ACP `model` select option). */
+export type AgentModelEntry = {
+  /** The wire value the agent takes back (`session/set_config_option`), e.g. `gpt-5.6-sol[context=272k,…]`. */
+  value: string
+  /** The agent's own name for it, e.g. `gpt-5.6-sol`, `Auto`. */
+  name: string
+}
+
 export type AgentCommandEntry = {
   name: string
   description?: string
@@ -187,6 +195,8 @@ export type NormalizedBodyBase =
         | { decline: true }
     }
   | { kind: "commands-update"; commands: AgentCommandEntry[] }
+  /** The models the agent offers, from a session start (ACP `configOptions`); sent again only when the list changes. */
+  | { kind: "models-update"; models: AgentModelEntry[] }
   | { kind: "mode-update"; modeId?: string; model?: string }
   | { kind: "permissions-update"; spec: import("../types.js").PermissionsSpec; applied: "now" | "next-turn" }
   | {
@@ -205,7 +215,11 @@ export type NormalizedBodyBase =
   | { kind: "compaction"; compactionId: string; status: CompactionStatus; summary?: string; error?: string }
   /** The agent started a new, empty conversation in place of the old one (Claude /clear); the session runs on in it. */
   | { kind: "conversation-reset"; agentSessionId: string; previousAgentSessionId: string; trigger?: string }
-  | { kind: "warning"; message: string; source?: string }
+  /**
+   * `code` names a warning a host can act on: `opencode_free_limit` = OpenCode's free models hit today's limit and
+   * OpenCode waits until `resetsAt` (ISO) before it retries.
+   */
+  | { kind: "warning"; message: string; source?: string; code?: string; resetsAt?: string }
   | { kind: "error"; message: string; errorType?: string; recoverable?: boolean }
   | {
       kind: "subagent"

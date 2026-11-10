@@ -1172,6 +1172,12 @@ fun rememberDictation(
     val scope = rememberRetainedScope()
     val haptic = rememberHaptics()
     val controller = remember(resetKey, mic) { DictationController(mic, scope, haptic) }
+    // A recording (or its transcription) is the app's own work: "Restart to update" waits for it (#113).
+    val capturing = controller.recording || controller.listening || controller.transcribing
+    DisposableEffect(controller, capturing) {
+        val end = if (capturing) dev.supermux.ui.platform.InFlightWork.begin(dev.supermux.ui.platform.InFlightWork.Kind.Recording) else null
+        onDispose { end?.invoke() }
+    }
 
     // Keep the session-bound closures + draft sink current across recompositions.
     controller.transcribeDraft = transcribeDraft

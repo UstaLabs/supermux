@@ -89,6 +89,10 @@ targets:
         # iPhone, so every scroll in the shared shell would run at half the display's rate — the
         # runtime treats that as a misconfiguration rather than a preference, and throws at launch.
         CADisableMinimumFrameDurationOnPhone: true
+        # #118: what the audio player plays, and read-aloud, go on with the app in the background (the lock screen
+        # shows it through MPNowPlayingInfoCenter, IosNowPlaying.kt). Needs the .playback session while it plays.
+        UIBackgroundModes:
+          - audio
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

@@ -375,8 +375,8 @@ export type LoginDeps = {
   schedule: (fire: () => void, ms: number) => () => void
   /** Fails early (e.g. account_exists for a taken id) before any process starts. */
   precheck(): Promise<void>
-  /** Promotes a verified login: rename into a home (subscription) or move tokens to the vault (token). */
-  promote(directory: string, identity: AccountIdentity, tokens?: string): Promise<Account>
+  /** Promotes a verified login: rename into a home (subscription) or move tokens to the vault (token). `credential`: the login's credential file. */
+  promote(directory: string, identity: AccountIdentity, tokens: string | undefined, credential: string): Promise<Account>
 }
 
 /**
@@ -436,7 +436,7 @@ export function startLogin(deps: LoginDeps): LoginHandle {
       tokens = JSON.stringify(token)
     }
     await plan.finalize?.(dir)
-    return deps.promote(dir, identity, tokens)
+    return deps.promote(dir, identity, tokens, plan.credential)
   }
 
   const run = async () => {

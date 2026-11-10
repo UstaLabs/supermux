@@ -42,6 +42,7 @@ import dev.supermux.ui.display.DisplayActions
 import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.work.DownloadSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -136,6 +137,12 @@ class ShellActions(
     val fileSystemFor: (workspaceId: String) -> dev.supermux.fs.FileSystemService? = { null },
     /** The host file-system service owning [sessionId]'s host (Android's session-scoped editor). */
     val sessionFileSystem: (sessionId: String) -> dev.supermux.fs.FileSystemService? = { null },
+    /**
+     * A host file by ABSOLUTE [path] as one of the fleet's downloads (#95, Files "Save and open…"): its key and
+     * source from the host owning [workspaceId], or null where that host keeps no downloads (or is gone) — the
+     * editor then reads the bytes, as before.
+     */
+    val hostFileDownloadFor: (workspaceId: String, path: String) -> Pair<String, DownloadSource>? = { _, _ -> null },
 
     // ── LSP (still session-keyed in this phase) ────────────────────────────────────────────────
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
@@ -214,6 +221,7 @@ fun rememberShellActions(
             workspaceFsRefs = { wsId -> app.workspaceFsRefs(wsId) },
             fileSystemFor = { app.fileSystem },
             sessionFileSystem = { app.fileSystem },
+            hostFileDownloadFor = { _, path -> app.hostFileDownload(path, version = null) },
             lspStatus = app.lspStatus,
             lspRpc = app.lspRpc,
             lspStatusQuery = { id, path -> session(id)?.let { app.lspStatusQuery(it, path) } },
@@ -278,6 +286,7 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             workspaceFsRefs = { wsId -> fleet.workspaceFsRefs(wsId) },
             fileSystemFor = { wsId -> fleet.appForWorkspace(wsId)?.fileSystem },
             sessionFileSystem = { sid -> fleet.appFor(sid)?.fileSystem },
+            hostFileDownloadFor = { wsId, path -> fleet.appForWorkspace(wsId)?.hostFileDownload(path, version = null) },
             lspStatus = fleet.lspStatus,
             lspRpc = fleet.lspRpc,
             lspStatusQuery = { id, path -> fleet.lspStatusQuery(id, path) },

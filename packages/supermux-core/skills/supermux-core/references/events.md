@@ -28,6 +28,7 @@ Fields with `?` may be absent.
 - `permission-auto` `{ toolCall, optionId }`: a request the session's ACP policy answered itself (`auto-approve`, `read-only`, `ask` with `askKinds` for the kinds not listed, or a `read`/`search` inside the spec's `readableRoots`), so no `permission-request` was raised.
 - `permissions-update` `{ spec, applied }`: the permissions changed, applied `now` or from the `next-turn`.
 - `commands-update` `{ commands }`: the agent's slash commands, each `{ name, description?, argumentHint?, builtin?, _meta? }`. ACP agents send it on `available_commands_update` (`input.hint` becomes `argumentHint`, `_meta` is kept as sent); Claude on its `initialize` and `reload_plugins` replies and its `commands_changed` push (`builtin` marks Claude's built-ins). No prompt is needed to learn the list.
+- `models-update` `{ models }`: the models an ACP agent offers, each `{ value, name }` (`value` is what `session/set_config_option` takes, `name` the agent's own name), from the `configOptions` its `session/new` returns; sent again only when the list changes. Cursor takes only these values: `cursor()` runs an id that names a base model plus `-…` as that base, and refuses any other id with an error that lists them.
 - `mode-update` `{ modeId?, model? }`: the agent's mode or model changed.
 - `session-info` `{ title?, cwd?, model? }`: what the agent reports about its session.
 - `usage` `{ context?, tokens?, cost?, rateLimits? }`: `context` `{ used, size }`, `tokens` `{ input, output, total }`, `cost` `{ amount, currency }`.

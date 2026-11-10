@@ -4,9 +4,11 @@ import dev.supermux.chat.mimeForFileName
 import dev.supermux.chat.webHandoff
 import dev.supermux.net.BlobChunkSource
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.FileAction
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
+import dev.supermux.work.DownloadedFile
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -30,6 +32,14 @@ private fun makeBlob(data: Int8Array, mime: String): Blob = js("new Blob([data],
 
 private fun blobOf(bytes: ByteArray, mime: String): Blob = makeBlob(bytes.toInt8Array(), mime)
 
+/** Whether [value] is a browser `Blob` (a `File` is one too). */
+@Suppress("UNUSED_PARAMETER")
+private fun isBlobJs(value: JsAny): Boolean = js("value instanceof Blob")
+
+/** [blob] as a Blob of [type]: `slice` makes a new view of the same bytes, it copies nothing. */
+@Suppress("UNUSED_PARAMETER")
+private fun retypedJs(blob: Blob, type: String): Blob = js("blob.slice(0, blob.size, type)")
+
 /**
  * "Save as…" is a download; "open with" is a new tab on a blob URL. Nothing touches a real path.
  *
@@ -41,10 +51,13 @@ private fun blobOf(bytes: ByteArray, mime: String): Blob = makeBlob(bytes.toInt8
  * so a caller that awaits anything (a fetch, a decode) before calling them resumes on a later tick
  * and the popup blocker eats the result silently — no exception, no download. Callers must do
  * their awaiting BEFORE the gesture hands over. The same applies to `WebPlatform.openUrl`.
+ *
+ * A finished download (#95) is already a Blob the browser holds ([WebDownload]): [saveFile] and [openFile] hand
+ * that over as it is, and suspend nowhere, so a bar action started inside the tap is still inside it at the click.
  */
 object WebFiles : FileAccess {
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
-        download(name, webHandoff(mime, open = false).mime, bytes)
+        download(name, blobOf(bytes, webHandoff(mime, open = false).mime))
         return SavedFile(name = name, location = "Downloads")
     }
 
@@ -53,13 +66,8 @@ object WebFiles : FileAccess {
 
     override suspend fun openExternally(name: String, mime: String, bytes: ByteArray): Boolean {
         val handoff = webHandoff(mime, open = true)
-        if (handoff.download) {
-            download(name, handoff.mime, bytes)
-            return true
-        }
-        val url = URL.createObjectURL(blobOf(bytes, handoff.mime))
-        window.open(url, "_blank", "noopener")
-        window.setTimeout({ URL.revokeObjectURL(url); null }, 60_000)
+        val blob = blobOf(bytes, handoff.mime)
+        if (handoff.download) download(name, blob) else openInTab(blob)
         return true
     }
 
@@ -68,13 +76,48 @@ object WebFiles : FileAccess {
     /** No temp directory in a browser tab; the inline video player falls back to its own path. */
     override suspend fun stageTemp(name: String, bytes: ByteArray): String? = null
 
-    private fun download(name: String, mime: String, bytes: ByteArray) {
-        val url = URL.createObjectURL(blobOf(bytes, mime))
+    /** A browser can save a finished download and open it in a new tab (R3); it has no share sheet. */
+    override val fileActions: Set<FileAction> = setOf(FileAction.Save, FileAction.Open)
+
+    /** The download's Blob as a browser download under its real name. Null: [file] holds no Blob. */
+    override suspend fun saveFile(file: DownloadedFile): SavedFile? {
+        val blob = downloadedBlob(file) ?: return null
+        download(file.name, retypedJs(blob, webHandoff(file.mime, open = false).mime))
+        return SavedFile(name = file.name, location = "Downloads")
+    }
+
+    /**
+     * The download's Blob in a new tab — or downloaded, for a type the browser would run as a page or a script
+     * ([webHandoff]). The Blob is retyped by the download's own type, never the type the server answered with, so
+     * that rule holds whatever came back. False: [file] holds no Blob.
+     */
+    override suspend fun openFile(file: DownloadedFile): Boolean {
+        val blob = downloadedBlob(file) ?: return false
+        val handoff = webHandoff(file.mime, open = true)
+        val typed = retypedJs(blob, handoff.mime)
+        if (handoff.download) download(file.name, typed) else openInTab(typed)
+        return true
+    }
+
+    /** [file]'s browser Blob ([DownloadedFile.handle] on the web), or null when it holds none. */
+    private fun downloadedBlob(file: DownloadedFile): Blob? {
+        val handle = file.handle as? JsAny ?: return null
+        return if (isBlobJs(handle)) handle.unsafeCast<Blob>() else null
+    }
+
+    private fun download(name: String, blob: Blob) {
+        val url = URL.createObjectURL(blob)
         val a = document.createElement("a") as HTMLAnchorElement
         a.href = url
         a.download = name
         a.click()
         window.setTimeout({ URL.revokeObjectURL(url); null }, 10_000)
+    }
+
+    private fun openInTab(blob: Blob) {
+        val url = URL.createObjectURL(blob)
+        window.open(url, "_blank", "noopener")
+        window.setTimeout({ URL.revokeObjectURL(url); null }, 60_000)
     }
 }
 

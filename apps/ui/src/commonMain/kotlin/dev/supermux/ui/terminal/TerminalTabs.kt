@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -68,6 +69,7 @@ import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.isTertiaryButtonPress
+import dev.supermux.ui.keys.LocalKeyScopeActive
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.rememberRetained
 import dev.supermux.ui.theme.MonoFontFamily
@@ -432,11 +434,14 @@ fun TerminalTabs(
                         val surface = live[id]
                         if (surface != null) {
                             KeepAlivePanel(visible = id == activeId) {
-                                surface.Content(
-                                    Modifier.fillMaxSize(),
-                                    id == activeId && active,
-                                    { removeLocalTab(id) },
-                                )
+                                // Hidden, a tab registers no commands.
+                                CompositionLocalProvider(LocalKeyScopeActive provides (LocalKeyScopeActive.current && id == activeId)) {
+                                    surface.Content(
+                                        Modifier.fillMaxSize(),
+                                        id == activeId && active,
+                                        { removeLocalTab(id) },
+                                    )
+                                }
                             }
                         }
                     }

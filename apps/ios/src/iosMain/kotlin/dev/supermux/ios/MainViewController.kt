@@ -255,11 +255,9 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             var groupByProject by remember { mutableStateOf(readGroupByProject(defaults)) }
             val foreground by IosAppState.foreground.collectAsState()
 
-            // Silence read-aloud when the app leaves the screen, the way Android stops it on
-            // ON_STOP. Without this an utterance keeps talking out of a phone the user has put
-            // away — and iOS, unlike Android, never destroys the composition that owns it, so
-            // nothing else would ever stop it.
-            LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+            // Read-aloud goes on with the app in the background (#118 car 3b), as the audio player does: the app has
+            // `UIBackgroundModes: audio` and the voice the .playback session; the lock screen's ❚❚ or the dock's ✕
+            // stops it.
 
             // A `supermux://pair` link that arrives while ALREADY paired adds a second host rather
             // than re-entering the gate. It goes to the shared Add host screen through

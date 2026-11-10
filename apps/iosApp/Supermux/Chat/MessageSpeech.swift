@@ -80,6 +80,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         u.rate = AVSpeechUtteranceDefaultSpeechRate
         arm(onDone)
         currentUtterance = u
+        activatePlayback()
         synth.speak(u)
     }
 
@@ -97,6 +98,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         }
         finishBox = box
         player.delegate = box
+        activatePlayback()
         if !player.play() { finishPending(gen: myGen) }
     }
 
@@ -126,7 +128,20 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             guard item.status == .failed else { return }
             Task { @MainActor in self?.finishPending(gen: myGen) }
         }
+        activatePlayback()
         player.play()
+    }
+
+    /// Read-aloud goes on with the app in the background (#118 car 3b): `UIBackgroundModes: audio`
+    /// keeps the app running only while its session is a playback one, and active. It also speaks
+    /// with the ringer switch on silent, as the audio player's notes do. A recording or dictation in
+    /// progress keeps its own category: the voice is heard through it.
+    private func activatePlayback() {
+        let session = AVAudioSession.sharedInstance()
+        if session.category != .playAndRecord && session.category != .record {
+            try? session.setCategory(.playback, mode: .spokenAudio)
+        }
+        try? session.setActive(true)
     }
 
     private func stopURLPlayer() {

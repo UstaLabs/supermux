@@ -8,6 +8,9 @@ const MIN_HOURS = 1 / 60
  */
 export const ACCOUNT_UNAVAILABLE_ERROR = "account_unavailable"
 
+/** `error` body `errorType` for a turn the agent refused because it has no sign-in at all (no credential to refuse). */
+export const NOT_SIGNED_IN_ERROR = "not_signed_in"
+
 /** The window Core records as full on an account the agent's API refused for lack of credits (HTTP 402). */
 export const BALANCE_WINDOW = "balance"
 
@@ -77,4 +80,32 @@ export function pickAccount(
     if (!best || value > best.score) best = { account, score: value }
   }
   return best?.account ?? fallback
+}
+
+/** When full windows free up again: the latest reset among them. Undefined when none is full or one has no reset time. */
+export function freesAt(windows: readonly UsageWindow[], now = Date.now()): Date | undefined {
+  const full = windows.filter(window => effectiveUsed(window, now) >= 100)
+  if (!full.length || full.some(window => !window.resetsAt)) return undefined
+  return new Date(Math.max(...full.map(window => window.resetsAt!.getTime())))
+}
+
+/**
+ * When every candidate is full: the account that frees up first and when, i.e. the minimum over
+ * accounts of the latest reset among its full windows. Unavailable (refused or dead) accounts, the
+ * ones never switched to, accounts without full windows and full windows without a reset time are
+ * no candidates. Undefined when no reset time is known.
+ */
+export function earliestReset(
+  candidates: readonly Account[],
+  usage: (id: string) => readonly UsageWindow[] | undefined,
+  now = Date.now(),
+  unavailable: (id: string) => boolean = () => false,
+): { account: string; at: Date } | undefined {
+  let best: { account: string; at: Date } | undefined
+  for (const account of candidates) {
+    if (!switchable(account) || unavailable(account.id)) continue
+    const at = freesAt(usage(account.id) ?? [], now)
+    if (at && (!best || at < best.at)) best = { account: account.id, at }
+  }
+  return best
 }

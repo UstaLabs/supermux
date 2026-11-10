@@ -1,5 +1,5 @@
 import { test, expect, mock } from "bun:test"
-import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverWithAccounts } from "../src/core/models/discovery"
+import { cursorModelsFromAcp, discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverWithAccounts } from "../src/core/models/discovery"
 import { discoverGrokModels, mapGrokModels } from "../src/core/agents/grok/model-discovery"
 
 // Verbatim `_meta.modelState.availableModels` from a live ACP `initialize`
@@ -258,6 +258,27 @@ test("discoverCursorModels parses cursor-agent --list-models output", async () =
     { id: "auto", displayName: "Auto", agent: "cursor" },
     { id: "gpt-5.3-codex", displayName: "Codex 5.3", agent: "cursor" },
     { id: "sonnet-4", displayName: "Sonnet 4", agent: "cursor" },
+  ])
+})
+
+test("discoverCursorModels prefers the list Cursor's ACP gave at a session start; the CLI is only the first-run fallback (#102)", async () => {
+  const mockRun = mock(() => Promise.resolve("auto - Auto\ngpt-5.6-sol-high - GPT-5.6 Sol High"))
+  const learned = [{ id: "auto", displayName: "Auto", agent: "cursor" as const }, { id: "gpt-5.6-sol", displayName: "gpt-5.6-sol", agent: "cursor" as const }]
+  expect(await discoverCursorModels({ run: mockRun, learned: () => learned })).toEqual(learned)
+  expect(mockRun).not.toHaveBeenCalled()
+  expect(await discoverCursorModels({ run: mockRun, learned: () => undefined })).toEqual([
+    { id: "auto", displayName: "Auto", agent: "cursor" },
+    { id: "gpt-5.6-sol-high", displayName: "GPT-5.6 Sol High", agent: "cursor" },
+  ])
+})
+
+test("cursorModelsFromAcp: Cursor's own names, and its Auto keeps the id every client stores (#102)", () => {
+  expect(cursorModelsFromAcp([
+    { value: "default[]", name: "Auto" },
+    { value: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]", name: "gpt-5.6-sol" },
+  ])).toEqual([
+    { id: "auto", displayName: "Auto", agent: "cursor" },
+    { id: "gpt-5.6-sol", displayName: "gpt-5.6-sol", agent: "cursor" },
   ])
 })
 

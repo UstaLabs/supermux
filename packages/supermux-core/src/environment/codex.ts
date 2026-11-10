@@ -5,6 +5,8 @@ import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.
 import type { CodexEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
 import { trustedHostBinary } from "./host-binary.js"
 import { copyFileReplace, writeFileNoFollow } from "./write.js"
+import { CoreError } from "../errors.js"
+import { NOT_SIGNED_IN_ERROR } from "../accounts/policy.js"
 
 function ensureHome(home: string): void {
   mkdirSync(home, { recursive: true, mode: 0o700 })
@@ -184,7 +186,8 @@ export async function prepareCodexEnvironmentWith(spec: CodexEnvironmentSpec, re
       files.push(sessionAuth)
       credentials = "copy"
     } else {
-      throw new Error(
+      throw new CoreError(
+        NOT_SIGNED_IN_ERROR,
         `Codex auth not found at ${userAuth} and OPENAI_API_KEY is unset. ` +
         `Run \`codex login\` first.`,
       )

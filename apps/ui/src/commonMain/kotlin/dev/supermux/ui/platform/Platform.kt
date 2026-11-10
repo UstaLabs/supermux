@@ -118,6 +118,21 @@ interface Platform {
     /** The assistant overlay's system side (#62); null where there is none. */
     val assistantOverlay: AssistantOverlayHost? get() = null
 
+    /**
+     * The app's audio player's outputs (#118) where this platform has its own — AVAudioPlayer on macOS and iOS, whose
+     * video library cannot play an audio-only file there — or null for the library's
+     * ([dev.supermux.ui.work.LibraryAudioOutputs]). One instance, shared by every player that asks: its
+     * [dev.supermux.work.AudioOutputs.close] must leave it usable.
+     */
+    val audioOutputs: dev.supermux.work.AudioOutputs? get() = null
+
+    /**
+     * The system's Now Playing for what the audio player plays (#118 cars 3b/3c): the lock screen and Control Center on
+     * iOS, the Mac's Now Playing and media keys, Windows's media keys. Null where there is none (Android has its media
+     * session in its outputs). One for the process.
+     */
+    val systemNowPlaying: dev.supermux.work.SystemNowPlaying? get() = null
+
     /** Read-aloud output (OS synthesiser + broker audio playback). */
     val tts: TtsEngine
 
