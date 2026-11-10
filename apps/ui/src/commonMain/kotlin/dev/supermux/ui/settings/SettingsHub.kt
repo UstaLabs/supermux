@@ -49,6 +49,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -343,12 +344,18 @@ fun SettingsHub(
         ?: extraSelected?.let(HubTarget::Ext)
         ?: HubTarget.Sec(wideSection)
     // What a section keeps on its page (rememberRetainedOnPage) belongs to this opening of it, on this machine.
-    val pageKey = (if (compact) phonePage else widePage)?.let { "${place.opening}:${machines?.currentId}:${it.key()}" }
+    /** The machine a page's data and forms belong to: hosting is this computer's, whichever one Settings is about. */
+    val pageMachine = if (place.sub == MachineSub.COMPUTER) THIS_COMPUTER_ID else machines?.currentId
+    val pageKey = (if (compact) phonePage else widePage)?.let { "${place.opening}:$pageMachine:${it.key()}" }
 
     /** "This computer" is a card of its own: no local host is paired, so its hosting page is not any machine's. */
     val computerCard = machines?.all?.any { it.id == THIS_COMPUTER_ID } == true
-    /** This computer's hosting is not a sub-page of another machine (one picked on the scope line, a stale route). */
-    val dropComputer = machines != null && machines.current?.local == false && !computerCard
+    /**
+     * This computer's hosting is not a sub-page of another machine (one picked on the scope line, a stale route), and
+     * a device that cannot host has none at all: a `Machine/computer` link there would be an invisible sub-page that
+     * eats a Back.
+     */
+    val dropComputer = !caps.localBroker || (machines != null && machines.current?.local == false && !computerCard)
 
     /** Runs [action], or asks to discard first when a section reported unsaved edits. */
     fun guard(action: () -> Unit) {
@@ -463,9 +470,12 @@ fun SettingsHub(
         }
     }
 
-    /** The shell's Escape and system back: a search being typed clears first. */
+    /**
+     * The shell's Escape and system back: a search clears first — on a wide rail whenever there is one (its results
+     * stand in for the rows), on a phone while it is being typed (a page opened from the results goes back to them).
+     */
     fun closeRequest() {
-        if (searchFocused && query.isNotEmpty()) query = "" else leave()
+        if (query.isNotEmpty() && (!compact || searchFocused)) query = "" else leave()
     }
 
     /** A machine card: that machine's page (switching to it first), or this computer's hosting. */
@@ -483,8 +493,15 @@ fun SettingsHub(
 
     /** A search result: its page at its row. A wide rail goes back to its rows; a phone keeps the results for Back. */
     fun pickResult(e: SettingsSearchEntry) {
-        open(HubTarget.Sec(e.section), anchor = e.anchor)
-        if (!compact) query = ""
+        if (compact) {
+            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            return
+        }
+        // Only once the page is really left: "Keep editing" stays on the results.
+        guard {
+            open(HubTarget.Sec(e.section), anchor = e.anchor)
+            query = ""
+        }
     }
 
     fun confirmDiscard() {
@@ -547,9 +564,20 @@ fun SettingsHub(
         }
     }
 
+    // Hosting opened from the "This computer" card pairs a local host when it starts, and the card gives way to that
+    // machine's: the page follows it there, still on hosting, instead of dropping to the machine Settings was about.
     // Another machine has no "This computer" screen: its page itself shows instead.
-    LaunchedEffect(dropComputer, place.sub) {
-        if (dropComputer && place.sub == MachineSub.COMPUTER) {
+    val hadComputerCard = remember { booleanArrayOf(computerCard) }
+    LaunchedEffect(computerCard, dropComputer, place.sub) {
+        val cardLeft = hadComputerCard[0] && !computerCard
+        hadComputerCard[0] = computerCard
+        if (place.sub != MachineSub.COMPUTER) return@LaunchedEffect
+        val local = machines?.all?.firstOrNull { it.local }
+        if (cardLeft && caps.localBroker && machines != null && local != null) {
+            if (local.id != machines.currentId) machines.onPick(local.id)
+            return@LaunchedEffect
+        }
+        if (dropComputer) {
             place.sub = null
             if (!compact && widePage == HubTarget.Sec(SettingsSection.Machine)) report(SettingsSection.Machine, null)
         }
@@ -598,7 +626,7 @@ fun SettingsHub(
     @Composable
     fun Slot(target: HubTarget) {
         when (target) {
-            is HubTarget.Sec -> key(machines?.currentId) { content(placeOf(target), scope) }
+            is HubTarget.Sec -> key(pageMachine) { content(placeOf(target), scope) }
             is HubTarget.Ext -> extraContent(target.extra, scope)
         }
     }
@@ -616,7 +644,10 @@ fun SettingsHub(
 
     // The search shortcut: the hub holds the keyboard focus (under the shell's Escape box, above the pages), so the
     // key reaches it wherever focus is inside Settings.
+    // The root takes the focus only while nothing inside has it (on opening, or after a page let go of it), so it is
+    // never a Tab stop of its own beside the rail and the page.
     val rootFocus = remember { FocusRequester() }
+    var focusInside by remember { mutableStateOf(false) }
     val shortcutKeys = if (searchShortcut == null) {
         Modifier
     } else {
@@ -630,10 +661,12 @@ fun SettingsHub(
                     false
                 }
             }
+            .onFocusChanged { focusInside = it.hasFocus && !it.isFocused }
+            .focusProperties { canFocus = !focusInside }
             .focusable()
     }
     LaunchedEffect(searchShortcut != null) {
-        if (searchShortcut != null) runCatching { rootFocus.requestFocus() }
+        if (searchShortcut != null && !focusInside) runCatching { rootFocus.requestFocus() }
     }
 
     CompositionLocalProvider(LocalSettingsMachines provides pageMachines) {
@@ -730,16 +763,24 @@ fun SettingsHub(
                     .then(shortcutKeys)
                     .testTag("settings_hub"),
             ) {
+                // proto.css: the window body's 6 dp inset, the head (10 dp in, 10 dp gaps), the search field (2/6/8 dp
+                // margins) and a list scrolled on its own, 2 dp in from the rail's sides.
                 Column(
                     Modifier
+                        .padding(start = 6.dp)
                         .width(252.dp)
                         .fillMaxHeight()
-                        .verticalScroll(rememberScrollState())
-                        .padding(start = 8.dp, end = 8.dp, bottom = 10.dp)
                         .testTag("settings_hub_rail"),
                 ) {
                     RailHeader(onBack = { leave() })
-                    Search(Modifier.padding(bottom = 10.dp))
+                    Search(Modifier.padding(start = 6.dp, end = 6.dp, top = 2.dp, bottom = 8.dp))
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(start = 2.dp, end = 2.dp, bottom = 10.dp),
+                    ) {
                     if (query.isBlank()) {
                         if (machines != null && machines.all.isNotEmpty()) {
                             Column(
@@ -771,6 +812,7 @@ fun SettingsHub(
                         }
                     } else {
                         SearchResults(query, groups, ::groupTitle) { pickResult(it) }
+                    }
                     }
                 }
                 // The detail pane: the page on the pane tone, inset from the chrome. The rail owns navigation, so
@@ -824,15 +866,16 @@ private fun RailHeader(onBack: () -> Unit) {
     val hovered by src.collectIsHoveredAsState()
     val shape = RoundedCornerShape(6.dp)
     Row(
-        Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 2.dp),
+        Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(
             Modifier
                 .size(24.dp)
                 .clip(shape)
-                .background(if (hovered) c.hover else Color.Transparent)
+                // proto.css `.bk:hover`: the selection wash.
+                .background(if (hovered) c.wash else Color.Transparent)
                 .clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onBack)
                 .kitFocusRing(src, shape)
                 .semantics { contentDescription = "Back" }

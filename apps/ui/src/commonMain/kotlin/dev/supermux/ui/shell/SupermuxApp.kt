@@ -176,7 +176,6 @@ import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.SettingsMachines
 import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
 import dev.supermux.host.formatLastSeen
-import kotlin.time.Clock
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
@@ -357,8 +356,10 @@ fun SupermuxApp(
     val activeHostId by fleet.activeHost.collectAsState()
     // The machines Settings shows as cards and its pages' scope lines pick from (#97).
     val localBrokerCap = LocalPlatform.current.caps.localBroker
-    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap) {
-        val now = Clock.System.now().toEpochMilliseconds()
+    // "last seen 2h ago" moves on with the clock, nudged once a minute.
+    val settingsClock = rememberRailClock()
+    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap, settingsClock) {
+        val now = settingsClock
         val paired = hostViews.map { h ->
             val seen = formatLastSeen(now, h.lastSeenAt)
             KitMachine(

@@ -15,6 +15,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -893,7 +898,7 @@ class SettingsHubTest {
     @Test fun the_this_computer_card_opens_hosting_when_no_local_host_is_paired() = runComposeUiTest {
         val computer = KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")
         var picked: String? = null
-        setPlatformContent {
+        setPlatformContent(platform = FakePlatform(caps = NO_CAPS.copy(localBroker = true))) {
             RoutedHub(machines = SettingsMachines(listOf(computer, mini), "m2") { picked = it }) { p, _ -> Text("page ${p.section} ${p.sub}") }
         }
         onNodeWithTag("settings_machine_card_this-computer").performClick()
@@ -975,6 +980,103 @@ class SettingsHubTest {
         assertEquals(null, restored.sub)
         assertEquals(null, restored.anchor)
         assertEquals("op-1", restored.opening)
+    }
+
+    // ── Unit C review fixes ────────────────────────────────────────────────────────────────────
+
+    @Test fun hosting_opened_from_the_this_computer_card_follows_the_local_host_it_pairs() = runComposeUiTest {
+        val computer = KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")
+        val paired = KitMachine("m3", "Ahmet's PC", local = true, online = true, status = "Running")
+        var all by mutableStateOf(listOf(computer, mini))
+        var current by mutableStateOf("m2")
+        val picks = mutableListOf<String>()
+        setPlatformContent(platform = FakePlatform(caps = NO_CAPS.copy(localBroker = true))) {
+            RoutedHub(machines = SettingsMachines(all, current) { picks += it; current = it }) { p, _ -> Text("page ${p.section} ${p.sub}") }
+        }
+        onNodeWithTag("settings_machine_card_this-computer").performClick()
+        onNodeWithText("page Machine computer").assertExists()
+        // Starting hosting pairs this computer's host: the synthetic card gives way to the real one.
+        all = listOf(paired, mini)
+        waitForIdle()
+        onNodeWithText("page Machine computer").assertExists()
+        assertEquals(listOf("m3"), picks)
+        assertEquals("m3", current)
+    }
+
+    @Test fun a_host_that_cannot_host_has_no_computer_sub_page_to_eat_a_back() = runComposeUiTest {
+        var handler: (() -> Unit)? = null
+        var closed = 0
+        setPlatformContent {
+            SettingsHub(
+                section = SettingsSection.Machine,
+                sub = MachineSub.COMPUTER,
+                onSectionChange = {},
+                onBack = { closed++ },
+                onRegisterCloseHandler = { handler = it },
+            ) { p, _ -> Text("page ${p.section} ${p.sub}") }
+        }
+        onNodeWithText("page Machine null").assertExists()
+        runOnIdle { handler!!() }
+        waitForIdle()
+        assertEquals(1, closed)
+    }
+
+    @Test fun escape_clears_a_wide_search_even_when_the_field_has_lost_focus() = runComposeUiTest {
+        var handler: (() -> Unit)? = null
+        var closed = 0
+        setPlatformContent {
+            SettingsHub(
+                section = null,
+                onSectionChange = {},
+                onBack = { closed++ },
+                onRegisterCloseHandler = { handler = it },
+                searchIndex = index,
+            ) { _, _ -> Box(Modifier.size(10.dp).testTag("page_focus").focusable()) }
+        }
+        onNodeWithTag("settings_search").performTextInput("theme")
+        onNodeWithTag("page_focus").requestFocus()
+        onNodeWithTag("settings_search").assertIsNotFocused()
+        runOnIdle { handler!!() }
+        waitForIdle()
+        onNodeWithTag("settings_search").assert(emptyQuery)
+        assertEquals(0, closed)
+    }
+
+    @Test fun keep_editing_on_a_wide_result_pick_keeps_the_query() = runComposeUiTest {
+        setPlatformContent {
+            RoutedHub(start = SettingsSection.Memory) { p, scope ->
+                scope.onDirtyChange(p.section == SettingsSection.Memory)
+                Text("page ${p.section}")
+            }
+        }
+        onNodeWithTag("settings_search").performTextInput("theme")
+        onNodeWithTag("settings_result_general_theme").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_discard_cancel").performClick()
+        waitForIdle()
+        onNodeWithText("page Memory").assertExists()
+        onNodeWithTag("settings_search").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("theme")))
+        // Leaving for real clears it.
+        onNodeWithTag("settings_result_general_theme").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_discard_confirm").performClick()
+        waitForIdle()
+        onNodeWithText("page General").assertExists()
+        onNodeWithTag("settings_search").assert(emptyQuery)
+    }
+
+    @Test fun the_hub_itself_is_no_tab_stop_once_focus_is_inside() = runComposeUiTest {
+        setPlatformContent {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, searchShortcut = "Ctrl+F") { _, _ -> Text("page") }
+        }
+        waitForIdle()
+        onNodeWithTag("settings_hub").assertIsFocused()
+        onNodeWithTag("settings_hub").performKeyInput { pressKey(Key.Tab) }
+        waitForIdle()
+        onNodeWithTag("settings_hub_back").assertIsFocused()
+        onNodeWithTag("settings_hub_back").performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Tab); keyUp(Key.ShiftLeft) }
+        waitForIdle()
+        onNodeWithTag("settings_hub").assertIsNotFocused()
     }
 }
 
