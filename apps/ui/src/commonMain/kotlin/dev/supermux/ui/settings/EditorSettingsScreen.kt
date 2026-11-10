@@ -27,6 +27,8 @@ import dev.supermux.ui.prefs.TERMINAL_FONT_MIN
 import dev.supermux.ui.settings.kit.KitStepperRow
 import dev.supermux.ui.settings.kit.KitToggleRow
 import dev.supermux.ui.settings.kit.kitAnchor
+import dev.supermux.ui.keys.KeyOs
+import dev.supermux.ui.keys.currentKeyOs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -76,7 +78,7 @@ fun EditorSection(modifier: Modifier = Modifier) {
             },
             range = TERMINAL_FONT_MIN..TERMINAL_FONT_MAX,
             modifier = Modifier.kitAnchor("terminal-font").testTag("coding_terminal-font"),
-            description = if (pointer) "Also ⌘+ and ⌘− in a terminal." else "Pinch in a terminal to change it too.",
+            description = if (pointer) terminalZoomHint(currentKeyOs) else "Pinch in a terminal to change it too.",
             tag = "terminal_font",
         )
         // The Changes pane's per-file diff: inline (default) or side by side. The pane's own toggle writes the same value.
@@ -99,3 +101,7 @@ fun EditorSection(modifier: Modifier = Modifier) {
         }
     }
 }
+
+/** The terminal's zoom keys as [os] writes them (the terminal's own rule: ⌘ on Apple, Ctrl elsewhere). */
+internal fun terminalZoomHint(os: KeyOs): String =
+    if (os == KeyOs.Apple) "Also ⌘+ and ⌘− in a terminal." else "Also Ctrl+Plus and Ctrl+Minus in a terminal."

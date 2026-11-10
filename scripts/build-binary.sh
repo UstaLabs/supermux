@@ -123,7 +123,7 @@ else
   else
     ST_ZIG_JOBS="${MUX_ZIG_JOBS:-4}" bash apps/terminal-core/wasm/build.sh
   fi
-  ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
+  ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain -PsupermuxVersion="$VERSION" )
 fi
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).

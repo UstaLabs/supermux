@@ -346,8 +346,9 @@ private fun MachineName(ms: SettingsMachines?) {
     val src = remember { MutableInteractionSource() }
     Box {
         Row(
+            // No 48 dp box on touch: Compose already widens a small target's touch bounds, and the box made the scope
+            // line 30 dp taller as soon as there were two machines.
             Modifier
-                .kitTouchTarget()
                 .clickable(interactionSource = src, indication = null, role = Role.Button) { open = true }
                 .kitFocusRing(src, RoundedCornerShape(4.dp))
                 .drawBehind {

@@ -173,4 +173,9 @@ class SettingsSearchTest {
         assertTrue(searchSettings("go to file", touch).isEmpty())
         assertTrue(searchSettings("hotkeys", touch).isEmpty())
     }
+
+    @Test fun the_cache_row_is_found_only_where_there_is_a_cache() {
+        assertEquals(1, searchSettings("disk media", desk).flatMap { it.hits }.size)
+        assertTrue(searchSettings("disk media", desk.copy(mediaCache = false)).isEmpty())
+    }
 }

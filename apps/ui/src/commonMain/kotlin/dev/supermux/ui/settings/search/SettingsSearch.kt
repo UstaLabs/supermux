@@ -14,13 +14,14 @@ import dev.supermux.ui.settings.settingsTitle
 
 /**
  * What this device shows, for rows that exist only on some platforms. [hardwareKeyboard]: the Keyboard shortcuts
- * page is listed (`LocalHardwareKeyboard`).
+ * page is listed (`LocalHardwareKeyboard`); [mediaCache]: General has its cached images and files row.
  */
 data class SettingsSearchContext(
     val caps: Caps,
     val phone: Boolean,
     val liveTranscript: Boolean,
     val hardwareKeyboard: Boolean = true,
+    val mediaCache: Boolean = true,
 )
 
 /** One searchable row; [anchor] null is the page itself. [keywords] are other words people type for it. */
@@ -70,7 +71,10 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsSection.General, "chat-detail", "Chat detail", "tools verbose transcript"),
     SettingsSearchEntry(SettingsSection.General, "terminal-colours", "Terminal colours", "terminal palette color"),
     SettingsSearchEntry(SettingsSection.General, "app-version", "App version", "update upgrade release check"),
-    SettingsSearchEntry(SettingsSection.General, "cache", "Cached images and files", "storage cache disk media clear"),
+    SettingsSearchEntry(
+        SettingsSection.General, "cache", "Cached images and files", "storage cache disk media clear",
+        shownWhen = { it.mediaCache },
+    ),
     page(SettingsSection.KeyboardShortcuts, "keys hotkeys keybindings keymap").copy(shownWhen = { it.hardwareKeyboard }),
     // Generated from the commands, so the list never goes stale (#96 §6); a command without keys here has no row.
     *AppCommands.all.map { cmd ->

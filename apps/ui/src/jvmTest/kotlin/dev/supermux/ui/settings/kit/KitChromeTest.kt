@@ -19,6 +19,10 @@ import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.NO_CAPS
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.getBoundsInRoot
 
 @OptIn(ExperimentalTestApi::class)
 class KitChromeTest {
@@ -112,5 +116,20 @@ class KitChromeTest {
             CompositionLocalProvider(LocalSettingsMachines provides SettingsMachines(listOf(mac), "m1") {}) { KitMixedScope() }
         }
         onNodeWithTag("settings_scope").assertDoesNotExist()
+    }
+
+    /** On touch the picker relies on Compose's touch widening: two machines do not make the line taller. */
+    @Test fun a_phones_scope_line_is_as_tall_with_a_picker_as_without() = runComposeUiTest {
+        var machines by mutableStateOf(SettingsMachines(listOf(mac), "m1") {})
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            CompositionLocalProvider(LocalSettingsMachines provides machines) { Column { KitMachineScope() } }
+        }
+        waitForIdle()
+        val one = onNodeWithTag("settings_scope").getBoundsInRoot().let { it.bottom - it.top }
+        machines = SettingsMachines(listOf(mac, mini), "m1") {}
+        waitForIdle()
+        onNodeWithTag("settings_scope_picker").assertExists()
+        val two = onNodeWithTag("settings_scope").getBoundsInRoot().let { it.bottom - it.top }
+        assertEquals(one.value, two.value, 1f)
     }
 }

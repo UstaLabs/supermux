@@ -46,6 +46,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -97,6 +103,26 @@ fun Modifier.kitFocusRing(interactionSource: InteractionSource, shape: Shape): M
     return if (focused) this.border(1.dp, accent, shape) else this
 }
 
+/** [kitFocusRing] drawn [outset] outside the node's bounds, taking no room in the layout. */
+@Composable
+private fun Modifier.kitOutsetFocusRing(interactionSource: InteractionSource, outset: Dp, corner: Dp): Modifier {
+    val focused by interactionSource.collectIsFocusedAsState()
+    val accent = kitColors().accent
+    if (!focused) return this
+    return drawWithContent {
+        drawContent()
+        val o = outset.toPx()
+        val stroke = 1.dp.toPx()
+        drawRoundRect(
+            accent,
+            topLeft = Offset(-o + stroke / 2, -o + stroke / 2),
+            size = Size(size.width + 2 * o - stroke, size.height + 2 * o - stroke),
+            cornerRadius = CornerRadius(corner.toPx()),
+            style = Stroke(stroke),
+        )
+    }
+}
+
 /**
  * The toggle: a 30×18 track, a 14 dp knob, accent when on. A switch of its own, named by [label] for screen
  * readers; in a row, [KitToggleRow] owns the switch and draws only [KitToggleTrack].
@@ -125,8 +151,9 @@ fun KitToggle(
             .padding(vertical = 1.dp),
         contentAlignment = Alignment.Center,
     ) {
-        // The ring sits 2 dp outside the track: on the track's own edge it would vanish into the accent when on.
-        Box(Modifier.kitFocusRing(src, RoundedCornerShape(11.dp)).padding(2.dp)) { KitToggleTrack(checked, enabled) }
+        // The ring sits 2 dp outside the track: on the track's own edge it would vanish into the accent when on. It is
+        // drawn there, not laid out there, so a standalone toggle ends where a row's own toggle ends.
+        KitToggleTrack(checked, enabled, Modifier.kitOutsetFocusRing(src, outset = 2.dp, corner = 11.dp))
     }
 }
 
@@ -381,6 +408,7 @@ fun KitSlider(
     onChangeFinished: () -> Unit = {},
 ) {
     require(step > 0f) { "KitSlider's step must be positive, was $step" }
+    require(range.endInclusive > range.start) { "KitSlider's range must go somewhere, was $range" }
     val c = kitColors()
     val m = kitMetrics()
     val current by rememberUpdatedState(value)

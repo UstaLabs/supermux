@@ -51,7 +51,8 @@ fun addOptionHint(agent: String, option: AddAccountOption): String = when (optio
         "antigravity" -> "Sign in with your Google account; paste the code the page shows."
         else -> "A subscription login, kept on this machine."
     }
-    AddAccountOption.Token -> "A long-lived token from claude setup-token."
+    // The command itself is the next step's copyable line, the only command Settings shows (#97 spec §6).
+    AddAccountOption.Token -> "A long-lived token you make once in a terminal."
     AddAccountOption.ApiKey -> when (agent) {
         "claude" -> "An Anthropic API key, billed per token."
         "codex" -> "An OpenAI API key, billed per token."

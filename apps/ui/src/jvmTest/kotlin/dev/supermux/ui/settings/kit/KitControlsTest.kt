@@ -33,6 +33,14 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.ui.chat.setPlatformContent
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
 
 @OptIn(ExperimentalTestApi::class)
 class KitControlsTest {
@@ -146,4 +154,44 @@ class KitControlsTest {
         onNodeWithTag("s").performKeyInput { pressKey(Key.MoveHome) }
         assertEquals(0.9f, v, 0.001f)
     }
+
+    @Test fun a_slider_needs_a_range_that_goes_somewhere() = runComposeUiTest {
+        assertFailsWith<IllegalArgumentException> {
+            setPlatformContent { KitSlider(1f, {}, 1f..1f, step = 0.1f, label = "Text size", valueText = "100%") }
+            waitForIdle()
+        }
+    }
+
+    /** The ring is drawn outside the track: a standalone toggle ends where a row's own toggle ends. */
+    @Test fun a_standalone_toggle_is_as_wide_as_its_track() = runComposeUiTest {
+        setPlatformContent {
+            Row(Modifier.width(200.dp).testTag("row"), horizontalArrangement = Arrangement.End) {
+                KitToggle(true, {}, label = "On", modifier = Modifier.testTag("t"))
+            }
+        }
+        val row = onNodeWithTag("row").getBoundsInRoot()
+        val t = onNodeWithTag("t").getBoundsInRoot()
+        assertEquals(30f, (t.right - t.left).value, 0.01f)
+        assertEquals(row.right.value, t.right.value, 0.01f)
+    }
+
+    @Test fun keyboard_focus_shows_the_ring() = runComposeUiTest {
+        var accent = Color.Unspecified
+        setPlatformContent {
+            accent = kitColors().accent
+            Box(Modifier.padding(8.dp)) { KitGhostButton("Run now", onClick = {}, modifier = Modifier.testTag("b")) }
+        }
+        fun ringPixels(): Int {
+            val px = onNodeWithTag("b").captureToImage().toPixelMap()
+            // The top edge's middle stretch: the outline, when there is one.
+            return (px.width / 4 until px.width * 3 / 4).count { x -> px[x, 0].closeTo(accent) }
+        }
+        assertEquals(0, ringPixels(), "no ring before focus")
+        onNodeWithTag("b").requestFocus()
+        waitForIdle()
+        assertTrue(ringPixels() > 0, "the focused button shows its ring")
+    }
+
+    private fun Color.closeTo(o: Color) =
+        kotlin.math.abs(red - o.red) < 0.08f && kotlin.math.abs(green - o.green) < 0.08f && kotlin.math.abs(blue - o.blue) < 0.08f
 }

@@ -23,6 +23,10 @@ import androidx.compose.ui.text.TextRange
 import dev.supermux.ui.chat.setPlatformContent
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 
 @OptIn(ExperimentalTestApi::class)
 class KitFieldsTest {
@@ -92,5 +96,24 @@ class KitFieldsTest {
         onNodeWithTag("f").requestFocus()
         onNodeWithTag("f").performKeyInput { pressKey(Key.Enter) }
         assertEquals(1, submitted)
+    }
+
+    @Test fun a_hidden_secret_gets_the_password_keyboard_and_never_autocorrects() {
+        val hidden = keyboardFor(KeyboardOptions.Default, secret = true, hidden = true, submits = false)
+        assertEquals(KeyboardType.Password, hidden.keyboardType)
+        assertEquals(false, hidden.autoCorrectEnabled)
+        assertEquals(KeyboardCapitalization.None, hidden.capitalization)
+        val shown = keyboardFor(KeyboardOptions.Default, secret = true, hidden = false, submits = false)
+        assertEquals(KeyboardType.Unspecified, shown.keyboardType)
+        assertEquals(false, shown.autoCorrectEnabled)
+    }
+
+    @Test fun a_field_that_submits_gets_done_unless_it_names_its_own_action() {
+        assertEquals(ImeAction.Done, keyboardFor(KeyboardOptions.Default, secret = false, hidden = false, submits = true).imeAction)
+        assertEquals(
+            ImeAction.Search,
+            keyboardFor(KeyboardOptions(imeAction = ImeAction.Search), secret = false, hidden = false, submits = true).imeAction,
+        )
+        assertEquals(KeyboardType.Email, keyboardFor(KeyboardOptions(keyboardType = KeyboardType.Email), secret = false, hidden = false, submits = false).keyboardType)
     }
 }

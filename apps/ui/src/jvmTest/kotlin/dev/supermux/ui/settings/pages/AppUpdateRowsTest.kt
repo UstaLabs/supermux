@@ -1,5 +1,7 @@
 package dev.supermux.ui.settings.pages
 
+import dev.supermux.ui.platform.VersionOnlyUpdater
+
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
@@ -318,5 +320,12 @@ class AppUpdateRowsTest {
         )
         assertEquals("Downloads the latest .deb and opens it.", installCaption("deb"))
         assertEquals("Downloads the latest installer and opens it.", installCaption(null))
+    }
+
+    /** iOS and the web app do not update themselves, but still know their version (#97, Unit E). */
+    @Test fun a_build_that_does_not_update_itself_still_shows_its_version() = runComposeUiTest {
+        setPlatformContent(FakePlatform(caps = NO_CAPS).also { it.updates = VersionOnlyUpdater("1.4.0", 41) }) { AppUpdateRows() }
+        waitForIdle()
+        onNodeWithTag("app_update_version").assertTextEquals("supermux 1.4.0 (build 41)")
     }
 }

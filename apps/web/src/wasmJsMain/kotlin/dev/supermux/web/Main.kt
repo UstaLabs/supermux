@@ -43,6 +43,8 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.web.seams.WebDownload
 import dev.supermux.web.seams.WebMedia
 import dev.supermux.web.auth.CookieSession
@@ -143,6 +145,8 @@ fun main() {
         ComposeViewport(document.body!!) {
             val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)
             val textScale by uiPrefs.textScale.collectAsState(textScaleSeed)
+            // The theme's own dark check: what System paints, for the sidebar's theme shortcut.
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
             // Hold the splash until Compose has actually painted: removing it before the first
             // frame leaves one blank frame.
             LaunchedEffect(Unit) { window.requestAnimationFrame { document.getElementById("splash")?.remove() } }
@@ -324,13 +328,12 @@ fun main() {
                     SupermuxApp(
                         fleet = fleet,
                         ui = ui,
-                        appearance = appearance,
+                        // What is painted, so the icon and the flip match the screen: the opposite of it
+                        // (System resolved by the browser's dark check), never of the stored value (#97 spec §10.6).
+                        appearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark),
                         onToggleTheme = {
-                            appScope.launch {
-                                uiPrefs.putAppearance(
-                                    if (appearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK,
-                                )
-                            }
+                            val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
+                            appScope.launch { uiPrefs.putAppearance(next) }
                         },
                         appForeground = foreground,
                         // A tab reopens where it was, and the URL says where that is.

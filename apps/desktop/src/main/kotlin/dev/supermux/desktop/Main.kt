@@ -107,6 +107,8 @@ import dev.supermux.pairing.PairingTokenStore
 import dev.supermux.ui.intro.OnboardingScreen
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
@@ -813,6 +815,8 @@ fun main() {
         }
         val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
         val themeScope = rememberCoroutineScope()
+        // The theme's own dark check: what System paints here, for the sidebar's theme shortcut.
+        val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
         // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
         // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
@@ -2074,16 +2078,14 @@ fun main() {
                             settingsSection = { place, scope ->
                                 DesktopSettingsSection(place, scope, fleet.activeApp() ?: app)
                             },
-                            appearance = ui.appearance,
-                            // The toggle writes the SAME stored value the Appearance screen does
+                            // What is painted (System resolved by the OS's dark check), so the icon and the flip
+                            // match the screen.
+                            appearance = paintedAppearance(ui.appearance, AppearanceMode.DARK, systemDark),
+                            // The toggle writes the SAME stored value General's Theme row does
                             // (the collector above mirrors it back onto `ui.appearance`), so the
-                            // two never drift apart.
+                            // two never drift apart — the opposite of what is painted (#97 spec §10.6).
                             onToggleTheme = {
-                                val next = if (ui.appearance == AppearanceMode.DARK) {
-                                    AppearanceMode.LIGHT
-                                } else {
-                                    AppearanceMode.DARK
-                                }
+                                val next = nextAppearance(ui.appearance, AppearanceMode.DARK, systemDark)
                                 ui.appearance = next
                                 themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },

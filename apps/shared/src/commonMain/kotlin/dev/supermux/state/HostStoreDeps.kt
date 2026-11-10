@@ -69,7 +69,7 @@ object SettingsKeys {
     // field are read once, on first launch after the upgrade, when the key here is still unset.
     /** `AppearanceMode.name` ("SYSTEM"/"LIGHT"/"DARK"). Unset = the app's own default. */
     const val APPEARANCE = "appearance:mode"
-    /** "true"/"false" — Material You opt-in. Persisted everywhere, honoured nowhere (brand palette). */
+    /** "true"/"false" — the old Material You opt-in. Only Android's appearance migration still writes it; nothing reads it (brand palette). */
     const val DYNAMIC_COLOR = "appearance:dynamicColor"
     /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
     const val TEXT_SCALE = "appearance:textScale"
@@ -107,10 +107,6 @@ object SettingsKeys {
     /** The session the shell reopens on. Absent = open on the list. Written only by a host that
      *  restores its selection (desktop); a phone deliberately opens on the session list. */
     const val SHELL_SELECTED_SESSION = "shell:selectedSession"
-
-    const val VOICE_STT = "voice:stt"
-    const val VOICE_CLEANUP = "voice:cleanup"
-    const val VOICE_TTS = "voice:tts"
 }
 
 /** The whole platform surface a HostStore / FleetStore needs. */

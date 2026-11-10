@@ -70,6 +70,8 @@ import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import kotlinx.coroutines.launch
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
@@ -181,10 +183,7 @@ class MainActivity : ComponentActivity() {
             val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
                 .collectAsState(appearanceSeed.appearance)
             val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
-            val effectiveAppearance = when (appearance) {
-                AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
-                else -> appearance
-            }
+            val effectiveAppearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
             val themeScope = androidx.compose.runtime.rememberCoroutineScope()
             val textScale by themeUiPrefs.textScale.collectAsState(appearanceSeed.textScale)
             AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
@@ -353,7 +352,8 @@ class MainActivity : ComponentActivity() {
                     // what's on screen, so the icon and the flip match what the user sees.
                     appearance = effectiveAppearance,
                     onToggleTheme = {
-                        val next = if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK
+                        // The opposite of what is painted (#97 spec §10.6).
+                        val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
                         themeScope.launch { themeUiPrefs.putAppearance(next) }
                     },
                     defaultDeviceName = androidDeviceName(),

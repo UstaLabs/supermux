@@ -7,6 +7,11 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.platform.AppUpdater
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.platform.VersionOnlyUpdater
 import androidx.compose.runtime.remember
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.desktop.testDeps
@@ -81,6 +86,15 @@ internal fun TestAppShell(
     online: Boolean = false,
 ) {
     val store = fleet ?: remember(app) { testFleet(app, online = online) }
+    // The real platform but not its updater: General's App version row checks the release feed when it opens, and a
+    // hub suite must not reach the network (#97, Unit E).
+    val base = LocalPlatform.current
+    val platform = remember(base) { object : Platform by base { override val updates: AppUpdater = VersionOnlyUpdater("1.0.0") } }
+    CompositionLocalProvider(LocalPlatform provides platform) { Shell(store, app, ui, notify) }
+}
+
+@Composable
+private fun Shell(store: FleetStore, app: HostStore, ui: ShellUiState, notify: NotificationController) {
     SupermuxApp(
         fleet = store,
         ui = ui,

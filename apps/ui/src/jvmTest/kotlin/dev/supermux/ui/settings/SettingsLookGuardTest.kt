@@ -96,6 +96,14 @@ class SettingsLookGuardTest {
         assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.settingsFieldColors"))
         assertNotNull(SettingsLook.offence("        colors = dev.supermux.ui.widgets.settingsFieldColors(),"))
         assertNull(SettingsLook.offence("import dev.supermux.ui.widgets.SettingsDetailMaxWidth"))
+        // A `;` or backticks change nothing.
+        assertNotNull(SettingsLook.offence("import androidx.compose.material3.Switch;"))
+        assertNotNull(SettingsLook.offence("import androidx.compose.material3.`Switch`"))
+        assertNotNull(SettingsLook.offence("import `androidx`.`compose`.`material3`.`Switch` as Toggle;"))
+        assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.AlertDialog;"))
+        assertNotNull(SettingsLook.offence("import dev.supermux.ui.widgets.`SecretField`"))
+        assertNull(SettingsLook.offence("import androidx.compose.material3.Text;"))
+        assertNull(SettingsLook.offence("import androidx.compose.material3.`MaterialTheme`"))
     }
 }
 
@@ -118,7 +126,8 @@ internal object SettingsLook {
         val trimmed = raw.trim()
         // KDoc and block comments may name what the kit replaces.
         if (trimmed.startsWith("*") || trimmed.startsWith("/*")) return null
-        val line = trimmed.substringBefore("//").trim()
+        // A `;` ends a statement and backticks quote a name: neither changes what is imported or called.
+        val line = trimmed.substringBefore("//").trim().removeSuffix(";").trim().replace("`", "")
         if (line.isEmpty()) return null
         if (line.startsWith("import ")) {
             m3Import.matchEntire(line)?.let { m ->

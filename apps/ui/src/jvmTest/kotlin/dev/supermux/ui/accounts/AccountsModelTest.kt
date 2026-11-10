@@ -131,4 +131,14 @@ class AccountsModelTest {
         assertNull(removalSentence(AccountRemovalPlanDto("claude-s", 0, "claude:system", "System login")))
         assertNull(removalSentence(null))
     }
+
+    /** #97 copy rules: the only command on screen is the copyable one in the token step, never in a hint. */
+    @Test fun no_add_option_hint_spells_out_a_command() {
+        for (agent in listOf("claude", "codex", "opencode", "antigravity", "cursor", "grok")) {
+            for (o in AddAccountOption.entries) {
+                val hint = addOptionHint(agent, o)
+                assertFalse("setup-token" in hint || "claude " in hint, "$agent/$o: $hint")
+            }
+        }
+    }
 }

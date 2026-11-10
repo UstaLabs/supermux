@@ -274,7 +274,7 @@ fun KitTextField(
  * The keyboard for a field: Done when it submits, unless [given] names an action; a secret never autocorrects or
  * capitalises (a token is not a sentence, shown or not) and gets the password keyboard while [hidden].
  */
-private fun keyboardFor(given: KeyboardOptions, secret: Boolean, hidden: Boolean, submits: Boolean): KeyboardOptions {
+internal fun keyboardFor(given: KeyboardOptions, secret: Boolean, hidden: Boolean, submits: Boolean): KeyboardOptions {
     val submit = if (submits) KeyboardOptions(imeAction = ImeAction.Done) else KeyboardOptions.Default
     val guard = if (secret) {
         KeyboardOptions(

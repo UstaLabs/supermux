@@ -47,7 +47,7 @@ class EditorSettingsScreenTest {
         onNodeWithText("Wrap instead of scrolling sideways.").assertExists()
         onNodeWithText("Editor font size").assertExists()
         onNodeWithText("Terminal font size").assertExists()
-        onNodeWithText("Also ⌘+ and ⌘− in a terminal.").assertExists()
+        onNodeWithText(terminalZoomHint(dev.supermux.ui.keys.currentKeyOs)).assertExists()
         onNodeWithText("Side-by-side diffs").assertExists()
         onNodeWithText("Each changed file in two columns.").assertExists()
         for (a in listOf("wrap", "editor-font", "terminal-font", "side-by-side")) onNode(anchored(a)).assertExists()
@@ -158,5 +158,11 @@ class EditorSettingsScreenTest {
         onNodeWithTag("editor_accessory_bar_switch").performScrollTo().performClick()
         waitForIdle()
         assertEquals("false", store.map.value[SettingsKeys.EDITOR_ACCESSORY_BAR])
+    }
+
+    /** #97 (Unit H): the zoom keys as this device writes them, not ⌘ on Windows and Linux. */
+    @Test fun the_terminal_zoom_hint_names_this_devices_keys() {
+        assertEquals("Also ⌘+ and ⌘− in a terminal.", terminalZoomHint(dev.supermux.ui.keys.KeyOs.Apple))
+        assertEquals("Also Ctrl+Plus and Ctrl+Minus in a terminal.", terminalZoomHint(dev.supermux.ui.keys.KeyOs.Other))
     }
 }

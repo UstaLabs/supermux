@@ -50,6 +50,8 @@ import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.nextAppearance
+import dev.supermux.ui.theme.paintedAppearance
 import dev.supermux.workspace.toDomainOrNull
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -158,10 +160,7 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
         // state the toggle can flip, so resolve it to what is actually on screen first — the
         // icon and the flip then match what the user sees.
         val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
-        val effectiveAppearance = when (appearance) {
-            AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
-            else -> appearance
-        }
+        val effectiveAppearance = paintedAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
 
         IosTheme(
             platform = platform,
@@ -349,9 +348,8 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // icon: `SupermuxApp` defaults `onToggleTheme` to `{}`, so nothing was wired.
                 appearance = effectiveAppearance,
                 onToggleTheme = {
-                    val next =
-                        if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT
-                        else AppearanceMode.DARK
+                    // The opposite of what is painted (#97 spec §10.6).
+                    val next = nextAppearance(appearance, AppearanceMode.SYSTEM, systemDark)
                     appScope.launch { uiPrefs.putAppearance(next) }
                 },
                 defaultDeviceName = UIDevice.currentDevice.name,

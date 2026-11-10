@@ -262,6 +262,7 @@ fun SettingsHub(
         phone = compact,
         liveTranscript = platform.mic.liveTranscript != null,
         hardwareKeyboard = keyboard,
+        mediaCache = platform.mediaCache != null,
     )
     val railSections = railSections(keyboard)
 
