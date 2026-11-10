@@ -9,7 +9,7 @@
  *
  * Run: scripts/test-broker.sh bun tests/ui/core-journey.spec.ts
  */
-import { launchBrowser, uiFixture } from "./fixture-env"
+import { launchBrowser, uiFixture, freshPairLink } from "./fixture-env"
 import { byTag, byTagPrefix, innerTextOf, openSeededSession, tap, typeInto, waitForTextWithin } from "./compose-dom"
 
 export async function main(): Promise<void> {
@@ -25,7 +25,7 @@ export async function main(): Promise<void> {
     const page = await context.newPage()
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
+    await page.goto((await freshPairLink(fixture)).url, {
       waitUntil: "domcontentloaded",
     })
 
