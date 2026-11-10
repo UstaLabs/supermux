@@ -28,6 +28,8 @@ import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingPowerUi
 import dev.supermux.ui.settings.HostingUiState
 import dev.supermux.ui.settings.KeepAwakeUi
+import dev.supermux.ui.settings.LidClosedUi
+import dev.supermux.ui.settings.HostingCopy
 import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.LocalSettingsMachines
@@ -64,6 +66,9 @@ class MachinePageTest {
         override fun manageIt() { calls += "manage" }
         override suspend fun installGit(): Boolean { calls += "git"; return true }
         override fun setKeepAwake(on: Boolean) { calls += "awake $on" }
+        override fun setKeepAwakeOnBattery(on: Boolean) { calls += "battery $on" }
+        override fun setLidClosed(on: Boolean) { calls += "lid $on" }
+        override fun uninstallLidHelper() { calls += "uninstall lid" }
     }
 
     private fun hostingState(
@@ -72,12 +77,16 @@ class MachinePageTest {
         relay: Boolean = true,
         git: GitRequirement? = null,
         failReason: String? = null,
+        power: HostingPowerUi? = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = true, showOnBattery = true)),
+        relayUrl: String? = "https://h-abc.relay.supermux.dev",
+        checkoutMoved: String? = null,
+        backgroundError: String? = null,
     ) = HostingUiState(
         hosting = phase != HostingPhase.Off, statusDot = "", statusText = "", readOnly = readOnly,
-        localUrl = "http://192.168.1.24:9898", relayUrl = "https://h-abc.relay.supermux.dev", relay = relay,
+        localUrl = "http://192.168.1.24:9898", relayUrl = relayUrl, relay = relay,
         background = true, sessions = 7, logTail = emptyList(), gitRequirement = git,
-        power = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = true, showOnBattery = true)),
-        phase = phase, failReason = failReason,
+        power = power, phase = phase, failReason = failReason,
+        checkoutMoved = checkoutMoved, backgroundError = backgroundError,
     )
 
     private fun ComposeUiTest.page(
@@ -356,5 +365,170 @@ class MachinePageTest {
                 "Your 2 chats wait until you host again. Nothing is deleted, and supermux no longer starts with this computer.",
             MachineCopy.stopText(MachineChats(2)),
         )
+    }
+
+    // ── Carried from today's System and Hosting screens (#97 S2-4) ────────────────────────────────
+
+    @Test fun a_failed_check_says_so_and_keeps_what_it_knew() = runComposeUiTest {
+        page(server, SystemSettingsActions(updateStatus = { status() }, checkUpdate = { null }))
+        waitForIdle()
+        onNodeWithTag("machine_check_updates").performClick()
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("machine_check_failed").assertExists() }.isSuccess }
+        onNodeWithTag("machine_check_failed").assertTextEquals("Couldn’t check for updates on studio-mini.")
+        onNodeWithTag("machine_status").assertTextEquals("Running · supermux 0.17.5 · 7 chats, 3 working")
+        onNodeWithTag("machine_check_updates").assertTextEquals("Check for updates")
+    }
+
+    @Test fun an_update_that_cannot_start_says_why_and_one_unanswered_says_so() = runComposeUiTest {
+        var answer: RunUpdateResult? = RunUpdateResult(started = false, instruction = "Use git pull.")
+        page(server, SystemSettingsActions(updateStatus = { status(latest = "0.17.6", available = true) }, runUpdate = { answer }))
+        waitForIdle()
+        onNodeWithTag("machine_update_button").performClick()
+        waitUntil(timeoutMillis = 5_000) { runCatching { onNodeWithTag("machine_update_button").assertTextEquals("Try again") }.isSuccess }
+        onNodeWithTag("machine_update_desc").assertTextEquals("Couldn’t update to 0.17.6: Use git pull. Nothing changed.")
+        answer = null
+        onNodeWithTag("machine_update_button").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            runCatching { onNodeWithTag("machine_update_desc").assertTextContains("studio-mini didn’t answer", substring = true) }.isSuccess
+        }
+    }
+
+    @Test fun keep_awake_battery_and_lid_drive_their_actions() = runComposeUiTest {
+        val h = Hosting()
+        val power = HostingPowerUi(
+            keepAwake = KeepAwakeUi(enabled = true, onBattery = false, showOnBattery = true),
+            lidClosed = LidClosedUi(on = false, installed = true),
+        )
+        page(laptop, SystemSettingsActions(updateStatus = { status(mode = "managed") }), ThisComputerHosting(hostingState(power = power), h))
+        waitForIdle()
+        onNodeWithTag("machine_keep_awake").performScrollTo().performClick()
+        onNodeWithTag("machine_battery").performScrollTo().performClick()
+        onNodeWithTag("machine_lid").performScrollTo().performClick()
+        onNodeWithTag("machine_lid_uninstall").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals(listOf("awake false", "battery true", "lid true", "uninstall lid"), h.calls)
+    }
+
+    @Test fun no_battery_no_battery_row_and_no_mac_laptop_no_lid() = runComposeUiTest {
+        val power = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false, showOnBattery = false))
+        page(laptop, SystemSettingsActions(updateStatus = { status(mode = "managed") }), ThisComputerHosting(hostingState(power = power), Hosting()))
+        waitForIdle()
+        onNodeWithTag("machine_keep_awake").assertExists()
+        onNodeWithTag("machine_battery").assertDoesNotExist()
+        onNodeWithTag("machine_lid").assertDoesNotExist()
+        onNodeWithTag("machine_lid_uninstall").assertDoesNotExist()
+    }
+
+    @Test fun keep_awake_says_why_it_is_not_held_and_unsupported_turns_the_switch_off() = runComposeUiTest {
+        var power by mutableStateOf(
+            HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false, warning = "Not held: log in again", note = HostingCopy.PAUSED_ON_BATTERY)),
+        )
+        setPlatformContent(platform = FakePlatform(), widthClass = WindowWidthClass.Expanded, pointer = true) {
+            Machines(laptop) {
+                MachinePage(
+                    SystemSettingsActions(updateStatus = { status(mode = "managed") }), chats = chats,
+                    hosting = ThisComputerHosting(hostingState(power = power), Hosting()),
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("machine_keep_awake_warning").assertTextEquals("Not held: log in again")
+        onNodeWithTag("machine_keep_awake_note").assertTextEquals("Paused while on battery")
+        onNodeWithTag("machine_keep_awake").assertIsEnabled()
+        power = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = false, onBattery = false, switchEnabled = false, note = "Not supported here"))
+        waitForIdle()
+        onNodeWithTag("machine_keep_awake").assertIsNotEnabled()
+        onNodeWithTag("machine_keep_awake_note").assertTextEquals("Not supported here")
+        onNodeWithTag("machine_keep_awake_warning").assertDoesNotExist()
+    }
+
+    @Test fun the_lid_switch_greys_while_asking_and_where_it_cannot_be_used() = runComposeUiTest {
+        var lid by mutableStateOf(LidClosedUi(on = false, installed = true, busy = true))
+        setPlatformContent(platform = FakePlatform(), widthClass = WindowWidthClass.Expanded, pointer = true) {
+            Machines(laptop) {
+                MachinePage(
+                    SystemSettingsActions(updateStatus = { status(mode = "managed") }), chats = chats,
+                    hosting = ThisComputerHosting(
+                        hostingState(power = HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false), lidClosed = lid)),
+                        Hosting(),
+                    ),
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("machine_lid").assertIsNotEnabled()
+        onNodeWithTag("machine_lid_note").assertTextEquals("Waiting for your password…")
+        onNodeWithTag("machine_lid_uninstall").assertIsNotEnabled()
+        lid = LidClosedUi(on = false, installed = false, enabled = false, note = HostingCopy.LID_HOME_UNSUPPORTED)
+        waitForIdle()
+        onNodeWithTag("machine_lid").assertIsNotEnabled()
+        onNodeWithTag("machine_lid_note").assertTextEquals("Not available for this account's home folder.")
+        onNodeWithTag("machine_lid_uninstall").assertDoesNotExist()
+    }
+
+    @Test fun the_auto_login_hint_shows_only_with_file_vault_off_and_no_power_hides_the_rows() = runComposeUiTest {
+        var power by mutableStateOf<HostingPowerUi?>(HostingPowerUi(keepAwake = KeepAwakeUi(enabled = true, onBattery = false), autoLoginHint = true))
+        setPlatformContent(platform = FakePlatform(), widthClass = WindowWidthClass.Expanded, pointer = true) {
+            Machines(laptop) {
+                MachinePage(
+                    SystemSettingsActions(updateStatus = { status(mode = "managed") }), chats = chats,
+                    hosting = ThisComputerHosting(hostingState(power = power), Hosting()),
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("machine_auto_login_hint").assertTextContains("Automatic Login", substring = true)
+        power = null
+        waitForIdle()
+        onNodeWithTag("machine_auto_login_hint").assertDoesNotExist()
+        onNodeWithTag("machine_keep_awake").assertDoesNotExist()
+        onNodeWithTag("machine_keep_running").assertExists()
+    }
+
+    @Test fun a_moved_checkout_and_a_background_error_are_shown() = runComposeUiTest {
+        page(
+            laptop, SystemSettingsActions(updateStatus = { status(mode = "managed") }),
+            ThisComputerHosting(hostingState(checkoutMoved = "Restart it to run the new code.", backgroundError = "launchctl refused"), Hosting()),
+        )
+        waitForIdle()
+        onNodeWithTag("machine_checkout_moved").assertTextEquals("Restart it to run the new code.")
+        onNodeWithTag("machine_background_error").assertTextEquals("launchctl refused")
+    }
+
+    @Test fun the_relay_address_copies_and_reads_off_without_one() = runComposeUiTest {
+        val platform = FakePlatform()
+        var state by mutableStateOf(hostingState())
+        setPlatformContent(platform = platform, widthClass = WindowWidthClass.Expanded, pointer = true) {
+            Machines(laptop) {
+                MachinePage(SystemSettingsActions(updateStatus = { status(mode = "managed") }), chats = chats, hosting = ThisComputerHosting(state, Hosting()))
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("machine_address_relay_text", useUnmergedTree = true).assertTextEquals("https://h-abc.relay.supermux.dev")
+        onNodeWithTag("machine_copy_relay").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals(listOf("https://h-abc.relay.supermux.dev"), platform.copied)
+        state = hostingState(relay = false)
+        waitForIdle()
+        onNodeWithTag("machine_address_relay_text", useUnmergedTree = true).assertTextEquals("Off")
+        onNodeWithTag("machine_copy_relay").assertDoesNotExist()
+        state = hostingState(relayUrl = null)
+        waitForIdle()
+        onNodeWithTag("machine_address_relay_text", useUnmergedTree = true).assertTextEquals("Off")
+    }
+
+    @Test fun background_switch_calls_its_action_and_git_present_says_nothing() = runComposeUiTest {
+        val h = Hosting()
+        page(laptop, SystemSettingsActions(updateStatus = { status(mode = "managed") }), ThisComputerHosting(hostingState(git = GitRequirement(ok = true)), h))
+        waitForIdle()
+        onNodeWithTag("machine_git").assertDoesNotExist()
+        onNodeWithTag("machine_keep_running").performScrollTo().performClick()
+        waitForIdle()
+        assertEquals(listOf("background false"), h.calls)
+    }
+
+    @Test fun an_update_in_flight_is_running() {
+        for (st in listOf("starting", "checking", "downloading", "swapping")) assertTrue(dev.supermux.ui.settings.isRunningState(st), st)
+        for (st in listOf("idle", "restart-required", "failed")) kotlin.test.assertFalse(dev.supermux.ui.settings.isRunningState(st), st)
     }
 }

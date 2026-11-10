@@ -6,8 +6,6 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.settings.PairQrContent
-import dev.supermux.desktop.settings.PairQrCopy
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -120,24 +118,5 @@ class HostingPairingTest {
         val payload = assertNotNull(PairingPayload.parse(ready.payloadJson))
         assertEquals("http://192.168.1.2:9898", payload.directUrl)
         m.finish(keepAlive = false) // a no-op: nothing to re-pair, no keep-alive change
-    }
-
-    @Test fun theDialogSaysPairThisComputerFirstWithoutAToken() = runComposeUiTest {
-        setContent { PairQrContent(state = null, needsPairing = true, onRefresh = {}, onClose = {}) }
-        onNodeWithTag("hosting_pair_needs_pairing").assertTextEquals(PairQrCopy.NEEDS_PAIRING)
-        onNodeWithTag("hosting_pair_qr").assertDoesNotExist()
-    }
-
-    @Test fun aReadyCodeSaysWhenItExpiresAndCanBeRefreshed() = runComposeUiTest {
-        var refreshes = 0
-        setContent {
-            PairQrContent(
-                state = HostWizardUiState.Ready("{}", ImageBitmap(1, 1), relayEnabled = false),
-                needsPairing = false, onRefresh = { refreshes++ }, onClose = {},
-            )
-        }
-        onNodeWithTag("hosting_pair_expires").assertTextEquals(PairQrCopy.EXPIRES)
-        onNodeWithTag("hosting_pair_refresh").performClick()
-        assertEquals(1, refreshes)
     }
 }

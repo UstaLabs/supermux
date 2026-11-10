@@ -206,7 +206,7 @@ object MachineCopy {
             .joinToString(" · ")
     fun installed(latest: String?) = "${latest ?: "The update"} is installed · restart to finish"
     fun updateFailed(latest: String?, name: String, why: String?) =
-        "Couldn’t update${latest?.let { " to $it" } ?: ""}: ${why ?: "$name didn’t say why"}. Nothing changed."
+        "Couldn’t update${latest?.let { " to $it" } ?: ""}: ${why?.trimEnd('.') ?: "$name didn’t say why"}. Nothing changed."
     fun didntStart(reason: String?) =
         if (reason.isNullOrBlank()) "supermux didn’t start on this computer." else "supermux didn’t start: $reason"
     fun chats(n: Int) = if (n == 1) "1 chat" else "$n chats"

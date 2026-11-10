@@ -1564,7 +1564,7 @@ class FleetStore(
      *
      * Was a fire-and-forget launch into [fleetScope]: a 5xx or an unreachable broker looked exactly
      * like a successful restart, so Android spun for four seconds and claimed success. The shared
-     * `SystemSettingsScreen` surfaces the failure off this Boolean.
+     * machine page surfaces the failure off this Boolean.
      */
     suspend fun restartBroker(): Boolean = activeApp()?.restartBroker() == true
     suspend fun restartBrokerResult(): dev.supermux.net.BrokerRestart =
@@ -1604,7 +1604,7 @@ class FleetStore(
      *
      * [proxies] stays the fire-and-forget list the session-links menu reads — it cannot tell a
      * transport failure from "no proxies", which is exactly the distinction the shared
-     * `ProxiesSettingsScreen` needs.
+     * machine page's Shared links need.
      */
     suspend fun proxiesForSettings(): List<ProxyDto>? = activeApp()?.proxiesForSettings()
 
