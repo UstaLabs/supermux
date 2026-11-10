@@ -337,7 +337,7 @@ private fun ScopeRow(modifier: Modifier, glyph: ImageVector, content: @Composabl
 @Composable
 private fun MachineName(ms: SettingsMachines?) {
     val c = kitColors()
-    val name = ms?.current?.name ?: "this machine"
+    val name = ms?.current?.name ?: MACHINE_FALLBACK_NAME
     if (ms == null || ms.all.size < 2) {
         Text(name)
         return

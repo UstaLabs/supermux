@@ -1,6 +1,8 @@
 package dev.supermux.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.Composable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -12,6 +14,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -34,6 +46,12 @@ import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.NO_CAPS
 import dev.supermux.ui.retain.LocalRetainedPage
+import dev.supermux.ui.settings.kit.KitMachine
+import dev.supermux.ui.settings.kit.KitMachineScope
+import dev.supermux.ui.settings.kit.SettingsMachines
+import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
+import dev.supermux.ui.settings.search.SettingsSearchEntry
+import dev.supermux.ui.settings.search.SettingsSearchIndex
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -570,7 +588,8 @@ class SettingsHubTest {
     }
 
     @Test fun every_section_has_an_index_description() {
-        SettingsSection.entries.forEach { assertTrue(it.desc().isNotBlank(), "no desc for $it") }
+        SettingsSection.entries.forEach { assertTrue(it.desc(labs = false).isNotBlank(), "no desc for $it") }
+        assertEquals("Usage statistics", SettingsSection.PrivacyLabs.desc(labs = false))
     }
 
     // ── #97: plain Settings, sub-pages and anchors ─────────────────────────────────────────────
@@ -712,6 +731,250 @@ class SettingsHubTest {
         onNodeWithText("page Providers codex auto-switch").assertExists()
         onNodeWithTag("settings_index").assertDoesNotExist()
         assertEquals(emptyList(), reported)
+    }
+    // ── #97 Task 10: the hub in our look ───────────────────────────────────────────────────────
+
+    private val mac = KitMachine("m1", "Ahmet's MacBook", local = true, online = true, status = "Running")
+    private val mini = KitMachine("m2", "studio-mini", local = false, online = false, status = "Offline · last seen 2h ago", lastSeen = "2h ago")
+
+    /** The field's own text, not its "Search settings" placeholder. */
+    private val emptyQuery = SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(""))
+
+    /** General's Theme row, which the General page (a later task) adds to the real index. */
+    private val index = SettingsSearchIndex + SettingsSearchEntry(SettingsSection.General, "theme", "Theme", "dark light mode")
+
+    /**
+     * The hub as the shell drives it: what the wide hub reports (a page, a sub-page) is written back into the
+     * route it reads, as `ShellUiState.moveSettings` does.
+     */
+    @Composable
+    private fun RoutedHub(
+        machines: SettingsMachines? = null,
+        start: SettingsSection? = null,
+        reported: MutableList<Pair<SettingsSection, String?>> = mutableListOf(),
+        content: @Composable (SettingsPlace, SettingsSlotScope) -> Unit,
+    ) {
+        var section by remember { mutableStateOf(start) }
+        var sub by remember { mutableStateOf<String?>(null) }
+        SettingsHub(
+            section = section,
+            sub = sub,
+            onSectionChange = { section = it; sub = null },
+            onPlaceChange = { s, p -> reported += s to p; section = s; sub = p },
+            onBack = {},
+            machines = machines,
+            searchIndex = index,
+            content = content,
+        )
+    }
+
+    @Test fun the_wide_rail_has_search_a_card_per_machine_and_the_six_pages() = runComposeUiTest {
+        setPlatformContent {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, machines = SettingsMachines(listOf(mac, mini), "m1") {}) { p, _ -> Text("page ${p.section}") }
+        }
+        onNodeWithTag("settings_search").assertExists()
+        onNodeWithTag("settings_machine_card_m1").assertExists()
+        onNodeWithTag("settings_machine_card_m2").assertExists()
+        for (s in listOf("general", "providers", "voice", "coding", "memory", "privacylabs")) onNodeWithTag("settings_section_$s").assertExists()
+        onNodeWithTag("settings_section_machine").assertDoesNotExist()
+        onNodeWithText("page General").assertExists()
+    }
+
+    @Test fun a_search_result_opens_its_page_at_its_row_and_clears_the_query_when_wide() = runComposeUiTest {
+        var lastAnchor: String? = "unset"
+        setPlatformContent {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, searchIndex = index) { p, _ ->
+                lastAnchor = p.anchor
+                Text("page ${p.section}")
+            }
+        }
+        onNodeWithTag("settings_search").performTextInput("theme")
+        onNodeWithTag("settings_result_general_theme").performClick()
+        onNodeWithText("page General").assertExists()
+        assertEquals("theme", lastAnchor)
+        onNodeWithTag("settings_search").assert(emptyQuery)
+    }
+
+    @Test fun a_search_with_no_hits_says_so() = runComposeUiTest {
+        setPlatformContent {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, searchIndex = index) { p, _ -> Text("page ${p.section}") }
+        }
+        onNodeWithTag("settings_search").performTextInput("zzqx")
+        onNodeWithTag("settings_search_empty").assertExists()
+        onNodeWithTag("settings_section_voice").assertDoesNotExist()
+    }
+
+    @Test fun on_a_phone_back_from_a_result_returns_to_the_results() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, searchIndex = index) { p, _ -> Text("page ${p.section}") }
+        }
+        onNodeWithTag("settings_search").performTextInput("theme")
+        onNodeWithTag("settings_result_general_theme").performClick()
+        onNodeWithText("page General").assertExists()
+        onNodeWithTag("settings_detail_back").performClick()
+        onNodeWithTag("settings_search_results").assertExists()
+    }
+
+    @Test fun the_shortcut_focuses_search() = runComposeUiTest {
+        setPlatformContent {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, searchShortcut = "Ctrl+F") { _, _ -> Text("page") }
+        }
+        onNodeWithTag("settings_hub").requestFocus()
+        onNodeWithTag("settings_hub").performKeyInput {
+            keyDown(Key.CtrlLeft); pressKey(Key.F); keyUp(Key.CtrlLeft)
+        }
+        onNodeWithTag("settings_search").assertIsFocused()
+    }
+
+    @Test fun escape_in_the_search_field_clears_the_query_before_it_closes() = runComposeUiTest {
+        var handler: (() -> Unit)? = null
+        var closed = 0
+        setPlatformContent {
+            SettingsHub(
+                section = null,
+                onSectionChange = {},
+                onBack = { closed++ },
+                onRegisterCloseHandler = { handler = it },
+                searchIndex = index,
+            ) { _, _ -> Text("page") }
+        }
+        onNodeWithTag("settings_search").performTextInput("theme")
+        // The shell's Escape (an ancestor's key handler) runs the registered close handler before the field sees the key.
+        runOnIdle { handler!!() }
+        waitForIdle()
+        onNodeWithTag("settings_search").assert(emptyQuery)
+        assertEquals(0, closed)
+        runOnIdle { handler!!() }
+        waitForIdle()
+        assertEquals(1, closed)
+    }
+
+    @Test fun a_machine_card_picks_that_machine_and_opens_its_page() = runComposeUiTest {
+        var picked: String? = null
+        setPlatformContent {
+            RoutedHub(machines = SettingsMachines(listOf(mac, mini), "m1") { picked = it }) { p, _ -> Text("page ${p.section}") }
+        }
+        onNodeWithTag("settings_machine_card_m2").performClick()
+        assertEquals("m2", picked)
+        onNodeWithText("page Machine").assertExists()
+    }
+
+    @Test fun picking_another_machine_on_a_phone_page_stays_on_the_page() = runComposeUiTest {
+        var current by mutableStateOf("m1")
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = SettingsSection.Memory, onSectionChange = {}, onBack = {}, machines = SettingsMachines(listOf(mac, mini), current) { current = it }) { p, _ ->
+                Column { Text("page ${p.section}"); KitMachineScope() }
+            }
+        }
+        onNodeWithTag("settings_scope_picker").performClick()
+        onNodeWithTag("settings_machine_pick_m2").performClick()
+        onNodeWithText("page Memory").assertExists()
+        assertEquals("m2", current)
+    }
+
+    @Test fun picking_a_machine_from_the_scope_line_asks_first_when_the_page_has_unsaved_edits() = runComposeUiTest {
+        var current by mutableStateOf("m1")
+        setPlatformContent {
+            SettingsHub(section = SettingsSection.Memory, onSectionChange = {}, onBack = {}, machines = SettingsMachines(listOf(mac, mini), current) { current = it }) { p, scope ->
+                scope.onDirtyChange(true)
+                Column { Text("page ${p.section}"); KitMachineScope() }
+            }
+        }
+        onNodeWithTag("settings_scope_picker").performClick()
+        onNodeWithTag("settings_machine_pick_m2").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_discard_dialog").assertExists()
+        assertEquals("m1", current)
+        onNodeWithTag("settings_discard_confirm").performClick()
+        waitForIdle()
+        assertEquals("m2", current)
+    }
+
+    @Test fun the_this_computer_card_opens_hosting_when_no_local_host_is_paired() = runComposeUiTest {
+        val computer = KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")
+        var picked: String? = null
+        setPlatformContent {
+            RoutedHub(machines = SettingsMachines(listOf(computer, mini), "m2") { picked = it }) { p, _ -> Text("page ${p.section} ${p.sub}") }
+        }
+        onNodeWithTag("settings_machine_card_this-computer").performClick()
+        onNodeWithText("page Machine computer").assertExists()
+        assertEquals(null, picked)
+        // Leaving it goes back to General, not to studio-mini's page.
+        onNodeWithTag("settings_hub_back").performClick()
+        onNodeWithText("page General null").assertExists()
+    }
+
+    @Test fun this_computer_s_hosting_is_not_shown_under_another_machine() = runComposeUiTest {
+        setPlatformContent {
+            SettingsHub(
+                section = SettingsSection.Machine,
+                sub = MachineSub.COMPUTER,
+                onSectionChange = {},
+                onBack = {},
+                machines = SettingsMachines(listOf(mac, mini), "m2") {},
+            ) { p, _ -> Text("page ${p.section} ${p.sub}") }
+        }
+        onNodeWithText("page Machine null").assertExists()
+    }
+
+    @Test fun the_phone_index_has_search_cards_and_described_rows() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Compact, pointer = false) {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}, machines = SettingsMachines(listOf(mac, mini), "m1") {}) { p, _ -> Text("page ${p.section}") }
+        }
+        onNodeWithTag("settings_index_title").assertTextEquals("Settings")
+        onNodeWithTag("settings_search").assertExists()
+        onNodeWithTag("settings_machine_card_m2").assertExists()
+        onNodeWithText("Dictation, languages, read aloud").assertExists()
+        // A machine card opens that machine's page, named after it.
+        onNodeWithTag("settings_machine_card_m1").performClick()
+        onNodeWithTag("settings_detail_title").assertTextEquals("Ahmet's MacBook")
+    }
+
+    // ── Unit B review fixes ────────────────────────────────────────────────────────────────────
+
+    @Test fun a_rail_click_on_the_page_on_display_clears_a_pending_anchor() = runComposeUiTest {
+        var lastAnchor: String? = "unset"
+        setPlatformContent {
+            // A page that never reports the anchor shown (the interim Git hosting screen).
+            SettingsHub(section = SettingsSection.Coding, anchor = "github", onSectionChange = {}, onBack = {}) { p, _ ->
+                lastAnchor = p.anchor
+                Text(if (p.anchor == "github") "git hosting" else "editor")
+            }
+        }
+        onNodeWithText("git hosting").assertExists()
+        onNodeWithTag("settings_section_coding").performClick()
+        waitForIdle()
+        assertEquals(null, lastAnchor)
+        onNodeWithText("editor").assertExists()
+    }
+
+    @Test fun a_wide_hub_reports_its_sub_pages_to_the_route() = runComposeUiTest {
+        val reported = mutableListOf<Pair<SettingsSection, String?>>()
+        setPlatformContent {
+            RoutedHub(start = SettingsSection.Providers, reported = reported) { p, scope ->
+                Text(
+                    "page ${p.section} ${p.sub}",
+                    Modifier.testTag("open_claude").clickable { scope.onOpen(SettingsPlace(SettingsSection.Providers, "claude")) },
+                )
+            }
+        }
+        onNodeWithTag("open_claude").performClick()
+        waitForIdle()
+        onNodeWithText("page Providers claude").assertExists()
+        assertEquals(SettingsSection.Providers to "claude", reported.last())
+        onNodeWithTag("settings_hub_back").performClick()
+        waitForIdle()
+        onNodeWithText("page Providers null").assertExists()
+        assertEquals(SettingsSection.Providers to null, reported.last())
+        assertEquals(2, reported.size)
+    }
+
+    @Test fun a_hub_saved_before_sub_pages_and_anchors_restores() {
+        val restored = HubPlace.Saver.restore(listOf("s:Voice", "", "Voice||", true, "op-1"))!!
+        assertEquals(SettingsSection.Voice, (restored.opened as HubTarget.Sec).section)
+        assertEquals(null, restored.sub)
+        assertEquals(null, restored.anchor)
+        assertEquals("op-1", restored.opening)
     }
 }
 

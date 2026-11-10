@@ -43,6 +43,13 @@ class UrlRoutesTest {
         )
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
     }
+    @Test fun aSubPageOnlyParsesWhereThatPageHasIt() {
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Providers, sub = "claude")), parsePath("/settings/providers/claude"))
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Providers)), parsePath("/settings/providers/glossary"))
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Voice)), parsePath("/settings/voice/claude"))
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Machine)), parsePath("/settings/machine/nope"))
+        assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.General)), parsePath("/settings/general/theme"))
+    }
     @Test fun everyOldSlugLandsOnItsNewPlace() {
         val old = mapOf(
             "/settings/agents" to Route.Settings(SettingsSection.Providers),

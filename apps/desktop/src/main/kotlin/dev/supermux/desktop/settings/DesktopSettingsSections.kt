@@ -141,7 +141,10 @@ fun DesktopSettingsSection(
             )
             else -> InterimMachinePage(
                 onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
-                showComputer = LocalPlatform.current.caps.localBroker,
+                // This computer's hosting, on this computer's own page (or with no machine known yet): a remote
+                // machine's page has none, and the hub would not show it there.
+                showComputer = LocalPlatform.current.caps.localBroker &&
+                    dev.supermux.ui.settings.kit.LocalSettingsMachines.current?.current?.local != false,
                 anchor = place.anchor,
                 onAnchorShown = scope.onAnchorShown,
             )

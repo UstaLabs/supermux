@@ -41,7 +41,6 @@ import dev.supermux.ui.chat.ChatPanel
 import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.chat.testHostStore
-import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.FakeAppUpdater
 import dev.supermux.ui.platform.FakePlatform
@@ -279,7 +278,8 @@ class ActivityPlacementTest {
 
     @Test fun onAPhoneSettingsShowsNoDownloads() = runDesktopComposeUiTest {
         val center = DownloadCenter(scope).apply { running() }
-        phone(center) { SettingsHub(section = SettingsSection.Providers, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
+        // Plain Settings: the index (#97 — a section is a destination now and would push its page).
+        phone(center) { SettingsHub(section = null, onSectionChange = {}, onBack = {}, content = { _, _ -> }) }
         onNodeWithTag("settings_hub_back").assertIsDisplayed()
         onNode(hasText("big-video.mp4", substring = true), useUnmergedTree = true).assertDoesNotExist()
     }

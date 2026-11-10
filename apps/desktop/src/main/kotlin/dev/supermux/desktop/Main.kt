@@ -2005,6 +2005,8 @@ fun main() {
                             // The broker this app supervises is "this computer": its folders get
                             // the native folder dialog in the launcher.
                             isLocalHost = { id -> id != null && id == supervisor.hostId.value },
+                            // Settings' search field shows its shortcut, and that key focuses it.
+                            settingsSearchShortcut = if (isMacOs()) "⌘F" else "Ctrl+F",
                             stripChrome = DesktopStripChrome,
                             // macOS: no full-window dead strip under the transparent title bar.
                             // Detail content runs to the top edge; only the sidebar body is padded

@@ -155,6 +155,25 @@ class WorkspaceUiStateTest {
         assertEquals(SettingsSection.Voice, ui.settingsSection)
     }
 
+    @Test fun aWideHubsSubPageMoveRewritesTheRouteWithItsSubPage() {
+        val ui = ShellUiState()
+        ui.openSettings(SettingsSection.Providers)
+        ui.moveSettings(SettingsSection.Providers, "claude")
+        assertEquals(Route.Settings(SettingsSection.Providers, sub = "claude"), ui.currentRoute)
+        assertEquals("claude", ui.settingsSub)
+        ui.moveSettings(SettingsSection.Providers, null)
+        assertEquals(Route.Settings(SettingsSection.Providers), ui.currentRoute)
+        assertEquals(listOf(Route.Home, Route.Settings(SettingsSection.Providers)), ui.backStack.toList())
+    }
+
+    @Test fun plainSettingsReadsAsNoSectionEvenAfterAnEarlierOne() {
+        val ui = ShellUiState()
+        ui.openSettings(SettingsSection.Voice)
+        ui.goBack()
+        ui.openSettings()
+        assertEquals(null, ui.settingsSection)
+    }
+
     // ── Nav3 back stack is the source of truth ──────────────────────────────────────────────────
 
     @Test fun sidebarWidthClampsToRange() {

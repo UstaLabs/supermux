@@ -5,6 +5,8 @@ package dev.supermux.ui.settings.search
 
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.settings.SettingsPlace
+import dev.supermux.ui.settings.settingsTitle
 
 /** What this device shows, for rows that exist only on some platforms. */
 data class SettingsSearchContext(val caps: Caps, val phone: Boolean, val liveTranscript: Boolean)
@@ -21,10 +23,8 @@ data class SettingsSearchEntry(
 data class SettingsSearchGroup(val section: SettingsSection, val hits: List<SettingsSearchEntry>)
 
 /** A page's name in search and in the rail: Privacy & labs is "Privacy" on a device without labs. */
-fun settingsPageTitle(section: SettingsSection, ctx: SettingsSearchContext): String = when (section) {
-    SettingsSection.PrivacyLabs -> if (ctx.caps.assistantOverlay) "Privacy & labs" else "Privacy"
-    else -> section.label
-}
+fun settingsPageTitle(section: SettingsSection, ctx: SettingsSearchContext): String =
+    settingsTitle(SettingsPlace(section), labs = ctx.caps.assistantOverlay)
 
 /** Every word of [query] must appear, in any case, in an entry's label, keywords or page title. */
 fun searchSettings(

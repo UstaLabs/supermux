@@ -128,7 +128,7 @@ fun UrlSync(ui: ShellUiState, enabled: Boolean = true, wizard: Boolean = false) 
         snapshotFlow { pathFor(ui.currentRoute, ui.selectedId) }.distinctUntilChanged().collect { path ->
             val current = currentPath()
             if (current == path) return@collect
-            // NORMALISATION (`/settings` → `/settings/agents`, `/nope` → `/`, `/s/a?x=1` → `/s/a`)
+            // NORMALISATION (`/settings/` → `/settings`, `/nope` → `/`, `/s/a?x=1` → `/s/a`)
             // must REPLACE the entry, not push one: the typed URL and the canonical URL are the
             // same destination, and pushing would put the un-normalised path one step back — so
             // Back would re-apply it, the mirror would push again, and Back would be trapped.

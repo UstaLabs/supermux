@@ -225,13 +225,29 @@ class ShellUiState {
      * section for the next open (and for tests).
      */
     var settingsSection: SettingsSection?
-        get() = (currentRoute as? Route.Settings)?.section ?: lastSettingsSection
+        get() = when (val r = currentRoute) {
+            is Route.Settings -> r.section
+            else -> lastSettingsSection
+        }
         set(value) {
             lastSettingsSection = value
             val i = backStack.indexOfLast { it is Route.Settings }
             if (i >= 0) backStack[i] = Route.Settings(value)
         }
     private var lastSettingsSection by mutableStateOf<SettingsSection?>(null)
+
+    /** The sub-page Settings shows (a provider, the glossary, a machine screen); null when on a page or closed. */
+    val settingsSub: String? get() = (currentRoute as? Route.Settings)?.sub
+
+    /**
+     * A wide Settings hub moved to [section]'s [sub] (or the page itself): the route follows, with no anchor — the
+     * hub already shows the place, so it is not a new landing. The web's address bar and Back then follow sub-pages.
+     */
+    fun moveSettings(section: SettingsSection, sub: String?) {
+        lastSettingsSection = section
+        val i = backStack.indexOfLast { it is Route.Settings }
+        if (i >= 0) backStack[i] = Route.Settings(section, sub)
+    }
 
     /**
      * Push [route]. [Route.Home] clears everything above it; any other route REPLACES whatever is

@@ -16,6 +16,22 @@ class SettingsPlaceTest {
         assertEquals("Privacy", settingsTitle(SettingsPlace(SettingsSection.PrivacyLabs), labs = false))
     }
 
+    @Test fun a_sub_page_is_kept_only_where_its_page_has_it() {
+        assertEquals("codex", settingsSubOrNull(SettingsSection.Providers, "codex"))
+        assertNull(settingsSubOrNull(SettingsSection.Providers, "glossary"))
+        assertEquals(GLOSSARY_SUB, settingsSubOrNull(SettingsSection.Voice, GLOSSARY_SUB))
+        for (sub in listOf("status", "computer", "devices", "links", "worktrees")) assertEquals(sub, settingsSubOrNull(SettingsSection.Machine, sub))
+        assertNull(settingsSubOrNull(SettingsSection.Machine, "nope"))
+        assertNull(settingsSubOrNull(SettingsSection.General, "theme"))
+        assertNull(settingsSubOrNull(SettingsSection.Voice, null))
+    }
+
+    @Test fun the_page_title_in_search_and_the_rail_is_the_page_title() {
+        val ctx = dev.supermux.ui.settings.search.SettingsSearchContext(dev.supermux.ui.platform.NO_CAPS, phone = false, liveTranscript = false)
+        assertEquals("Privacy", dev.supermux.ui.settings.search.settingsPageTitle(SettingsSection.PrivacyLabs, ctx))
+        assertEquals("This machine", dev.supermux.ui.settings.search.settingsPageTitle(SettingsSection.Machine, ctx))
+    }
+
     @Test fun plain_settings_is_no_section() {
         val ui = ShellUiState()
         ui.openSettings()

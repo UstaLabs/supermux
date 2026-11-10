@@ -1,23 +1,18 @@
-// The one Settings shell for both apps (cluster E1).
+// The one Settings shell for every app (cluster E1; drawn by the Settings kit since #97).
 //
-// Base = desktop's `settings/SettingsHub.kt`: a left rail of [SettingsSection]s beside a detail
-// pane, with the identity dirty-close guard (`onRegisterCloseHandler` → Escape / NavDisplay back).
-// The Compact branch is Android's `MoreScreens.kt` router + index list: a `TopAppBar`, an index of
-// tappable rows, and a push to the section's detail with `BackHandler` returning to the index.
+// A wide window gets a rail (back + "Settings", the search field, a card per machine, a row per page) beside a
+// detail pane; a phone (Compact) gets an index (the same search, cards and rows, with a line of description each)
+// and pushes the page over it, with Back returning to the index. The identity dirty-close guard
+// (`onRegisterCloseHandler` → Escape / NavDisplay back) asks before anything leaves a page with unsaved edits.
 //
-// Sections are NOT rendered here — they arrive through the [content] slot, so E2–E6 can replace a
-// host screen with the shared one a section at a time without touching this file. In E1 both hosts
-// pass their existing per-section composables in.
+// Pages are NOT rendered here — they arrive through the [content] slot (each host's `*SettingsSections.kt`), so a
+// page can be rebuilt without touching this file.
 package dev.supermux.ui.settings
 
-import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,41 +21,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -71,15 +47,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -89,8 +77,26 @@ import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.retain.LocalRetainedPage
 import dev.supermux.ui.retain.newRetainedPageOpening
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.settings.kit.KitGhostButton
+import dev.supermux.ui.settings.kit.KitGlyphs
+import dev.supermux.ui.settings.kit.KitMachine
+import dev.supermux.ui.settings.kit.KitMachineCard
+import dev.supermux.ui.settings.kit.KitNavRow
+import dev.supermux.ui.settings.kit.KitSearchField
+import dev.supermux.ui.settings.kit.KitSheet
+import dev.supermux.ui.settings.kit.KitTopBar
+import dev.supermux.ui.settings.kit.LocalSettingsMachines
+import dev.supermux.ui.settings.kit.SettingsMachines
+import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
+import dev.supermux.ui.settings.kit.kitColors
+import dev.supermux.ui.settings.kit.kitFocusRing
+import dev.supermux.ui.settings.kit.kitMetrics
+import dev.supermux.ui.settings.search.SettingsSearchContext
+import dev.supermux.ui.settings.search.SettingsSearchEntry
+import dev.supermux.ui.settings.search.SettingsSearchGroup
+import dev.supermux.ui.settings.search.SettingsSearchIndex
+import dev.supermux.ui.settings.search.searchSettings
+import dev.supermux.ui.settings.search.settingsPageTitle
 import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.SwipeBackPages
@@ -121,8 +127,8 @@ enum class SettingsExtra(val label: String, val desc: String) {
  *   rail layout. Honors the dirty guard, so a folded screen's own Back button can call it safely.
  * @property onDirtyChange the section reports unsaved edits; while true the hub confirms before a
  *   section switch or a close (available to every section).
- * @property topBarShown true when the hub already painted a `TopAppBar` for this detail — a slot
- *   that could carry its own `Scaffold`/`TopAppBar` (every settings screen can, because Android's
+ * @property topBarShown true when the hub already painted a top bar for this detail — a slot
+ *   that could carry its own bar (every settings screen can, because Android's
  *   standalone routes still need one) must only draw it when this is false.
  * @property onOpen move the hub to another place: a page (as a rail click or an index tap would), a sub-page
  *   of a page (a provider, the glossary, a machine screen) or a row on one. A sub-page of the page on display
@@ -143,25 +149,25 @@ class SettingsSlotScope internal constructor(
 }
 
 /** Which detail the hub is showing. */
-private sealed interface Target {
-    data class Sec(val section: SettingsSection) : Target
-    data class Ext(val extra: SettingsExtra) : Target
+internal sealed interface HubTarget {
+    data class Sec(val section: SettingsSection) : HubTarget
+    data class Ext(val extra: SettingsExtra) : HubTarget
 }
 
-/** [Target]'s name in saved state and in a page key. */
-private fun Target.key(): String = when (this) {
-    is Target.Sec -> "s:${section.name}"
-    is Target.Ext -> "e:${extra.name}"
+/** [HubTarget]'s name in saved state and in a page key. */
+private fun HubTarget.key(): String = when (this) {
+    is HubTarget.Sec -> "s:${section.name}"
+    is HubTarget.Ext -> "e:${extra.name}"
 }
 
-private fun targetOf(key: String): Target? = when {
-    key.startsWith("s:") -> SettingsSection.entries.firstOrNull { it.name == key.removePrefix("s:") }?.let(Target::Sec)
-    key.startsWith("e:") -> SettingsExtra.entries.firstOrNull { it.name == key.removePrefix("e:") }?.let(Target::Ext)
+private fun targetOf(key: String): HubTarget? = when {
+    key.startsWith("s:") -> SettingsSection.entries.firstOrNull { it.name == key.removePrefix("s:") }?.let(HubTarget::Sec)
+    key.startsWith("e:") -> SettingsExtra.entries.firstOrNull { it.name == key.removePrefix("e:") }?.let(HubTarget::Ext)
     else -> null
 }
 
 /** [section] as a destination: any section; null is `Route.Settings`'s "just Settings" (#97). */
-private fun deliberate(section: SettingsSection?): Target? = section?.let(Target::Sec)
+private fun deliberate(section: SettingsSection?): HubTarget? = section?.let(HubTarget::Sec)
 
 /** The page a wide hub shows for "just Settings". */
 private val WIDE_DEFAULT = SettingsSection.General
@@ -176,7 +182,7 @@ private fun routeKey(section: SettingsSection?, sub: String?, anchor: String?): 
  * last drawn in, and the opening of the page on display that the sections keep their forms under
  * ([LocalRetainedPage]).
  */
-private class HubPlace(opened: Target?, landedFor: String, drawnCompact: Boolean) {
+internal class HubPlace(opened: HubTarget?, landedFor: String, drawnCompact: Boolean) {
     /** The page the user opened: the phone's pushed page (null = the index), or the wide rail's last pick. */
     var opened by mutableStateOf(opened)
     var extra by mutableStateOf<SettingsExtra?>(null)
@@ -220,22 +226,30 @@ private class HubPlace(opened: Target?, landedFor: String, drawnCompact: Boolean
 /**
  * Full-pane Settings.
  *
- * `LocalWindowWidthClass == Compact` renders Android's index + push; anything wider renders
- * desktop's rail + detail. [section] is the rail selection (desktop reads and writes it through
+ * `LocalWindowWidthClass == Compact` renders the phone's index + push; anything wider renders the
+ * rail + detail. [section] is the rail selection (the shell reads and writes it through
  * `Route.Settings.section`); null is "just Settings" — the index on a phone, General on a wide
  * window. Any section, [sub] or [anchor] is a deliberate destination and lands there (#97).
  *
  * @param onBack close the hub entirely (the host pops its route).
  * @param onRegisterCloseHandler the host's Escape / system-back path — the hub keeps a closure here
- *   that honors the dirty guard, and restores a plain [onBack] on dispose.
- * @param hostKey the active host id. The compact push stack is scoped to it: switching hosts
- *   returns to the index rather than leaving a stale detail of the previous host on screen.
+ *   that honors the dirty guard (and clears a search being typed first), and restores a plain [onBack] on dispose.
+ * @param hostKey a key the compact push stack is scoped to: a new one returns to the index. The shell passes none
+ *   since #97 — a machine pick keeps the hub on its page and reloads only the page ([machines]).
+ * @param machines every machine Settings knows, the one its machine pages are about, and how to switch: the cards
+ *   at the top of the rail / index, and [LocalSettingsMachines] for the pages' scope lines. The page is keyed by
+ *   the current machine, so a pick reloads its data and forms; the hub stays where it is.
+ * @param searchShortcut the shortcut's text in the search field ("⌘F"); when set, that key focuses the search.
+ * @param onPlaceChange a wide hub moved to another page or sub-page (a rail click, a sub-page, back from one): the
+ *   shell writes it into the route, so a web address bar and its Back follow sub-pages too. Without it only a new
+ *   section is reported, through [onSectionChange]. A phone reports nothing (see [SettingsHub]'s `open`).
+ * @param searchIndex what the search looks through (tests hand in their own).
  * @param extraContent renders a [SettingsExtra] page. Only reached for extras the caps allow.
  * @param sub a second-level page of [section] to land on (a provider, the glossary, a machine screen).
  * @param anchor a row of the landed page to scroll to and flash once.
  * @param content renders one place — each host's `*SettingsSections.kt` wiring.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsHub(
     section: SettingsSection?,
@@ -245,12 +259,17 @@ fun SettingsHub(
     anchor: String? = null,
     onRegisterCloseHandler: ((() -> Unit) -> Unit)? = null,
     hostKey: String? = null,
+    machines: SettingsMachines? = null,
+    searchShortcut: String? = null,
+    onPlaceChange: ((SettingsSection, String?) -> Unit)? = null,
+    searchIndex: List<SettingsSearchEntry> = SettingsSearchIndex,
     extraContent: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     content: @Composable (SettingsPlace, SettingsSlotScope) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val caps = LocalPlatform.current.caps
-    val hasMediaCache = LocalPlatform.current.mediaCache != null
+    val c = kitColors()
+    val platform = LocalPlatform.current
+    val caps = platform.caps
+    val hasMediaCache = platform.mediaCache != null
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // A route's sub-page or anchor only means something with a section.
     val routeSub = sub.takeIf { section != null }
@@ -267,11 +286,19 @@ fun SettingsHub(
             }
         }
     }
+    val searchCtx = SettingsSearchContext(caps, phone = compact, liveTranscript = platform.mic.liveTranscript != null)
 
     var identityDirty by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     /** When non-null, discard-confirm runs this instead of closing the hub. */
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    // Search (spec §2.5): the query outlives a page opened from its results, so a phone's Back returns to them.
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchFocus = remember { FocusRequester() }
+    var searchFocused by remember { mutableStateOf(false) }
+    val groups = remember(query, searchCtx, searchIndex) { searchSettings(query, searchCtx, searchIndex) }
+
     /**
      * The compact hub's landing target: no section is `Route.Settings`'s default and means "just
      * Settings", so it lands on the index; any section is a DELIBERATE destination
@@ -283,9 +310,9 @@ fun SettingsHub(
      * was the entry key, seeding from it would have reopened the section every time the route was
      * rewritten.
      */
-    fun landing(): Target? = if (compact) deliberate(section) else null
+    fun landing(): HubTarget? = if (compact) deliberate(section) else null
 
-    // Compact push stack (null = index) and wide extra selection, both reset with the host. Saved
+    // Compact push stack (null = index) and wide extra selection, both reset with [hostKey]. Saved
     // with the hub's nav entry (#89): an Android recreation rebuilt the phone hub on its index, and
     // a width change, which keeps this hub but swaps its layout, showed the wide rail's section
     // instead of the page the phone had open. A new opening of Settings is a new entry, so it
@@ -307,16 +334,21 @@ fun SettingsHub(
     val swapping = place.drawnCompact != compact
 
     /** The page a narrowing window opens on the phone: the wide hub's, unless it showed only the default. */
-    fun narrowed(): Target? = extraSelected?.let(Target::Ext)
-        ?: opened?.takeIf { it is Target.Sec && it.section == section }
+    fun narrowed(): HubTarget? = extraSelected?.let(HubTarget::Ext)
+        ?: opened?.takeIf { it is HubTarget.Sec && it.section == section }
         ?: deliberate(section)
 
-    val phonePage: Target? = if (swapping) narrowed() else opened
-    val widePage: Target = opened?.takeIf { swapping }
-        ?: extraSelected?.let(Target::Ext)
-        ?: Target.Sec(wideSection)
-    // What a section keeps on its page (rememberRetainedOnPage) belongs to this opening of it.
-    val pageKey = (if (compact) phonePage else widePage)?.let { "${place.opening}:${it.key()}" }
+    val phonePage: HubTarget? = if (swapping) narrowed() else opened
+    val widePage: HubTarget = opened?.takeIf { swapping }
+        ?: extraSelected?.let(HubTarget::Ext)
+        ?: HubTarget.Sec(wideSection)
+    // What a section keeps on its page (rememberRetainedOnPage) belongs to this opening of it, on this machine.
+    val pageKey = (if (compact) phonePage else widePage)?.let { "${place.opening}:${machines?.currentId}:${it.key()}" }
+
+    /** "This computer" is a card of its own: no local host is paired, so its hosting page is not any machine's. */
+    val computerCard = machines?.all?.any { it.id == THIS_COMPUTER_ID } == true
+    /** This computer's hosting is not a sub-page of another machine (one picked on the scope line, a stale route). */
+    val dropComputer = machines != null && machines.current?.local == false && !computerCard
 
     /** Runs [action], or asks to discard first when a section reported unsaved edits. */
     fun guard(action: () -> Unit) {
@@ -337,21 +369,19 @@ fun SettingsHub(
     }
 
     /**
-     * Back from wherever we are: a sub-page → its page; a page → the index (Compact) or close the hub;
-     * the index → close the hub.
+     * A wide hub tells the shell where it is now, so the route (and a web address bar) has its page and sub-page.
+     * Not a new landing: the hub already shows it.
      */
-    fun leave() {
-        if (place.sub != null) {
-            // The page's forms belong to the page, so going back to it is not a new opening.
-            guard { toPage() }
-        } else if (compact && opened != null) {
-            guard {
-                opened = null
-                toPage()
-                place.reopen()
-            }
-        } else {
-            tryClose()
+    fun report(s: SettingsSection, newSub: String?) {
+        if (s == section && newSub == routeSub) return
+        val p = onPlaceChange
+        if (p != null) {
+            place.landedFor = routeKey(s, newSub, null)
+            p(s, newSub)
+        } else if (s != section) {
+            // The shell writes `Route.Settings(section)` — no sub-page, no anchor.
+            place.landedFor = routeKey(s, null, null)
+            onSectionChange(s)
         }
     }
 
@@ -359,7 +389,7 @@ fun SettingsHub(
      * Shows [target] with [sub] and [anchor] on it. A sub-page or anchor on the page already on display swaps in
      * place: what that page retains belongs to the page, not to its sub-page (#97).
      */
-    fun open(target: Target, sub: String? = null, anchor: String? = null) {
+    fun open(target: HubTarget, sub: String? = null, anchor: String? = null) {
         if (compact) {
             // No `onSectionChange` here, and that omission is the whole point.
             //
@@ -370,9 +400,6 @@ fun SettingsHub(
             // a changed key disposes the entry and composes a fresh one — a fresh hub, whose
             // `opened` starts at null. So the tap opened a section and the rewrite closed it in
             // the same frame, and every settings section on a phone was a row that did nothing.
-            //
-            // The `key(activeHostId)` in `SupermuxApp` is the same rule already learned once, one
-            // level down: `route.section` must not be allowed to remount this hub.
             guard {
                 val samePage = opened == target
                 opened = target
@@ -384,24 +411,21 @@ fun SettingsHub(
         }
         // The wide rail's pick is also what a narrowing window opens on the phone.
         when (target) {
-            is Target.Sec -> {
+            is HubTarget.Sec -> {
                 val samePage = extraSelected == null && target.section == wideSection
-                if (samePage && sub == place.sub && anchor == null) return
+                // A pending anchor is not "already there": the rail row takes the page back to its top (the interim
+                // Git hosting screen behind Coding's `github` anchor never reports it shown).
+                if (samePage && sub == place.sub && anchor == place.anchor) return
                 guard {
                     extraSelected = null
                     opened = target
                     place.sub = sub
                     place.anchor = anchor
                     if (!samePage) place.reopen()
-                    if (target.section != section) {
-                        // The shell writes `Route.Settings(section)` — no sub-page, no anchor — and that is
-                        // not a new landing: the hub already shows it.
-                        place.landedFor = routeKey(target.section, null, null)
-                        onSectionChange(target.section)
-                    }
+                    report(target.section, sub)
                 }
             }
-            is Target.Ext -> {
+            is HubTarget.Ext -> {
                 if (extraSelected == target.extra) return
                 guard {
                     extraSelected = target.extra
@@ -413,6 +437,56 @@ fun SettingsHub(
         }
     }
 
+    /**
+     * Back from wherever we are: a sub-page → its page; a page → the index (Compact) or close the hub;
+     * the index → close the hub. This computer's hosting opened from its own card is not a sub-page of the
+     * current machine: it leaves to the index (phone) or General (wide).
+     */
+    fun leave() {
+        val fromComputerCard = computerCard && place.sub == MachineSub.COMPUTER
+        if (place.sub != null && !fromComputerCard) {
+            // The page's forms belong to the page, so going back to it is not a new opening.
+            guard {
+                toPage()
+                if (!compact) (widePage as? HubTarget.Sec)?.let { report(it.section, null) }
+            }
+        } else if (compact && opened != null) {
+            guard {
+                opened = null
+                toPage()
+                place.reopen()
+            }
+        } else if (fromComputerCard) {
+            open(HubTarget.Sec(WIDE_DEFAULT))
+        } else {
+            tryClose()
+        }
+    }
+
+    /** The shell's Escape and system back: a search being typed clears first. */
+    fun closeRequest() {
+        if (searchFocused && query.isNotEmpty()) query = "" else leave()
+    }
+
+    /** A machine card: that machine's page (switching to it first), or this computer's hosting. */
+    fun pickMachine(m: KitMachine) {
+        val ms = machines ?: return
+        if (m.id == THIS_COMPUTER_ID) {
+            open(HubTarget.Sec(SettingsSection.Machine), sub = MachineSub.COMPUTER)
+            return
+        }
+        guard {
+            if (m.id != ms.currentId) ms.onPick(m.id)
+            open(HubTarget.Sec(SettingsSection.Machine))
+        }
+    }
+
+    /** A search result: its page at its row. A wide rail goes back to its rows; a phone keeps the results for Back. */
+    fun pickResult(e: SettingsSearchEntry) {
+        open(HubTarget.Sec(e.section), anchor = e.anchor)
+        if (!compact) query = ""
+    }
+
     fun confirmDiscard() {
         showDiscardDialog = false
         identityDirty = false
@@ -421,25 +495,27 @@ fun SettingsHub(
         if (next != null) next() else onBack()
     }
 
+    fun cancelDiscard() {
+        showDiscardDialog = false
+        pending = null
+    }
+
     LaunchedEffect(compact, routeKey) {
         if (swapping) {
             // The Compact↔wide swap: the layout now drawn takes over the page the other one had
             // on display (#89), with its sub-page and pending anchor (#97). The rail selection is
-            // the shell's, so a widening window reports the phone's section to it, as a rail
+            // the shell's, so a widening window reports the phone's page to it, as a rail
             // click would.
             if (compact) {
                 opened = narrowed()
                 if (opened == null) toPage()
             } else {
                 when (val t = opened) {
-                    is Target.Sec -> {
+                    is HubTarget.Sec -> {
                         extraSelected = null
-                        if (t.section != section) {
-                            place.landedFor = routeKey(t.section, null, null)
-                            onSectionChange(t.section)
-                        }
+                        report(t.section, place.sub)
                     }
-                    is Target.Ext -> extraSelected = t.extra
+                    is HubTarget.Ext -> extraSelected = t.extra
                     null -> Unit
                 }
             }
@@ -471,18 +547,27 @@ fun SettingsHub(
         }
     }
 
+    // Another machine has no "This computer" screen: its page itself shows instead.
+    LaunchedEffect(dropComputer, place.sub) {
+        if (dropComputer && place.sub == MachineSub.COMPUTER) {
+            place.sub = null
+            if (!compact && widePage == HubTarget.Sec(SettingsSection.Machine)) report(SettingsSection.Machine, null)
+        }
+    }
+
     // Keep the registered close handler current for Escape / system back on the outer host.
+    val closeNow = rememberUpdatedState<() -> Unit> { closeRequest() }
     DisposableEffect(identityDirty, opened, compact) {
-        onRegisterCloseHandler?.invoke { leave() }
+        onRegisterCloseHandler?.invoke { closeNow.value() }
         onDispose { onRegisterCloseHandler?.invoke { onBack() } }
     }
 
     // The slot scope is `@Immutable`, so it must not be a fresh object every recomposition —
-    // that would defeat skipping in every section body underneath. The two callbacks are held in
+    // that would defeat skipping in every section body underneath. The callbacks are held in
     // `rememberUpdatedState` so the remembered scope always runs the CURRENT `leave()`.
     val leaveNow = rememberUpdatedState<() -> Unit> { leave() }
     val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
-    val openNow = rememberUpdatedState<(SettingsPlace) -> Unit> { open(Target.Sec(it.section), it.sub, it.anchor) }
+    val openNow = rememberUpdatedState<(SettingsPlace) -> Unit> { open(HubTarget.Sec(it.section), it.sub, it.anchor) }
     val anchorShownNow = rememberUpdatedState<() -> Unit> { place.anchor = null }
     val scope = remember(compact) {
         SettingsSlotScope(
@@ -493,390 +578,369 @@ fun SettingsHub(
             onAnchorShown = { anchorShownNow.value() },
         )
     }
+    // The pages' scope lines switch machines through the same guard as the cards.
+    val guardNow = rememberUpdatedState<(() -> Unit) -> Unit> { guard(it) }
+    val pageMachines = remember(machines) {
+        machines?.let { ms -> SettingsMachines(ms.all, ms.currentId) { id -> guardNow.value { ms.onPick(id) } } }
+    }
 
     /** What a section's slot is handed: its page, with the sub-page and anchor on it. */
-    fun placeOf(target: Target.Sec) = SettingsPlace(target.section, place.sub, place.anchor)
+    fun placeOf(target: HubTarget.Sec) = SettingsPlace(
+        target.section,
+        place.sub.takeUnless { target.section == SettingsSection.Machine && it == MachineSub.COMPUTER && dropComputer },
+        place.anchor,
+    )
 
-    if (compact) {
-        val target = phonePage
-        val detailSwipe = rememberIosBackSwipe()
-        // The index leaves the hub, so its swipe drags the whole Settings page off (the route's
-        // swipe). A section reporting unsaved edits asks first, so neither back may slide a page
-        // away underneath the discard dialog.
-        SwipeBackHandler(interactive = !identityDirty) { leave() }
-        // An open section goes back to the index. Registered second, so it runs first.
-        SwipeBackHandler(enabled = target != null, swipe = detailSwipe, interactive = !identityDirty) { leave() }
-        SwipeBackPages(
-            pushed = target != null,
-            swipe = detailSwipe,
-            pageBackground = cs.background,
-            modifier = Modifier.background(cs.background).testTag("settings_hub"),
-            under = {
-                SettingsIndex(
-                    extras = extras,
-                    labs = labs,
-                    onBack = { leave() },
-                    onOpen = { open(it) },
-                )
-            },
-        ) {
-            if (target != null) {
-                CompositionLocalProvider(LocalIosBackSwipe provides detailSwipe, LocalRetainedPage provides pageKey) {
-                    CompactDetail(
-                        title = when (target) {
-                            // Task 10 names the Machine page after the active machine.
-                            is Target.Sec -> settingsTitle(placeOf(target), machineName = null, labs = labs)
-                            is Target.Ext -> target.extra.label
-                        },
-                        onBack = { leave() },
-                    ) {
-                        Box(Modifier.fillMaxSize().testTag("settings_hub_detail")) {
-                            when (target) {
-                                is Target.Sec -> content(placeOf(target), scope)
-                                is Target.Ext -> extraContent(target.extra, scope)
+    /** The search group's name: the Machine page is the current machine's. */
+    fun groupTitle(s: SettingsSection): String =
+        machines?.current?.name?.takeIf { s == SettingsSection.Machine } ?: settingsPageTitle(s, searchCtx)
+
+    @Composable
+    fun Slot(target: HubTarget) {
+        when (target) {
+            is HubTarget.Sec -> key(machines?.currentId) { content(placeOf(target), scope) }
+            is HubTarget.Ext -> extraContent(target.extra, scope)
+        }
+    }
+
+    @Composable
+    fun Search(modifier: Modifier) {
+        KitSearchField(
+            query = query,
+            onQueryChange = { query = it },
+            modifier = modifier.onFocusChanged { searchFocused = it.isFocused },
+            shortcut = searchShortcut,
+            focusRequester = searchFocus,
+        )
+    }
+
+    // The search shortcut: the hub holds the keyboard focus (under the shell's Escape box, above the pages), so the
+    // key reaches it wherever focus is inside Settings.
+    val rootFocus = remember { FocusRequester() }
+    val shortcutKeys = if (searchShortcut == null) {
+        Modifier
+    } else {
+        Modifier
+            .focusRequester(rootFocus)
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown && e.key == Key.F && (e.isCtrlPressed || e.isMetaPressed)) {
+                    runCatching { searchFocus.requestFocus() }
+                    true
+                } else {
+                    false
+                }
+            }
+            .focusable()
+    }
+    LaunchedEffect(searchShortcut != null) {
+        if (searchShortcut != null) runCatching { rootFocus.requestFocus() }
+    }
+
+    CompositionLocalProvider(LocalSettingsMachines provides pageMachines) {
+        if (compact) {
+            val target = phonePage
+            val detailSwipe = rememberIosBackSwipe()
+            // The index leaves the hub, so its swipe drags the whole Settings page off (the route's
+            // swipe). A section reporting unsaved edits asks first, so neither back may slide a page
+            // away underneath the discard dialog.
+            SwipeBackHandler(interactive = !identityDirty) { closeRequest() }
+            // An open section goes back to the index. Registered second, so it runs first.
+            SwipeBackHandler(enabled = target != null, swipe = detailSwipe, interactive = !identityDirty) { leave() }
+            SwipeBackPages(
+                pushed = target != null,
+                swipe = detailSwipe,
+                pageBackground = c.pane,
+                modifier = Modifier.background(c.pane).then(shortcutKeys).testTag("settings_hub"),
+                under = {
+                    Column(Modifier.fillMaxSize().background(c.pane).testTag("settings_index")) {
+                        KitTopBar(
+                            "Settings",
+                            onBack = { leave() },
+                            backTag = "settings_hub_back",
+                            titleTag = "settings_index_title",
+                        )
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            Search(Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
+                            if (query.isBlank()) {
+                                if (machines != null && machines.all.isNotEmpty()) {
+                                    Column(
+                                        Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        for (m in machines.all) {
+                                            KitMachineCard(m, selected = false, onClick = { pickMachine(m) })
+                                        }
+                                    }
+                                }
+                                for (s in railSections) {
+                                    KitNavRow(
+                                        label = settingsPageTitle(s, searchCtx),
+                                        glyph = s.glyph(),
+                                        selected = false,
+                                        onClick = { open(HubTarget.Sec(s)) },
+                                        modifier = Modifier.testTag("settings_row_${s.name.lowercase()}"),
+                                        description = s.desc(labs),
+                                    )
+                                }
+                                for (e in extras) {
+                                    KitNavRow(
+                                        label = e.label,
+                                        glyph = e.glyph(),
+                                        selected = false,
+                                        onClick = { open(HubTarget.Ext(e)) },
+                                        modifier = Modifier.testTag("settings_row_${e.name.lowercase()}"),
+                                        description = e.desc,
+                                    )
+                                }
+                            } else {
+                                SearchResults(query, groups, ::groupTitle) { pickResult(it) }
                             }
                         }
                     }
-                }
-            }
-        }
-    } else {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(cs.background)
-                .testTag("settings_hub"),
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.md),
+                },
             ) {
-                // Back pops a sub-page first, then closes (Escape and system back do the same).
-                IconButton(onClick = { leave() }, modifier = Modifier.testTag("settings_hub_back")) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = cs.onSurface,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                Text(
-                    "Settings",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            HorizontalDivider(color = cs.outlineVariant)
-
-            Row(Modifier.fillMaxSize()) {
-                // Left rail
-                Column(
-                    Modifier
-                        .width(200.dp)
-                        .fillMaxHeight()
-                        .background(cs.surfaceContainerLow)
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = Space.sm)
-                        .testTag("settings_hub_rail"),
-                ) {
-                    railSections.forEach { s ->
-                        RailRow(
-                            label = settingsTitle(SettingsPlace(s), labs = labs),
-                            selected = widePage == Target.Sec(s),
-                            onClick = { open(Target.Sec(s)) },
-                            testTag = "settings_section_${s.name.lowercase()}",
-                        )
-                    }
-                    extras.forEach { e ->
-                        RailRow(
-                            label = e.label,
-                            selected = widePage == Target.Ext(e),
-                            onClick = { open(Target.Ext(e)) },
-                            testTag = "settings_section_${e.name.lowercase()}",
-                        )
-                    }
-                }
-                VerticalDivider(color = cs.outlineVariant)
-                // Detail pane — no nested Back on the folded screens (hub owns navigation)
-                Box(Modifier.weight(1f).fillMaxHeight().testTag("settings_hub_detail")) {
-                    CompositionLocalProvider(LocalRetainedPage provides pageKey) {
-                        when (val p = widePage) {
-                            is Target.Ext -> extraContent(p.extra, scope)
-                            is Target.Sec -> content(placeOf(p), scope)
+                if (target != null) {
+                    CompositionLocalProvider(LocalIosBackSwipe provides detailSwipe, LocalRetainedPage provides pageKey) {
+                        // The hub ALWAYS paints the pushed page's bar: every page reads `topBarShown` and draws none,
+                        // so a phone gets exactly one bar per page and the hub's back handlers own Back.
+                        Column(Modifier.fillMaxSize().background(c.pane)) {
+                            KitTopBar(
+                                title = when (target) {
+                                    is HubTarget.Sec -> settingsTitle(placeOf(target), machines?.current?.name, labs)
+                                    is HubTarget.Ext -> target.extra.label
+                                },
+                                onBack = { leave() },
+                            )
+                            Box(Modifier.weight(1f).fillMaxWidth().testTag("settings_hub_detail")) { Slot(target) }
                         }
                     }
+                }
+            }
+        } else {
+            val onMachinePage = widePage == HubTarget.Sec(SettingsSection.Machine)
+            fun cardSelected(m: KitMachine): Boolean = onMachinePage && when {
+                m.id == THIS_COMPUTER_ID -> place.sub == MachineSub.COMPUTER
+                computerCard && place.sub == MachineSub.COMPUTER -> false
+                else -> m.id == machines?.current?.id
+            }
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .background(c.chrome)
+                    .then(shortcutKeys)
+                    .testTag("settings_hub"),
+            ) {
+                Column(
+                    Modifier
+                        .width(252.dp)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
+                        .padding(start = 8.dp, end = 8.dp, bottom = 10.dp)
+                        .testTag("settings_hub_rail"),
+                ) {
+                    RailHeader(onBack = { leave() })
+                    Search(Modifier.padding(bottom = 10.dp))
+                    if (query.isBlank()) {
+                        if (machines != null && machines.all.isNotEmpty()) {
+                            Column(
+                                Modifier.padding(bottom = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                for (m in machines.all) {
+                                    KitMachineCard(m, selected = cardSelected(m), onClick = { pickMachine(m) })
+                                }
+                            }
+                        }
+                        for (s in railSections) {
+                            KitNavRow(
+                                label = settingsPageTitle(s, searchCtx),
+                                glyph = s.glyph(),
+                                selected = widePage == HubTarget.Sec(s),
+                                onClick = { open(HubTarget.Sec(s)) },
+                                modifier = Modifier.testTag("settings_section_${s.name.lowercase()}"),
+                            )
+                        }
+                        for (e in extras) {
+                            KitNavRow(
+                                label = e.label,
+                                glyph = e.glyph(),
+                                selected = widePage == HubTarget.Ext(e),
+                                onClick = { open(HubTarget.Ext(e)) },
+                                modifier = Modifier.testTag("settings_section_${e.name.lowercase()}"),
+                            )
+                        }
+                    } else {
+                        SearchResults(query, groups, ::groupTitle) { pickResult(it) }
+                    }
+                }
+                // The detail pane: the page on the pane tone, inset from the chrome. The rail owns navigation, so
+                // the page draws no back of its own.
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(c.pane)
+                        .testTag("settings_hub_detail"),
+                ) {
+                    CompositionLocalProvider(LocalRetainedPage provides pageKey) { Slot(widePage) }
                 }
             }
         }
     }
 
     // A sub-page goes back to its page, instantly: no slide, and not the route's swipe (which would drag the whole
-    // Settings page off). Registered last, so it runs before the handlers above.
-    SwipeBackHandler(enabled = place.sub != null, swipe = null) { leave() }
+    // Settings page off). Registered last, so it runs before the handlers above — and registered again after a
+    // Compact↔wide swap, which registers the layout's own handlers anew.
+    key(compact) {
+        SwipeBackHandler(enabled = place.sub != null, swipe = null) { leave() }
+    }
 
     if (showDiscardDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showDiscardDialog = false
-                pending = null
-            },
-            title = { Text("Discard unsaved changes?") },
-            text = {
-                Text("You have unsaved edits. Leave without saving?")
-            },
-            confirmButton = {
-                TextButton(
+        KitSheet(
+            "Discard unsaved changes?",
+            onDismiss = { cancelDiscard() },
+            description = "You have unsaved edits. Leave without saving?",
+            tag = "settings_discard_dialog",
+            buttons = {
+                KitGhostButton("Keep editing", onClick = { cancelDiscard() }, modifier = Modifier.testTag("settings_discard_cancel"))
+                KitGhostButton(
+                    "Discard",
                     onClick = { confirmDiscard() },
                     modifier = Modifier.testTag("settings_discard_confirm"),
-                ) { Text("Discard") }
+                    destructive = true,
+                )
             },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showDiscardDialog = false
-                        pending = null
-                    },
-                    modifier = Modifier.testTag("settings_discard_cancel"),
-                ) { Text("Keep editing") }
-            },
-            modifier = Modifier.testTag("settings_discard_dialog"),
         )
     }
 }
 
-/** The Compact index: Android's `SettingsIndexPage`, on shared icons and one row per target. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** The wide rail's head: a back box and "Settings". */
 @Composable
-private fun SettingsIndex(
-    extras: List<SettingsExtra>,
-    labs: Boolean,
-    onBack: () -> Unit,
-    onOpen: (Target) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("settings_hub_back")) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-            )
-        },
-        containerColor = cs.background,
-        modifier = Modifier.testTag("settings_index"),
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            railSections.forEachIndexed { i, s ->
-                if (i > 0) HorizontalDivider(color = cs.outlineVariant)
-                IndexRow(
-                    icon = s.icon(),
-                    label = settingsTitle(SettingsPlace(s), labs = labs),
-                    desc = s.desc(),
-                    testTag = "settings_row_${s.name.lowercase()}",
-                    onClick = { onOpen(Target.Sec(s)) },
-                )
-            }
-            extras.forEach { e ->
-                HorizontalDivider(color = cs.outlineVariant)
-                IndexRow(
-                    icon = e.icon(),
-                    label = e.label,
-                    desc = e.desc,
-                    testTag = "settings_row_${e.name.lowercase()}",
-                    onClick = { onOpen(Target.Ext(e)) },
-                )
-            }
-        }
-    }
-}
-
-/**
- * The pushed detail's chrome. The hub ALWAYS paints it: since cluster E7 every section and extra
- * is a screen that reads `SettingsSlotScope.topBarShown` and draws no bar of its own, so a phone
- * gets exactly one bar per page and the hub's `BackHandler` is the only Back owner.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CompactDetail(
-    title: String,
-    onBack: () -> Unit,
-    body: @Composable () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        title,
-                        color = cs.onSurface,
-                        modifier = Modifier.testTag("settings_detail_title"),
-                    )
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("settings_detail_back"),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-            )
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) { body() }
-    }
-}
-
-/** Tappable index row: icon box + label/desc + trailing chevron (Android's `SettingsNavRow`). */
-@Composable
-private fun IndexRow(
-    icon: ImageVector,
-    label: String,
-    desc: String,
-    testTag: String,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
+private fun RailHeader(onBack: () -> Unit) {
+    val c = kitColors()
+    val src = remember { MutableInteractionSource() }
+    val hovered by src.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(6.dp)
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-            .testTag(testTag),
+        Modifier.fillMaxWidth().height(38.dp).padding(horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(
             Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(cs.surfaceContainer)
-                .border(1.dp, cs.outline, RoundedCornerShape(10.dp)),
+                .size(24.dp)
+                .clip(shape)
+                .background(if (hovered) c.hover else Color.Transparent)
+                .clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onBack)
+                .kitFocusRing(src, shape)
+                .semantics { contentDescription = "Back" }
+                .testTag("settings_hub_back"),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+            Icon(KitGlyphs.Back, contentDescription = null, tint = c.dim, modifier = Modifier.size(16.dp))
         }
-        Column(Modifier.weight(1f)) {
-            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+        Text(
+            "Settings",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = c.text,
+            modifier = Modifier.semantics { heading() },
         )
     }
 }
 
+/** Search hits grouped by page, the query's words in the accent; "No settings match" when there are none. */
 @Composable
-private fun RailRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    testTag: String,
+private fun SearchResults(
+    query: String,
+    groups: List<SettingsSearchGroup>,
+    titleOf: (SettingsSection) -> String,
+    onPick: (SettingsSearchEntry) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val hovered by interaction.collectIsHoveredAsState()
-    // Hover + keyboard focus are both first-class: hover lifts surface; focus draws a border
-    // (including when the row is already selected). Click keeps LocalIndication for press/ripple.
-    val bg = when {
-        selected -> cs.surfaceContainerHighest
-        focused || hovered -> cs.surfaceContainerHigh
-        else -> cs.surfaceContainerLow
+    val c = kitColors()
+    val m = kitMetrics()
+    if (groups.isEmpty()) {
+        Text(
+            "No settings match “$query”.",
+            fontSize = 12.5.sp,
+            color = c.faint,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp).testTag("settings_search_empty"),
+        )
+        return
     }
-    Text(
-        label,
-        color = if (selected) cs.primary else cs.onSurface,
-        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier
-            .fillMaxWidth()
-            .hoverable(interactionSource = interaction)
-            .focusable(interactionSource = interaction)
-            .onPreviewKeyEvent { e ->
-                if (e.type == KeyEventType.KeyDown &&
-                    (e.key == Key.Enter || e.key == Key.NumPadEnter || e.key == Key.Spacebar)
+    Column(Modifier.padding(horizontal = 4.dp).testTag("settings_search_results")) {
+        for (g in groups) {
+            Text(
+                titleOf(g.section).uppercase(),
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.63.sp,
+                color = c.faint,
+                modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 4.dp),
+            )
+            for (e in g.hits) {
+                val src = remember { MutableInteractionSource() }
+                val hovered by src.collectIsHoveredAsState()
+                val shape = RoundedCornerShape(7.dp)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(shape)
+                        .background(if (hovered) c.hover else Color.Transparent)
+                        .clickable(interactionSource = src, indication = null, role = Role.Button) { onPick(e) }
+                        .kitFocusRing(src, shape)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("settings_result_${g.section.name.lowercase()}_${e.anchor ?: "page"}"),
                 ) {
-                    onClick()
-                    true
-                } else {
-                    false
+                    Text(highlight(e.label, query, c.accent), fontSize = if (m.phone) 15.sp else 13.sp, color = c.text)
+                    if (e.anchor == null) Text("Page", fontSize = 11.5.sp, color = c.faint)
                 }
             }
-            .clickable(
-                interactionSource = interaction,
-                indication = LocalIndication.current,
-                onClick = onClick,
-            )
-            .background(bg)
-            .then(
-                if (focused) {
-                    Modifier.border(width = 1.dp, color = cs.primary)
-                } else {
-                    Modifier
-                },
-            )
-            .padding(horizontal = Space.lg, vertical = Space.md)
-            .testTag(testTag),
-    )
+        }
+    }
+}
+
+private fun highlight(text: String, query: String, accent: Color): AnnotatedString = buildAnnotatedString {
+    append(text)
+    val lower = text.lowercase()
+    for (w in query.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }) {
+        var i = lower.indexOf(w)
+        while (i >= 0) {
+            addStyle(SpanStyle(color = accent), i, i + w.length)
+            i = lower.indexOf(w, i + w.length)
+        }
+    }
 }
 
 /** The rail's and the index's rows: every page but [SettingsSection.Machine], which a machine card opens. */
 private val railSections = SettingsSection.entries.filter { it != SettingsSection.Machine }
 
-/** One-line "what is behind this row" on the phone's index (#97 spec §2.1). */
-internal fun SettingsSection.desc(): String = when (this) {
+internal fun SettingsSection.glyph(): ImageVector = when (this) {
+    SettingsSection.General -> KitGlyphs.Sliders
+    SettingsSection.Providers -> KitGlyphs.Bot
+    SettingsSection.Voice -> KitGlyphs.Mic
+    SettingsSection.Coding -> KitGlyphs.Code
+    SettingsSection.Memory -> KitGlyphs.Memory
+    SettingsSection.PrivacyLabs -> KitGlyphs.Shield
+    SettingsSection.Machine -> KitGlyphs.Server
+}
+
+/** One-line "what is behind this row" on the phone's index (#97 spec §2.1). [labs]: this device has lab features. */
+internal fun SettingsSection.desc(labs: Boolean): String = when (this) {
     SettingsSection.General -> "Theme, text size, live replies, updates"
     SettingsSection.Providers -> "Sign in, extra logins, switch at a limit"
     SettingsSection.Voice -> "Dictation, languages, read aloud"
     SettingsSection.Coding -> "GitHub & GitLab, editor, code intelligence"
     SettingsSection.Memory -> "Nightly tidy-up of what agents learn"
-    SettingsSection.PrivacyLabs -> "Usage statistics, experiments"
-    SettingsSection.Machine -> "Status, devices, shared links and worktrees"
+    SettingsSection.PrivacyLabs -> if (labs) "Usage statistics, experiments" else "Usage statistics"
+    SettingsSection.Machine -> "Status, devices, shared links, disk"
 }
 
-/** Material icons stand in until the kit's glyphs take over (Task 10). */
-private fun SettingsSection.icon(): ImageVector = when (this) {
-    SettingsSection.General -> Icons.Filled.Palette
-    SettingsSection.Providers -> Icons.Filled.SmartToy
-    SettingsSection.Voice -> Icons.Filled.Mic
-    SettingsSection.Coding -> Icons.Filled.Code
-    SettingsSection.Memory -> Icons.Filled.AutoAwesome
-    SettingsSection.PrivacyLabs -> Icons.Filled.Lock
-    SettingsSection.Machine -> Icons.Filled.Computer
-}
-
-private fun SettingsExtra.icon(): ImageVector = when (this) {
-    SettingsExtra.Appearance -> Icons.Filled.Palette
-    SettingsExtra.AppUpdate -> Icons.Filled.SystemUpdate
-    SettingsExtra.Storage -> Icons.Filled.Storage
+/** The extras keep their rows until their pages move into General (Task 11). */
+private fun SettingsExtra.glyph(): ImageVector = when (this) {
+    SettingsExtra.Appearance -> KitGlyphs.Sliders
+    SettingsExtra.AppUpdate -> KitGlyphs.Download
+    SettingsExtra.Storage -> KitGlyphs.Disk
 }

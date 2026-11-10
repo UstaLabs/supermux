@@ -98,8 +98,8 @@ fun FleetSettingsSection(
                 onBack = scope.onClose,
                 topBarShown = scope.topBarShown,
             )
-            // Hosting is desktop-only: `Caps.localBroker` hides the row everywhere this renderer is used.
-            MachineSub.COMPUTER -> Unit
+            // Hosting is desktop-only (`Caps.localBroker` hides its row everywhere this renderer is used), so a
+            // `Machine/computer` link lands on the machine page below rather than on a blank one.
             // Devices and Proxies are standalone routes too (Route.Devices / Route.Proxies) — the same
             // screens, which paint their own chrome there via `standalone = true`.
             MachineSub.DEVICES -> DevicesSettingsScreen(

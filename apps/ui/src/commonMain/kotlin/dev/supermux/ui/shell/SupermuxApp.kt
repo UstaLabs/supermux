@@ -172,6 +172,11 @@ import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SettingsSlotScope
+import dev.supermux.ui.settings.kit.KitMachine
+import dev.supermux.ui.settings.kit.SettingsMachines
+import dev.supermux.ui.settings.kit.THIS_COMPUTER_ID
+import dev.supermux.host.formatLastSeen
+import kotlin.time.Clock
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
@@ -309,6 +314,8 @@ fun SupermuxApp(
     isLocalHost: (hostId: String?) -> Boolean = { false },
     settingsExtra: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     settingsSection: @Composable (SettingsPlace, SettingsSlotScope) -> Unit = { _, _ -> },
+    /** The text of the key that focuses Settings' search ("⌘F" on a Mac); null where there is no keyboard shortcut. */
+    settingsSearchShortcut: String? = null,
     /** This window's keyboard. A desktop host passes its own, to drive its menu bar through it. */
     shortcuts: ShortcutDispatcher = remember { ShortcutDispatcher() },
 ) {
@@ -348,6 +355,33 @@ fun SupermuxApp(
     val hostViews by fleet.hostViews.collectAsState()
     val sessionHost by fleet.sessionHost.collectAsState()
     val activeHostId by fleet.activeHost.collectAsState()
+    // The machines Settings shows as cards and its pages' scope lines pick from (#97).
+    val localBrokerCap = LocalPlatform.current.caps.localBroker
+    val settingsMachines = remember(hostViews, activeHostId, localBrokerCap) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val paired = hostViews.map { h ->
+            val seen = formatLastSeen(now, h.lastSeenAt)
+            KitMachine(
+                id = h.recordId,
+                name = h.displayLabel,
+                local = isLocalHost(h.hostId),
+                online = h.online,
+                status = when {
+                    h.online -> "Running"
+                    seen.isEmpty() -> "Offline"
+                    else -> "Offline · last seen $seen"
+                },
+                lastSeen = seen,
+            )
+        }
+        // Desktop can always host: with no local host paired, a "This computer" card still opens Hosting (spec §11).
+        val all = if (localBrokerCap && paired.none { it.local }) {
+            listOf(KitMachine(THIS_COMPUTER_ID, "This computer", local = true, online = false, status = "Not hosting")) + paired
+        } else {
+            paired
+        }
+        SettingsMachines(all, activeHostId, onPick = fleet::setActiveHost)
+    }
     // Hosts whose broker refuses agent sessions until git is installed (`host_requirements`).
     val hostRequirements by fleet.hostRequirements.collectAsState()
     val lastBySession = remember(messages) { messages.mapValues { it.value.lastOrNull() } }
@@ -1198,27 +1232,24 @@ fun SupermuxApp(
                                     tag = if (route.section == SettingsSection.Coding) "lsp_settings_overlay" else "settings_overlay",
                                     onEscape = { settingsTryClose?.invoke() ?: run { ui.goBack() } },
                                 ) {
-                                    HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
-                                        // Keyed on the HOST only: `route.section` here would
-                                        // remount the hub on every section change — the same
-                                        // mistake the `clazzContentKey` above exists to prevent
-                                        // one level up (E1 review).
-                                        key(activeHostId) {
-                                            SettingsHub(
-                                                section = route.section,
-                                                sub = route.sub,
-                                                anchor = route.anchor,
-                                                onSectionChange = { ui.settingsSection = it },
-                                                onBack = { ui.goBack() },
-                                                onRegisterCloseHandler = { settingsTryClose = it },
-                                                // Already inside `key(activeHostId)`, so the hub's
-                                                // own host scoping has nothing left to reset.
-                                                hostKey = null,
-                                                extraContent = settingsExtra,
-                                                content = settingsSection,
-                                            )
-                                        }
-                                    }
+                                    // No hub-wide host picker and no `key(activeHostId)` (#97): every machine is a card in the
+                                    // hub, a page about one machine names it in its scope line, and a pick reloads only the
+                                    // page (the hub keys its slot by the machine). Never `route.section` as a key either —
+                                    // that would remount the hub on every page change, the mistake `clazzContentKey`
+                                    // above exists to prevent (E1 review).
+                                    SettingsHub(
+                                        section = route.section,
+                                        sub = route.sub,
+                                        anchor = route.anchor,
+                                        onSectionChange = { ui.settingsSection = it },
+                                        onPlaceChange = { s, sub -> ui.moveSettings(s, sub) },
+                                        onBack = { ui.goBack() },
+                                        onRegisterCloseHandler = { settingsTryClose = it },
+                                        machines = settingsMachines,
+                                        searchShortcut = settingsSearchShortcut,
+                                        extraContent = settingsExtra,
+                                        content = settingsSection,
+                                    )
                                 }
                             }
 

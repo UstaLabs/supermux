@@ -25,6 +25,15 @@ data class KitMachine(
 
 fun KitMachine.glyph(): ImageVector = if (local) KitGlyphs.Laptop else KitGlyphs.Server
 
+/**
+ * The card a computer that can host gets while no host running on it is paired (spec §11): it opens this
+ * computer's hosting page without picking a machine.
+ */
+const val THIS_COMPUTER_ID = "this-computer"
+
+/** What Settings calls the machine it is about when it knows no name for it. */
+const val MACHINE_FALLBACK_NAME = "This machine"
+
 /** Every machine Settings knows, the one its machine pages are about ([currentId]), and how to switch it. */
 @Immutable
 class SettingsMachines(val all: List<KitMachine>, val currentId: String?, val onPick: (String) -> Unit) {
@@ -37,7 +46,7 @@ val LocalSettingsMachines = staticCompositionLocalOf<SettingsMachines?> { null }
 /** The name machine pages use in their copy ("‹machine›'s local time"). */
 @Composable
 @ReadOnlyComposable
-fun currentMachineName(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+fun currentMachineName(): String = LocalSettingsMachines.current?.current?.name ?: MACHINE_FALLBACK_NAME
 
 /** False when the machine Settings is about is offline: its sections show [KitOfflineNote] instead of content. */
 @Composable
@@ -52,7 +61,7 @@ fun currentMachineOnline(): Boolean = LocalSettingsMachines.current?.current?.on
 @Composable
 fun KitOfflineNote(modifier: Modifier = Modifier) {
     val m = LocalSettingsMachines.current?.current
-    val name = m?.name ?: "This machine"
+    val name = m?.name ?: MACHINE_FALLBACK_NAME
     val seen = m?.lastSeen?.takeIf { it.isNotEmpty() }?.let { " · last seen $it" } ?: ""
     KitNote("$name is offline$seen.", modifier.testTag("settings_offline"))
 }

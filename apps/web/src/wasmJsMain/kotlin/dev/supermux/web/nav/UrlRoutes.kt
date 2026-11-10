@@ -2,6 +2,7 @@ package dev.supermux.web.nav
 
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.settingsSubOrNull
 
 /** What a browser path means: a screen, or the chat of one session. */
 sealed interface UrlTarget {
@@ -86,7 +87,8 @@ fun parsePath(pathAndQuery: String): UrlTarget {
         segs[0] == "settings" && segs[1] == "appearance" -> UrlTarget.Screen(Route.Appearance)
         segs[0] == "settings" && segs[1] == "updates" -> UrlTarget.Screen(Route.AppUpdate)
         segs[0] == "settings" -> UrlTarget.Screen(
-            slugSections[segs[1]]?.let { Route.Settings(it, sub = segs.getOrNull(2)) }
+            // A sub-page the page does not have (a typo, an old link) opens the page itself.
+            slugSections[segs[1]]?.let { Route.Settings(it, sub = settingsSubOrNull(it, segs.getOrNull(2))) }
                 ?: oldSettingsSlugs[segs[1]]
                 ?: Route.Home,
         )

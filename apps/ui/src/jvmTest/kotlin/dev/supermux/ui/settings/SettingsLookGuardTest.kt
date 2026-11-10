@@ -33,7 +33,6 @@ class SettingsLookGuardTest {
 
     /** Converted by this plan, one page task at a time. Remove a file the moment it is clean; never add to it. */
     private val pending = setOf(
-        "settings/SettingsHub.kt",
         "settings/AppearanceSettingsScreen.kt",
         "settings/StorageSettingsScreen.kt",
         "settings/TelemetrySettingsSection.kt",

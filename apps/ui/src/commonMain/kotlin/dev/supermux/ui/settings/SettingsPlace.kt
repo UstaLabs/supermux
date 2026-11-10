@@ -3,7 +3,9 @@ package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Immutable
 import dev.supermux.ui.accounts.agentDisplayName
+import dev.supermux.ui.accounts.ACCOUNT_AGENTS
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.kit.MACHINE_FALLBACK_NAME
 
 @Immutable
 data class SettingsPlace(val section: SettingsSection, val sub: String? = null, val anchor: String? = null)
@@ -15,10 +17,25 @@ object MachineSub {
     const val DEVICES = "devices"
     const val LINKS = "links"
     const val WORKTREES = "worktrees"
+
+    val ALL = setOf(STATUS, COMPUTER, DEVICES, LINKS, WORKTREES)
 }
 
 /** Voice's word list. */
 const val GLOSSARY_SUB = "glossary"
+
+/**
+ * [sub] when [section] has such a sub-page (a provider's agent, Voice's glossary, a machine screen), else null: an
+ * address bar is user input, and a sub-page a page does not have would draw a blank page.
+ */
+fun settingsSubOrNull(section: SettingsSection, sub: String?): String? = sub?.takeIf {
+    when (section) {
+        SettingsSection.Providers -> it in ACCOUNT_AGENTS
+        SettingsSection.Voice -> it == GLOSSARY_SUB
+        SettingsSection.Machine -> it in MachineSub.ALL
+        else -> false
+    }
+}
 
 /**
  * A page's title: the phone's top bar and the wide page heading. [machineName] names the Machine page; [labs] is
@@ -36,7 +53,7 @@ fun settingsTitle(place: SettingsPlace, machineName: String? = null, labs: Boole
             MachineSub.DEVICES -> "Devices"
             MachineSub.LINKS -> "Shared links"
             MachineSub.WORKTREES -> "Worktrees"
-            else -> machineName ?: "This machine"
+            else -> machineName ?: MACHINE_FALLBACK_NAME
         }
         else -> place.section.label
     }
