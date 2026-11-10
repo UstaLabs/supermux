@@ -35,7 +35,6 @@ class SettingsLookGuardTest {
     private val pending = setOf(
         "settings/AppearanceSettingsScreen.kt",
         "settings/StorageSettingsScreen.kt",
-        "settings/TelemetrySettingsSection.kt",
         "settings/CuratorSettingsScreen.kt",
         "settings/VoiceSettingsScreen.kt",
         "settings/EditorSettingsScreen.kt",
@@ -45,7 +44,6 @@ class SettingsLookGuardTest {
         "accounts/AccountsSettingsScreen.kt",
         "accounts/AccountsWidgets.kt",
         "accounts/AddAccountSheet.kt",
-        "desktop/overlay/DesktopOverlaySettings.kt",
     )
 
     /** `settings/X.kt` for `ui`'s files, `desktop/settings/X.kt` for the desktop app's. */

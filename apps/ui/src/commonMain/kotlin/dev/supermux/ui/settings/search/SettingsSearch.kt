@@ -57,4 +57,9 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     page(SettingsSection.Coding, "editor git"),
     page(SettingsSection.Memory, "curator"),
     page(SettingsSection.PrivacyLabs, "telemetry experimental"),
+    SettingsSearchEntry(SettingsSection.PrivacyLabs, "telemetry", "Send anonymous usage statistics", "telemetry analytics privacy statistics"),
+    SettingsSearchEntry(
+        SettingsSection.PrivacyLabs, "assistant-overlay", "Assistant overlay", "experimental bubble float head talk",
+        shownWhen = { it.caps.assistantOverlay },
+    ),
 )

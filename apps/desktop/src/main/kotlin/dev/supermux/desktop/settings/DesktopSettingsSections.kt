@@ -15,7 +15,6 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.CuratorSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
-import dev.supermux.ui.settings.InterimPrivacyPage
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
@@ -27,6 +26,7 @@ import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.PrivacyLabsPage
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
@@ -111,7 +111,11 @@ fun DesktopSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.PrivacyLabs -> InterimPrivacyPage(rememberSystemSettingsActions(host))
+        SettingsSection.PrivacyLabs -> PrivacyLabsPage(
+            system = rememberSystemSettingsActions(host),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
         SettingsSection.Machine -> when (place.sub) {
             MachineSub.STATUS -> SystemSettingsScreen(
                 actions = rememberSystemSettingsActions(host),

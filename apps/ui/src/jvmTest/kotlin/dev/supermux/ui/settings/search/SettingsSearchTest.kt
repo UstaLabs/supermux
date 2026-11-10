@@ -61,4 +61,14 @@ class SettingsSearchTest {
         val dupes = SettingsSearchIndex.filter { it.anchor != null }.groupBy { it.section to it.anchor }.filterValues { it.size > 1 }
         assertTrue(dupes.isEmpty(), "duplicate anchors: ${dupes.keys}")
     }
+
+    @Test fun privacy_and_labs_rows_are_found_where_they_are_shown() {
+        val stats = searchSettings("statistics", desk).flatMap { it.hits }
+        assertEquals(listOf(SettingsSection.PrivacyLabs to "telemetry"), stats.map { it.section to it.anchor })
+        val bubble = searchSettings("bubble", desk).flatMap { it.hits }
+        assertEquals(listOf(SettingsSection.PrivacyLabs to "assistant-overlay"), bubble.map { it.section to it.anchor })
+        val web = desk.copy(caps = NO_CAPS)
+        assertTrue(searchSettings("bubble", web).isEmpty())
+        assertEquals(1, searchSettings("analytics", web).flatMap { it.hits }.size)
+    }
 }

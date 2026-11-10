@@ -23,6 +23,7 @@ import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.PrivacyLabsPage
 
 /**
  * Renders [place] against the fleet's active host. Called from the hub's `content` slot.
@@ -91,7 +92,11 @@ fun FleetSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.PrivacyLabs -> InterimPrivacyPage(rememberSystemSettingsActions(fleet))
+        SettingsSection.PrivacyLabs -> PrivacyLabsPage(
+            system = rememberSystemSettingsActions(fleet),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
         SettingsSection.Machine -> when (place.sub) {
             MachineSub.STATUS -> SystemSettingsScreen(
                 actions = rememberSystemSettingsActions(fleet),
