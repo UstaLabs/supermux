@@ -1833,6 +1833,8 @@ class HostStore(
             // the working tree and the base picker writes one when the user chooses another.
             dev.supermux.workspace.NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
             dev.supermux.workspace.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
+            // A new tab: no page yet (BrowserViewState.Empty), the address bar takes the focus.
+            dev.supermux.workspace.NewViewKind.BROWSER -> buildJsonObject { }
             // A pending chat: no sessionId yet. The tab renders the new-session
             // composer, and binds to a real session on first send (bindChatView).
             dev.supermux.workspace.NewViewKind.CHAT -> buildJsonObject { }

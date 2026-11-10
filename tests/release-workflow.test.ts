@@ -339,7 +339,8 @@ test("publish-website builds on the published manifest and leaves the pinned com
 test("every desktop installer is built with the tag as the app's version", () => {
   const packaging = workflow.split("\n").filter((l) => /gradlew(\.bat)? :desktop:(package|createDistributable)/.test(l))
   expect(packaging.length).toBe(4)
-  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(4)
+  // Four desktop packaging steps carry the tag, and so does the web client's build (#97: Settings shows its version).
+  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(5)
   expect(publishJob).toContain('CLIENT_DESKTOP_VERSION="$V"')
 })
 

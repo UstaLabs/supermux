@@ -13,7 +13,7 @@ import type { Browser } from "playwright"
 import { rmSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { launchBrowser, uiFixture } from "./fixture-env"
+import { launchBrowser, uiFixture, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap } from "./compose-dom"
 
 const PIXEL_PNG = Buffer.from(
@@ -39,7 +39,7 @@ export async function main(): Promise<void> {
     const page = await context.newPage()
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
+    await page.goto((await freshPairLink(fixture)).url, {
       waitUntil: "domcontentloaded",
     })
     await openSeededSession(page, fixture.sessionId)

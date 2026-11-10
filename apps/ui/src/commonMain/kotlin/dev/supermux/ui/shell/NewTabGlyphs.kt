@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * Five thin line glyphs drawn for the page: one stroke weight, round ends, on a 24 grid, no fills.
+ * Six thin line glyphs drawn for the page: one stroke weight, round ends, on a 24 grid, no fills.
  * Tinted like any icon.
  */
 internal object NewTabGlyphs {
@@ -94,6 +94,21 @@ internal object NewTabGlyphs {
             lineTo(12f, 19f)
             moveTo(8.5f, 19f)
             lineTo(15.5f, 19f)
+        }
+    }
+
+    /** A globe: the page's circle, a meridian and the equator. */
+    val Browser: ImageVector by lazy {
+        glyph("browser") {
+            moveTo(20f, 12f)
+            arcTo(8f, 8f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 4f, y1 = 12f)
+            arcTo(8f, 8f, 0f, isMoreThanHalf = true, isPositiveArc = true, x1 = 20f, y1 = 12f)
+            close()
+            moveTo(12f, 4f)
+            arcTo(3.6f, 8f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 12f, y1 = 20f)
+            arcTo(3.6f, 8f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 12f, y1 = 4f)
+            moveTo(4f, 12f)
+            lineTo(20f, 12f)
         }
     }
 

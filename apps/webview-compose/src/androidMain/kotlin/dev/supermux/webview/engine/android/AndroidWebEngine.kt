@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
@@ -75,7 +76,10 @@ import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
@@ -86,11 +90,15 @@ import dev.supermux.webview.engine.EngineEvent
 import dev.supermux.webview.engine.EngineEventQueue
 import dev.supermux.webview.engine.PageSetup
 import dev.supermux.webview.engine.WebEngine
+import dev.supermux.webview.engine.cookieHeader
+import dev.supermux.webview.engine.findResultOf
+import dev.supermux.webview.engine.textZoomPercent
 import dev.supermux.webview.originOf
 import dev.supermux.webview.runtime.MAX_SNAPSHOT_SCALE
 import dev.supermux.webview.runtime.OverlayCutouts
 import dev.supermux.webview.runtime.drawScale
 import dev.supermux.webview.runtime.snapshotSize
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -124,6 +132,12 @@ private const val MAX_EARLY_CONSOLE_LINES = 64
 
 /** The most WebView state kept per page (engine history and scroll); older history entries are dropped first. */
 private const val MAX_STATE_BYTES = 64 * 1024
+
+/** How long a find may go without its listener reporting a finished count before it answers null. */
+private const val FIND_MILLIS = 3_000L
+
+/** How long the cookie store may take to take a cookie before setCookie answers false. */
+private const val COOKIE_MILLIS = 5_000L
 
 /** How long a reset's profile wipe may take before the reset fails. */
 private const val RESET_WIPE_MILLIS = 5_000L
@@ -431,6 +445,7 @@ internal class AndroidWebEngine(
      */
     private fun boundary(content: WebContent?, reset: Boolean = false) {
         if (gate.loadingNewDocument) webView.stopLoading()
+        endFind(clear = false)
         token = newToken()
         val epoch = gate.boundary(token)
         queue.advance(reset = reset)
@@ -587,6 +602,92 @@ internal class AndroidWebEngine(
         if (usableNow()) webView.stopLoading()
     }
 
+    /** The query the WebView's find session is on, and the find waiting for its count; both end with the document. */
+    private var findQuery: String? = null
+    private var findWaiter: CancellableContinuation<FindResult?>? = null
+
+    /** Ends the find session: a waiting [find] answers null, and the next one starts afresh. */
+    private fun endFind(clear: Boolean) {
+        val waiter = findWaiter
+        findWaiter = null
+        findQuery = null
+        if (waiter != null && waiter.isActive) waiter.resume(null)
+        if (clear && !released) webView.clearMatches()
+    }
+
+    /**
+     * `findAllAsync` for a query's first call, `findNext` for the same query after: the listener's first finished count
+     * ([findResultOf]) answers; null when none comes in [FIND_MILLIS], and for a find another find, a boundary, a reset
+     * or a release cut short. Main thread, like every engine call.
+     */
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        if (!usableNow() || query.isEmpty()) return null
+        val view = webView
+        return withTimeoutOrNull(FIND_MILLIS) {
+            suspendCancellableCoroutine { continuation ->
+                findWaiter?.let { if (it.isActive) it.resume(null) }
+                findWaiter = continuation
+                continuation.invokeOnCancellation { if (findWaiter === continuation) findWaiter = null }
+                view.setFindListener { ordinal, count, done ->
+                    if (done && view === webView && findWaiter === continuation && continuation.isActive) {
+                        findWaiter = null
+                        continuation.resume(findResultOf(ordinal, count))
+                    }
+                }
+                if (findQuery == query) {
+                    view.findNext(!backwards)
+                } else {
+                    findQuery = query
+                    view.findAllAsync(query)
+                }
+            }
+        }
+    }
+
+    override fun clearFind() {
+        if (!released && !crashed) endFind(clear = true)
+    }
+
+    /**
+     * Android's WebView has no page zoom (pinch zoom is the visual viewport's scale, `zoomBy`, which doesn't reflow the
+     * page): the nearest documented one is `WebSettings.textZoom`, a percentage of the page's text sizes, which does.
+     * Images and fixed-size boxes stay as they are.
+     */
+    override fun setZoom(factor: Float): Boolean {
+        if (!usableNow()) return false
+        webView.settings.textZoom = textZoomPercent(factor)
+        return true
+    }
+
+    /** This engine's cookie store: its own profile's where WebView has profiles, else the process's one. */
+    private fun cookieManager(): CookieManager =
+        if (profileName != null && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            WebViewCompat.getProfile(webView).cookieManager
+        } else {
+            CookieManager.getInstance()
+        }
+
+    override suspend fun setCookie(cookie: WebCookie): Boolean {
+        if (!usableNow()) return false
+        val header = cookieHeader(cookie) ?: return false
+        val manager = cookieManager()
+        val stored = withTimeoutOrNull(COOKIE_MILLIS) {
+            suspendCancellableCoroutine<Boolean> { continuation ->
+                manager.setCookie(cookie.url, header) { ok -> if (continuation.isActive) continuation.resume(ok == true) }
+            }
+        } ?: return false
+        if (stored) manager.flush()
+        return stored
+    }
+
+    /** Debugging is process-wide ([Inspector]): a page whose lease asked for `inspectable` shows in chrome://inspect. */
+    override fun openInspector(): InspectorResult =
+        if (usableNow() && setup?.inspectable == true) {
+            InspectorResult.Elsewhere("chrome://inspect on a computer, with the phone connected")
+        } else {
+            InspectorResult.Unsupported
+        }
+
     override suspend fun evaluate(script: String): String? {
         if (!usableNow()) return null
         val view = webView
@@ -726,6 +827,7 @@ internal class AndroidWebEngine(
      */
     private fun rebuild() {
         val old = webView
+        endFind(clear = false)
         channels.clear()
         listening = false
         shim = null
@@ -914,6 +1016,7 @@ internal class AndroidWebEngine(
         if (released) return
         released = true
         resetWait?.complete(false)
+        endFind(clear = false)
         pending.answerAll()
         letGoCatchers()
         client = null
@@ -967,6 +1070,7 @@ internal class AndroidWebEngine(
         val dies = isUsable
         crashed = true
         resetWait?.complete(false)
+        endFind(clear = false)
         pending.answerAll()
         letGoCatchers()
         emit(EngineEvent.Crashed)

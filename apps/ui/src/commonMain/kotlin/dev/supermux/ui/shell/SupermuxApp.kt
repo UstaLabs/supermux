@@ -1923,51 +1923,66 @@ private fun WorkspacePanel(
         }
     }
 
-    if (compact) {
-        PhoneWorkspacePanes(
-            current = current,
-            session = workspaceSession,
-            ws = ws,
-            app = wsApp,
-            appFor = appFor,
-            ui = ui,
-            drafts = drafts,
-            shell = rememberShellActions(wsApp, appFor),
-            launcherPane = launcherPane,
-            sessionNames = sessionNames,
-            unreadSessions = unreadSessions,
-            modifier = Modifier.fillMaxSize(),
-        )
-        return
+    // Chat links open in this workspace's Browser tabs (#105). The opener is rebuilt every composition, so the
+    // LinkOpener reads the latest one: a new LinkOpener each time would recompose every chat under it.
+    val browserOpener by rememberUpdatedState(ws.browserOpener)
+    val linksInTabs = LocalPlatform.current.caps.linksInBrowserTabs
+    val linkOpener = remember(linksInTabs, current.id, compact) {
+        if (!linksInTabs) null
+        else dev.supermux.ui.browser.LinkOpener { url, source, modified ->
+            browserOpener?.open(url, source, modified, onPlaced = { id -> if (compact) wsApp.setActiveView(current.id, id) })
+        }
     }
-
-    // `tablet_pane_host` is Android's name for "the TREE renderer is mounted, not the phone tab
-    // strip"; `workspace_layout_host` (on the `PaneHost` itself, below) is desktop's name for the
-    // tree. Both survive the merge because they sit on different nodes — Compose's `TestTag` merge
-    // policy keeps the outermost value, so stacking them on one node would silently drop one.
-    Column(Modifier.fillMaxSize().testTag("tablet_pane_host")) {
-        val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
-        WorkspacePanes(
-            hostId = ui.windows.mainHostId,
-            layout = hostedLayout,
-            current = current,
-            session = workspaceSession,
-            ws = ws,
-            app = wsApp,
-            appFor = appFor,
-            ui = ui,
-            drafts = drafts,
-            overlayScope = overlayScope,
-            launcherPane = launcherPane,
-            tabDragState = tabDragState,
-            closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
-            onCloseCandidate = { panesKept.askToClose(it) },
-            sessionNames = sessionNames,
-            unreadSessions = unreadSessions,
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
-            onTearOutTab = onTearOutTab,
-            stripChrome = stripChrome,
-        )
+    val browserIcons = remember(current.id) { mutableStateMapOf<String, String>() }
+    CompositionLocalProvider(
+        dev.supermux.ui.browser.LocalLinkOpener provides linkOpener,
+        dev.supermux.ui.browser.LocalBrowserIcons provides browserIcons,
+    ) {
+        if (compact) {
+            PhoneWorkspacePanes(
+                current = current,
+                session = workspaceSession,
+                ws = ws,
+                app = wsApp,
+                appFor = appFor,
+                ui = ui,
+                drafts = drafts,
+                shell = rememberShellActions(wsApp, appFor),
+                launcherPane = launcherPane,
+                sessionNames = sessionNames,
+                unreadSessions = unreadSessions,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            // `tablet_pane_host` is Android's name for "the TREE renderer is mounted, not the phone tab
+            // strip"; `workspace_layout_host` (on the `PaneHost` itself, below) is desktop's name for the
+            // tree. Both survive the merge because they sit on different nodes — Compose's `TestTag` merge
+            // policy keeps the outermost value, so stacking them on one node would silently drop one.
+            Column(Modifier.fillMaxSize().testTag("tablet_pane_host")) {
+                val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
+                WorkspacePanes(
+                    hostId = ui.windows.mainHostId,
+                    layout = hostedLayout,
+                    current = current,
+                    session = workspaceSession,
+                    ws = ws,
+                    app = wsApp,
+                    appFor = appFor,
+                    ui = ui,
+                    drafts = drafts,
+                    overlayScope = overlayScope,
+                    launcherPane = launcherPane,
+                    tabDragState = tabDragState,
+                    closeCandidate = panesKept.closingViewId?.let { ws.viewsById[it] },
+                    onCloseCandidate = { panesKept.askToClose(it) },
+                    sessionNames = sessionNames,
+                    unreadSessions = unreadSessions,
+                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
+                    onTearOutTab = onTearOutTab,
+                    stripChrome = stripChrome,
+                )
+            }
+        }
     }
 }
 
@@ -2056,13 +2071,13 @@ internal fun rememberHostWorkspaceSession(
     ),
     fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
     fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
-    postView = { id, state, groupId ->
+    postView = { id, kind, state, groupId ->
         val created = runCatching {
             wsApp.api.addView(
                 current.id,
-                AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
+                AddViewBody(kind = kind, state = state, id = id, groupId = groupId),
             )
-        }.onFailure { println("[SupermuxApp] open file view failed: $it") }.getOrNull()?.id
+        }.onFailure { println("[SupermuxApp] open $kind view failed: $it") }.getOrNull()?.id
         if (created != null && activateOpenedFile) wsApp.setActiveView(current.id, created)
         created
     },

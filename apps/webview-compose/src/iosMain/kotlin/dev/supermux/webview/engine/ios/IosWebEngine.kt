@@ -8,6 +8,9 @@ import androidx.compose.ui.viewinterop.UIKitInteropInteractionMode
 import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
 import dev.supermux.webview.DialogResult
+import dev.supermux.webview.FindResult
+import dev.supermux.webview.InspectorResult
+import dev.supermux.webview.WebCookie
 import dev.supermux.webview.DownloadRequest
 import dev.supermux.webview.NavigationDecision
 import dev.supermux.webview.NewWindowDecision
@@ -96,6 +99,7 @@ import platform.WebKit.WKUserScriptInjectionTime
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 import platform.WebKit.WKWebpagePreferences
+import platform.WebKit.WKFindConfiguration
 import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
 import kotlin.coroutines.resume
@@ -424,6 +428,49 @@ internal class IosWebEngine private constructor(
     override fun stop() {
         if (!released) webView.stopLoading()
     }
+
+    /** WebKit's find (iOS 16): found or not, never a count; selects the match. Null before iOS 16, or for no query. */
+    override suspend fun find(query: String, backwards: Boolean): FindResult? {
+        if (released || query.isEmpty() || !osAtLeast(16)) return null
+        val found = awaitWebKit<Boolean> { waiter ->
+            val configuration = WKFindConfiguration()
+            configuration.backwards = backwards
+            configuration.caseSensitive = false
+            configuration.wraps = true
+            webView.findString(query, configuration) { result -> waiter.answer(result?.matchFound ?: false) }
+        } ?: return null
+        return FindResult(found = found)
+    }
+
+    /** WebKit's find selects the match: clearing it is clearing the selection. */
+    override fun clearFind() {
+        if (released) return
+        webView.evaluateJavaScript("getSelection().removeAllRanges()", inFrame = null, inContentWorld = WKContentWorld.defaultClientWorld) { _, _ -> }
+    }
+
+    override fun setZoom(factor: Float): Boolean {
+        if (released) return false
+        webView.pageZoom = factor.toDouble()
+        return true
+    }
+
+    /** Into the view's own data store, its profile's, once WebKit has it. */
+    override suspend fun setCookie(cookie: WebCookie): Boolean = awaitWebKit<Boolean> { waiter ->
+        val httpCookie = httpCookieOf(cookie)
+        if (httpCookie == null) {
+            waiter.answer(false)
+        } else {
+            webView.configuration.websiteDataStore.httpCookieStore.setCookie(httpCookie) { waiter.answer(true) }
+        }
+    } ?: false
+
+    /** WebKit opens its inspector only from Safari on a Mac: an inspectable page (iOS 16.4) is listed in its Develop menu. */
+    override fun openInspector(): InspectorResult =
+        if (!released && osAtLeast(16, 4) && setup?.inspectable == true) {
+            InspectorResult.Elsewhere("Safari ▸ Develop on a Mac, with the device connected")
+        } else {
+            InspectorResult.Unsupported
+        }
 
     override suspend fun evaluate(script: String): String? = if (released) null else evaluateIn(WKContentWorld.pageWorld, script)
 

@@ -66,6 +66,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
@@ -190,6 +191,7 @@ internal fun ViewDto?.switcherIcon(): ImageVector = when (this?.kind) {
     "chat" -> Icons.AutoMirrored.Filled.Chat
     "terminal" -> Icons.Filled.Terminal
     "display" -> Icons.Filled.Monitor
+    "browser" -> Icons.Filled.Language
     "editor" -> when (stateString("mode")) {
         "file" -> Icons.Filled.Code
         "diff" -> Icons.Filled.Difference

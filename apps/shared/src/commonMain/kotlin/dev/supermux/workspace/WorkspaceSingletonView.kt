@@ -30,7 +30,7 @@ fun ViewDto.matchesKind(kind: NewViewKind): Boolean = when (kind) {
     NewViewKind.DIFF -> isDiffView()
     // Neither is a singleton, so nothing asks; answering "no" keeps every non-singleton pick
     // going straight to a fresh view.
-    NewViewKind.CHAT, NewViewKind.TERMINAL, NewViewKind.DISPLAY -> false
+    NewViewKind.CHAT, NewViewKind.TERMINAL, NewViewKind.DISPLAY, NewViewKind.BROWSER -> false
 }
 
 /**

@@ -77,6 +77,10 @@ kotlin {
             implementation(project(":editor-plugins:search"))
             implementation(project(":editor-plugins:autocomplete"))
             implementation(project(":editor-plugins:lint"))
+            // The Browser tab (#105): each platform's own web engine inside Compose. `implementation`:
+            // no webview type is in this module's public signatures (BrowserActions speaks the
+            // broker's DTOs; the pane converts).
+            implementation(project(":webview-compose"))
             api(compose.runtime)
             api(libs.coroutines.core)
             api(libs.serialization.json)
@@ -135,6 +139,8 @@ kotlin {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)
+            // The library's fake engine, so the Browser pane's tests run where Compose UI tests run.
+            implementation(project(":webview-compose-testing"))
             // ChatHeaderTest drives the real ChatPanel over a HostStore, which needs an HTTP
             // engine; the mock engine answers "{}" and no socket is opened (connectOnInit = false).
             implementation(libs.ktor.client.mock)

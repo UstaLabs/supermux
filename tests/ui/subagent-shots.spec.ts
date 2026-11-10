@@ -17,7 +17,7 @@
  */
 import { mkdirSync } from "node:fs"
 import type { Browser, BrowserContext, Page } from "playwright"
-import { launchBrowser, uiFixture, injectServerFrame } from "./fixture-env"
+import { launchBrowser, uiFixture, injectServerFrame, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap, typeInto } from "./compose-dom"
 
 const LABEL = process.env.SUBAGENT_SHOTS_LABEL || "after"
@@ -536,7 +536,7 @@ export async function main(): Promise<void> {
   try {
     const pairing = await browser.newContext()
     const pairPage = await pairing.newPage()
-    await pairPage.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "domcontentloaded" })
+    await pairPage.goto((await freshPairLink(fixture)).url, { waitUntil: "domcontentloaded" })
     await openSeededSession(pairPage, fixture.sessionId)
     const storage = await pairing.storageState()
     await pairing.close()

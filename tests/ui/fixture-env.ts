@@ -39,6 +39,23 @@ export function launchBrowser(extra: LaunchOptions = {}): Promise<Browser> {
   return chromium.launch(browserLaunchOptions(extra))
 }
 
+/**
+ * A fresh pairing link for one browser (#119: a link pairs once, within 10 minutes), made with the fixture's
+ * durable device token like the app's "Add device". [name] is the device the browser becomes.
+ */
+export async function freshPairLink(fixture: UiFixture, name = fixture.deviceName): Promise<{ url: string; name: string }> {
+  const res = await fetch(`${fixture.baseUrl}/devices`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${fixture.token}`, "content-type": "application/json", origin: fixture.baseUrl },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw new Error(`POST /devices failed ${res.status}: ${await res.text()}`)
+  const minted = await res.json() as { url: string; name: string }
+  // The broker builds the link on its public URL; the browser reaches the fixture on baseUrl.
+  const link = new URL(minted.url)
+  return { url: `${fixture.baseUrl}/pair${link.search}`, name: minted.name }
+}
+
 /** Broadcast a server frame to every web client (MUX_TEST_BROKER inject seam). */
 export async function injectServerFrame(page: import("playwright").Page, frame: Record<string, unknown>): Promise<void> {
   const res = await page.evaluate(async (body) => {

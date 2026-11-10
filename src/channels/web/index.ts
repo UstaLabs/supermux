@@ -30,7 +30,7 @@ import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
-import { pairJsonResponse } from "./pair-json"
+import { pairJsonResponse, pairingRefusal } from "./pair-json"
 import { parseClientInfo, featureForRequest, featureForUpgrade, featureNeedsBody, type FeatureContext, type FeatureUse } from "../../core/telemetry/sanitize"
 import { parseTelemetryBody, type TelemetryState } from "../../core/telemetry/config"
 import type { EventName, Surface } from "../../core/telemetry/events"
@@ -154,6 +154,15 @@ function clientMessageIdOf(value: unknown): string | undefined {
 export function __resetAuthFailures(): void {}
 
 /** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+/**
+ * The base previews are served on, which their links (GET /proxies/by-port) and the preview cookie both use, so a Browser
+ * tab's cookie is for the host its pages load from: the relay's (named proxies' links), else MUX_WEB_PUBLIC_URL, else the
+ * host the request reached (#105: with no public URL the cookie had no host, and /p/<port>/ asked to pair).
+ */
+function previewLinksBase(o: { proxyLinksBaseUrl?: () => string | undefined; publicUrl?: string }, req: Request): string | undefined {
+  return o.proxyLinksBaseUrl?.() ?? o.publicUrl ?? hostOrigin(req)
+}
+
 function hostOrigin(req: Request): string | undefined {
   const host = req.headers.get("host")
   if (!host) return undefined
@@ -2974,22 +2983,26 @@ export class WebChannel implements Channel {
     // cookie; the token never reaches JS.
     if (method === "GET" && path === "/pair") {
       const t = url.searchParams.get("t") ?? ""
-      if (t && this.store.verify(t)) {
+      // A pairing link pairs once, within 10 minutes (#119).
+      const claim = this.store.claimPairing(t)
+      if (claim.ok) {
         this.store.touch(t)
         return new Response(null, {
           status: 302,
           headers: { location: "/", "set-cookie": buildAuthCookie(t, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) },
         })
       }
+      const message = claim.reason === "unknown" ? "This pairing link is not valid. Make a new one." : pairingRefusal(claim.reason).error
       return new Response(
-        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pairing link is invalid or expired. Generate a new one.</p></body>`,
+        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>${message}</p></body>`,
         { status: 401, headers: { "content-type": "text/html" } },
       )
     }
     if (method === "GET" && path === "/pair.json") {
       const t = url.searchParams.get("t") ?? ""
-      this.store.touch(t)
-      return pairJsonResponse(t, this.store)
+      const res = pairJsonResponse(t, this.store)
+      if (res.ok) this.store.touch(t)
+      return res
     }
     // Logout: clear the cookie (Origin-checked as a mutating route above).
     if (method === "POST" && path === "/logout") {
@@ -4740,7 +4753,8 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const requested = ((body.name as string | undefined) ?? "").trim()
       if (!requested) return this.json({ error: "name required" }, 400)
-      const { token, name: finalName } = this.store.mint(requested)
+      // A pending device: its link pairs once, within 10 minutes; this device's next code revokes it (#119).
+      const { token, name: finalName } = this.store.mintPairing(requested, { by: auth.device.name })
       // A desktop host normally listens on localhost and publishes through the built-in
       // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
       // configured localhost publicUrl here produces a perfectly valid but unusable QR.
@@ -4753,7 +4767,9 @@ export class WebChannel implements Channel {
       if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
       const token = this.store.mintPreview(bearerToken(req))
       if (!token) return this.json({ error: "unknown device" }, 401)
-      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) })
+      const linksBase = previewLinksBase(this.opts, req)
+      if (!linksBase) return this.json({ error: "this broker has no address its previews are served on" }, 503)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: linksBase, proxyBaseDomain: this.opts.proxyBaseDomain }) })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))
@@ -4819,7 +4835,7 @@ export class WebChannel implements Channel {
       return this.json({
         url: buildProxyPublicUrl("{port}", {
           baseDomain: this.opts.proxyBaseDomain,
-          publicUrl: this.opts.proxyLinksBaseUrl?.() ?? this.opts.publicUrl,
+          publicUrl: previewLinksBase(this.opts, req),
         }),
       })
     }

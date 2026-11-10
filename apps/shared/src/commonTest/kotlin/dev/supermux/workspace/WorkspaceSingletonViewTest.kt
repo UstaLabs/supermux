@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 private fun editor(id: String, mode: String?) = ViewDto(
@@ -71,5 +72,11 @@ class WorkspaceSingletonViewTest {
         val layout = LayoutNode.Group("g-term", listOf("t1"), "t1")
         assertNull(openSingletonView(layout, views, NewViewKind.EDITOR))
         assertNull(openSingletonView(layout, views, NewViewKind.DIFF))
+    }
+
+    @Test
+    fun aBrowserTabIsNeverASingleton() {
+        assertFalse(NewViewKind.BROWSER.singleton)
+        assertFalse(ViewDto(id = "b1", workspaceId = "w1", kind = "browser").matchesKind(NewViewKind.BROWSER))
     }
 }

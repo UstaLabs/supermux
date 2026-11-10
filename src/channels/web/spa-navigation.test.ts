@@ -144,7 +144,7 @@ test("document navigation to /pair?t= pairs server-side instead of getting the s
   const made = makeChannel()
   channel = made.channel
   await channel.start()
-  const token = mintToken(made.devicesFile)
+  const token = new DeviceStore(made.devicesFile).mintPairing("test-device").token
 
   const res = await fetch(`${base()}/pair?t=${encodeURIComponent(token)}`, {
     redirect: "manual",
