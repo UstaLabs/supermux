@@ -25,6 +25,7 @@ import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
@@ -53,6 +54,10 @@ fun FleetSettingsSection(
         SettingsSection.General -> GeneralPage(
             // What these hosts paint when nothing is stored: the system's choice (spec §10.6).
             defaultAppearance = AppearanceMode.SYSTEM,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.KeyboardShortcuts -> KeyboardShortcutsPage(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )

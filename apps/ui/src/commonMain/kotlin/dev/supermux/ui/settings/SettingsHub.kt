@@ -72,6 +72,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.adaptive.LocalHardwareKeyboard
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.nav.SettingsSection
@@ -254,7 +255,15 @@ fun SettingsHub(
     val routeKey = routeKey(section, routeSub, routeAnchor)
     /** Privacy & labs is just "Privacy" where there are no labs. */
     val labs = caps.assistantOverlay
-    val searchCtx = SettingsSearchContext(caps, phone = compact, liveTranscript = platform.mic.liveTranscript != null)
+    // The Keyboard shortcuts page is listed only with a hardware keyboard (#96): its row and its search results.
+    val keyboard = LocalHardwareKeyboard.current
+    val searchCtx = SettingsSearchContext(
+        caps,
+        phone = compact,
+        liveTranscript = platform.mic.liveTranscript != null,
+        hardwareKeyboard = keyboard,
+    )
+    val railSections = railSections(keyboard)
 
     var identityDirty by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -886,11 +895,17 @@ private fun highlight(text: String, query: String, accent: Color): AnnotatedStri
     }
 }
 
-/** The rail's and the index's rows: every page but [SettingsSection.Machine], which a machine card opens. */
-private val railSections = SettingsSection.entries.filter { it != SettingsSection.Machine }
+/**
+ * The rail's and the index's rows: every page but [SettingsSection.Machine], which a machine card opens, and Keyboard
+ * shortcuts only with a [hardwareKeyboard] to use them on.
+ */
+private fun railSections(hardwareKeyboard: Boolean): List<SettingsSection> = SettingsSection.entries.filter {
+    it != SettingsSection.Machine && (hardwareKeyboard || it != SettingsSection.KeyboardShortcuts)
+}
 
 internal fun SettingsSection.glyph(): ImageVector = when (this) {
     SettingsSection.General -> KitGlyphs.Sliders
+    SettingsSection.KeyboardShortcuts -> KitGlyphs.Keyboard
     SettingsSection.Providers -> KitGlyphs.Bot
     SettingsSection.Voice -> KitGlyphs.Mic
     SettingsSection.Coding -> KitGlyphs.Code
@@ -902,6 +917,7 @@ internal fun SettingsSection.glyph(): ImageVector = when (this) {
 /** One-line "what is behind this row" on the phone's index (#97 spec §2.1). [labs]: this device has lab features. */
 internal fun SettingsSection.desc(labs: Boolean): String = when (this) {
     SettingsSection.General -> "Theme, text size, live replies, updates"
+    SettingsSection.KeyboardShortcuts -> "Every shortcut on this keyboard"
     SettingsSection.Providers -> "Sign in, extra logins, switch at a limit"
     SettingsSection.Voice -> "Dictation, languages, read aloud"
     SettingsSection.Coding -> "GitHub & GitLab, editor, code intelligence"

@@ -417,6 +417,26 @@ class AppShellTest {
         assertTrue(ui.sidebarCollapsed)
     }
 
+    @Test fun the_shortcuts_key_opens_settings_on_keyboard_shortcuts() = runComposeUiTest {
+        // #96/#97: ⌘/ (Ctrl+/) from anywhere opens Settings › Keyboard shortcuts.
+        val app = appFor(mutableListOf())
+        val ui = ShellUiState()
+        lateinit var focus: androidx.compose.ui.focus.FocusManager
+        setPlatformContent(uiPrefs = UiPrefs(InMemorySettingsStore())) {
+            focus = androidx.compose.ui.platform.LocalFocusManager.current
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui, sessionListMode = SessionListMode.Workspaces)
+        }
+        waitForIdle()
+        runOnIdle { focus.clearFocus() }
+        waitForIdle()
+        onRoot().performKeyInput { withKeyDown(mod) { pressKey(Key.Slash) } }
+        waitForIdle()
+        assertEquals(
+            dev.supermux.ui.nav.SettingsSection.KeyboardShortcuts,
+            (ui.currentRoute as? Route.Settings)?.section,
+        )
+    }
+
     @Test fun cmd_f_after_a_transcript_click_opens_that_chats_find_bar() = runComposeUiTest {
         // Through a real pane: the chat registers find in its pane's key scope, and a click in the
         // transcript, which drops the focus, makes that pane the one the window's keys go to.

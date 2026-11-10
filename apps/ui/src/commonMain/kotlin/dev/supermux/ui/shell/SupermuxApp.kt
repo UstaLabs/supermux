@@ -867,6 +867,12 @@ fun SupermuxApp(
                 true
             }
             RegisterCommand(AppCommands.OpenSettings, enabled = !ui.settingsOpen) { ui.openSettings(); true }
+            // ⌘/ (Ctrl+/): Settings › Keyboard shortcuts. The editor's "comment line" and a terminal's own Ctrl+/ win
+            // where they have the focus (the registry's scopes, #96).
+            RegisterCommand(AppCommands.ShowShortcuts, enabled = !ui.settingsOpen) {
+                ui.openSettings(SettingsSection.KeyboardShortcuts)
+                true
+            }
             // One update check per launch, here rather than in the sidebar's card: on a phone the
             // sidebar comes and goes with every chat, and each return would be another poll.
             val appUpdater = LocalPlatform.current.updates

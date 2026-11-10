@@ -50,8 +50,8 @@ class SettingsSearchTest {
         val pages = SettingsSearchIndex.filter { it.anchor == null }.map { it.section }
         assertEquals(
             listOf(
-                SettingsSection.General, SettingsSection.Providers, SettingsSection.Voice,
-                SettingsSection.Coding, SettingsSection.Memory, SettingsSection.PrivacyLabs,
+                SettingsSection.General, SettingsSection.KeyboardShortcuts, SettingsSection.Providers,
+                SettingsSection.Voice, SettingsSection.Coding, SettingsSection.Memory, SettingsSection.PrivacyLabs,
             ),
             pages,
         )
@@ -156,5 +156,21 @@ class SettingsSearchTest {
         )
         // Every provider is found by what people type for it.
         assertEquals(6, searchSettings("install", desk).flatMap { it.hits }.count { it.anchor?.startsWith("provider-") == true })
+    }
+
+    @Test fun the_shortcuts_page_and_every_command_are_found_with_a_hardware_keyboard() {
+        val shortcuts = SettingsSearchIndex.filter { it.section == SettingsSection.KeyboardShortcuts }.map { it.anchor }
+        assertEquals(listOf(null) + dev.supermux.ui.keys.AppCommands.all.map { "key-${it.id}" }, shortcuts)
+        assertEquals(
+            listOf(SettingsSection.KeyboardShortcuts to "key-files.goTo"),
+            searchSettings("go to file", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertTrue(searchSettings("hotkeys", desk).flatMap { it.hits }.any { it.section == SettingsSection.KeyboardShortcuts && it.anchor == null })
+    }
+
+    @Test fun without_a_hardware_keyboard_the_shortcuts_are_not_found() {
+        val touch = desk.copy(hardwareKeyboard = false)
+        assertTrue(searchSettings("go to file", touch).isEmpty())
+        assertTrue(searchSettings("hotkeys", touch).isEmpty())
     }
 }

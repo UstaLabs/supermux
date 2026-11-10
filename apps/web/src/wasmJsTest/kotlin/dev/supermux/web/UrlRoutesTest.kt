@@ -16,6 +16,7 @@ class UrlRoutesTest {
     @Test fun settingsSections() {
         assertEquals("/settings", pathFor(Route.Settings(), null))
         assertEquals("/settings/general", pathFor(Route.Settings(SettingsSection.General), null))
+        assertEquals("/settings/shortcuts", pathFor(Route.Settings(SettingsSection.KeyboardShortcuts), null))
         assertEquals("/settings/providers", pathFor(Route.Settings(SettingsSection.Providers), null))
         assertEquals("/settings/voice", pathFor(Route.Settings(SettingsSection.Voice), null))
         assertEquals("/settings/coding", pathFor(Route.Settings(SettingsSection.Coding), null))

@@ -22,6 +22,7 @@ import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
+import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 import dev.supermux.ui.settings.pages.ProviderDetailPage
@@ -56,6 +57,10 @@ fun DesktopSettingsSection(
         SettingsSection.General -> GeneralPage(
             // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies (spec §10.6).
             defaultAppearance = AppearanceMode.DARK,
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
+        SettingsSection.KeyboardShortcuts -> KeyboardShortcutsPage(
             anchor = place.anchor,
             onAnchorShown = scope.onAnchorShown,
         )

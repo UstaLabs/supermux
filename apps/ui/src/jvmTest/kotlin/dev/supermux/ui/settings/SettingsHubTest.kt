@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.input.key.Key
@@ -1003,6 +1004,61 @@ class SettingsHubTest {
         onNodeWithTag("settings_hub_back").performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Tab); keyUp(Key.ShiftLeft) }
         waitForIdle()
         onNodeWithTag("settings_hub").assertIsNotFocused()
+    }
+
+    // ── Keyboard shortcuts (#97 unit L, #96) ───────────────────────────────────────────────────
+
+    @Test fun keyboard_shortcuts_is_the_second_row_with_a_hardware_keyboard() = runComposeUiTest {
+        assertEquals(SettingsSection.KeyboardShortcuts, SettingsSection.entries[1])
+        assertEquals("Every shortcut on this keyboard", SettingsSection.KeyboardShortcuts.desc(labs = true))
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(section = null, onSectionChange = {}, onBack = {}) { p, _ -> Text("page ${p.section}") }
+        }
+        waitForIdle()
+        val general = onNodeWithTag("settings_section_general").fetchSemanticsNode().boundsInRoot
+        val keys = onNodeWithTag("settings_section_keyboardshortcuts").fetchSemanticsNode().boundsInRoot
+        val providers = onNodeWithTag("settings_section_providers").fetchSemanticsNode().boundsInRoot
+        assertTrue(general.top < keys.top && keys.top < providers.top, "rail order: $general, $keys, $providers")
+    }
+
+    @Test fun without_a_hardware_keyboard_there_is_no_shortcuts_row_or_result() = runComposeUiTest {
+        var phone by mutableStateOf(false)
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            CompositionLocalProvider(
+                dev.supermux.ui.adaptive.LocalHardwareKeyboard provides false,
+                LocalWindowWidthClass provides if (phone) WindowWidthClass.Compact else WindowWidthClass.Expanded,
+            ) {
+                SettingsHub(section = null, onSectionChange = {}, onBack = {}) { p, _ -> Text("page ${p.section}") }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("settings_section_general").assertExists()
+        onNodeWithTag("settings_section_keyboardshortcuts").assertDoesNotExist()
+        onNodeWithTag("settings_search").performTextInput("go to file")
+        waitForIdle()
+        onNodeWithTag("settings_result_keyboardshortcuts_key-files.goTo").assertDoesNotExist()
+        onNodeWithTag("settings_search").performTextClearance()
+        phone = true
+        waitForIdle()
+        onNodeWithTag("settings_row_general").assertExists()
+        onNodeWithTag("settings_row_keyboardshortcuts").assertDoesNotExist()
+    }
+
+    @Test fun with_a_hardware_keyboard_search_finds_a_shortcut_and_opens_its_row() = runComposeUiTest {
+        var landed: SettingsPlace? = null
+        var section by mutableStateOf<SettingsSection?>(null)
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(section = section, onSectionChange = { section = it }, onBack = {}) { p, _ ->
+                landed = p
+                Text("page ${p.section}")
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("settings_search").performTextInput("go to file")
+        waitForIdle()
+        onNodeWithTag("settings_result_keyboardshortcuts_key-files.goTo").performClick()
+        waitForIdle()
+        assertEquals(SettingsPlace(SettingsSection.KeyboardShortcuts, anchor = "key-files.goTo"), landed)
     }
 }
 

@@ -3,13 +3,25 @@
 // page task adds its rows here, in page order.
 package dev.supermux.ui.settings.search
 
+import dev.supermux.ui.keys.AppCommands
+import dev.supermux.ui.keys.DefaultKeymap
+import dev.supermux.ui.keys.currentKeyOs
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.settings.SettingsPlace
+import dev.supermux.ui.settings.pages.shortcutAnchor
 import dev.supermux.ui.settings.settingsTitle
 
-/** What this device shows, for rows that exist only on some platforms. */
-data class SettingsSearchContext(val caps: Caps, val phone: Boolean, val liveTranscript: Boolean)
+/**
+ * What this device shows, for rows that exist only on some platforms. [hardwareKeyboard]: the Keyboard shortcuts
+ * page is listed (`LocalHardwareKeyboard`).
+ */
+data class SettingsSearchContext(
+    val caps: Caps,
+    val phone: Boolean,
+    val liveTranscript: Boolean,
+    val hardwareKeyboard: Boolean = true,
+)
 
 /** One searchable row; [anchor] null is the page itself. [keywords] are other words people type for it. */
 data class SettingsSearchEntry(
@@ -59,6 +71,14 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsSection.General, "terminal-colours", "Terminal colours", "terminal palette color"),
     SettingsSearchEntry(SettingsSection.General, "app-version", "App version", "update upgrade release check"),
     SettingsSearchEntry(SettingsSection.General, "cache", "Cached images and files", "storage cache disk media clear"),
+    page(SettingsSection.KeyboardShortcuts, "keys hotkeys keybindings keymap").copy(shownWhen = { it.hardwareKeyboard }),
+    // Generated from the commands, so the list never goes stale (#96 §6); a command without keys here has no row.
+    *AppCommands.all.map { cmd ->
+        SettingsSearchEntry(
+            SettingsSection.KeyboardShortcuts, shortcutAnchor(cmd), cmd.title, "shortcut keys hotkey",
+            shownWhen = { it.hardwareKeyboard && DefaultKeymap.chordsFor(cmd, currentKeyOs).isNotEmpty() },
+        )
+    }.toTypedArray(),
     page(SettingsSection.Providers, "agents accounts logins sign in"),
     SettingsSearchEntry(SettingsSection.Providers, "provider-claude", "Claude Code", "agent sign in login account install"),
     SettingsSearchEntry(SettingsSection.Providers, "provider-codex", "Codex", "agent sign in login account install"),
