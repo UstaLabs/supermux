@@ -1,5 +1,9 @@
 package dev.supermux.webview.sample.checks
 
+import dev.supermux.webview.WebCookie
+import dev.supermux.webview.FindResult
+import java.net.InetSocketAddress
+import com.sun.net.httpserver.HttpServer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -33,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.webview.Activation
 import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebSizing
 import dev.supermux.webview.WebView
@@ -77,7 +82,8 @@ hostBridge.handle('state', function () {
     )
 
     /** What a check's scene shows, and where its parts are in the window (px). */
-    private class Stage(withEmbed: Boolean = false) {
+    /** [profile]: a view that loads local content and then a page needs one pinned, or each runs in its own (Html: Ephemeral). */
+    private class Stage(withEmbed: Boolean = false, val profile: WebProfile? = null) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
         val state = WebViewState(INPUT_PAGE)
@@ -100,7 +106,7 @@ hostBridge.handle('state', function () {
                         WebView(
                             stage.state,
                             Modifier.fillMaxSize().onGloballyPositioned { stage.page = it.boundsInWindow() },
-                            settings = WebSettings(darkMode = DarkMode.Light),
+                            settings = WebSettings(darkMode = DarkMode.Light, profile = stage.profile),
                             activation = Activation.Eager,
                         )
                         // A marked overlay over the page's top-right corner: its presses are Compose's (D1).
@@ -190,7 +196,73 @@ hostBridge.handle('state', function () {
         if (met != true) throw AssertionError("no $what within $millis ms")
     }
 
+    /** A page whose title says what it sees: its device pixel ratio (WebKit's page zoom scales it), refreshed on resize. */
+    private val TEXT_PAGE = WebContent.Html(
+        """<!doctype html><html><head><title>text-page</title></head><body>
+<p>Find the password in this paragraph.</p><script>
+function report() { document.title = 'dpr=' + window.devicePixelRatio.toFixed(2); }
+window.addEventListener('resize', report);
+setTimeout(report, 50);
+</script></body></html>""",
+    )
+
+    /** A local page that puts the Cookie header its request carried, and what its script can read, in its title. */
+    private fun cookieEcho(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            val sent = exchange.requestHeaders.getFirst("Cookie").orEmpty().replace(Regex("[^A-Za-z0-9=;_ -]"), "")
+            val body = "<!doctype html><title>cookies</title><script>document.title = 'req=$sent | js=' + document.cookie</script>"
+                .toByteArray()
+            exchange.responseHeaders.add("Content-Type", "text/html")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        start()
+    }
+
     val all: List<Check> = listOf(
+        Check("mac-find-says-found-or-not") {
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(TEXT_PAGE)
+                waitFor("the text page") { stage.state.title?.startsWith("dpr=") == true }
+                assertEquals(FindResult(found = true), stage.state.navigator.find("password"), "a word on the page")
+                assertEquals(FindResult(found = false), stage.state.navigator.find("absent-word"), "a word that isn't")
+                stage.state.navigator.clearFind()
+            }
+        },
+        Check("mac-zoom-scales-the-page") {
+            val stage = Stage()
+            withPage(stage) { _ ->
+                stage.state.load(TEXT_PAGE)
+                waitFor("the text page") { stage.state.title?.startsWith("dpr=") == true }
+                val before = stage.state.title!!.removePrefix("dpr=").toDouble()
+                assertTrue(stage.state.navigator.setZoom(2f), "the engine zooms")
+                waitFor("the page at 200 %") { (stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() ?: 0.0) >= before * 1.9 }
+                stage.state.navigator.setZoom(1f)
+                waitFor("the page back at 100 %") { stage.state.title?.removePrefix("dpr=")?.toDoubleOrNull() == before }
+            }
+        },
+        Check("mac-a-cookie-set-before-the-page-reaches-its-request-and-an-httponly-one-stays-out-of-its-script") {
+            val server = cookieEcho()
+            try {
+                // The stage starts on local content: without a pinned profile its cookies would go into Html's
+                // Ephemeral store, and the page would load in the Default one.
+                val stage = Stage(profile = WebProfile.Named("checks-cookies"))
+                withPage(stage) { _ ->
+                    val url = "http://127.0.0.1:${server.address.port}/"
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "probe", value = "1", url = url, secure = false, httpOnly = false)))
+                    assertTrue(stage.state.navigator.setCookie(WebCookie(name = "hidden", value = "1", url = url, secure = false, httpOnly = true)))
+                    stage.state.navigator.load(url)
+                    waitFor("the echo page") { stage.state.title?.startsWith("req=") == true }
+                    val title = stage.state.title!!
+                    val (sent, script) = title.removePrefix("req=").split(" | js=")
+                    assertTrue("probe=1" in sent && "hidden=1" in sent, "the request carried both: $title")
+                    assertTrue("probe=1" in script && "hidden" !in script, "the script sees only the plain one: $title")
+                }
+            } finally {
+                server.stop(0)
+            }
+        },
         Check("mac-the-page-takes-its-presses-and-a-marked-overlay-its-own") {
             val stage = Stage()
             withPage(stage) { mac ->
