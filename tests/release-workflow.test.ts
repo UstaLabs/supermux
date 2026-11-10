@@ -108,6 +108,13 @@ test("Windows release signs the app image's binaries, then the MSI built from th
   }
 })
 
+// jpackage leaves its launcher read-only in the app image: signtool /dg then fails with "Access is denied" (rc.18/rc.19).
+test("the app image's binaries are made writable before they are signed", () => {
+  const step = windowsJob.slice(position("Sign the host helpers and the launcher in the app image"), position("Build the .msi from the signed image"))
+  expect(step).toContain(".IsReadOnly = $false")
+  expect(step.indexOf(".IsReadOnly = $false")).toBeLessThan(step.indexOf("bun ../scripts/certum-sign/sign.ts"))
+})
+
 test("the MSI wraps the signed app image: packaging does not rebuild it", () => {
   const msiLine = windowsJob.split("\n").find((l) => l.includes(":desktop:packageMsi"))!
   expect(msiLine).toContain("-x :desktop:createDistributable")
