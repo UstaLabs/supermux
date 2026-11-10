@@ -85,6 +85,51 @@ test("Windows release preserves stable MSI and checksum names", () => {
   position("supermux-windows.msi.sha256")
 })
 
+// #116: every shipped Windows binary is Authenticode-signed with the Certum (SimplySign) certificate and an RFC 3161
+// timestamp, through our own cloud client (scripts/certum-sign) and signtool's digest mode. The host helpers and the
+// launcher are signed inside the app image, which the MSI then wraps; then the MSI. Two logins, one per signing step.
+test("Windows release signs the app image's binaries, then the MSI built from that image, then verifies", () => {
+  const stage = position("../scripts/stage-desktop-binaries.sh windows-x64")
+  const image = position(":desktop:createDistributable")
+  const signImage = position("Sign the host helpers and the launcher in the app image")
+  const msi = position(":desktop:packageMsi")
+  const signMsi = position("Sign the .msi")
+  const verify = position("Verify the Windows signatures")
+  const checksum = position("supermux-windows.msi.sha256")
+  expect(stage).toBeLessThan(image)
+  expect(image).toBeLessThan(signImage)
+  expect(signImage).toBeLessThan(msi)
+  expect(msi).toBeLessThan(signMsi)
+  expect(signMsi).toBeLessThan(verify)
+  // The checksum is of the signed MSI.
+  expect(verify).toBeLessThan(checksum)
+  for (const file of ["supermux-broker.exe", "mux-sessiond.exe", "supermux.exe"]) {
+    expect(windowsJob.slice(signImage, msi)).toContain(file)
+  }
+})
+
+test("the MSI wraps the signed app image: packaging does not rebuild it", () => {
+  const msiLine = windowsJob.split("\n").find((l) => l.includes(":desktop:packageMsi"))!
+  expect(msiLine).toContain("-x :desktop:createDistributable")
+  const gradle = readFileSync(resolve(import.meta.dir, "..", "apps", "desktop", "build.gradle.kts"), "utf8")
+  expect(gradle).toMatch(/named<AbstractJPackageTask>\("packageMsi"\)[\s\S]*?appImage\.set\(/)
+})
+
+test("signing runs our own client with the secrets, serialized and gated, and is verified with signtool", () => {
+  position("bun ../scripts/certum-sign/sign.ts")
+  position("secrets.SIMPLYSIGN_EMAIL")
+  position("secrets.SIMPLYSIGN_OTP_URI")
+  position("signtool verify /pa")
+  position("Open Source Developer Ahmet")
+  expect(windowsJob).toContain("group: certum-simplysign")
+  expect(windowsJob).toContain("cancel-in-progress: false")
+  expect(windowsJob).toMatch(/environment: windows-signing/)
+  // No third-party action or tool in the signing path.
+  expect(windowsJob).not.toMatch(/uses: .*(simply|certum|ssign)/i)
+  // Never in CI: every PR and push would spend signatures (5000 a month) and expose the secrets.
+  expect(ci).not.toContain("SIMPLYSIGN")
+})
+
 test("Android release auto-injects monotonic versionCode and tag versionName", () => {
   expect(androidStart).toBeGreaterThanOrEqual(0)
   expect(androidEnd).toBeGreaterThan(androidStart)
@@ -338,9 +383,10 @@ test("publish-website builds on the published manifest and leaves the pinned com
 
 test("every desktop installer is built with the tag as the app's version", () => {
   const packaging = workflow.split("\n").filter((l) => /gradlew(\.bat)? :desktop:(package|createDistributable)/.test(l))
-  expect(packaging.length).toBe(4)
-  // Four desktop packaging steps carry the tag, and so does the web client's build (#97: Settings shows its version).
-  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(5)
+  // Windows builds its image and its MSI in two invocations (#116: the image is signed in between); both carry it.
+  expect(packaging.length).toBe(5)
+  // The five desktop packaging steps carry the tag, and so does the web client's build (#97: Settings shows its version).
+  expect(workflow.match(/-PsupermuxVersion="\$\{\{ steps\.ver\.outputs\.version \}\}"/g)?.length).toBe(6)
   expect(publishJob).toContain('CLIENT_DESKTOP_VERSION="$V"')
 })
 
