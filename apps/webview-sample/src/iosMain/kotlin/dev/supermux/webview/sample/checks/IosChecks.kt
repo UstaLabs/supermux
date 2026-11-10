@@ -18,7 +18,9 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import dev.supermux.webview.Activation
+import dev.supermux.webview.InspectorResult
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebCookie
 import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebResourceProvider
 import dev.supermux.webview.WebView
@@ -47,6 +49,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import platform.Foundation.NSData
+import platform.UIKit.UIDevice
 import platform.posix.memcpy
 import platform.UIKit.UIApplication
 import platform.UIKit.UIView
@@ -297,6 +300,72 @@ object IosChecks {
         },
     )
 
+    /** The browser operations (#105): find, zoom, cookies and the inspector, on WebKit's own APIs. */
+    val browserOps: List<Check> = listOf(
+        Check("find-selects-the-match-and-clear-find-clears-it") {
+            val engine = engine()
+            live(engine, page("find", body = "<p>one needle, two needle</p>"))
+            val result = engine.find("needle", backwards = false)
+            if (!osVersionAtLeast(16)) {
+                assertNull(result, "find answers null before iOS 16")
+                return@Check
+            }
+            assertTrue(assertNotNull(result).found, "a match")
+            assertEquals("\"needle\"", engine.evaluate("getSelection().toString()"), "the match is selected")
+            assertFalse(assertNotNull(engine.find("absent-text", backwards = false)).found, "no match")
+            assertTrue(assertNotNull(engine.find("needle", backwards = true)).found, "backwards")
+            engine.clearFind()
+            var selection = engine.evaluate("getSelection().toString()")
+            var tries = 0
+            while (selection != "\"\"" && tries++ < 20) {
+                delay(100)
+                selection = engine.evaluate("getSelection().toString()")
+            }
+            assertEquals("\"\"", selection, "the selection is cleared")
+            assertNull(engine.find("", backwards = false), "no query, no answer")
+        },
+        Check("zoom-scales-the-pages-layout") {
+            val engine = engine()
+            live(engine, page("zoom"))
+            val before = engine.evaluate("document.documentElement.clientWidth")!!.toDouble()
+            assertTrue(engine.setZoom(1.5f))
+            var ratio = 1.0
+            var tries = 0
+            while (ratio <= 1.3 && tries++ < 30) {
+                delay(100)
+                ratio = before / engine.evaluate("document.documentElement.clientWidth")!!.toDouble()
+            }
+            assertTrue(ratio in 1.3..1.7, "the page is laid out at 1.5x: $ratio")
+            assertTrue(engine.setZoom(1f))
+        },
+        Check("a-cookie-set-before-the-load-is-the-pages") {
+            val content = page("cookie")
+            val engine = engine()
+            assertTrue(
+                engine.setCookie(WebCookie(name = "ios_ops", value = "tok", url = content.origin.url, httpOnly = false)),
+                "the cookie is set",
+            )
+            live(engine, content)
+            assertEquals("\"ios_ops=tok\"", engine.evaluate("document.cookie"))
+        },
+        Check("the-inspector-is-safaris") {
+            val engine = engine()
+            live(engine, page("inspector"))
+            val result = engine.openInspector()
+            if (osVersionAtLeast(16, 4)) {
+                assertEquals(InspectorResult.Elsewhere("Safari ▸ Develop on a Mac, with the device connected"), result)
+            } else {
+                assertEquals(InspectorResult.Unsupported, result)
+            }
+        },
+    )
+
+    private fun osVersionAtLeast(major: Int, minor: Int = 0): Boolean {
+        val parts = UIDevice.currentDevice.systemVersion.split('.').map { it.toIntOrNull() ?: 0 }
+        val have = parts.getOrElse(0) { 0 }
+        return have > major || have == major && parts.getOrElse(1) { 0 } >= minor
+    }
+
     /** The relay acts on the user's own events only, and keeps a flooding page from the app's main thread. */
     val relay: List<Check> = listOf(
         Check("a-pages-own-focus-and-blur-are-not-the-views") {
@@ -481,7 +550,7 @@ object IosChecks {
         if (state?.let(wanted) != true) throw AssertionError("the page's media isn't $what: $state")
     }
 
-    val all: List<Check> = failedLoads + resets + release + adoption + resizes + profiles + relay + dialogs + media + history + untested
+    val all: List<Check> = failedLoads + resets + release + adoption + resizes + profiles + relay + dialogs + media + history + untested + browserOps
 
     /** A `WebView` of [content] in a runtime of its own, which gives a hidden view's engine back at once. */
     private class ViewStage(content: WebContent) {
