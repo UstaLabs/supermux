@@ -34,7 +34,7 @@ fun agentFailureText(failure: AccountResult.Failed, action: String): String =
         ?: when (failure.code) {
             "name_invalid" -> "That name can't be used."
             "name_taken" -> "An agent with that name already exists."
-            "agent_not_installed" -> "That provider isn't installed. Install it in Settings ▸ Providers."
+            "agent_not_installed" -> "That provider isn't installed. Install it in Settings ▸ Providers & accounts."
             else -> null
         }
         ?: "Couldn't $action — check the connection and try again."

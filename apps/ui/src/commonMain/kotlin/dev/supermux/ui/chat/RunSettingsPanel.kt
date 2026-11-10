@@ -170,9 +170,9 @@ class RunSettingsAccount(
     val pendingId: String? = null,
     /** Why the last pick was refused, shown under the list. */
     val refusal: String? = null,
-    /** Opens Settings ▸ Accounts; offered when the current account is unavailable. */
+    /** Opens Settings ▸ Providers & accounts; offered when the current account is unavailable. */
     val onOpenAccounts: (() -> Unit)? = null,
-    /** Opens the agent's own sign-in (Settings ▸ Providers); offered instead when the system login's sign-in expired. */
+    /** Opens the agent's own sign-in (Settings ▸ Providers & accounts); offered instead when the system login's sign-in expired. */
     val onSignIn: (() -> Unit)? = null,
 ) {
     /** The account chosen by hand (null while Auto is chosen) or run on. */

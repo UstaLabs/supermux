@@ -217,7 +217,7 @@ class GitHostingScreenTest {
             )
         }
         openAddSheet()
-        onNodeWithText("Use the gh login on this machine").assertExists()
+        onNodeWithText("Use the GitHub sign-in found on this machine").assertExists()
         onNodeWithText("@cliuser, found on that machine").assertExists()
         onNodeWithTag("git_hosting_import_gitlab").assertDoesNotExist()
         onNodeWithTag("git_hosting_import_github").performClick()
@@ -233,7 +233,7 @@ class GitHostingScreenTest {
         openAddSheet()
         onNodeWithTag("git_hosting_import_gitlab").performClick()
         awaitTag("git_hosting_add_error")
-        onNodeWithText("Couldn't use the glab login on this machine — is it signed in?").assertExists()
+        onNodeWithText("Couldn't use the GitLab sign-in found on this machine — is it signed in?").assertExists()
         onNodeWithTag("git_hosting_add_dialog").assertExists()
         onNodeWithTag("git_hosting_token").assertExists()
     }

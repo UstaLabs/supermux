@@ -78,6 +78,7 @@ fun ProviderDetailPage(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     backOnPhone: Boolean = false,
+    showAddLogin: Boolean = true,
 ) {
     val sectionTitle = SettingsSection.Providers.label
     KitPage(
@@ -107,7 +108,7 @@ fun ProviderDetailPage(
                     if (status == null) {
                         KitNote("${providerName(agent)} isn't on ${providerMachine()}.")
                     } else {
-                        ProviderBody(status, providers.holder(agent), agents, accounts, accountsFor(all.orEmpty(), agent), providers::reload)
+                        ProviderBody(status, providers.holder(agent), agents, accounts, accountsFor(all.orEmpty(), agent), providers::reload, showAddLogin)
                     }
                 }
             }
@@ -123,6 +124,7 @@ private fun ProviderBody(
     accounts: AccountsActions,
     mine: List<AccountDto>,
     onChanged: () -> Unit,
+    showAddLogin: Boolean,
 ) {
     val kind = status.kind
     when {
@@ -143,6 +145,7 @@ private fun ProviderBody(
                 onSignInSystem = p::startLogin,
                 systemLoginExtra = { YourLoginExtra(status, p, agents, onUseToken = { tokenForm.open = true }) },
                 own = ownLogin(status, p, mine.firstOrNull { it.system }),
+                showAddLogin = showAddLogin,
             )
             if (kind != "grok") TokenSheet(kind, tokenForm, save = { agents.agentSaveSecret(kind, it) }, onSaved = onChanged)
         }

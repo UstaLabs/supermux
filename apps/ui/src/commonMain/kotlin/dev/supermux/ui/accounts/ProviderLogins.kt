@@ -48,6 +48,7 @@ fun ProviderLogins(
     onSignInSystem: () -> Unit,
     systemLoginExtra: (@Composable () -> Unit)? = null,
     own: OwnLogin? = null,
+    showAddLogin: Boolean = true,
 ) {
     // The open add sheet, kept for the page on display (#89): a rotation closed it in the middle of a sign-in that went
     // on on the host. The sheet keeps its own state under its key.
@@ -111,7 +112,7 @@ fun ProviderLogins(
             }
         }
         // OpenCode's guided login is broken today (#97 spec §11).
-        if (agent != "opencode") KitItem("Add a login", Modifier.testTag("provider_login_add"), mark = KitMark.Add, onClick = { adding.open = true })
+        if (agent != "opencode" && showAddLogin) KitItem("Add a login", Modifier.testTag("provider_login_add"), mark = KitMark.Add, onClick = { adding.open = true })
     }
 
     if (adding.open) AddAccountSheet(agent, actions, existing = mine, onDismiss = { adding.open = false }, retainKey = "accounts:add:$agent")

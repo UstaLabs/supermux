@@ -168,7 +168,7 @@ fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
                         subtitle = if (logins.isEmpty()) {
                             "Paste a personal access token"
                         } else {
-                            "Use the ${logins.joinToString(" / ") { cliName(it) }} login on $machine, or paste a token"
+                            "Use the ${logins.joinToString(" / ") { forgeName(it) }} sign-in found on $machine, or paste a token"
                         },
                         mark = KitMark.Add,
                         onClick = { add.open(null) },
@@ -307,7 +307,7 @@ private fun AddForgeSheet(
         scope.launch {
             val ok = onImport(k, tr)
             form.submitting = false
-            if (ok) form.done = true else form.error = "Couldn't use the ${cliName(k)} login on $machine — is it signed in?"
+            if (ok) form.done = true else form.error = "Couldn't use the ${forgeName(k)} sign-in found on $machine — is it signed in?"
         }
     }
 
@@ -337,7 +337,7 @@ private fun AddForgeSheet(
             KitItemList(Modifier.padding(top = 12.dp)) {
                 logins.forEach { k ->
                     KitItem(
-                        "Use the ${cliName(k)} login on $machine",
+                        "Use the ${forgeName(k)} sign-in found on $machine",
                         modifier = Modifier.testTag("git_hosting_import_$k"),
                         subtitle = cliLogin(cliStatus, k)?.let { "@$it, found on that machine" },
                         onClick = { useLogin(k) },
@@ -438,6 +438,9 @@ internal fun cliLogin(cli: ForgeCliStatus?, kind: String): String? =
     cli?.let { if (kind == "github") it.github.login else it.gitlab.login }
 
 internal fun cliName(kind: String): String = if (kind == "github") "gh" else "glab"
+
+/** The forge as a person names it, for copy: GitHub or GitLab. */
+internal fun forgeName(kind: String): String = if (kind == "github") "GitHub" else "GitLab"
 
 internal fun scopesHint(kind: String, hostUrl: String): String {
     if (kind == "github") {

@@ -869,7 +869,7 @@ fun SupermuxApp(
             RegisterCommand(AppCommands.OpenSettings, enabled = !ui.settingsOpen) { ui.openSettings(); true }
             // ⌘/ (Ctrl+/): Settings › Keyboard shortcuts. The editor's "comment line" and a terminal's own Ctrl+/ win
             // where they have the focus (the registry's scopes, #96).
-            RegisterCommand(AppCommands.ShowShortcuts, enabled = !ui.settingsOpen) {
+            RegisterCommand(AppCommands.ShowShortcuts, enabled = ui.settingsSection != SettingsSection.KeyboardShortcuts || !ui.settingsOpen) {
                 ui.openSettings(SettingsSection.KeyboardShortcuts)
                 true
             }

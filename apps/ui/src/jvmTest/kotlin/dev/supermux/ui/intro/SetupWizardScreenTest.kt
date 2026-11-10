@@ -250,6 +250,15 @@ class SetupWizardScreenTest {
         eventually { onNodeWithTag("agent_install_running_codex").assertExists() }
     }
 
+    @Test fun a_provider_page_in_the_wizard_has_no_add_a_login() = runComposeUiTest {
+        wizard()
+        advanceTo(1)
+        eventually { onNodeWithTag("agent_row_claude").assertIsDisplayed() }
+        onNodeWithTag("agent_row_claude").performClick()
+        eventually { onNodeWithTag("provider_login_claude:system").assertExists() }
+        onNodeWithText("Add a login").assertDoesNotExist()
+    }
+
     @Test fun the_git_step_offers_to_add_a_github_or_gitlab_account() = runComposeUiTest {
         wizard()
         advanceTo(2)

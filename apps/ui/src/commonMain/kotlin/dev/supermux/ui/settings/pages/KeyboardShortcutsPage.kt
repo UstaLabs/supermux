@@ -68,6 +68,5 @@ fun KeyboardShortcutsPage(
                 )
             }
         }
-        KitNote("A read-only list for now; changing keys comes later.")
     }
 }

@@ -173,11 +173,11 @@ fun AgentSettingsScreen(
     onStatusesChanged: (List<AgentInstallStatus>) -> Unit = {},
 ) {
     val providers = rememberProvidersState(actions, onStatusesChanged = onStatusesChanged)
-    // No logins here: the wizard has no accounts wiring, and Your login still signs the machine in.
+    // No "Add a login" here: the wizard has no accounts wiring, so it would always fail; Your login still signs the machine in.
     val accounts = remember { AccountsActions() }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     when (val agent = open) {
         null -> ProvidersPage(providers, accounts, onOpenProvider = { open = it }, modifier = modifier, showAccountSettings = false)
-        else -> ProviderDetailPage(agent, providers, actions, accounts, modifier = modifier, onBack = { open = null }, backOnPhone = true)
+        else -> ProviderDetailPage(agent, providers, actions, accounts, modifier = modifier, onBack = { open = null }, backOnPhone = true, showAddLogin = false)
     }
 }

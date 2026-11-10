@@ -67,7 +67,6 @@ class KeyboardShortcutsPageTest {
         }
         waitForIdle()
         for (c in AppCommands.all) onNode(SemanticsMatcher.expectValue(KitAnchorKey, "key-${c.id}")).assertExists()
-        onNodeWithText("A read-only list for now; changing keys comes later.").assertExists()
         waitUntil(timeoutMillis = 5_000) { shown == 1 }
         assertEquals(1, shown)
     }

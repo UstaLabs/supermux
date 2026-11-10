@@ -109,6 +109,18 @@ class ProviderDetailPageTest {
         onNodeWithText("18%", substring = true).assertExists()
     }
 
+    @Test fun showAddLogin_false_hides_add_a_login() = runComposeUiTest {
+        val agents = AgentSettingsActions(agentStatuses = { allInstalled() })
+        setPlatformContent(platform = FakePlatform(), widthClass = WindowWidthClass.Expanded, pointer = true) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                val providers = rememberProvidersState(agents)
+                ProviderDetailPage("codex", providers, agents, AccountsActions(), showAddLogin = false)
+            }
+        }
+        awaitTag("provider_login_codex:system")
+        onNodeWithText("Add a login").assertDoesNotExist()
+    }
+
     // ── Your login ──────────────────────────────────────────────────────────────────────────────
 
     @Test fun your_login_is_there_without_any_accounts_and_says_whether_it_is_signed_in() = runComposeUiTest {
