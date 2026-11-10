@@ -803,6 +803,15 @@ fun SupermuxApp(
         }
             .also { if (!fleet.audio.hasOutputs) fleet.audio.useOutputs(it) }
     }
+    // What plays, on the lock screen / the Mac's Now Playing, driven by its media keys: one follower for the fleet.
+    val platformNowPlaying = LocalPlatform.current.systemNowPlaying
+    remember(fleet) {
+        platformNowPlaying?.let { system ->
+            fleet.retainedUi.getOrPut("audio.nowPlaying") {
+                dev.supermux.work.SystemMediaControls(fleet.audio, system).also { it.start(fleet.retainedUi.scope) }
+            }
+        }
+    }
     CompositionLocalProvider(
         dev.supermux.ui.chat.LocalChatSearch provides chatSearch,
         dev.supermux.ui.retain.LocalRetainedUiState provides fleet.retainedUi,

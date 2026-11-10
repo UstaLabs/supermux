@@ -198,9 +198,7 @@ fun main() {
                 }
                 val foreground by WebAppState.foreground.collectAsState()
 
-                // Silence read-aloud when the tab goes to the background, the way Android stops it
-                // on ON_STOP: nothing else would ever stop it, since the composition stays alive.
-                LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+                // Read-aloud goes on in a background tab (#118 car 3b), as the audio player does: the dock's ✕ stops it.
 
                 // Has this broker been through first-run setup? `null` until its first snapshot,
                 // which is the whole reason this is a tri-state: a default of `false` would flash
