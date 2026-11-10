@@ -31,7 +31,8 @@ class UrlSyncTest {
         "/archived",
         "/proxies",
         "/displays",
-        "/agents",
+        // Not "/agents": that page was removed and lands Home (UrlRoutesTest.theRemovedAgentsPagesHaveNoRoute),
+        // so it cannot round-trip.
         "/settings",
         "/settings/general",
         "/settings/providers",
