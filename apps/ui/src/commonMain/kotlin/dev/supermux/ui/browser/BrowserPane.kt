@@ -151,9 +151,9 @@ fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, mod
         if (url == requested) return@LaunchedEffect
         if (displayAddress(url, previews.orEmpty(), byPort) is DisplayAddress.Preview) {
             val cookie = actions.previewCookie()
-            if (cookie != null && cookie.url !in webViews.previewCookies) {
+            if (cookie != null && webViews.needsPreviewCookie(cookie)) {
                 if (!live) return@LaunchedEffect
-                if (state.navigator.setCookie(cookie.toWebCookie())) webViews.previewCookies += cookie.url
+                if (state.navigator.setCookie(cookie.toWebCookie())) webViews.previewCookieSet(cookie)
             }
         }
         requested = url
