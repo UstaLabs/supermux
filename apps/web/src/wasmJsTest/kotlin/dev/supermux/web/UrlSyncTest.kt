@@ -27,10 +27,10 @@ class UrlSyncTest {
         "/new?draft=d1",
         "/add-host",
         "/usage",
-        "/devices",
         "/archived",
-        "/proxies",
         "/displays",
+        // Not "/devices" or "/proxies": the machine page's parts since #97 Step 2, they land on /settings/machine
+        // (UrlSyncTest.anOldSlugLandsWithItsAnchor…).
         // Not "/agents": that page was removed and lands Home (UrlRoutesTest.theRemovedAgentsPagesHaveNoRoute),
         // so it cannot round-trip.
         "/settings",
@@ -43,10 +43,8 @@ class UrlSyncTest {
         "/settings/memory",
         "/settings/privacy",
         "/settings/machine",
-        "/settings/machine/status",
-        "/settings/machine/devices",
-        "/settings/machine/links",
-        "/settings/machine/worktrees",
+        "/settings/machine/computer",
+        // Not Step 1's /settings/machine/status|devices|links|worktrees: parts of the machine page now (as above).
         // Not "/settings/appearance" or "/settings/updates": old slugs, they land on General (below).
     )
 
