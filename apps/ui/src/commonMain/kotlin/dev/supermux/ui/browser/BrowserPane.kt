@@ -289,7 +289,7 @@ fun BrowserPane(
     val livePage = remember(view.id) {
         movableContentOf {
             ProvideWebViewRuntime(webViews.runtime) {
-                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager)
+                WebView(state, Modifier.fillMaxSize(), settings = BROWSER_SETTINGS, client = client, activation = Activation.Eager, keepRunningWhileHidden = keepRunning)
             }
         }
     }
