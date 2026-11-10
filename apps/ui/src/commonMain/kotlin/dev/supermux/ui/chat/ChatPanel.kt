@@ -296,6 +296,8 @@ class ChatActions(
     val transcribeAudio: (suspend (ByteArray, String, String) -> String?)? = null,
     /** How the chat reads attachments — the host's media cache in production. */
     val media: dev.supermux.media.AttachmentMedia = dev.supermux.media.AttachmentMedia.None,
+    /** #104: the html cards' pages and their sends; null shows a card without its page. */
+    val htmlCards: HtmlCardHost? = null,
     /** The composer's non-hot seams (drafts, slash cleanup, glossary, pending-first, git ops). */
     val composer: ComposerActions = ComposerActions(),
     val loadModels: suspend () -> ModelsResponse? = { null },
@@ -360,6 +362,11 @@ fun rememberChatActions(
             },
             transcribeAudio = { bytes, name, mime -> app.transcribeAudio(session.id, bytes, name, mime)?.text },
             media = app.media,
+            htmlCards = HtmlCardHost(
+                page = { id -> app.htmlPages.get(id) },
+                send = { card, text -> app.sendFromCard(session.id, card, text) },
+                peek = { id -> app.htmlPages.peek(id) },
+            ),
             composer = composerActions,
             loadModels = { app.sessionModels(session.id) },
             loadReasoning = { app.sessionReasoning(session.id) },
@@ -698,6 +705,9 @@ fun ChatPanel(
             }
     }
     val density = LocalDensity.current
+    // #104: an html card caps itself at a share of the chat's visible height.
+    val chatViewportPx by remember(listState) { derivedStateOf { listState.layoutInfo.viewportSize.height } }
+    val chatViewportHeight = if (chatViewportPx > 0) with(density) { chatViewportPx.toDp() } else androidx.compose.ui.unit.Dp.Unspecified
     // The find bar (open, its query, its scope) outlives this composition: a rotation or a width
     // change closed it and dropped what was typed (#89).
     val find = rememberRetained("chat.find:${session.id}") { ChatFindState() }
@@ -1227,6 +1237,8 @@ fun ChatPanel(
                 LocalChatSessionId provides session.id,
                 LocalChatTitle provides session.name,
                 LocalLiveReveals provides reveals,
+                LocalHtmlCards provides actions.htmlCards,
+                LocalChatViewportHeight provides chatViewportHeight,
             ) {
             LazyColumn(
                 state = listState,
