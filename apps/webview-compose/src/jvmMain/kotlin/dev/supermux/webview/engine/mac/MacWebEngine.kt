@@ -21,6 +21,9 @@ import dev.supermux.webview.NewWindowDecision
 import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
@@ -110,7 +113,15 @@ internal class MacWebEngine(
     private val onReleased: (MacWebEngine) -> Unit = {},
     /** Asks for a window's page views to move with skiko's frames ([MacFrameSync]); tests record it. */
     private val frameSync: (java.awt.Window?, Long) -> Unit = MacFrameSync::ensure,
-) : WebEngine, SurfaceHost {
+) : WebEngine, SurfaceHost, UserInputSource {
+
+    /**
+     * When the user last gave this view real input, for [UserInputSource]. The glue tells of every press or key the page's own view took ([onPointer]), which no page script can make. A new document starts with none.
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     /** A question the engine asked its client for WebKit: answered once, by the client or by default. */
     private inner class Pending(private val byDefault: () -> Unit) {
         var job: Job? = null
@@ -1029,6 +1040,7 @@ internal class MacWebEngine(
     /** The page took a press or a key (D7): it is in use, the next second's navigations are the user's, a menu closes. */
     private fun onPointer(pointer: GlueEvent.Pointer) {
         lastInput = clock()
+        inputStamp.mark(inputClock())
         setFocused(queue.epoch, true)
         if (pointer.xPoints >= 0 && pointer.yPoints >= 0) surface?.dismissPopupsAt(pointer.xPoints, pointer.yPoints)
     }
@@ -1385,6 +1397,7 @@ internal class MacWebEngine(
     /** A new document of [content] starts: nothing an earlier one caused is delivered from now on. */
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
+        inputStamp.clear()
         this.content = content
         documentPainted = false
         paintOnScreen = false

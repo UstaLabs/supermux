@@ -24,6 +24,9 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.PermissionKind
 import dev.supermux.webview.PermissionRequest
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
@@ -95,7 +98,15 @@ internal class WindowsWebEngine(
     private val scripts: Wv2Scripts,
     private val scope: CoroutineScope,
     private val onReleased: () -> Unit = {},
-) : WebEngine {
+) : WebEngine, UserInputSource {
+
+    /**
+     * When the user last gave this view real input, for [UserInputSource]. A press Compose delivered to the surface (which the library forwards to WebView2 itself) or a key the page took counts; the key comes on the glue's UI thread, so the stamp may be marked from it. A new document starts with none.
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     /** A question the client was asked and hasn't answered: answered exactly once (Linux's Pending). */
     private class Pending(val byDefault: () -> Unit, val holdsPage: Boolean) {
         var job: Job? = null
@@ -188,7 +199,11 @@ internal class WindowsWebEngine(
     init {
         WinPages.listen(page.token, ::onEvent)
         WinPages.decide(page.token) { _, flags, url -> Wv2Navigation.decide(flags, url, snapshot, own) }
-        WinPages.keys(page.token) { vk, scan, flags -> keyRouter.offer(vk, scan, flags) }
+        WinPages.keys(page.token) { vk, scan, flags ->
+            // Every key the page is about to get, before the app is offered it: real input to this view.
+            if (!released && !crashed) inputStamp.mark(inputClock())
+            keyRouter.offer(vk, scan, flags)
+        }
         publish()
     }
 
@@ -274,6 +289,7 @@ internal class WindowsWebEngine(
      */
     private fun loadInDocument(content: WebContent.Url) {
         val epoch = queue.advance()
+        inputStamp.clear()
         this.content = content
         page.setScript(epoch, secret, documentScript())
         committedEpoch = epoch
@@ -926,6 +942,7 @@ internal class WindowsWebEngine(
     internal fun pointer(event: PointerEvent) {
         if (released || crashed) return
         val change = event.changes.firstOrNull() ?: return
+        if (event.type == PointerEventType.Press) inputStamp.mark(inputClock())
         val mouse = event.nativeEvent as? java.awt.event.MouseEvent
         val kind = when (event.type) {
             PointerEventType.Enter -> MouseInput.Kind.Enter

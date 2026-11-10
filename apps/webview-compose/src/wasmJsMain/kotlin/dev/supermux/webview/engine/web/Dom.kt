@@ -39,6 +39,12 @@ internal fun hasAttribute(element: HTMLElement, name: String): Boolean = js("ele
 
 internal fun setSrcdoc(iframe: HTMLElement, html: String): Unit = js("{ iframe.srcdoc = html; }")
 
+/** A `blob:` URL for [html] as a page, which a frame can load as its own document (see [setSrc]). Revoke it when done. */
+internal fun blobUrlOf(html: String): String = js("URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))")
+
+/** Releases a [blobUrlOf] URL: the browser forgets the page it named, and a fetch of it fails. */
+internal fun revokeBlobUrl(url: String): Unit = js("{ URL.revokeObjectURL(url); }")
+
 internal fun setSrc(iframe: HTMLElement, url: String): Unit = js("{ iframe.src = url; }")
 
 /** The iframe's WindowProxy, which stays the same across its navigations. */
@@ -141,7 +147,7 @@ internal fun handshakePort(handshake: JsAny): JsAny = js("handshake.port")
 /**
  * Listens on a document's port. A string is a bridge message, `{webviewOpen, newWindow}` a link the user clicked,
  * `{webviewScroll: [dx, dy]}` and `{webviewFling: [vx, vy]}` what the user's wheel or drag left over (CSS px, and CSS px
- * per second; positive down and right), `{webviewPress: 1}` a press of the user's in the page,
+ * per second; positive down and right), `{webviewPress: 1}` a press of the user's in the page, `{webviewKey: 1}` a key of theirs,
  * `{webviewFocus: true|false}` the keyboard coming to the page or leaving it, `{webviewGone: 1}` the document leaving,
  * and `{webviewPaint: 1}` its first paint. Anything else, or a pair that isn't two finite numbers, is dropped.
  */
@@ -152,6 +158,7 @@ internal fun listenOnPort(
     onScroll: (Double, Double) -> Unit,
     onFling: (Double, Double) -> Unit,
     onPress: () -> Unit,
+    onKey: () -> Unit,
     onFocus: (Boolean) -> Unit,
     onGone: () -> Unit,
     onPaint: () -> Unit,
@@ -165,6 +172,7 @@ internal fun listenOnPort(
       else if (pair(d.webviewScroll)) onScroll(d.webviewScroll[0], d.webviewScroll[1]);
       else if (pair(d.webviewFling)) onFling(d.webviewFling[0], d.webviewFling[1]);
       else if (d.webviewPress === 1) onPress();
+      else if (d.webviewKey === 1) onKey();
       else if (typeof d.webviewFocus === 'boolean') onFocus(d.webviewFocus);
       else if (d.webviewGone === 1) onGone();
       else if (d.webviewPaint === 1) onPaint();

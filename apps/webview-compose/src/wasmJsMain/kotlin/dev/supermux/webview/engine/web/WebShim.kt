@@ -37,6 +37,8 @@ internal object WebShim {
      * @param secret the document's secret: random, used once.
      * @param parentOrigin the app's origin (`location.origin`), the only place the handshake goes. An app with an
      *   opaque origin (served from a file) sends it to `*`: an iframe's parent can't change while the iframe lives.
+     * @param baseUrl what a relative link resolves against when the document's own base is a `blob:` URL, which is no
+     *   base at all (`new URL('x', 'blob:null/...')` throws). Null: there is none, and such a link is the browser's.
      * @param trustSyntheticInput for tests only, which can't make trusted input: scroll chaining and link interception
      *   take the page's own synthetic wheels, drags and clicks too. Never set by the engine an app gets.
      */
@@ -45,6 +47,7 @@ internal object WebShim {
         parentOrigin: String,
         callTimeoutMillis: Long = 30_000,
         trustSyntheticInput: Boolean = false,
+        baseUrl: String? = null,
     ): String {
         val target = if (parentOrigin == "null" || parentOrigin.isEmpty()) "*" else parentOrigin
         val prelude = PRELUDE
@@ -52,6 +55,7 @@ internal object WebShim {
             .replace("__SECRET__", JsonPrimitive(secret).toString())
             .replace("__TARGET__", JsonPrimitive(target).toString())
             .replace("__TRUST_SYNTHETIC__", trustSyntheticInput.toString())
+            .replace("__BASE__", if (baseUrl == null) "null" else JsonPrimitive(baseUrl).toString())
         val shim = BridgeShim.source("link.send", mainFrameExpression = "window.parent !== window", callTimeoutMillis = callTimeoutMillis)
         return prelude + "\n" + shim + "\n" + LINKS + "\n" + NOTICES + "\n" + SCROLL + "\n" + EPILOGUE
     }
@@ -70,7 +74,7 @@ internal object WebShim {
   var postOnPort = MessagePort.prototype.postMessage, dataOf = getterOf(MessageEvent, 'data');
   var port1Of = getterOf(MessageChannel, 'port1'), port2Of = getterOf(MessageChannel, 'port2');
   var setOnMessage = getOwn(MessagePort.prototype, 'onmessage').set;
-  var TRUST_SYNTHETIC = __TRUST_SYNTHETIC__;
+  var TRUST_SYNTHETIC = __TRUST_SYNTHETIC__, BASE = __BASE__;
   function trusted(e) { return e.isTrusted === true || TRUST_SYNTHETIC; }
   var link = (function () {
     var parentWindow = window.parent, Channel = MessageChannel, port = null;
@@ -91,6 +95,7 @@ internal object WebShim {
       scroll: function (dx, dy) { post({ webviewScroll: [dx, dy] }); },
       fling: function (vx, vy) { post({ webviewFling: [vx, vy] }); },
       press: function () { post({ webviewPress: 1 }); },
+      key: function () { post({ webviewKey: 1 }); },
       focus: function (has) { post({ webviewFocus: has === true }); },
       gone: function () { post({ webviewGone: 1 }); },
       paint: function () { post({ webviewPaint: 1 }); }
@@ -103,6 +108,8 @@ internal object WebShim {
      * page can't hide anything from them; only trusted events count, and the page can't send on the port.
      * - The user's presses (`{webviewPress: 1}`, at most one each 50 ms): a page that takes the keyboard right after one
      *   was given it by the user; one that takes it with none, took it.
+     * - The user's key presses (`{webviewKey: 1}`, not a held key's repeats): input for the host's input stamp, which
+     *   allows a send right after one, and for nothing else.
      * - The keyboard coming to the page (`{webviewFocus: true}`, on a `focusin` or window `focus`) or leaving it
      *   (`{webviewFocus: false}`, on a window `blur`): the app's own document sees nothing when the keyboard moves
      *   between frames, or into one while the app's window isn't focused, and its `activeElement` can lag behind.
@@ -125,6 +132,7 @@ internal object WebShim {
     addEventListener('pointerdown', pressed, true);
     addEventListener('mousedown', pressed, true);
     addEventListener('touchstart', pressed, { capture: true, passive: true });
+    addEventListener('keydown', function (e) { if (trusted(e) && e.repeat !== true) link.key(); }, true);
     function onWindow(e) { return e.isTrusted === true && read(targetOf, e) === window; }
     addEventListener('focus', function (e) { if (onWindow(e)) link.focus(true); }, true);
     addEventListener('focusin', function (e) { if (e.isTrusted === true) link.focus(true); }, true);
@@ -176,7 +184,11 @@ internal object WebShim {
       return;
     }
     var href;
-    try { href = Str(new URL(raw, document.baseURI).href); } catch (x) { return; }
+    try {
+      var base = Str(document.baseURI);
+      if (base.indexOf('blob:') === 0 && BASE !== null) base = BASE;
+      href = Str(new URL(raw, base).href);
+    } catch (x) { return; }
     if (href.indexOf('javascript:') === 0) return;
     if (href.split('#')[0] === Str(location.href).split('#')[0]) return;
     e.preventDefault();
