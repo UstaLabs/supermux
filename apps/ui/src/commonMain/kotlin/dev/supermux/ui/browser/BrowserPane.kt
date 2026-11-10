@@ -107,7 +107,14 @@ private class BrowserClient(private val newWindow: (String) -> Unit) : WebClient
  */
 @OptIn(FlowPreview::class)
 @Composable
-fun BrowserPane(view: ViewDto, workspaceId: String, actions: BrowserActions, modifier: Modifier = Modifier) {
+fun BrowserPane(
+    view: ViewDto,
+    workspaceId: String,
+    actions: BrowserActions,
+    modifier: Modifier = Modifier,
+    /** Desktop ([BrowserTabKeeper]): the page keeps running while its tab is in the back. */
+    keepRunning: Boolean = false,
+) {
     val platform = LocalPlatform.current
     val provided = LocalAppWebViews.current
     // The app's runtime is made on first use: a tab with no page makes no engine, nor loads one.

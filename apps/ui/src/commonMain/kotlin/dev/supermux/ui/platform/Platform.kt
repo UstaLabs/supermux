@@ -183,6 +183,12 @@ interface Platform {
      * Storage (size + Clear). Null hides that row: a host that caches nothing has nothing to clear.
      */
     val mediaCache: dev.supermux.media.MediaCache? get() = null
+
+    /**
+     * Whether every open Browser tab's page stays live, hidden, while another tab is in front, as a desktop browser's
+     * tabs do (#105, Ahmet's call: tabs never freeze). Phones keep only the tab in front and park the rest.
+     */
+    val keepsBrowserTabsLive: Boolean get() = false
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */

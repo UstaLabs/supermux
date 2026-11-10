@@ -1,5 +1,6 @@
 package dev.supermux.ui.browser
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
@@ -147,6 +148,39 @@ class BrowserPaneTest {
         waitForIdle()
         assertTrue(webViews.tab("b1") === kept, "an open tab lost its page")
         assertTrue(webViews.tab("b2") !== closed, "a closed tab kept its page")
+    }
+
+    // Desktop: a tab not in front stays composed, hidden, its page never parked or saved (Ahmet: tabs never freeze).
+    @Test fun onDesktopATabInTheBackStaysComposedAndItsPageIsNeverParked() = runComposeUiTest {
+        val rig = Rig()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val webViews = AppWebViews(
+            WebViewRuntime(RuntimeConfig(maxLive = 4, snapshotCacheBytes = 8L shl 20, factory = rig.engines, scope = scope, clock = { mainClock.currentTime })),
+        )
+        val keeper = BrowserTabKeeper()
+        val tab = view("https://vitejs.dev/")
+        val front = mutableStateOf("b1")
+        val actions = rig.actions()
+        setPlatformContent(platform = FakePlatform()) {
+            CompositionLocalProvider(LocalAppWebViews provides webViews, LocalBrowserTabKeeper provides keeper) {
+                Box(Modifier.size(800.dp, 600.dp)) {
+                    if (front.value == "b1") keeper.Show(tab, "w1", actions, Modifier.size(800.dp, 600.dp))
+                    KeepBrowserTabsLive(listOf(tab), shown = setOf(front.value), workspaceId = "w1", actions = actions)
+                }
+            }
+        }
+        waitUntil(timeoutMillis = 5_000) { "https://vitejs.dev/" in rig.loads() }
+        waitForIdle()
+        front.value = "t1"
+        waitForIdle()
+        mainClock.advanceTimeBy(2_000)
+        front.value = "b1"
+        waitForIdle()
+        mainClock.advanceTimeBy(1_000)
+        waitForIdle()
+        assertEquals(listOf("https://vitejs.dev/"), rig.loads(), "the page loaded again: ${rig.calls}")
+        val first = rig.engines.created.first().calls
+        assertTrue("save" !in first && "replay" !in first, "the page was parked and adopted, not kept: $first")
     }
 
     @Test fun theStoredPageOpensAndIsWrittenBack() = runComposeUiTest {

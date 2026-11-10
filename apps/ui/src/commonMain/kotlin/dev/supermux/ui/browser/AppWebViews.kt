@@ -56,7 +56,13 @@ class AppWebViews(val runtime: WebViewRuntime) {
     companion object {
         private const val MAX_TABS = 32
 
-        private val made = lazy { AppWebViews(WebViewRuntime(RuntimeConfig.platformDefault().copy(maxLive = 4))) }
+        /**
+         * How many live engines the app's runtime allows, read when it is first made: 4 on phones. A desktop keeps every
+         * open Browser tab live ([BrowserTabKeeper]), so its platform raises it before then.
+         */
+        var liveBudget: Int = 4
+
+        private val made = lazy { AppWebViews(WebViewRuntime(RuntimeConfig.platformDefault().copy(maxLive = liveBudget))) }
         val app: AppWebViews get() = made.value
 
         /** The app's web views if a Browser tab has made them, without making them. */

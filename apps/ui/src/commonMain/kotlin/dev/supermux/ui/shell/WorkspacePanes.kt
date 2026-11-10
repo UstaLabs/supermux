@@ -147,6 +147,7 @@ import dev.supermux.ui.workspace.applyEntryMoved
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectActiveViewIds
+import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.isBrowserView
@@ -242,6 +243,94 @@ class WorkspacePanesBind(
  */
 @Composable
 fun WorkspacePanes(
+    hostId: String,
+    layout: LayoutNode,
+    current: WorkspaceDto,
+    session: SessionInfo?,
+    ws: WorkspaceSession,
+    app: HostStore,
+    appFor: (String) -> HostStore,
+    ui: ShellUiState,
+    drafts: SnapshotStateMap<String, String>,
+    overlayScope: CoroutineScope,
+    launcherPane: @Composable (
+        onBack: () -> Unit,
+        onCreated: (String) -> Unit,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
+    ) -> Unit,
+    tabDragState: PaneDragController,
+    closeCandidate: ViewDto?,
+    onCloseCandidate: (ViewDto?) -> Unit,
+    sessionNames: Map<String, String>,
+    unreadSessions: Set<String>,
+    modifier: Modifier,
+    onTearOutTab: (String) -> Unit = {},
+    stripChrome: PaneStripChrome = PaneStripChrome.None,
+) {
+    // Desktop (#105): every open Browser tab's page stays live, hidden, while another tab is in front.
+    val keeper = if (LocalPlatform.current.keepsBrowserTabsLive) remember(hostId, current.id) { dev.supermux.ui.browser.BrowserTabKeeper() } else null
+    if (keeper == null) {
+        WorkspacePanesBody(
+            hostId = hostId,
+            layout = layout,
+            current = current,
+            session = session,
+            ws = ws,
+            app = app,
+            appFor = appFor,
+            ui = ui,
+            drafts = drafts,
+            overlayScope = overlayScope,
+            launcherPane = launcherPane,
+            tabDragState = tabDragState,
+            closeCandidate = closeCandidate,
+            onCloseCandidate = onCloseCandidate,
+            sessionNames = sessionNames,
+            unreadSessions = unreadSessions,
+            onTearOutTab = onTearOutTab,
+            stripChrome = stripChrome,
+            modifier = modifier,
+        )
+    } else {
+        CompositionLocalProvider(dev.supermux.ui.browser.LocalBrowserTabKeeper provides keeper) {
+            Box(modifier) {
+                WorkspacePanesBody(
+                    hostId = hostId,
+                    layout = layout,
+                    current = current,
+                    session = session,
+                    ws = ws,
+                    app = app,
+                    appFor = appFor,
+                    ui = ui,
+                    drafts = drafts,
+                    overlayScope = overlayScope,
+                    launcherPane = launcherPane,
+                    tabDragState = tabDragState,
+                    closeCandidate = closeCandidate,
+                    onCloseCandidate = onCloseCandidate,
+                    sessionNames = sessionNames,
+                    unreadSessions = unreadSessions,
+                    onTearOutTab = onTearOutTab,
+                    stripChrome = stripChrome,
+                    modifier = Modifier.matchParentSize(),
+                )
+                dev.supermux.ui.browser.KeepBrowserTabsLive(
+                    ws.viewsById.values,
+                    // Only this window's tabs: one torn out into another window is that window's to keep.
+                    inLayout = collectViewIds(layout).toSet(),
+                    shown = collectActiveViewIds(layout).toSet(),
+                    workspaceId = current.id,
+                    actions = dev.supermux.ui.browser.rememberBrowserActions(app),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspacePanesBody(
     hostId: String,
     layout: LayoutNode,
     current: WorkspaceDto,
