@@ -616,6 +616,10 @@ data class PreviewCookieDto(
 @Serializable
 data class PreviewTokenResponse(val token: String, val cookie: PreviewCookieDto)
 
+/** GET /html/<id>'s answer (#104): an html card's page text. */
+@Serializable
+data class HtmlPageDto(val id: String, val html: String)
+
 /** GET /proxies/by-port's answer: the host's by-port preview URL, `{port}` standing for the port. */
 @Serializable
 data class ByPortDto(val url: String)
@@ -3058,6 +3062,10 @@ class BrokerApi(
 
     /** GET /proxies/by-port: the host's `/p/<port>/` template (#105), or null from a broker without by-port previews. */
     suspend fun byPortTemplate(): String? = runCatching { getJson<ByPortDto>("$httpBase/proxies/by-port").url }.getOrNull()
+
+    /** GET /html/<id> (#104): an html card's page text, or null when the broker hasn't it. Never loaded from the broker's origin. */
+    suspend fun htmlPage(id: String): String? =
+        runCatching { getJson<HtmlPageDto>("$httpBase/html/${urlEncode(id)}").html }.getOrNull()
 
     /** PATCH /proxies/<domain> {isPublic} */
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =

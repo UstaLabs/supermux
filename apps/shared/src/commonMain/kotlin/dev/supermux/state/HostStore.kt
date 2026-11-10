@@ -116,6 +116,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import dev.supermux.proto.ClientFrame
+import dev.supermux.proto.CardRef
+import dev.supermux.proto.FromCardDto
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
@@ -268,6 +270,9 @@ class HostStore(
     private fun rangeDownload(fileId: String): RangeDownload = { from, to, sink ->
         runApi("fileRange") { apiMedia.fileRange(fileId, from, to, sink) }
     }
+
+    /** #104: html cards' pages on this host, kept in memory by id. */
+    val htmlPages: dev.supermux.net.HtmlPages = dev.supermux.net.HtmlPages(fetch = { id -> apiMedia.htmlPage(id) })
 
     /** How the chat reads this host's attachments: through the media cache once [bindMedia] ran. */
     val media: AttachmentMedia = object : AttachmentMedia {
@@ -1047,13 +1052,14 @@ class HostStore(
      *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Replaced in the
      *  MessageAppend reducer by the broker's copy of the message sent as [clientMessageId] (card #75).
      *  Only echoes when there is text (attachments-only stay quiet). */
-    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null) {
+    fun appendLocalEcho(sessionId: String, text: String, clientMessageId: String? = null, fromCard: FromCardDto? = null) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
             id = clientMessageId?.let(::localEchoId) ?: "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
+            fromCard = fromCard,
         )
         _state.update {
             it.copy(messages = it.messages + (sessionId to ((it.messages[sessionId] ?: emptyList()) + optimistic)))
@@ -1097,6 +1103,19 @@ class HostStore(
         appendLocalEcho(sessionId, text.trim(), clientMessageId)
         markPendingSend(sessionId)
         val frame = ClientFrame.Send(sessionId, args = SendArgs(text, attachments.ifEmpty { null }), clientMessageId = clientMessageId)
+        stateScope.launch { deliverOrQueue(frame) }
+    }
+
+    /**
+     * #104: a click in [card] sends [text] as the user's message: a `send` frame with `from_card`, no attachments. The
+     * broker refuses a card it doesn't know, or a second send within a second. The app's click rules are the caller's.
+     */
+    fun sendFromCard(sessionId: String, card: FromCardDto, text: String) {
+        if (text.isEmpty()) return
+        val clientMessageId = newClientMessageId()
+        appendLocalEcho(sessionId, text, clientMessageId, fromCard = card)
+        markPendingSend(sessionId)
+        val frame = ClientFrame.Send(sessionId, args = SendArgs(text, fromCard = CardRef(card.id)), clientMessageId = clientMessageId)
         stateScope.launch { deliverOrQueue(frame) }
     }
 

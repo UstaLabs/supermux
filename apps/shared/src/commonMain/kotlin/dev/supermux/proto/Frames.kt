@@ -129,7 +129,31 @@ data class LogEntry(
     val error: Boolean = false,
     /** Card #76: the live stream this stored reply replaces (only on the live `message_append`; never stored). */
     val stream: String? = null,
+    /** #104: an html card the agent showed (show_html); its page is GET /html/<id>. */
+    val card: HtmlCardDto? = null,
+    /** #104: on the user's message a click in an html card sent. */
+    @SerialName("from_card") val fromCard: FromCardDto? = null,
 )
+
+/**
+ * #104: an agent's html card. [id] is the page's SHA-256. The heights are the page's first-paint heights in CSS px,
+ * measured by the broker at phone width ([height]) and at the desktop chat column's width ([desktopHeight]).
+ */
+@Serializable
+data class HtmlCardDto(
+    val id: String,
+    val title: String,
+    val height: Int? = null,
+    @SerialName("desktop_height") val desktopHeight: Int? = null,
+)
+
+/** #104: the card a user's message was sent from. */
+@Serializable
+data class FromCardDto(val id: String, val title: String)
+
+/** #104: the card a `send` names (`args.from_card`); the broker finds its title. */
+@Serializable
+data class CardRef(val id: String)
 
 @Serializable
 data class Attachment(
@@ -356,7 +380,12 @@ data class AgentStatus(
 }
 
 @Serializable
-data class SendArgs(val text: String = "", val attachments: List<String>? = null)
+data class SendArgs(
+    val text: String = "",
+    val attachments: List<String>? = null,
+    /** #104: a click in this card sent the text. Left out when null: the broker reads any from_card as a card's. */
+    @SerialName("from_card") val fromCard: CardRef? = null,
+)
 
 @Serializable
 data class ControlAction(val kind: String, val muted: Boolean? = null)
