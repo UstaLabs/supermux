@@ -17,6 +17,7 @@ import type { InboundMessage } from "../channel"
 import type { MessageStore } from "../../core/session-manager/messages"
 import { makeLogger } from "../../shared/log"
 import { attachmentMeta } from "../../core/agents/attachment-meta"
+import { fromCardText } from "../../core/show-html/card-send"
 
 const log = makeLogger("channels/web/inbound-handler")
 
@@ -46,6 +47,7 @@ export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps
       message_id: msg.message_id,
       text: msg.text,
       attachments: msg.attachments,
+      ...(msg.from_card ? { from_card: msg.from_card } : {}),
     })
   } catch (err: any) {
     log.error("messages_append_failed", { session: sessionId, err: err?.message ?? String(err) })
@@ -59,5 +61,6 @@ export async function handleWebInbound(msg: InboundMessage, deps: WebInboundDeps
     ts: msg.ts,
     ...attachmentMeta(msg.attachments),
   }
-  await deps.deliver(sessionId, msg.text ?? "", meta)
+  // The user's bubble shows his own words ("from <card>"); the agent is told which card they came from.
+  await deps.deliver(sessionId, msg.from_card ? fromCardText(msg.from_card, msg.text ?? "") : (msg.text ?? ""), meta)
 }

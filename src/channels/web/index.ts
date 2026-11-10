@@ -12,6 +12,7 @@ import { MUX_HOME, isMuxInternalPath } from "../../shared/paths"
 import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join, resolve, sep } from "path"
+import { CardSendGuard } from "../../core/show-html/card-send"
 import { kindFromMime, type AttachmentKind } from "../../core/files/kinds"
 import { PayloadTooLargeError, EmptyUploadError, OffsetConflictError, UploadOverflowError, UploadNotFoundError } from "../../core/files/store"
 import { buildProxyPublicUrl, extractSubdomain, handleProxyRequest, matchProxyPath, parseCookie, portFromSlug } from "./proxy"
@@ -355,6 +356,10 @@ export interface WebChannelOpts {
   setMute: (name: string, muted: boolean) => void
   onSendFromWeb: (msg: InboundMessage) => void
   fileStore?: import("../../core/files/store").FileStore
+  /** show_html pages (#104) for GET /html/<id>. */
+  htmlPages?: { read(id: string): string | undefined }
+  /** The html card with this id in the session's log, for a `send` frame from a card. */
+  findCard?: (session: string, cardId: string) => { title: string } | undefined
   pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   vapidPublicKey?: string
@@ -669,6 +674,7 @@ export class WebChannel implements Channel {
   private heartbeatTimer?: NodeJS.Timeout
   private readonly store: DeviceStore
   private readonly fileStore?: import("../../core/files/store").FileStore
+  private readonly cardSends: CardSendGuard
   private readonly pushStore?: import("../../core/push/subscriptions").PushSubscriptionStore
   private readonly deviceTokenStore?: import("../../core/push/device-tokens").DevicePushTokenStore
   private readonly pushWatch?: PushRegistrationWatch
@@ -709,6 +715,7 @@ export class WebChannel implements Channel {
   constructor(private readonly opts: WebChannelOpts) {
     this.store = new DeviceStore(opts.devicesFile)
     this.fileStore = opts.fileStore
+    this.cardSends = new CardSendGuard((session, id) => opts.findCard?.(session, id))
     this.pushStore = opts.pushStore
     this.deviceTokenStore = opts.deviceTokenStore
     if (opts.deviceTokenStore) this.pushWatch = new PushRegistrationWatch(opts.deviceTokenStore, log)
@@ -2041,6 +2048,21 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "send" && frame.session && frame.op === "reply") {
+      // #104: a click in an html card. Only an existing card of this session may speak, once a second, in 2000 characters.
+      const fromCardId = frame.args?.from_card?.id
+      let fromCard: { id: string; title: string } | undefined
+      if (frame.args?.from_card !== undefined) {
+        const ok = this.cardSends.check(String(frame.session), fromCardId, frame.args?.text)
+        if (!ok.ok) {
+          ws.send(JSON.stringify({ type: "error", reason: ok.reason }))
+          return
+        }
+        if (Array.isArray(frame.args?.attachments) && frame.args.attachments.length > 0) {
+          ws.send(JSON.stringify({ type: "error", reason: "a card message carries no attachments" }))
+          return
+        }
+        fromCard = { id: fromCardId, title: ok.title }
+      }
       const requestedIds: string[] = Array.isArray(frame.args?.attachments) ? frame.args.attachments : []
       let attachments: InboundAttachment[] | undefined = undefined
       if (requestedIds.length > 0) {
@@ -2084,6 +2106,7 @@ export class WebChannel implements Channel {
         text: frame.args?.text,
         target_session_id: frame.session,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(fromCard ? { from_card: fromCard } : {}),
       }
       this.opts.onSendFromWeb(msg)
       for (const h of this.inboundHandlers) h(msg)
@@ -2973,6 +2996,25 @@ export class WebChannel implements Channel {
       if (!poster) return new Response("poster_file_id required", { status: 400 })
       const linked = await this.fileStore.setPoster(clip, poster, auth.device.name)
       return linked ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 })
+    }
+
+    // #104: a show_html page, as TEXT inside JSON. Never text/html: a page served from here would run on the
+    // broker's origin, with the login cookie. The app puts the string in its own sandboxed blob: frame.
+    if (method === "GET" && path.startsWith("/html/")) {
+      const auth = this.requireAuth(req)
+      if (!auth.ok) return this.authFailureResponse(auth)
+      let id = ""
+      try { id = decodeURIComponent(path.slice("/html/".length)) } catch { return new Response("not found", { status: 404 }) }
+      const html = this.opts.htmlPages?.read(id)
+      if (html === undefined) return new Response("not found", { status: 404 })
+      return new Response(JSON.stringify({ id, html }), {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox",
+          "cache-control": "private, max-age=3600",
+        },
+      })
     }
 
     if (method === "GET" && path.startsWith("/files/")) {
