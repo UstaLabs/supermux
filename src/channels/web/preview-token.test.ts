@@ -95,3 +95,25 @@ test("the cross-site guard covers the preview cookie too", async () => {
   expect((await fetch(`${base}/p/px/page`, { headers: { cookie: `cmux_preview=${token}`, origin: "null" } })).status).toBe(403)
   expect((await fetch(`${base}/p/px/page`, { headers: { cookie: `cmux_preview=${token}`, "sec-fetch-site": "cross-site", "sec-fetch-mode": "cors" } })).status).toBe(403)
 })
+
+// Ahmet's test, 2026-11-10: on a broker with no MUX_WEB_PUBLIC_URL the cookie had no host (a 500), so the Browser tab
+// loaded /p/<port>/ without it and got "pair this device first". The cookie must be for the host the by-port links use.
+test("the cookie is for the same host as the by-port links: the relay's when the broker has no public URL", async () => {
+  const { mint, base, device } = await boot({ publicUrl: undefined, proxyLinksBaseUrl: () => "https://h-x.relay.test" })
+  const res = await mint()
+  expect(res.status).toBe(200)
+  const { cookie } = await res.json() as { cookie: Record<string, unknown> }
+  expect(cookie.url).toBe("https://h-x.relay.test/p/")
+  const byPort = await (await fetch(`${base}/proxies/by-port`, { headers: { authorization: `Bearer ${device}` } })).json() as { url: string }
+  expect(new URL(byPort.url.replace("{port}", "3077")).origin).toBe(new URL(cookie.url as string).origin)
+})
+
+test("with neither a public URL nor a relay, the cookie and the links are for the host the app reached", async () => {
+  const { mint, base, device } = await boot({ publicUrl: undefined })
+  const res = await mint()
+  expect(res.status).toBe(200)
+  const { cookie } = await res.json() as { cookie: Record<string, unknown> }
+  expect(cookie.url).toBe(`${base}/p/`)
+  const byPort = await (await fetch(`${base}/proxies/by-port`, { headers: { authorization: `Bearer ${device}` } })).json() as { url: string }
+  expect(byPort.url).toBe(`${base}/p/{port}/`)
+})

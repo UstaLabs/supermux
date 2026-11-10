@@ -154,6 +154,15 @@ function clientMessageIdOf(value: unknown): string | undefined {
 export function __resetAuthFailures(): void {}
 
 /** `scheme://host` of the request itself, from its Host header (undefined when absent). */
+/**
+ * The base previews are served on, which their links (GET /proxies/by-port) and the preview cookie both use, so a Browser
+ * tab's cookie is for the host its pages load from: the relay's (named proxies' links), else MUX_WEB_PUBLIC_URL, else the
+ * host the request reached (#105: with no public URL the cookie had no host, and /p/<port>/ asked to pair).
+ */
+function previewLinksBase(o: { proxyLinksBaseUrl?: () => string | undefined; publicUrl?: string }, req: Request): string | undefined {
+  return o.proxyLinksBaseUrl?.() ?? o.publicUrl ?? hostOrigin(req)
+}
+
 function hostOrigin(req: Request): string | undefined {
   const host = req.headers.get("host")
   if (!host) return undefined
@@ -4752,7 +4761,9 @@ export class WebChannel implements Channel {
       if (!authedViaBearer(req)) return this.json({ error: "preview tokens are for the native apps" }, 403)
       const token = this.store.mintPreview(bearerToken(req))
       if (!token) return this.json({ error: "unknown device" }, 401)
-      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) })
+      const linksBase = previewLinksBase(this.opts, req)
+      if (!linksBase) return this.json({ error: "this broker has no address its previews are served on" }, 503)
+      return this.json({ token, cookie: previewCookieSpec(token, { publicUrl: linksBase, proxyBaseDomain: this.opts.proxyBaseDomain }) })
     }
     if (method === "DELETE" && path.startsWith("/devices/")) {
       const name = decodeURIComponent(path.slice("/devices/".length))
@@ -4818,7 +4829,7 @@ export class WebChannel implements Channel {
       return this.json({
         url: buildProxyPublicUrl("{port}", {
           baseDomain: this.opts.proxyBaseDomain,
-          publicUrl: this.opts.proxyLinksBaseUrl?.() ?? this.opts.publicUrl,
+          publicUrl: previewLinksBase(this.opts, req),
         }),
       })
     }
