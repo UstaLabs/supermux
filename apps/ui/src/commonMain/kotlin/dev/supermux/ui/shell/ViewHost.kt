@@ -16,6 +16,7 @@ package dev.supermux.ui.shell
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.browser.trackClickModifiers
 import dev.supermux.fs.hostJoin
 import dev.supermux.ui.editor.repoPath
 import dev.supermux.ui.isAbsoluteEditorPath
@@ -217,29 +218,37 @@ fun ViewHost(
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatViewPane(
-                actions = actions,
-                sessionId = sessionId,
-                workdir = workdir,
-                drafts = drafts,
-                headerMode = chatHeaderMode,
-                chatState = chatState,
-                chatActions = chatActions,
-                onSelectSession = onSelectSession,
-                onOpenFile = onOpenFile,
-                onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
-                forceLinksMenu = forceLinksMenuFor == sessionId,
-                onForceLinksMenuConsumed = onForceLinksMenuConsumed,
-                externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
-                onExternalAttachConsumed = onExternalAttachConsumed,
-                externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
-                onExternalDictateConsumed = onExternalDictateConsumed,
-                // Addressed to one session so a workspace showing two chats pastes into the
-                // selected one, not both.
-                pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
-                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
-                modifier = modifier,
-            )
+            else {
+                // Its links go through the workspace (#105), with the modifiers of the press that clicked them.
+                val links = dev.supermux.ui.browser.LocalLinkOpener.current
+                val clicks = remember { dev.supermux.ui.browser.ClickModifiers() }
+                val openLink = remember(links, view.id) { links?.let { o -> { url: String -> o.open(url, view.id, clicks.modified) } } }
+                CompositionLocalProvider(dev.supermux.ui.browser.LocalOpenLink provides openLink) {
+                    ChatViewPane(
+                        actions = actions,
+                        sessionId = sessionId,
+                        workdir = workdir,
+                        drafts = drafts,
+                        headerMode = chatHeaderMode,
+                        chatState = chatState,
+                        chatActions = chatActions,
+                        onSelectSession = onSelectSession,
+                        onOpenFile = onOpenFile,
+                        onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
+                        forceLinksMenu = forceLinksMenuFor == sessionId,
+                        onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+                        externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
+                        onExternalAttachConsumed = onExternalAttachConsumed,
+                        externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
+                        onExternalDictateConsumed = onExternalDictateConsumed,
+                        // Addressed to one session so a workspace showing two chats pastes into the
+                        // selected one, not both.
+                        pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
+                        onPasteImageRequestConsumed = onPasteImageRequestConsumed,
+                        modifier = modifier.then(Modifier.trackClickModifiers(clicks)),
+                    )
+                }
+            }
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"

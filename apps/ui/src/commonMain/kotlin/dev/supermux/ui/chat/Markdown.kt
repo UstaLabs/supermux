@@ -135,7 +135,10 @@ fun mdAnnotated(
     softBreaks: Boolean = false,
 ): AnnotatedString {
     val platform = LocalPlatform.current
-    val openUrl: (String) -> Unit = onOpenUrl ?: { url -> runCatching { platform.openUrl(url) } }
+    // A chat in a workspace routes its links (#105): the Browser tab that shows the link, a new one, or, on a
+    // ⌘/Ctrl-click, the system's browser. Outside one, and on the web client, links open as they always did.
+    val routed = dev.supermux.ui.browser.LocalOpenLink.current
+    val openUrl: (String) -> Unit = onOpenUrl ?: routed ?: { url -> runCatching { platform.openUrl(url) } }
     val linkColor = MaterialTheme.colorScheme.primary
     val codeFill = mdPalette().codeFill
     val linkStyles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))

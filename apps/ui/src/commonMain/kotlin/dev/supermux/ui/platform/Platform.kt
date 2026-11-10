@@ -251,6 +251,11 @@ data class Caps(
     /** The assistant overlay (#62): the default Agent can float over other apps (Android's
      *  "Display over other apps"). Gates the Appearance switch; see [Platform.assistantOverlay]. */
     val assistantOverlay: Boolean = false,
+    /**
+     * A link from chat opens in a Browser tab of the workspace (#105). False on the web client, where a link opens a
+     * tab of the browser the app runs in (Ahmet's Q5).
+     */
+    val linksInBrowserTabs: Boolean = true,
 )
 
 /**
