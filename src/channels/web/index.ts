@@ -30,7 +30,7 @@ import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
 import { redactAppConfig } from "../../core/settings/app-config"
-import { pairJsonResponse } from "./pair-json"
+import { pairJsonResponse, pairingRefusal } from "./pair-json"
 import { parseClientInfo, featureForRequest, featureForUpgrade, featureNeedsBody, type FeatureContext, type FeatureUse } from "../../core/telemetry/sanitize"
 import { parseTelemetryBody, type TelemetryState } from "../../core/telemetry/config"
 import type { EventName, Surface } from "../../core/telemetry/events"
@@ -2983,22 +2983,26 @@ export class WebChannel implements Channel {
     // cookie; the token never reaches JS.
     if (method === "GET" && path === "/pair") {
       const t = url.searchParams.get("t") ?? ""
-      if (t && this.store.verify(t)) {
+      // A pairing link pairs once, within 10 minutes (#119).
+      const claim = this.store.claimPairing(t)
+      if (claim.ok) {
         this.store.touch(t)
         return new Response(null, {
           status: 302,
           headers: { location: "/", "set-cookie": buildAuthCookie(t, { publicUrl: this.opts.publicUrl, proxyBaseDomain: this.opts.proxyBaseDomain }) },
         })
       }
+      const message = claim.reason === "unknown" ? "This pairing link is not valid. Make a new one." : pairingRefusal(claim.reason).error
       return new Response(
-        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>Pairing link is invalid or expired. Generate a new one.</p></body>`,
+        `<!DOCTYPE html><meta charset="utf-8"><title>Pairing failed</title><body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0"><p>${message}</p></body>`,
         { status: 401, headers: { "content-type": "text/html" } },
       )
     }
     if (method === "GET" && path === "/pair.json") {
       const t = url.searchParams.get("t") ?? ""
-      this.store.touch(t)
-      return pairJsonResponse(t, this.store)
+      const res = pairJsonResponse(t, this.store)
+      if (res.ok) this.store.touch(t)
+      return res
     }
     // Logout: clear the cookie (Origin-checked as a mutating route above).
     if (method === "POST" && path === "/logout") {
@@ -4748,7 +4752,8 @@ export class WebChannel implements Channel {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const requested = ((body.name as string | undefined) ?? "").trim()
       if (!requested) return this.json({ error: "name required" }, 400)
-      const { token, name: finalName } = this.store.mint(requested)
+      // A pending device: its link pairs once, within 10 minutes; this device's next code revokes it (#119).
+      const { token, name: finalName } = this.store.mintPairing(requested, { by: auth.device.name })
       // A desktop host normally listens on localhost and publishes through the built-in
       // relay. Pairing links leave the host, so prefer the relay's LIVE URL; using the
       // configured localhost publicUrl here produces a perfectly valid but unusable QR.

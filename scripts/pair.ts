@@ -28,7 +28,7 @@ if (!publicUrl) {
 }
 
 const store = new DeviceStore(DEVICES_FILE)
-const { token, name: finalName } = store.mint(name)
+const { token, name: finalName } = store.mintPairing(name)
 
 const url = `${publicUrl.replace(/\/$/, "")}/pair?t=${token}`
 

@@ -84,7 +84,8 @@ export function mintPairLink(
   publicUrl: string,
 ): { url: string; token: string; name: string } {
   const store = new DeviceStore(join(stateDir, "devices.json"))
-  const { token, name: finalName } = store.mint(name)
+  // The link pairs once, within 10 minutes (#119).
+  const { token, name: finalName } = store.mintPairing(name)
   const url = `${publicUrl.replace(/\/$/, "")}/pair?t=${token}`
   return { url, token, name: finalName }
 }

@@ -16,7 +16,7 @@
  */
 
 import type { Browser, Page } from "playwright"
-import { launchBrowser, uiFixture } from "./fixture-env"
+import { launchBrowser, uiFixture, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap, waitForTextWithin } from "./compose-dom"
 
 /** Make the app see (or not see) a broker that takes streamed dictation. */
@@ -110,7 +110,7 @@ export async function main(): Promise<void> {
       })
     }
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "domcontentloaded" })
+    await page.goto((await freshPairLink(fixture)).url, { waitUntil: "domcontentloaded" })
     await openSeededSession(page, fixture.sessionId)
 
     await tap(byTag(page, "composer-mic"))

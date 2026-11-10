@@ -252,7 +252,7 @@ pair() {
     MUX_STATE_DIR="$dir/state" "$BUN" -e '
       import { DeviceStore } from "./src/channels/web/device-store.ts";
       const s = new DeviceStore(process.env.MUX_STATE_DIR + "/devices.json");
-      const r = s.mint(process.argv[1] || "feel-test");
+      const r = s.mintPairing(process.argv[1] || "feel-test");
       console.log(r.token);
     ' -- "$name" 2>/dev/null
   )"
@@ -262,7 +262,7 @@ pair() {
       cd "$WORKTREE" && MUX_STATE_DIR="$dir/state" "$BUN" -e '
         import { DeviceStore } from "./src/channels/web/device-store.ts";
         const s = new DeviceStore(`${process.env.MUX_STATE_DIR}/devices.json`);
-        const r = s.mint(Bun.argv[2] || "feel-test");
+        const r = s.mintPairing(Bun.argv[2] || "feel-test");
         console.log(r.token);
       ' -- "$name"
     )"

@@ -9,7 +9,17 @@ export interface DeviceRecord {
   last_seen_at: string | null
   /** The device's preview-only token (#105): it opens port previews and nothing else. Gone with the device. */
   preview_hash?: string
+  /**
+   * Set while the device's pairing link is unclaimed (#119): the link pairs once, by [expires_at]. [by] is the
+   * device that made the code: its next code revokes this one. Gone once claimed; an expired one is revoked.
+   */
+  pairing?: { expires_at: string; by?: string }
 }
+
+/** How long a pairing link pairs (#119), on the broker, whatever the app does. */
+export const PAIRING_TTL_MS = 10 * 60_000
+
+export type PairingClaim = { ok: true; name: string } | { ok: false; reason: "expired" | "used" | "unknown" }
 
 function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex")
@@ -19,7 +29,11 @@ function sha256(s: string): string {
 const TOUCH_INTERVAL_MS = 60_000
 
 export class DeviceStore {
-  constructor(private readonly path: string) {}
+  private readonly clock: () => number
+
+  constructor(private readonly path: string, opts: { clock?: () => number } = {}) {
+    this.clock = opts.clock ?? Date.now
+  }
 
   private revokeListeners: Array<(name: string) => void> = []
 
@@ -84,7 +98,9 @@ export class DeviceStore {
     this.setCache(this.statKey(), records.map((r) => ({ ...r })))
   }
 
+  /** The devices; an unclaimed pairing link past its deadline is revoked on the way (#119). */
   list(): DeviceRecord[] {
+    for (const r of this.cached()) if (this.pairingExpired(r)) this.revoke(r.name)
     return this.read()
   }
 
@@ -128,11 +144,50 @@ export class DeviceStore {
     return r ? { ...r } : undefined
   }
 
+  /**
+   * A device for a pairing link (#119): pending until the link's first /pair or /pair.json claims it, revoked when
+   * nobody has within [PAIRING_TTL_MS]. A code made [by] a device revokes that device's earlier unclaimed codes.
+   */
+  mintPairing(name: string, opts: { by?: string } = {}): { token: string; name: string } {
+    if (opts.by) {
+      for (const r of this.cached()) if (r.pairing && r.pairing.by === opts.by) this.revoke(r.name)
+    }
+    const minted = this.mint(name)
+    const records = this.read()
+    const record = records.find((r) => r.name === minted.name)!
+    record.pairing = { expires_at: new Date(this.clock() + PAIRING_TTL_MS).toISOString(), ...(opts.by ? { by: opts.by } : {}) }
+    this.write(records)
+    return minted
+  }
+
+  /** The pairing link's one use (#119): claims a pending device, or says why the link no longer pairs. */
+  claimPairing(token: string): PairingClaim {
+    const hash = token ? sha256(token) : ""
+    const records = this.read()
+    const record = records.find((r) => r.token_hash === hash)
+    if (!record) return { ok: false, reason: "unknown" }
+    if (!record.pairing) return { ok: false, reason: "used" }
+    if (this.pairingExpired(record)) {
+      this.revoke(record.name)
+      return { ok: false, reason: "expired" }
+    }
+    delete record.pairing
+    this.write(records)
+    return { ok: true, name: record.name }
+  }
+
+  private pairingExpired(r: DeviceRecord): boolean {
+    return !!r.pairing && this.clock() > Date.parse(r.pairing.expires_at)
+  }
+
   verify(token: string): DeviceRecord | undefined {
     if (!token) return undefined
     this.cached()
     const r = this.cache!.byHash.get(sha256(token))
-    return r ? { ...r } : undefined
+    if (!r) return undefined
+    // An unclaimed pairing link past its deadline is no device (#119); the list and its claim remove it.
+    if (this.pairingExpired(r)) return undefined
+    return { ...r }
   }
 
   touch(token: string): void {
@@ -140,10 +195,14 @@ export class DeviceStore {
     const now = Date.now()
     const i = this.cached().findIndex((r) => r.token_hash === presentedHash)
     if (i < 0) return
-    const last = this.cached()[i]!.last_seen_at
-    if (last && now - Date.parse(last) < TOUCH_INTERVAL_MS) return
+    const current = this.cached()[i]!
+    const last = current.last_seen_at
+    // A pending device that signs in has had its link's one use (#119), unless the link expired first.
+    const claims = !!current.pairing && !this.pairingExpired(current)
+    if (!claims && last && now - Date.parse(last) < TOUCH_INTERVAL_MS) return
     const records = this.read()
     records[i]!.last_seen_at = new Date(now).toISOString()
+    if (claims) delete records[i]!.pairing
     this.write(records)
   }
 

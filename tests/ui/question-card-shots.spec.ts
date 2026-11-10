@@ -10,7 +10,7 @@
  */
 import { mkdirSync } from "node:fs"
 import type { Browser, Page } from "playwright"
-import { launchBrowser, uiFixture, injectServerFrame, lastClientFrames } from "./fixture-env"
+import { launchBrowser, uiFixture, injectServerFrame, lastClientFrames, freshPairLink } from "./fixture-env"
 import { byTag, openSeededSession, tap } from "./compose-dom"
 
 const LABEL = process.env.QUESTION_SHOTS_LABEL || "after"
@@ -293,7 +293,7 @@ export async function main(): Promise<void> {
     // Pair once, then reuse the cookie jar for every width/theme context.
     const pairing = await browser.newContext()
     const pairPage = await pairing.newPage()
-    await pairPage.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "domcontentloaded" })
+    await pairPage.goto((await freshPairLink(fixture)).url, { waitUntil: "domcontentloaded" })
     await openSeededSession(pairPage, fixture.sessionId)
     const storage = await pairing.storageState()
     await pairing.close()
