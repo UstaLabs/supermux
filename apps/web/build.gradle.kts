@@ -255,7 +255,9 @@ val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 // after the Agents / inbox / council / streaming-voice work (~535 KiB gzipped since 2026-09-28,
 // nearly all of it app wasm). The ceiling moved to 9 MiB so the release could ship; winning back
 // the app wasm is still the real fix and is now owed, not optional.
-val maxGzipBytes = 9L * 1024 * 1024
+// AND 2026-11-10 (#105, Tally): 9229 KiB, 13 KiB over 9 MiB. The Browser tab: webview-compose's iframe engine, which
+// the web client needs because its Browser tabs are synced and shown. Raised to 9344 KiB.
+val maxGzipBytes = 9344L * 1024
 
 // THE NATIVE EDITOR'S SYNTAX MODULE IS OUTSIDE THAT CEILING, with a ceiling of its own (M5).
 // `supermux-syntax.wasm` is 7.45 MB raw / 2.69 MB gzipped (editor-syntax/native/README.md): counted
