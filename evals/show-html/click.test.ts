@@ -1,11 +1,11 @@
 // Click-to-send on the web, in real Chrome: a send goes through only from a real click or tap in that card, once.
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import type { Browser } from "playwright"
-import { findBrowser, launchBrowser } from "./check"
-import { clickRoundTrip, deliveries, forged, openCards } from "./click"
+import { findBrowser } from "./check"
+import { clickRoundTrip, deliveries, forged, launchPlaywright, openCards } from "./click"
 
 let browser: Browser | undefined
-beforeAll(async () => { browser = await launchBrowser() }, 30_000)
+beforeAll(async () => { browser = await launchPlaywright() }, 30_000)
 afterAll(async () => { await browser?.close() })
 // Real Chrome, on demand: SHOW_HTML_EVALS=1 bun test evals/show-html
 const run = findBrowser() && process.env.SHOW_HTML_EVALS === "1" ? test : test.skip

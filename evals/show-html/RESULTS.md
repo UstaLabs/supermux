@@ -48,3 +48,15 @@ Runs where the model never answered (a usage limit, a stalled provider) are kept
 
 ## How to reproduce
 Use `evals/show-html/README.md`. The raw results are in `~/.cache/x/show-html-evals/{stage1-haiku,haiku2,sonnet3,stage1-opencode}/results.jsonl` on the dev box.
+
+## Follow-up (2026-11-10): the shipped text, arm C3
+
+The product's text (`src/core/show-html/description.ts`) is wording 1 and variant C's check line, plus one sentence for
+pasted numbers and comparisons of options. It was measured as arm C3 on Haiku, 24 prompts × 3, against C1:
+
+- **Card when wanted:** 25/45, the same as C1. The sentence did not reach its targets: compare, the pasted latency and CI
+  tables, sales by region and the overflow repair stay at 0/3 each, and big data went from 0/3 to 1/3.
+- **Click sends:** 6/6 (C1: 3/6). Backoff: 3/3 (1/3). Never a card when not wanted: 18/18.
+- **Decision (Tally):** ship C3 as the text and stop tuning. Haiku answers a pasted table with prose whatever one
+  sentence says. Sonnet makes the card 67–69% of the time. A rule strong enough to force it would also force cards where
+  prose is right.

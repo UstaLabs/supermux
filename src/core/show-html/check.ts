@@ -1,13 +1,14 @@
 // The render check for #104's show_html: it loads an agent's page the way the web app will (the strictest of the six
 // platforms: a sandboxed blob: frame, an opaque origin), at phone and desktop width, and reports what stops a card.
 // The spec (docs/superpowers/specs/2026-11-08-show-html-design.md, "The check") is the contract. The evals use this
-// same module (evals/show-html/check.ts). Playwright is imported lazily, so a host without it answers "not checked".
-import type { Browser, BrowserContext, Frame, Page } from "playwright"
+// same module (evals/show-html/check.ts). The browser is driven over the DevTools protocol directly (./cdp.ts): no
+// automation library ships with the broker.
 import { inflateSync } from "node:zlib"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { pagePrelude } from "./page-api"
 import { startProxy } from "./check-proxy"
+import { CdpClient, CdpSession, launchChrome } from "./cdp"
 
 // The functions handed to page.evaluate run in the browser; the broker's tsconfig has no DOM lib, so name what they use.
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -68,18 +69,25 @@ export function findBrowser(): string | undefined {
   return CHROMES.find((p) => existsSync(p))
 }
 
+/** A launched Chrome and its DevTools connection. One per broker (checkPage) or per harness run. */
+export interface CheckBrowser {
+  client: CdpClient
+  close(): Promise<void>
+  /** Resolves when the browser is gone, however it went. */
+  disconnected: Promise<void>
+}
+
 /** Chrome set up for one SOCKS5 proxy per check (startProxy), which refuses private addresses after resolving. */
-export async function launchBrowser(): Promise<Browser | undefined> {
-  const executablePath = findBrowser()
-  if (!executablePath) return undefined
-  const { chromium } = await import("playwright")
-  return chromium.launch({
-    executablePath,
-    headless: true,
+export async function launchBrowser(): Promise<CheckBrowser | undefined> {
+  const executable = findBrowser()
+  if (!executable) return undefined
+  const chrome = await launchChrome(executable, {
     env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: "disabled:" },
-    proxy: { server: "per-context" },
-    args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
+    args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+      "--hide-scrollbars", "--mute-audio", "--force-color-profile=srgb", "--disable-extensions", "--disable-sync",
+      "--disable-background-networking", "--disable-component-update", "--disable-default-apps"],
   })
+  return { client: chrome.client, close: () => chrome.close(), disconnected: chrome.client.closed }
 }
 
 /** The card as the app frames it: the page API first, then the agent's document or fragment. */
@@ -116,33 +124,56 @@ card.src = URL.createObjectURL(new Blob([${JSON.stringify(card).replace(/</g, "\
 </script></body></html>`
 }
 
-async function cardFrame(page: Page): Promise<Frame> {
-  const deadline = Date.now() + 3000
+// ---- Talking to the page: the page's target, and the card's, which Chrome puts in its own process (a sandboxed frame).
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** Run a function in a target's page (the card's frame when `contextId` names it) and return its value. */
+async function evalIn<T>(s: CdpSession, fn: (...a: any[]) => any, args: unknown[] = [], contextId?: number): Promise<T> {
+  const r = await s.send("Runtime.evaluate", {
+    expression: `(${fn.toString()})(...${JSON.stringify(args)})`, awaitPromise: true, returnByValue: true,
+    ...(contextId ? { contextId } : {}),
+  })
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? "evaluation failed")
+  return r.result.value as T
+}
+
+/** Poll until `cond` holds; false at the deadline. */
+async function until(cond: () => boolean | Promise<boolean>, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
   for (;;) {
-    const f = page.frames().find((fr) => fr !== page.mainFrame())
-    if (f && f.url().startsWith("blob:")) return f
-    if (Date.now() > deadline) throw new Error("the card frame never loaded")
-    await page.waitForTimeout(25)
+    if (await Promise.resolve().then(cond).catch(() => false)) return true
+    if (Date.now() > deadline) return false
+    await sleep(25)
   }
 }
 
-async function setFrameHeight(page: Page, px: number): Promise<void> {
-  await page.evaluate((h) => { document.getElementById("card")!.style.height = `${h}px` }, px)
-  await page.waitForTimeout(60)
+/** The card frame: its own session when Chrome isolates it, else an execution context in the page's. */
+interface Card { session: CdpSession; contextId?: number }
+
+interface Tab {
+  page: CdpSession
+  card(): Card | undefined
+  inCard<T>(fn: (...a: any[]) => any, ...args: unknown[]): Promise<T>
+  /** Requests in flight, across the page and its frames. */
+  inflight: Set<string>
+}
+
+async function setFrameHeight(tab: Tab, px: number): Promise<void> {
+  await evalIn(tab.page, (h) => { document.getElementById("card")!.style.height = `${h}px` }, [px])
+  await sleep(60)
 }
 
 /** The root element's layout height: the content's, unless the page ties it to the frame (vh, height:100%). */
-async function rootHeight(frame: Frame): Promise<number> {
-  return frame.evaluate(() => Math.ceil(document.documentElement.getBoundingClientRect().height))
+const rootHeight = (tab: Tab) => tab.inCard<number>(() => Math.ceil(document.documentElement.getBoundingClientRect().height))
+
+async function contentHeight(tab: Tab): Promise<number> {
+  await setFrameHeight(tab, 80)
+  return Math.max(await rootHeight(tab), await tab.inCard<number>(() => document.body?.scrollHeight ?? 0))
 }
 
-async function contentHeight(page: Page, frame: Frame): Promise<number> {
-  await setFrameHeight(page, 80)
-  return Math.max(await rootHeight(frame), await frame.evaluate(() => document.body?.scrollHeight ?? 0))
-}
-
-async function overflow(frame: Frame, width: number): Promise<{ width: number; widest?: string } | undefined> {
-  return frame.evaluate((w) => {
+function overflow(tab: Tab, width: number): Promise<{ width: number; widest?: string } | undefined> {
+  return tab.inCard((w) => {
     const sw = document.documentElement.scrollWidth
     if (sw <= w + 1) return undefined
     let widest: Element | undefined
@@ -158,6 +189,24 @@ async function overflow(frame: Frame, width: number): Promise<{ width: number; w
     return { width: sw, ...(name ? { widest: name } : {}) }
   }, width)
 }
+
+/** The card's pixels, as Chrome paints them (the frame may be taller than the window: captured beyond it). */
+async function screenshotCard(page: CdpSession): Promise<Buffer> {
+  const r = await evalIn<{ x: number; y: number; width: number; height: number }>(page, () => {
+    const b = document.getElementById("card")!.getBoundingClientRect()
+    return { x: b.x + window.scrollX, y: b.y + window.scrollY, width: b.width, height: b.height }
+  })
+  await evalIn(page, () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+  const { data } = await page.send("Page.captureScreenshot", { format: "png", clip: { ...r, scale: 1 }, captureBeyondViewport: true })
+  return Buffer.from(data, "base64")
+}
+
+const viewport = (page: CdpSession, v: { width: number; height: number }) =>
+  page.send("Emulation.setDeviceMetricsOverride", { ...v, deviceScaleFactor: 1, mobile: false })
+
+const colorAndMotion = (s: CdpSession) => s.send("Emulation.setEmulatedMedia", {
+  features: [{ name: "prefers-color-scheme", value: "dark" }, { name: "prefers-reduced-motion", value: "reduce" }],
+})
 
 /** Nothing painted: all but a few pixels are one colour (theme mismatches, an unrendered app root, …). */
 export function isBlank(png: Buffer): boolean {
@@ -192,17 +241,14 @@ export function createLimiter(max: number): <T>(fn: () => Promise<T>) => Promise
 const slot = createLimiter(MAX_CHECKS)
 
 /** The harness's entry: its own browser, screenshots, an extra blocked-host list, and the full result. */
-export function checkWithBrowser(html: string, browser: Browser | undefined,
+export function checkWithBrowser(html: string, browser: CheckBrowser | undefined,
   o: { screenshots?: boolean; blockedHosts?: string[]; capMs?: number } = {}): Promise<CheckResult> {
   const capMs = o.capMs ?? defaultCapMs()
   const empty = { problems: [], notes: [], heights: { phone: 0, desktop: 0 }, unpromptedSends: [] }
   if (!browser) return Promise.resolve({ checked: false, reason: "no Chrome, Edge or Chromium on this machine", ...empty })
   return slot(async () => {
     const proxy = await startProxy(o.blockedHosts)
-    const context = await browser.newContext({
-      viewport: PHONE, colorScheme: "dark", reducedMotion: "reduce", deviceScaleFactor: 1,
-      proxy: { server: `socks5://127.0.0.1:${proxy.port}`, bypass: "<-loopback>" },
-    })
+    let contextId: string | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     // A page that hasn't rendered by the cap is a problem, not a pass: a stuck script would otherwise be shown unchecked.
     const capped = new Promise<CheckResult>((resolve) => {
@@ -210,78 +256,159 @@ export function checkWithBrowser(html: string, browser: Browser | undefined,
         problems: [{ kind: "script-error", message: `the page didn't finish rendering within ${capMs / 1000} s (a script may be stuck)` }] }), capMs)
     })
     try {
-      return await Promise.race([measure(context, html, proxy.refused, o), capped])
+      // The proxy is per context: every connection of this check's page goes through it, loopback included.
+      const created = await browser.client.send<{ browserContextId: string }>("Target.createBrowserContext",
+        { proxyServer: `socks5://127.0.0.1:${proxy.port}`, proxyBypassList: "<-loopback>" })
+      contextId = created.browserContextId
+      return await Promise.race([measure(browser.client, contextId, html, proxy.refused, o), capped])
+    } catch (e) {
+      return { checked: false, reason: `the check failed: ${(e as Error).message.split("\n")[0]}`, ...empty }
     } finally {
       clearTimeout(timer)
-      await context.close().catch(() => {})
+      if (contextId) await browser.client.send("Target.disposeBrowserContext", { browserContextId: contextId }).catch(() => {})
       proxy.stop()
     }
   })
 }
 
-async function measure(context: BrowserContext, html: string, refused: string[], o: { screenshots?: boolean }): Promise<CheckResult> {
+async function measure(client: CdpClient, browserContextId: string, html: string, refused: string[], o: { screenshots?: boolean }): Promise<CheckResult> {
   const problems: Problem[] = []
   const notes: string[] = []
   const nonce = randomUUID()
   try {
-    await context.route(HOST, (route) => route.fulfill({ contentType: "text/html", body: hostPage(cardDocument(html, "dark", nonce), nonce) }))
-    const page = await context.newPage()
-    page.on("pageerror", (e) => problems.push({ kind: "script-error", message: e.message.split("\n")[0]!.slice(0, 300) }))
-    page.on("console", (m) => { if (m.type() === "error" && notes.length < 5 && !m.text().startsWith("Failed to load resource")) notes.push(`console.error: ${m.text().slice(0, 200)}`) })
-    page.on("requestfailed", (r) => {
-      const url = r.url()
-      if (url.startsWith("blob:") || url.startsWith("data:")) return
-      if (r.resourceType() === "script") problems.push({ kind: "script-error", message: `a script failed to load: ${url.slice(0, 200)}` })
-      else notes.push(`failed to load: ${url.slice(0, 200)}`)
+    const { targetId } = await client.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", browserContextId })
+    const page = await client.attach(targetId)
+    const inflight = new Set<string>()
+    let card: Card | undefined
+    const contexts = new Map<string, number>()
+
+    // What a session reports: script errors, console errors, failed loads. Frames Chrome isolates attach as child sessions.
+    const watch = (s: CdpSession) => {
+      const urls = new Map<string, string>()
+      s.on("Runtime.exceptionThrown", (p) => problems.push({ kind: "script-error", message: exceptionMessage(p.exceptionDetails) }))
+      s.on("Runtime.consoleAPICalled", (p) => {
+        if (p.type !== "error" || notes.length >= 5) return
+        const text = (p.args ?? []).map((a: any) => a.value ?? a.description ?? "").join(" ")
+        if (!text.startsWith("Failed to load resource")) notes.push(`console.error: ${text.slice(0, 200)}`)
+      })
+      s.on("Network.requestWillBeSent", (p) => { urls.set(p.requestId, p.request.url); inflight.add(`${s.id}:${p.requestId}`) })
+      s.on("Network.loadingFinished", (p) => { inflight.delete(`${s.id}:${p.requestId}`) })
+      s.on("Network.loadingFailed", (p) => {
+        inflight.delete(`${s.id}:${p.requestId}`)
+        const url = urls.get(p.requestId) ?? ""
+        if (!url || url.startsWith("blob:") || url.startsWith("data:")) return
+        if (p.type === "Script") problems.push({ kind: "script-error", message: `a script failed to load: ${url.slice(0, 200)}` })
+        else notes.push(`failed to load: ${url.slice(0, 200)}`)
+      })
+      s.on("Network.responseReceived", (p) => {
+        const { status, url } = p.response
+        if (status < 400 || url === HOST) return
+        if (p.type === "Script") problems.push({ kind: "script-error", message: `a script failed to load (${status}): ${String(url).slice(0, 200)}` })
+        else notes.push(`failed to load (${status}): ${String(url).slice(0, 200)}`)
+      })
+    }
+    const prepare = async (s: CdpSession) => {
+      watch(s)
+      await Promise.all([s.send("Runtime.enable"), s.send("Network.enable"), colorAndMotion(s)])
+      await s.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
+    }
+    const follow = (parent: CdpSession, top: boolean) => parent.on("Target.attachedToTarget", (p) => {
+      const child = new CdpSession(client, p.sessionId)
+      follow(child, false)
+      void (async () => {
+        try {
+          await prepare(child)
+          // The first frame the page itself embeds is the card.
+          if (top && p.targetInfo.type === "iframe" && !card) card = { session: child }
+        } finally {
+          if (p.waitingForDebugger) await child.send("Runtime.runIfWaitingForDebugger").catch(() => {})
+        }
+      })()
     })
-    page.on("response", (r) => {
-      if (r.status() < 400 || r.url() === HOST) return
-      if (r.request().resourceType() === "script") problems.push({ kind: "script-error", message: `a script failed to load (${r.status()}): ${r.url().slice(0, 200)}` })
-      else notes.push(`failed to load (${r.status()}): ${r.url().slice(0, 200)}`)
+    follow(page, true)
+    page.on("Runtime.executionContextCreated", (p) => {
+      const c = p.context
+      if (c.auxData?.isDefault && c.auxData.frameId) contexts.set(c.auxData.frameId, c.id)
     })
+    page.on("Runtime.executionContextsCleared", () => contexts.clear())
+    page.on("Fetch.requestPaused", (p) => {
+      const body = Buffer.from(hostPage(cardDocument(html, "dark", nonce), nonce)).toString("base64")
+      void page.send("Fetch.fulfillRequest", { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: "Content-Type", value: "text/html" }], body }).catch(() => {})
+    })
+    await Promise.all([
+      prepare(page), page.send("Page.enable"), page.send("Emulation.setFocusEmulationEnabled", { enabled: true }),
+      viewport(page, PHONE), page.send("Fetch.enable", { patterns: [{ urlPattern: HOST, requestStage: "Request" }] }),
+    ])
+
+    const tab: Tab = {
+      page, inflight,
+      card: () => card,
+      inCard: (fn, ...args) => {
+        if (!card) throw new Error("the card frame never loaded")
+        return evalIn(card.session, fn, args, card.contextId)
+      },
+    }
 
     const started = Date.now()
-    await page.goto(HOST, { waitUntil: "domcontentloaded", timeout: SETTLE_CAP_MS })
-    const frame = await cardFrame(page)
-    await frame.waitForLoadState("load", { timeout: SETTLE_CAP_MS }).catch(() => notes.push("the page was still loading after 4 s"))
+    const nav = await page.send("Page.navigate", { url: HOST })
+    if (nav.errorText) throw new Error(`could not open the check page: ${nav.errorText}`)
+    await until(() => evalIn<boolean>(page, () => document.readyState !== "loading"), SETTLE_CAP_MS)
+    // The card is a child session; without site isolation it is a frame of this page, found by its blob: URL.
+    const found = await until(async () => {
+      if (card) return true
+      const { frameTree } = await page.send("Page.getFrameTree")
+      const f = (frameTree.childFrames ?? []).map((c: any) => c.frame).find((fr: any) => String(fr.url).startsWith("blob:"))
+      const contextId = f && contexts.get(f.id)
+      if (contextId) card = { session: page, contextId }
+      return !!card
+    }, 3000)
+    if (!found) throw new Error("the card frame never loaded")
+    const loaded = await until(async () => (await tab.inCard<string>(() => document.readyState)) === "complete", Math.max(0, SETTLE_CAP_MS - (Date.now() - started)))
+    if (!loaded) notes.push("the page was still loading after 4 s")
     const left = SETTLE_CAP_MS - (Date.now() - started)
-    if (left > 0) await page.waitForLoadState("networkidle", { timeout: Math.min(left, SETTLE_QUIET_MS * 2) }).catch(() => {})
-    await frame.evaluate(() => Promise.race([
+    if (left > 0) {
+      // Network idle: nothing in flight for 500 ms, waiting at most 2 s.
+      let quietSince = Date.now()
+      await until(() => { if (inflight.size) quietSince = Date.now(); return Date.now() - quietSince >= 500 }, Math.min(left, SETTLE_QUIET_MS * 2))
+    }
+    await tab.inCard(() => Promise.race([
       document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))),
       new Promise((r) => setTimeout(r, 500)),
     ])).catch(() => {})
 
     // A page that grows with its frame (vh units, height:100%, a 100vh child): the card would grow to its cap.
-    const bottom = () => frame.evaluate(() => Math.max(document.documentElement.getBoundingClientRect().height,
+    const bottom = () => tab.inCard<number>(() => Math.max(document.documentElement.getBoundingClientRect().height,
       ...(Array.from(document.body?.querySelectorAll("*") ?? []) as Element[]).map((e) => e.getBoundingClientRect().bottom)))
-    await setFrameHeight(page, 600)
+    await setFrameHeight(tab, 600)
     const at600 = await bottom()
-    await setFrameHeight(page, 1200)
+    await setFrameHeight(tab, 1200)
     const at1200 = await bottom()
     const endless = at600 >= 480 && at1200 >= at600 + 400
     if (endless) notes.push("the page's height follows its frame (vh units or height:100%): the card stops it at its cap")
 
-    const phoneHeight = endless ? PHONE.height : await contentHeight(page, frame)
-    const over = await overflow(frame, PHONE.width)
+    const phoneHeight = endless ? PHONE.height : await contentHeight(tab)
+    const over = await overflow(tab, PHONE.width)
     if (over) problems.push({ kind: "overflow", ...over })
-    await setFrameHeight(page, Math.max(80, Math.min(phoneHeight, 1600)))
-    const phoneShot = await page.locator("#card").screenshot()
+    await setFrameHeight(tab, Math.max(80, Math.min(phoneHeight, 1600)))
+    let phoneShot = await screenshotCard(page)
+    // A fresh browser's first frame can lag the layout: look again before calling a page blank.
+    if (isBlank(phoneShot)) { await sleep(250); phoneShot = await screenshotCard(page) }
     if (isBlank(phoneShot)) problems.push({ kind: "blank" })
-    const background = await frame.evaluate(() => {
+    const background = await tab.inCard<string | null>(() => {
       const paint = (el: Element | null) => (el ? getComputedStyle(el).backgroundColor : "")
       const clear = (c: string) => !c || c === "transparent" || /^rgba\(.*,\s*0\)$/.test(c)
       const b = [paint(document.documentElement), paint(document.body)].find((c) => !clear(c))
       return b ?? null
     })
 
-    await page.setViewportSize(DESKTOP)
-    await page.waitForTimeout(60)
-    const desktopHeight = endless ? DESKTOP.height : await contentHeight(page, frame)
-    await setFrameHeight(page, Math.max(80, Math.min(desktopHeight, 1600)))
-    const desktopShot = o.screenshots ? await page.locator("#card").screenshot() : undefined
+    await viewport(page, DESKTOP)
+    await sleep(60)
+    const desktopHeight = endless ? DESKTOP.height : await contentHeight(tab)
+    await setFrameHeight(tab, Math.max(80, Math.min(desktopHeight, 1600)))
+    const desktopShot = o.screenshots ? await screenshotCard(page) : undefined
 
     for (const r of refused) notes.push(`refused a local address: ${r}`)
-    const unpromptedSends = await page.evaluate(() => (window as unknown as { __sends: string[] }).__sends)
+    const unpromptedSends = await evalIn<string[]>(page, () => window.__sends)
     return {
       checked: true,
       problems: dedupe(problems),
@@ -295,6 +422,13 @@ async function measure(context: BrowserContext, html: string, refused: string[],
   } catch (e) {
     return { checked: false, reason: `the check failed: ${(e as Error).message.split("\n")[0]}`, problems, notes, heights: { phone: 0, desktop: 0 }, unpromptedSends: [] }
   }
+}
+
+/** The first line of an uncaught error, without its class name ("x is not defined", as the page's own message reads). */
+function exceptionMessage(d: any): string {
+  const ex = d?.exception
+  const raw = String(ex?.description ?? (ex?.value !== undefined ? ex.value : d?.text) ?? "uncaught error").split("\n")[0]!
+  return raw.replace(/^[A-Za-z]*Error: /, "").slice(0, 300)
 }
 
 function dedupe(problems: Problem[]): Problem[] {
@@ -377,14 +511,14 @@ export interface PageCheck {
 
 export const NO_BROWSER_NOTE = "not checked: no Chrome, Edge or Chromium on the host"
 
-let shared: Promise<Browser | undefined> | undefined
+let shared: Promise<CheckBrowser | undefined> | undefined
 let idleTimer: ReturnType<typeof setTimeout> | undefined
 let active = 0
 
-function sharedBrowser(): Promise<Browser | undefined> {
+function sharedBrowser(): Promise<CheckBrowser | undefined> {
   if (!shared) {
-    const p: Promise<Browser | undefined> = launchBrowser().then((b) => {
-      b?.on("disconnected", () => { if (shared === p) shared = undefined })
+    const p: Promise<CheckBrowser | undefined> = launchBrowser().then((b) => {
+      void b?.disconnected.then(() => { if (shared === p) shared = undefined })
       return b
     })
     shared = p

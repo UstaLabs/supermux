@@ -9,8 +9,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 import { createHash } from "node:crypto"
-import type { Browser } from "playwright"
-import { checkPage, describeProblem, launchBrowser, PHONE, type CheckResult, type Problem } from "./check"
+import { checkPage, describeProblem, launchBrowser, PHONE, type CheckBrowser, type CheckResult, type Problem } from "./check"
 import { toolsFor, type Arm } from "./arms"
 
 const MAX_BYTES = 2 * 1024 * 1024
@@ -19,7 +18,7 @@ const dir = resolve(process.env.EVAL_DIR ?? ".")
 const forced = process.env.EVAL_FORCE_PROBLEM as Problem["kind"] | undefined
 let forcedUsed = false
 let seq = 0
-let browser: Promise<Browser | undefined> | undefined
+let browser: Promise<CheckBrowser | undefined> | undefined
 
 mkdirSync(join(dir, "pages"), { recursive: true })
 

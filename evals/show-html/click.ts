@@ -3,7 +3,15 @@
 // activated the page and the card was the last thing the user touched. Real clicks come through the DevTools protocol.
 import type { Browser, Page } from "playwright"
 import { randomUUID } from "node:crypto"
-import { cardDocument } from "./check"
+import { cardDocument, findBrowser } from "./check"
+
+// The click test drives real input through Playwright: evals only, never shipped (nothing under src/ imports it).
+export async function launchPlaywright(): Promise<Browser | undefined> {
+  const executablePath = findBrowser()
+  if (!executablePath) return undefined
+  const { chromium } = await import("playwright")
+  return chromium.launch({ executablePath, headless: true, env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: "disabled:" } })
+}
 
 export interface Delivery { card: string; text: string; ok: boolean; reason?: string }
 

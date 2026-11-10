@@ -8,8 +8,7 @@ import { freemem, loadavg } from "node:os"
 import { ARMS, instructionsFor, type Arm } from "./arms"
 import { PROMPTS, type EvalPrompt } from "./prompts"
 import { invocation, type AgentKind } from "./agents"
-import { launchBrowser } from "./check"
-import { clickRoundTrip } from "./click"
+import { clickRoundTrip, launchPlaywright } from "./click"
 import { gotNoAnswer, score, type Call, type Result } from "./score"
 
 const RUN_TIMEOUT_MS = 4 * 60_000
@@ -58,7 +57,7 @@ async function runOne(o: { runId: string; agent: AgentKind; model: string; arm: 
   const shownPage = lastShown ? readFileSync(join(dir, lastShown.page!), "utf8") : undefined
   let sendWorks: boolean | undefined
   if (o.prompt.send && shownPage) {
-    const browser = await launchBrowser()
+    const browser = await launchPlaywright()
     if (browser) {
       try { sendWorks = (await clickRoundTrip(browser, shownPage)).sent.length > 0 } finally { await browser.close() }
     }

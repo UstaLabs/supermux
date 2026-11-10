@@ -1,9 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import type { Browser } from "playwright"
-import { cardDocument, checkPage, findBrowser, launchBrowser } from "./check"
+import { cardDocument, checkPage, findBrowser, launchBrowser, type CheckBrowser } from "./check"
 import { isLocalName, isPrivateAddress } from "./proxy"
 
-let browser: Browser | undefined
+let browser: CheckBrowser | undefined
 beforeAll(async () => { browser = await launchBrowser() }, 30_000)
 afterAll(async () => { await browser?.close() })
 // Real Chrome, on demand: SHOW_HTML_EVALS=1 bun test evals/show-html
