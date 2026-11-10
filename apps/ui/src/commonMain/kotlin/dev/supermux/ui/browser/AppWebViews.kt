@@ -10,8 +10,18 @@ import dev.supermux.webview.runtime.WebViewRuntime
  * that never opens one loads no web engine. Tests provide their own, on the fake engine, through [LocalAppWebViews].
  */
 class AppWebViews(val runtime: WebViewRuntime) {
-    /** The hosts (by the cookie's URL) whose preview cookie this run has put in [BROWSER_PROFILE]. */
-    internal val previewCookies: MutableSet<String> = mutableSetOf()
+    /** The preview token this run has put in [BROWSER_PROFILE] for each host (by the cookie's URL). */
+    internal val previewCookies: MutableMap<String, String> = mutableMapOf()
+
+    /**
+     * Whether [cookie] still has to go into the store: not there yet, or a newer token. The broker keeps one preview token
+     * per device and each mint replaces the last, so a store holding an older one gets a 401 (Ahmet's Fold, 2026-11-10).
+     */
+    internal fun needsPreviewCookie(cookie: dev.supermux.net.PreviewCookieDto): Boolean = previewCookies[cookie.url] != cookie.value
+
+    internal fun previewCookieSet(cookie: dev.supermux.net.PreviewCookieDto) {
+        previewCookies[cookie.url] = cookie.value
+    }
 
     companion object {
         val app: AppWebViews by lazy { AppWebViews(WebViewRuntime(RuntimeConfig.platformDefault().copy(maxLive = 4))) }
