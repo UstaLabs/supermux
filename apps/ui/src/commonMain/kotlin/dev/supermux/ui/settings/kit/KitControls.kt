@@ -157,6 +157,51 @@ fun KitToggle(
     }
 }
 
+/**
+ * The checkbox (#97 Step 2, the prototype's `.cb`): a 16 dp square, a 1 dp line border and 4 dp corners; checked is
+ * the accent fill with a check in the pane's colour. A checkbox of its own, named by [label] for screen readers;
+ * disabled is faint. Its focus ring sits 2 dp outside the square, as the toggle's does.
+ */
+@Composable
+fun KitCheckbox(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val c = kitColors()
+    val src = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(4.dp)
+    Box(
+        modifier
+            .toggleable(
+                value = checked,
+                interactionSource = src,
+                indication = null,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = onCheckedChange,
+            )
+            .semantics { contentDescription = label }
+            .kitTouchTarget(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .kitOutsetFocusRing(src, outset = 2.dp, corner = 6.dp)
+                .size(16.dp)
+                .alpha(if (enabled) 1f else 0.4f)
+                .clip(shape)
+                .background(if (checked) c.accent else Color.Transparent)
+                .border(1.dp, if (checked) c.accent else if (enabled) c.faint else c.line, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) Icon(KitGlyphs.Check, contentDescription = null, tint = c.pane, modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
 /** The toggle's track and knob, drawn only: no role, no state, no click. */
 @Composable
 internal fun KitToggleTrack(checked: Boolean, enabled: Boolean, modifier: Modifier = Modifier) {
