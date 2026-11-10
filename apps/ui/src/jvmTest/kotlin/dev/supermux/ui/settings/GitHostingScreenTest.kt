@@ -3,13 +3,12 @@ package dev.supermux.ui.settings
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -20,12 +19,7 @@ import dev.supermux.net.ForgeCliPresence
 import dev.supermux.net.ForgeCliStatus
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
-import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
-import dev.supermux.ui.platform.FakePlatform
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.theme.SupermuxTheme
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
@@ -35,57 +29,24 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 /**
- * The shared [GitHostingScreen] (cluster E3) — desktop's suite, moved by name.
- *
- * Covers empty/list/error load, the add form (PAT connect failure + success, CLI import failure),
- * the self-hosted URL validation, the disconnect confirm that keeps the row when the broker
- * rejects it, and the pure helpers — plus the Compact branch Android contributed (its own top bar
- * with the "+" action, and the add form as a bottom sheet). Desktop's `AppShell` hub wiring stays
- * in `:desktop` (`GitHostingHubTest`).
+ * GitHub & GitLab (#97 spec §2.2, §10.8): the connected accounts as items, the add sheet (the gh / glab login on the
+ * machine, or a pasted token with "Your own server" for either forge) and the disconnect sheet. Driven through
+ * [GitHostingScreen], the thin page the setup wizard embeds around [GitHubSection]. Absorbs the old Git hosting suite.
  */
-@OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalTestApi::class)
 class GitHostingScreenTest {
 
-    /**
-     * `setContent` with a [FakePlatform] and an explicit width class. Defaults are the DESKTOP
-     * shape, so the moved suite asserts exactly what it always asserted.
-     */
-    private fun ComposeUiTest.gitContent(
-        pointer: Boolean = true,
-        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
-        content: @Composable () -> Unit,
-    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
-        content()
-    }
+    private fun ComposeUiTest.gitContent(content: @Composable () -> Unit) = setPlatformContent { content() }
 
-    /**
-     * The screen under its pre-E3 argument shape.
-     *
-     * The four suspend lambdas now travel as one [GitHostingActions]; keeping the old names here
-     * means every moved test reads exactly as it did on desktop.
-     */
     @Composable
-    private fun GitHostingScreenUnderTest(
-        forgesLoad: suspend () -> ForgeConnectionsResponse?,
-        forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
-        forgeImport: suspend (kind: String, transport: String) -> Boolean,
-        forgeRemove: suspend (id: String) -> Boolean,
-        /** The Compact suite flips this to false to prove the screen brings Android's own bar. */
-        topBarShown: Boolean = true,
-        onBack: () -> Unit = {},
-    ) = GitHostingScreen(
-        actions = GitHostingActions(
-            forgesLoad = forgesLoad,
-            forgeAdd = forgeAdd,
-            forgeImport = forgeImport,
-            forgeRemove = forgeRemove,
-        ),
-        onBack = onBack,
-        topBarShown = topBarShown,
-    )
+    private fun Screen(
+        forgesLoad: suspend () -> ForgeConnectionsResponse? = { response() },
+        forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean = { _, _, _, _ -> false },
+        forgeImport: suspend (kind: String, transport: String) -> Boolean = { _, _ -> false },
+        forgeRemove: suspend (id: String) -> Boolean = { true },
+    ) = GitHostingScreen(GitHostingActions(forgesLoad, forgeAdd, forgeImport, forgeRemove))
 
     private fun conn(
         id: String = "c1",
@@ -110,10 +71,24 @@ class GitHostingScreenTest {
         cli: ForgeCliStatus? = null,
     ) = ForgeConnectionsResponse(connections = connections, cli = cli)
 
+    private fun ComposeUiTest.awaitTag(tag: String) =
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun ComposeUiTest.awaitText(text: String) =
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun ComposeUiTest.openAddSheet() {
+        awaitTag("git_hosting_add_account")
+        onNodeWithTag("git_hosting_add_account").performClick()
+        awaitTag("git_hosting_add_dialog")
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────────────────────
+
     @Test fun scopes_hint_github_public_vs_enterprise() {
         assertEquals("Contents + Administration (read & write)", scopesHint("github", ""))
         assertEquals("Contents + Administration (read & write)", scopesHint("github", "github.com"))
-        assertEquals("repo, read:org", scopesHint("github", "github.acme.com/api/v3"))
+        assertEquals("repo, read:org", scopesHint("github", "github.acme.com"))
         assertEquals("api", scopesHint("gitlab", ""))
     }
 
@@ -134,6 +109,8 @@ class GitHostingScreenTest {
         assertFalse(isValidForgeHostUrl("just-a-word"))
         assertFalse(isValidForgeHostUrl("http://"))
         assertNotNull(forgeHostUrlError("just-a-word"))
+        // supermux adds the API path itself (inventory bug 8): the hint never asks for one.
+        assertFalse(forgeHostUrlError("just-a-word")!!.contains("/api"))
     }
 
     @Test fun importable_kinds_skips_unavailable_and_already_connected() {
@@ -142,12 +119,7 @@ class GitHostingScreenTest {
             gitlab = ForgeCliPresence(available = false),
         )
         assertEquals(listOf("github"), importableKinds(cli, emptyList()))
-        val connected = listOf(
-            ForgeConnection(
-                id = "c1", kind = "github",
-                account = ForgeAccount(login = "alice"),
-            ),
-        )
+        val connected = listOf(ForgeConnection(id = "c1", kind = "github", account = ForgeAccount(login = "alice")))
         assertTrue(importableKinds(cli, connected).isEmpty())
         assertTrue(importableKinds(null, emptyList()).isEmpty())
     }
@@ -157,680 +129,269 @@ class GitHostingScreenTest {
         assertEquals("glab", cliName("gitlab"))
     }
 
-    @Test fun empty_state_shows_connect_a_git_host_strings() = runComposeUiTest {
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_empty_title").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Connect a Git host").assertIsDisplayed()
-        onNodeWithText("Connect manually").assertIsDisplayed()
-        onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-        onNodeWithTag("git_hosting_manual_gitlab").assertIsDisplayed()
+    // ── the list ──────────────────────────────────────────────────────────────────────────────
+
+    @Test fun with_no_accounts_the_add_item_is_all_there_is() = runComposeUiTest {
+        gitContent { Screen() }
+        awaitTag("git_hosting_add_account")
+        onNodeWithTag("git_hosting_screen").assertExists()
+        onNodeWithText("Add a GitHub or GitLab account").assertIsDisplayed()
+        onAllNodesWithTag("forge_row_c1").assertCountEquals(0)
     }
 
-    @Test fun connection_list_renders_login_and_disconnect() = runComposeUiTest {
+    @Test fun connection_list_renders_handle_host_transport_and_disconnect() = runComposeUiTest {
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        response(
-                            listOf(
-                                conn(id = "gh1", login = "alice"),
-                                conn(id = "gl1", kind = "gitlab", login = "bob", host = "gitlab.com"),
-                            ),
-                        )
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(
+                forgesLoad = {
+                    response(
+                        listOf(
+                            conn(id = "gh1", login = "alice"),
+                            conn(id = "gl1", kind = "gitlab", login = "bob", host = "", transport = "ssh"),
+                        ),
+                    )
+                },
+            )
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_row_gh1").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
+        awaitTag("forge_row_gh1")
         onNodeWithText("@alice").assertIsDisplayed()
+        onNodeWithText("github.com · HTTPS").assertIsDisplayed()
         onNodeWithText("@bob").assertIsDisplayed()
-        onNodeWithTag("git_hosting_add_account").assertIsDisplayed()
+        // An empty host is the forge's public one.
+        onNodeWithText("gitlab.com · SSH").assertIsDisplayed()
+        onNodeWithTag("forge_ok_gh1").assertExists()
+        onAllNodesWithText("Connected").assertCountEquals(2)
         onNodeWithTag("forge_disconnect_gh1").assertIsDisplayed()
+        onNodeWithTag("git_hosting_add_account").assertIsDisplayed()
     }
 
-    @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
+    @Test fun a_failed_load_says_so_and_tries_again() = runComposeUiTest {
         val loads = AtomicInteger(0)
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        loads.incrementAndGet()
-                        null
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(forgesLoad = {
+                loads.incrementAndGet()
+                null
+            })
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Couldn't load connections").assertIsDisplayed()
-        assertTrue(loads.get() >= 1)
+        awaitTag("git_hosting_error")
+        onNodeWithText("Couldn't reach this machine.").assertIsDisplayed()
+        assertEquals(1, loads.get())
         onNodeWithTag("git_hosting_retry").performClick()
-        waitForIdle()
-        assertTrue(loads.get() >= 2)
+        waitUntil(timeoutMillis = 5_000) { loads.get() >= 2 }
     }
 
-    @Test fun manual_github_opens_add_dialog() = runComposeUiTest {
+    @Test fun needs_reconnect_offers_reconnect_which_opens_the_sheet_for_that_forge() = runComposeUiTest {
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(forgesLoad = { response(listOf(conn(id = "stale", kind = "gitlab", login = "stale", status = "needs_reconnect"))) })
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-        onNodeWithText("Add a Git account").assertIsDisplayed()
-        onNodeWithTag("git_hosting_token").assertIsDisplayed()
-        onNodeWithTag("git_hosting_connect").assertIsDisplayed()
+        awaitTag("forge_reconnect_stale")
+        onNodeWithTag("forge_ok_stale").assertDoesNotExist()
+        onNodeWithTag("forge_reconnect_stale").performClick()
+        awaitTag("git_hosting_add_dialog")
+        onNodeWithText("Connect GitLab").assertExists()
     }
 
-    @Test fun connect_failure_surfaces_error_in_dialog() = runComposeUiTest {
+    // ── the add sheet ─────────────────────────────────────────────────────────────────────────
+
+    @Test fun the_add_item_opens_the_sheet_with_a_token_field() = runComposeUiTest {
+        gitContent { Screen() }
+        openAddSheet()
+        onNodeWithContentDescription("Paste a token").assertExists()
+        onNodeWithTag("git_hosting_kind_github").assertExists()
+        onNodeWithTag("git_hosting_kind_gitlab").assertExists()
+        onNodeWithTag("git_hosting_token").assertExists()
+        onNodeWithTag("git_hosting_connect").assertIsNotEnabled()
+        // No gh / glab on the machine: no "use the login" items.
+        onNodeWithTag("git_hosting_import_github").assertDoesNotExist()
+        onNodeWithTag("git_hosting_import_gitlab").assertDoesNotExist()
+    }
+
+    @Test fun the_gh_and_glab_logins_are_offered_only_where_the_machine_has_them() = runComposeUiTest {
+        val imported = AtomicReference<String?>(null)
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(
+                forgesLoad = { response(cli = ForgeCliStatus(github = ForgeCliPresence(available = true, login = "cliuser"))) },
+                forgeImport = { kind, _ ->
+                    imported.set(kind)
+                    true
+                },
+            )
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
+        openAddSheet()
+        onNodeWithText("Use the gh login on this machine").assertExists()
+        onNodeWithText("@cliuser, found on that machine").assertExists()
+        onNodeWithTag("git_hosting_import_gitlab").assertDoesNotExist()
+        onNodeWithTag("git_hosting_import_github").performClick()
+        waitUntil(timeoutMillis = 5_000) { imported.get() == "github" }
+        // A login that worked closes the sheet.
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("git_hosting_add_dialog").fetchSemanticsNodes().isEmpty() }
+    }
+
+    @Test fun a_failed_import_keeps_the_sheet_open_with_an_error() = runComposeUiTest {
+        gitContent {
+            Screen(forgesLoad = { response(cli = ForgeCliStatus(gitlab = ForgeCliPresence(available = true))) })
         }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
+        openAddSheet()
+        onNodeWithTag("git_hosting_import_gitlab").performClick()
+        awaitTag("git_hosting_add_error")
+        onNodeWithText("Couldn't use the glab login on this machine — is it signed in?").assertExists()
+        onNodeWithTag("git_hosting_add_dialog").assertExists()
+        onNodeWithTag("git_hosting_token").assertExists()
+    }
+
+    @Test fun connect_failure_surfaces_an_error_in_the_sheet() = runComposeUiTest {
+        gitContent { Screen() }
+        openAddSheet()
         onNodeWithTag("git_hosting_token").performTextInput("bad-token")
         onNodeWithTag("git_hosting_connect").performClick()
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_add_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Couldn't connect — check your token and try again.").assertIsDisplayed()
+        awaitTag("git_hosting_add_error")
+        onNodeWithText("Couldn't connect — check your token and try again.").assertExists()
     }
 
-    @Test fun connect_success_closes_dialog_and_reloads_list() = runComposeUiTest {
+    @Test fun connect_success_closes_the_sheet_and_reloads_the_list() = runComposeUiTest {
         val loads = AtomicInteger(0)
+        val sent = AtomicReference<List<String?>>()
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        val n = loads.incrementAndGet()
-                        if (n == 1) response()
-                        else response(listOf(conn(id = "new1", login = "newuser")))
-                    },
-                    forgeAdd = { kind, token, _, _ ->
-                        kind == "github" && token == "good-pat"
-                    },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(
+                forgesLoad = {
+                    if (loads.incrementAndGet() == 1) response() else response(listOf(conn(id = "new1", login = "newuser")))
+                },
+                forgeAdd = { kind, token, host, transport ->
+                    sent.set(listOf(kind, token, host, transport))
+                    true
+                },
+            )
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
+        openAddSheet()
+        onNodeWithTag("git_hosting_kind_gitlab").performClick()
         onNodeWithTag("git_hosting_token").performTextInput("good-pat")
         onNodeWithTag("git_hosting_connect").performClick()
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_row_new1").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
+        awaitTag("forge_row_new1")
+        assertEquals(listOf("gitlab", "good-pat", null, "https"), sent.get())
         onNodeWithText("@newuser").assertIsDisplayed()
         onNodeWithTag("git_hosting_add_dialog").assertDoesNotExist()
     }
 
-    @Test fun disconnect_confirm_calls_remove() = runComposeUiTest {
-        val removed = AtomicReference<String?>(null)
+    /** §10.8: the host and HTTPS · SSH apply to both forges, under "Your own server"; no `/api/v3` to type. */
+    @Test fun your_own_server_is_there_for_github_and_gitlab() = runComposeUiTest {
+        val sent = AtomicReference<List<String?>>()
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response(listOf(conn(id = "c-rm", login = "gone"))) },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { id -> removed.set(id); true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_disconnect_c-rm").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
+            Screen(forgeAdd = { kind, token, host, transport ->
+                sent.set(listOf(kind, token, host, transport))
                 false
-            }
+            })
         }
-        onNodeWithTag("forge_disconnect_c-rm").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_disconnect_dialog").assertIsDisplayed()
-        onNodeWithText("Disconnect @gone?").assertIsDisplayed()
-        onNodeWithTag("git_hosting_disconnect_confirm").performClick()
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) { removed.get() == "c-rm" }
-        assertEquals("c-rm", removed.get())
-        // Successful remove drops the row.
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_row_c-rm").assertDoesNotExist()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-    }
-
-    @Test fun disconnect_failure_keeps_row_and_surfaces_error() = runComposeUiTest {
-        val removed = AtomicReference<String?>(null)
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response(listOf(conn(id = "c-keep", login = "sticky"))) },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { id ->
-                        removed.set(id)
-                        false // broker rejected delete
-                    },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_disconnect_c-keep").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("forge_disconnect_c-keep").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_disconnect_confirm").performClick()
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        assertEquals("c-keep", removed.get())
-        onNodeWithText("Couldn't disconnect — try again.").assertIsDisplayed()
-        // Row must still be present after a failed delete.
-        onNodeWithTag("forge_row_c-keep").assertIsDisplayed()
-        onNodeWithText("@sticky").assertIsDisplayed()
-    }
-
-    @Test fun cli_import_button_shown_when_cli_available() = runComposeUiTest {
-        val imported = AtomicBoolean(false)
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        response(
-                            cli = ForgeCliStatus(
-                                github = ForgeCliPresence(available = true, login = "cliuser"),
-                            ),
-                        )
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { kind, _ ->
-                        if (kind == "github") imported.set(true)
-                        true
-                    },
-                    forgeRemove = { true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_import_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Import from gh (@cliuser)").assertIsDisplayed()
-        onNodeWithText("or connect manually").assertIsDisplayed()
-        onNodeWithTag("git_hosting_import_github").performClick()
-        waitForIdle()
-        assertTrue(imported.get())
-    }
-
-    @Test fun cli_import_failure_keeps_dialog_open_with_error() = runComposeUiTest {
-        // Opens the add dialog (which has the CLI import path) and forces import to fail —
-        // the old bug closed the dialog with no error on a 500.
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        response(
-                            cli = ForgeCliStatus(
-                                github = ForgeCliPresence(available = true, login = "cliuser"),
-                            ),
-                        )
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        // Open add dialog so the in-dialog CLI import button is present.
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-        onNodeWithTag("git_hosting_cli_import").assertIsDisplayed()
-        onNodeWithTag("git_hosting_cli_import").performClick()
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_add_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        // Dialog stays open; error is visible; token field still there.
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-        onNodeWithText("Couldn't import from gh — is it logged in?").assertIsDisplayed()
-        onNodeWithTag("git_hosting_token").assertIsDisplayed()
-    }
-
-    @Test fun invalid_self_host_url_blocks_connect_and_shows_feedback() = runComposeUiTest {
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> true },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
+        openAddSheet()
+        onNodeWithTag("git_hosting_host_url").assertDoesNotExist()
+        onNodeWithText("Your own server").assertExists()
         onNodeWithTag("git_hosting_advanced_toggle").performClick()
+        awaitTag("git_hosting_host_url")
+        onNodeWithText("github.example.com").assertExists()
+        onAllNodesWithText("/api/v3", substring = true).assertCountEquals(0)
+        onNodeWithTag("git_hosting_transport_ssh").assertExists()
+        // GitHub over SSH is not experimental…
+        onNodeWithTag("git_hosting_transport_ssh").performClick()
+        onNodeWithText("SSH for GitLab is experimental.").assertDoesNotExist()
+
+        onNodeWithTag("git_hosting_kind_gitlab").performClick()
         waitForIdle()
+        // …the same fields stay for GitLab, and SSH there keeps today's note.
+        onNodeWithTag("git_hosting_host_url").assertExists()
+        onNodeWithText("gitlab.example.com").assertExists()
+        onNodeWithText("SSH for GitLab is experimental.").assertExists()
+
+        onNodeWithTag("git_hosting_host_url").performTextInput("git.acme.dev")
+        onNodeWithTag("git_hosting_token").performTextInput("glpat-x")
+        onNodeWithTag("git_hosting_connect").performClick()
+        waitUntil(timeoutMillis = 5_000) { sent.get() != null }
+        assertEquals(listOf("gitlab", "glpat-x", "git.acme.dev", "ssh"), sent.get())
+    }
+
+    @Test fun an_invalid_server_blocks_connect_and_says_why() = runComposeUiTest {
+        gitContent { Screen(forgeAdd = { _, _, _, _ -> true }) }
+        openAddSheet()
+        onNodeWithTag("git_hosting_advanced_toggle").performClick()
+        awaitTag("git_hosting_host_url")
         onNodeWithTag("git_hosting_host_url").performTextInput("not a url")
         onNodeWithTag("git_hosting_token").performTextInput("pat-xxx")
         waitForIdle()
-        // supportingText lives in the unmerged tree under OutlinedTextField.
-        onNodeWithTag("git_hosting_host_url_error", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText("URL can't contain spaces", useUnmergedTree = true).assertIsDisplayed()
-        // Connect stays disabled while the host URL is invalid.
+        onNodeWithText("URL can't contain spaces").assertExists()
         onNodeWithTag("git_hosting_connect").assertIsNotEnabled()
     }
 
-    @Test fun needs_reconnect_shows_badge_and_reconnect() = runComposeUiTest {
-        gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        response(listOf(conn(id = "stale", login = "stale", status = "needs_reconnect")))
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_row_stale").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("reconnect").assertIsDisplayed()
-        onNodeWithTag("forge_reconnect_stale").assertIsDisplayed()
-        onNodeWithTag("forge_reconnect_stale").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-    }
-
-    // ── Compact branch (Android's phone shape) ──────────────────────────────────────────────────
-
-    /**
-     * On a phone the hub pushes the detail without a bar, so the screen brings Android's: a title,
-     * a working Back and the "+" action that opens the add form — as a bottom sheet, not a dialog.
-     */
-    @Test fun compact_screen_paints_its_own_top_bar_and_add_action() = runComposeUiTest {
-        var backs = 0
-        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                    topBarShown = false,
-                    onBack = { backs++ },
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_empty_title").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Git hosting").assertIsDisplayed()
-        // Back is the screen's own, and it reaches the hub (the caller's `onClose`).
-        onNodeWithTag("git_hosting_back").performClick()
-        waitForIdle()
-        assertEquals(1, backs)
-        onNodeWithTag("git_hosting_add_action").performClick()
-        waitForIdle()
-        // Same form, same tags — only the container differs (ModalBottomSheet on a phone).
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-        onNodeWithTag("git_hosting_token").assertIsDisplayed()
-    }
-
-    /** A tablet's rail already painted the title — the screen must not add a second one. */
-    @Test fun compact_top_bar_suppressed_when_the_hub_painted_one() = runComposeUiTest {
-        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                    topBarShown = true,
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("git_hosting_back").assertDoesNotExist()
-        onNodeWithTag("git_hosting_screen").assertIsDisplayed()
-    }
-
-    /**
-     * A sheet is not a dialog: swiping it away goes to Hidden FIRST and only then reports the
-     * dismiss. Ignoring that report (desktop's mid-submit guard) used to leave the form composed
-     * but invisible, with the screen still "open" — the "+" action went dead. The Compact branch
-     * brings the sheet back instead, so the form stays reachable.
-     */
-    @Test fun compact_add_sheet_survives_a_dismiss_while_submitting() = runComposeUiTest {
+    @Test fun cancel_is_refused_while_a_connect_is_in_flight() = runComposeUiTest {
         val gate = CompletableDeferred<Boolean>()
-        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    // Never returns: the form stays in its submitting state for the whole test.
-                    forgeAdd = { _, _, _, _ -> gate.await() },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                    topBarShown = false,
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
+        gitContent { Screen(forgeAdd = { _, _, _, _ -> gate.await() }) }
+        openAddSheet()
         onNodeWithTag("git_hosting_token").performTextInput("pat-xxx")
         onNodeWithTag("git_hosting_connect").performClick()
-        waitForIdle()
-        // Swipe the sheet away mid-submit.
-        onNodeWithTag("git_hosting_add_dialog").performTouchInput { swipeDown() }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_token").assertIsDisplayed()
+        awaitText("Connecting…")
+        onNodeWithTag("git_hosting_add_cancel").assertIsNotEnabled()
+        onNodeWithTag("git_hosting_add_dialog").assertExists()
         gate.complete(false)
+        awaitTag("git_hosting_add_error")
     }
 
-    /** The control for the case above: the SAME gesture closes the sheet when nothing is in flight. */
-    @Test fun compact_add_sheet_closes_on_a_dismiss_when_idle() = runComposeUiTest {
-        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = { response() },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                    topBarShown = false,
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("git_hosting_manual_github").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-        onNodeWithTag("git_hosting_add_dialog").performTouchInput { swipeDown() }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_add_dialog").assertDoesNotExist()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        // …and the "+" action opens it again.
-        onNodeWithTag("git_hosting_add_action").performClick()
-        waitForIdle()
-        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
-    }
+    // ── disconnect ────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The touch bump is real, not just a token swap: two connection rows sit FURTHER apart without
-     * a pointer. Keyed on `LocalPointerAvailable`, never `LocalInputMode` — a phone with a
-     * Bluetooth keyboard is still a thumb.
-     *
-     * Row PITCH, not the tagged node's own height: the tag sits after `Modifier.padding(…)` in the
-     * chain, so the node's own bounds are the padded-in content and identical either way. The
-     * distance from one row to the next is what the extra padding actually moves.
-     */
-    @Test fun touch_connection_rows_sit_further_apart_than_pointer_rows() {
-        fun rowPitch(pointer: Boolean): Float {
-            var pitch = 0f
-            runComposeUiTest {
-                gitContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
-                    SupermuxTheme(appearance = AppearanceMode.DARK) {
-                        GitHostingScreenUnderTest(
-                            forgesLoad = {
-                                response(listOf(conn(id = "c1"), conn(id = "c2", login = "bob")))
-                            },
-                            forgeAdd = { _, _, _, _ -> false },
-                            forgeImport = { _, _ -> false },
-                            forgeRemove = { true },
-                        )
-                    }
-                }
-                waitForIdle()
-                waitUntil(timeoutMillis = 5_000) {
-                    try {
-                        onNodeWithTag("forge_row_c2").assertIsDisplayed()
-                        true
-                    } catch (_: Throwable) {
-                        false
-                    }
-                }
-                val first = onNodeWithTag("forge_row_c1").fetchSemanticsNode().positionInRoot.y
-                val second = onNodeWithTag("forge_row_c2").fetchSemanticsNode().positionInRoot.y
-                pitch = second - first
-            }
-            return pitch
-        }
-        val touch = rowPitch(pointer = false)
-        val mouse = rowPitch(pointer = true)
-        assertTrue(touch > mouse, "touch pitch $touch should exceed pointer pitch $mouse")
-    }
-
-    /**
-     * Android's per-kind forge icon colour survived the move: a GitLab row paints the brand
-     * orange, a GitHub row does not (it keeps the theme's primary).
-     */
-    @Test fun gitlab_rows_paint_the_brand_orange_and_github_rows_do_not() = runComposeUiTest {
+    @Test fun disconnect_confirm_calls_remove_and_drops_the_row() = runComposeUiTest {
+        val removed = AtomicReference<String?>(null)
+        val loads = AtomicInteger(0)
         gitContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreenUnderTest(
-                    forgesLoad = {
-                        response(
-                            listOf(
-                                conn(id = "gh1", kind = "github", login = "alice"),
-                                conn(id = "gl1", kind = "gitlab", login = "bob", host = "gitlab.com"),
-                            ),
-                        )
-                    },
-                    forgeAdd = { _, _, _, _ -> false },
-                    forgeImport = { _, _ -> false },
-                    forgeRemove = { true },
-                )
-            }
+            Screen(
+                forgesLoad = {
+                    if (loads.incrementAndGet() == 1) response(listOf(conn(id = "c-rm", login = "gone"))) else response()
+                },
+                forgeRemove = { id ->
+                    removed.set(id)
+                    true
+                },
+            )
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("forge_row_gl1").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        assertTrue(
-            onNodeWithTag("forge_row_gl1").captureToImage().hasGitLabOrange(),
-            "the GitLab row should paint its brand orange",
-        )
-        assertFalse(
-            onNodeWithTag("forge_row_gh1").captureToImage().hasGitLabOrange(),
-            "the GitHub row should keep the theme colour",
-        )
+        awaitTag("forge_disconnect_c-rm")
+        onNodeWithTag("forge_disconnect_c-rm").performClick()
+        awaitTag("git_hosting_disconnect_dialog")
+        onNodeWithText("Disconnect @gone?").assertExists()
+        onNodeWithTag("git_hosting_disconnect_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { removed.get() == "c-rm" }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithTag("forge_row_c-rm").fetchSemanticsNodes().isEmpty() }
+        onNodeWithTag("git_hosting_disconnect_dialog").assertDoesNotExist()
     }
 
-    /** GitLab's #FC6D26, allowing for the icon's anti-aliased edges. */
-    private fun ImageBitmap.hasGitLabOrange(): Boolean {
-        val pixels = toPixelMap()
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val c = pixels[x, y]
-                if (c.red > 0.9f && c.green in 0.35f..0.5f && c.blue < 0.25f) return true
-            }
+    @Test fun disconnect_cancel_keeps_the_account() = runComposeUiTest {
+        val removed = AtomicReference<String?>(null)
+        gitContent {
+            Screen(
+                forgesLoad = { response(listOf(conn(id = "c1"))) },
+                forgeRemove = { id ->
+                    removed.set(id)
+                    true
+                },
+            )
         }
-        return false
+        awaitTag("forge_disconnect_c1")
+        onNodeWithTag("forge_disconnect_c1").performClick()
+        awaitTag("git_hosting_disconnect_cancel")
+        onNodeWithTag("git_hosting_disconnect_cancel").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_disconnect_dialog").assertDoesNotExist()
+        onNodeWithTag("forge_row_c1").assertExists()
+        assertNull(removed.get())
+    }
+
+    @Test fun a_refused_disconnect_keeps_the_row_and_says_so() = runComposeUiTest {
+        gitContent {
+            Screen(
+                forgesLoad = { response(listOf(conn(id = "c-keep", login = "sticky"))) },
+                forgeRemove = { false },
+            )
+        }
+        awaitTag("forge_disconnect_c-keep")
+        onNodeWithTag("forge_disconnect_c-keep").performClick()
+        awaitTag("git_hosting_disconnect_confirm")
+        onNodeWithTag("git_hosting_disconnect_confirm").performClick()
+        awaitTag("git_hosting_error")
+        onNodeWithText("Couldn't disconnect — try again.").assertExists()
+        onNodeWithTag("forge_row_c-keep").assertExists()
+        onNodeWithText("@sticky").assertExists()
     }
 }

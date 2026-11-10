@@ -88,7 +88,7 @@ class GitHostingHubTest {
         val app = appWithForges(body)
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -113,7 +113,7 @@ class GitHostingHubTest {
         val app = appWithForges(body)
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -129,6 +129,6 @@ class GitHostingHubTest {
                 false
             }
         }
-        onNodeWithText("Connect a Git host").assertIsDisplayed()
+        onNodeWithText("Add a GitHub or GitLab account").assertIsDisplayed()
     }
 }

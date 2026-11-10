@@ -211,6 +211,22 @@ class SetupWizardScreenTest {
         onNodeWithTag("setup_next").assertIsEnabled()
     }
 
+    /** #97 restyled Settings; the wizard still embeds the real agents and git-hosting screens and they still work. */
+    @Test fun the_agents_step_still_shows_the_agents() = runComposeUiTest {
+        wizard()
+        advanceTo(1)
+        eventually { onNodeWithTag("agent_settings_screen").assertIsDisplayed() }
+    }
+
+    @Test fun the_git_hosting_step_still_shows_the_accounts_and_opens_the_add_sheet() = runComposeUiTest {
+        wizard()
+        advanceTo(2)
+        eventually { onNodeWithTag("git_hosting_screen").assertIsDisplayed() }
+        eventually { onNodeWithTag("git_hosting_add_account").assertIsDisplayed() }
+        onNodeWithTag("git_hosting_add_account").performClick()
+        eventually { onNodeWithTag("git_hosting_token").assertIsDisplayed() }
+    }
+
     @Test fun phone_step_is_step_four_and_skippable() = runComposeUiTest {
         wizard()
         advanceTo(3)

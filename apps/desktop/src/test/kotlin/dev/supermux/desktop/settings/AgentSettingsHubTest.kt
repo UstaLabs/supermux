@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.withKeyDown
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
@@ -234,7 +235,7 @@ class AgentSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -243,7 +244,7 @@ class AgentSettingsHubTest {
         assertEquals(SettingsSection.Coding, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("lsp_settings_screen").assertIsDisplayed()
+                onNodeWithTag("lsp_settings_screen").assertExists()
                 true
             } catch (_: Throwable) {
                 false
@@ -251,7 +252,7 @@ class AgentSettingsHubTest {
         }
         // Nested back must be gone when embedded in the hub.
         onNodeWithTag("lsp_settings_back").assertDoesNotExist()
-        onNodeWithText("TypeScript").assertIsDisplayed()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("TypeScript").fetchSemanticsNodes().isNotEmpty() }
         // Hub back remains.
         onNodeWithTag("settings_hub_back").assertIsDisplayed()
     }

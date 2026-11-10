@@ -1,119 +1,141 @@
 package dev.supermux.ui.settings
 
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.net.LspServer
 import dev.supermux.state.SettingsKeys
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.FakeSettingsStore
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.prefs.EDITOR_FONT_MAX
 import dev.supermux.ui.prefs.EDITOR_FONT_MIN
+import dev.supermux.ui.prefs.TERMINAL_FONT_MAX
+import dev.supermux.ui.prefs.TERMINAL_FONT_MIN
 import dev.supermux.ui.prefs.UiPrefs
-import kotlinx.coroutines.flow.MutableStateFlow
+import dev.supermux.ui.settings.kit.KitAnchorKey
+import dev.supermux.ui.settings.kit.KitPage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * The shared Editor settings screen (cluster E7) — Android's `EditorSettingsPage` moved into `:ui`
- * and handed to desktop as its `EditorLsp` hub section.
- *
- * What is under test here is the half that is NEW to the shared world: the two device-local
- * preferences, which now round-trip through `UiPrefs`/`SettingsStore` instead of Android's
- * SharedPreferences. The language-server half below them is `LspSettingsScreenTest`'s.
+ * Coding's Editor & terminal section (#97 spec §2.2, §11): this device's wrap, editor and terminal font sizes,
+ * side-by-side diffs and, on touch, the keys above the keyboard — each written to `UiPrefs` the moment it changes.
  */
 @OptIn(ExperimentalTestApi::class)
 class EditorSettingsScreenTest {
 
-    private val noServers: suspend () -> List<LspServer> = { emptyList() }
+    private fun anchored(key: String) = SemanticsMatcher.expectValue(KitAnchorKey, key)
 
-    private fun screen(
-        topBarShown: Boolean = false,
-        standalone: Boolean = false,
-    ): @androidx.compose.runtime.Composable () -> Unit = {
-        EditorSettingsScreen(
-            lspLoad = noServers,
-            lspToggle = { _, _ -> null },
-            lspInstall = { null },
-            lspInstallLog = MutableStateFlow(emptyMap()),
-            lspInstallDone = MutableStateFlow(emptyMap()),
-            lspAddCustom = { null },
-            lspRemoveCustom = { null },
-            topBarShown = topBarShown,
-            standalone = standalone,
-        )
+    private fun ComposeUiTest.section(store: FakeSettingsStore, pointer: Boolean = true) =
+        setPlatformContent(
+            pointer = pointer,
+            widthClass = if (pointer) WindowWidthClass.Expanded else WindowWidthClass.Compact,
+            uiPrefs = UiPrefs(store),
+        ) { KitPage("Coding") { EditorSection() } }
+
+    @Test fun the_rows_carry_their_copy_and_anchors() = runComposeUiTest {
+        section(FakeSettingsStore())
+        waitForIdle()
+        onNodeWithText("Wrap long lines").assertExists()
+        onNodeWithText("Wrap instead of scrolling sideways.").assertExists()
+        onNodeWithText("Editor font size").assertExists()
+        onNodeWithText("Terminal font size").assertExists()
+        onNodeWithText("Also ⌘+ and ⌘− in a terminal.").assertExists()
+        onNodeWithText("Side-by-side diffs").assertExists()
+        onNodeWithText("Each changed file in two columns.").assertExists()
+        for (a in listOf("wrap", "editor-font", "terminal-font", "side-by-side")) onNode(anchored(a)).assertExists()
     }
 
-    @Test fun the_font_stepper_persists_through_the_settings_store() = runComposeUiTest {
+    @Test fun the_keys_above_the_keyboard_are_only_offered_on_touch() = runComposeUiTest {
+        section(FakeSettingsStore(), pointer = true)
+        waitForIdle()
+        onNodeWithText("Keys above the keyboard").assertDoesNotExist()
+        onNode(anchored("accessory-bar")).assertDoesNotExist()
+    }
+
+    @Test fun on_touch_the_terminal_row_says_pinch_and_the_keys_row_is_there() = runComposeUiTest {
+        section(FakeSettingsStore(), pointer = false)
+        waitForIdle()
+        onNodeWithText("Pinch in a terminal to change it too.").assertExists()
+        onNodeWithText("Keys above the keyboard").assertExists()
+        onNodeWithText("Tab, arrows, undo and find over the on-screen keyboard.").assertExists()
+        onNode(anchored("accessory-bar")).assertExists()
+    }
+
+    @Test fun the_editor_font_stepper_persists_through_the_settings_store() = runComposeUiTest {
         val store = FakeSettingsStore()
-        setPlatformContent(uiPrefs = UiPrefs(store)) {
-            screen()()
-        }
+        section(store)
         waitForIdle()
         // No stored value → the shared default (13).
-        onNodeWithTag("editor_font_size").assertTextEquals("13")
+        onNodeWithTag("editor_font_value").assertTextEquals("13")
         onNodeWithTag("editor_font_plus").performClick()
         waitForIdle()
-        onNodeWithTag("editor_font_size").assertTextEquals("14")
+        onNodeWithTag("editor_font_value").assertTextEquals("14")
         assertEquals("14", store.map.value[SettingsKeys.EDITOR_FONT_SIZE])
-        // Two taps with no frame between them: each step reads the CURRENT stored size, so they
-        // are 14 → 13 → 12, not two writes of 13 from the one value both taps saw on screen.
+        // Two taps with no frame between them: each step reads the CURRENT stored size, so they are 14 → 13 → 12.
         onNodeWithTag("editor_font_minus").performClick()
         onNodeWithTag("editor_font_minus").performClick()
         waitForIdle()
-        onNodeWithTag("editor_font_size").assertTextEquals("12")
+        onNodeWithTag("editor_font_value").assertTextEquals("12")
         assertEquals("12", store.map.value[SettingsKeys.EDITOR_FONT_SIZE])
     }
 
-    @Test fun the_font_stepper_clamps_at_both_ends() = runComposeUiTest {
+    @Test fun the_editor_font_stepper_stops_at_both_ends() = runComposeUiTest {
         val store = FakeSettingsStore()
         store.map.value = mapOf(SettingsKeys.EDITOR_FONT_SIZE to EDITOR_FONT_MAX.toString())
-        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        section(store)
         waitForIdle()
-        onNodeWithTag("editor_font_size").assertTextEquals(EDITOR_FONT_MAX.toString())
-        // "+" is disabled at the top of the range, so a click cannot push past it.
-        onNodeWithTag("editor_font_plus").performClick()
-        waitForIdle()
-        assertEquals(EDITOR_FONT_MAX.toString(), store.map.value[SettingsKeys.EDITOR_FONT_SIZE])
+        onNodeWithTag("editor_font_value").assertTextEquals(EDITOR_FONT_MAX.toString())
+        onNodeWithTag("editor_font_plus").assertIsNotEnabled()
 
         store.map.value = mapOf(SettingsKeys.EDITOR_FONT_SIZE to EDITOR_FONT_MIN.toString())
         waitForIdle()
-        onNodeWithTag("editor_font_size").assertTextEquals(EDITOR_FONT_MIN.toString())
-        onNodeWithTag("editor_font_minus").performClick()
-        waitForIdle()
-        assertEquals(EDITOR_FONT_MIN.toString(), store.map.value[SettingsKeys.EDITOR_FONT_SIZE])
+        onNodeWithTag("editor_font_value").assertTextEquals(EDITOR_FONT_MIN.toString())
+        onNodeWithTag("editor_font_minus").assertIsNotEnabled()
     }
 
     @Test fun an_out_of_range_stored_font_size_is_read_back_clamped() = runComposeUiTest {
         val store = FakeSettingsStore()
         store.map.value = mapOf(SettingsKeys.EDITOR_FONT_SIZE to "99")
-        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        section(store)
         waitForIdle()
-        onNodeWithTag("editor_font_size").assertTextEquals(EDITOR_FONT_MAX.toString())
+        onNodeWithTag("editor_font_value").assertTextEquals(EDITOR_FONT_MAX.toString())
     }
 
-    /** M5: the Changes pane's side-by-side default and the native editor's accessory bar. */
-    @Test fun the_side_by_side_and_accessory_bar_switches_persist() = runComposeUiTest {
+    @Test fun the_terminal_font_stepper_writes_the_terminal_size_and_stops_at_8_and_32() = runComposeUiTest {
         val store = FakeSettingsStore()
-        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        section(store)
         waitForIdle()
-        // Side by side defaults OFF, the bar ON.
-        onNodeWithTag("editor_side_by_side_switch").performScrollTo().performClick()
+        onNodeWithTag("terminal_font_value").assertTextEquals("13")
+        onNodeWithTag("terminal_font_plus").performClick()
         waitForIdle()
-        assertEquals("true", store.map.value[SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE])
-        onNodeWithTag("editor_accessory_bar_switch").performScrollTo().performClick()
+        assertEquals("14", store.map.value[SettingsKeys.TERMINAL_FONT_SIZE])
+        onNodeWithTag("terminal_font_value").assertTextEquals("14")
+
+        store.map.value = mapOf(SettingsKeys.TERMINAL_FONT_SIZE to TERMINAL_FONT_MAX.toString())
         waitForIdle()
-        assertEquals("false", store.map.value[SettingsKeys.EDITOR_ACCESSORY_BAR])
+        onNodeWithTag("terminal_font_value").assertTextEquals("32")
+        onNodeWithTag("terminal_font_plus").assertIsNotEnabled()
+        onNodeWithTag("terminal_font_minus").performClick()
+        waitForIdle()
+        assertEquals("31", store.map.value[SettingsKeys.TERMINAL_FONT_SIZE])
+
+        store.map.value = mapOf(SettingsKeys.TERMINAL_FONT_SIZE to TERMINAL_FONT_MIN.toString())
+        waitForIdle()
+        onNodeWithTag("terminal_font_value").assertTextEquals("8")
+        onNodeWithTag("terminal_font_minus").assertIsNotEnabled()
     }
 
     @Test fun the_wrap_switch_persists() = runComposeUiTest {
         val store = FakeSettingsStore()
-        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        section(store)
         waitForIdle()
         // Wrap defaults ON, so the first click turns it off.
         onNodeWithTag("editor_wrap_switch").performClick()
@@ -124,44 +146,17 @@ class EditorSettingsScreenTest {
         assertEquals("true", store.map.value[SettingsKeys.EDITOR_LINE_WRAP])
     }
 
-    // ── chrome ────────────────────────────────────────────────────────────────────────────────
-
-    @Test fun a_compact_window_paints_its_own_top_bar_when_the_hub_did_not() = runComposeUiTest {
+    /** M5: the Changes pane's side-by-side default and the native editor's accessory bar. */
+    @Test fun the_side_by_side_and_accessory_bar_switches_persist() = runComposeUiTest {
         val store = FakeSettingsStore()
-        setPlatformContent(
-            pointer = false,
-            widthClass = WindowWidthClass.Compact,
-            uiPrefs = UiPrefs(store),
-        ) { screen()() }
+        section(store, pointer = false)
         waitForIdle()
-        onNodeWithTag("editor_settings_back").assertIsDisplayed()
-    }
-
-    @Test fun the_hub_owns_the_bar_when_it_says_so() = runComposeUiTest {
-        val store = FakeSettingsStore()
-        setPlatformContent(
-            pointer = false,
-            widthClass = WindowWidthClass.Compact,
-            uiPrefs = UiPrefs(store),
-        ) { screen(topBarShown = true)() }
+        // Side by side defaults OFF, the bar ON.
+        onNodeWithTag("editor_side_by_side_switch").performScrollTo().performClick()
         waitForIdle()
-        onNodeWithTag("editor_settings_back").assertDoesNotExist()
-        onNodeWithTag("editor_settings_screen").assertIsDisplayed()
-    }
-
-    @Test fun a_wide_hub_detail_has_no_nested_chrome() = runComposeUiTest {
-        val store = FakeSettingsStore()
-        setPlatformContent(uiPrefs = UiPrefs(store)) { screen()() }
+        assertEquals("true", store.map.value[SettingsKeys.EDITOR_DIFF_SIDE_BY_SIDE])
+        onNodeWithTag("editor_accessory_bar_switch").performScrollTo().performClick()
         waitForIdle()
-        onNodeWithTag("editor_settings_back").assertDoesNotExist()
-    }
-
-    @Test fun a_standalone_destination_paints_the_bar_at_every_width() = runComposeUiTest {
-        val store = FakeSettingsStore()
-        setPlatformContent(widthClass = WindowWidthClass.Expanded, uiPrefs = UiPrefs(store)) {
-            screen(standalone = true)()
-        }
-        waitForIdle()
-        onNodeWithTag("editor_settings_back").assertIsDisplayed()
+        assertEquals("false", store.map.value[SettingsKeys.EDITOR_ACCESSORY_BAR])
     }
 }

@@ -459,22 +459,23 @@ class ConfigurationChangeWorkTest {
         assertEquals("LOGIN-CODE", onNodeWithTag("agent_login_code_field").editableText())
     }
 
-    // ── Settings › Git hosting: a token being pasted into the add form ──────────────────────────
+    // ── Settings › Coding: a token being pasted into the GitHub add sheet ──────────────────────────
 
     private fun gitHost() = testHostStore(
         Broker(mapOf("GET /forge/connections" to """{"connections":[],"cli":{"github":{"available":false},"gitlab":{"available":false}}}""")).handler,
     )
 
     private fun ComposeUiTest.pasteAGitToken(token: String) {
-        await("git_hosting_manual_github")
-        onNodeWithTag("git_hosting_manual_github").performClick()
+        await("git_hosting_add_account")
+        onNodeWithTag("git_hosting_add_account").performScrollTo().performClick()
         await("git_hosting_token")
         onNodeWithTag("git_hosting_token").performTextInput(token)
         waitForIdle()
     }
 
     @Test fun the_git_account_form_and_its_token_survive_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(gitHost(), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
+        val host = gitHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         activity.recreate()
@@ -484,7 +485,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_git_account_form_and_its_token_survive_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(gitHost(), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
+        val host = gitHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openSettings(SettingsSection.Coding, anchor = "github") }
         pasteAGitToken("ghp_token")
 
         unfold(width)
@@ -695,7 +697,7 @@ class ConfigurationChangeWorkTest {
         await("proxies_public_dialog")
     }
 
-    // ── Settings › Editor: the "Add language server" form ────────────────────────────────────────
+    // ── Settings › Coding: the "Add your own language server" fold ────────────────────────────────────────
 
     private fun lspHost() = testHostStore(Broker(mapOf("GET /settings/editor" to """{"lsp":{"servers":[]}}""")).handler)
 
@@ -715,7 +717,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_language_server_form_survives_a_recreation() = runComposeUiTest {
-        val activity = phoneShell(lspHost(), settings = true) { openLspSettings() }
+        val host = lspHost()
+        val activity = phoneShell(host, testFleet(host, online = true), settings = true) { openLspSettings() }
         describeALanguageServer()
 
         activity.recreate()
@@ -724,7 +727,8 @@ class ConfigurationChangeWorkTest {
     }
 
     @Test fun the_add_language_server_form_survives_the_compact_to_wide_swap() = runComposeUiTest {
-        val width = flippablePhone(lspHost(), settings = true) { openLspSettings() }
+        val host = lspHost()
+        val width = flippablePhone(host, testFleet(host, online = true), settings = true) { openLspSettings() }
         describeALanguageServer()
 
         unfold(width)

@@ -106,4 +106,30 @@ class SettingsSearchTest {
         assertTrue(searchSettings("offline", desk).flatMap { it.hits }.none { it.anchor == "dictation" })
         assertTrue(searchSettings("offline", desk.copy(liveTranscript = true)).flatMap { it.hits }.any { it.anchor == "dictation" })
     }
+
+    @Test fun codings_rows_follow_its_page_entry_in_page_order() {
+        val coding = SettingsSearchIndex.filter { it.section == SettingsSection.Coding }.map { it.anchor }
+        assertEquals(
+            listOf(
+                null, "github", "wrap", "editor-font", "terminal-font", "side-by-side", "accessory-bar",
+                "code-intelligence", "add-language-server",
+            ),
+            coding,
+        )
+        assertEquals(
+            listOf(SettingsSection.Coding to "github"),
+            searchSettings("token", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertEquals(
+            listOf(SettingsSection.Coding to "terminal-font"),
+            searchSettings("pinch", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        assertEquals(
+            listOf(SettingsSection.Coding to "add-language-server"),
+            searchSettings("custom lsp", desk).flatMap { it.hits }.map { it.section to it.anchor },
+        )
+        // The keys above the keyboard are a phone's.
+        assertTrue(searchSettings("accessory", desk).flatMap { it.hits }.none { it.anchor == "accessory-bar" })
+        assertTrue(searchSettings("accessory", desk.copy(phone = true)).flatMap { it.hits }.any { it.anchor == "accessory-bar" })
+    }
 }

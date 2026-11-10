@@ -370,6 +370,8 @@ fun KitButtons(modifier: Modifier = Modifier, content: @Composable RowScope.() -
 
 /**
  * The "Advanced ›" disclosure. Opens itself when the page was opened for one of [anchors] (a search hit inside).
+ * [initiallyOpen] is how it starts when it is (re)created: a fold holding a half-typed form starts open, so the form
+ * comes back open where only the typing was kept (a phone unfolding into a wide window).
  */
 @Composable
 fun KitFold(
@@ -377,12 +379,13 @@ fun KitFold(
     modifier: Modifier = Modifier,
     anchors: Set<String> = emptySet(),
     tag: String? = null,
+    initiallyOpen: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = kitColors()
     val m = kitMetrics()
     val registry = LocalKitAnchors.current
-    var open by rememberSaveable { mutableStateOf(false) }
+    var open by rememberSaveable { mutableStateOf(initiallyOpen) }
     val target = registry?.target
     LaunchedEffect(target) { if (target != null && target in anchors) open = true }
     val turn by animateFloatAsState(if (open) 90f else 0f, tween(120), label = "kit-fold")

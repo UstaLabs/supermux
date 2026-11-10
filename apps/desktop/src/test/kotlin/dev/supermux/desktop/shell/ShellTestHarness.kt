@@ -48,12 +48,27 @@ internal fun testPairedHostStore(): PairedHostStore = PairedHostStore(
  * store's lock — this suite deadlocked on it. The store publishes outside its lock now
  * (`FleetStoreLockingTest`), so the fold can run off-thread the way it does in production.
  */
-internal fun testFleet(app: HostStore): FleetStore = FleetStore(
-    store = testPairedHostStore(),
-    scope = CoroutineScope(Dispatchers.Default),
-    deps = testDeps(),
-    appFactory = { _, _, _ -> app },
-)
+internal fun testFleet(
+    app: HostStore,
+    /**
+     * Report the host's socket as up once the fleet has dialled it: Settings' machine sections show an offline
+     * machine's note instead of loading (#97), so a suite that drives their rows needs it online.
+     */
+    online: Boolean = false,
+): FleetStore {
+    var connection: ((Boolean) -> Unit)? = null
+    val fleet = FleetStore(
+        store = testPairedHostStore(),
+        scope = CoroutineScope(Dispatchers.Default),
+        deps = testDeps(),
+        appFactory = { _, _, onConnectionChange ->
+            connection = onConnectionChange
+            app
+        },
+    )
+    if (online) checkNotNull(connection) { "the fleet did not dial its host" }(true)
+    return fleet
+}
 
 /** The desktop-shaped root: one host, the workspace sidebar, no window seam. */
 @Composable
@@ -62,8 +77,10 @@ internal fun TestAppShell(
     ui: ShellUiState,
     fleet: FleetStore? = null,
     notify: NotificationController = remember { NotificationController(NoopNotificationManager) },
+    /** The host's socket is up (see [testFleet]); only used when no [fleet] is given. */
+    online: Boolean = false,
 ) {
-    val store = fleet ?: remember(app) { testFleet(app) }
+    val store = fleet ?: remember(app) { testFleet(app, online = online) }
     SupermuxApp(
         fleet = store,
         ui = ui,

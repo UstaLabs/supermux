@@ -1,117 +1,62 @@
-// The one Git-hosting settings screen for both apps (cluster E3).
+// GitHub & GitLab (#97 spec §2.2, §10.8): the machine's connected forge accounts, as Coding's first section and as the
+// setup wizard's git-hosting step. Today's Git hosting screen restyled in place with the Settings kit: the same load,
+// the same add form (now a sheet: the gh / glab login on the machine, or a pasted token with "Your own server" for
+// either forge), the disconnect confirm that keeps the row when the machine refuses, and every surviving test tag.
 //
-// Base = desktop's `settings/GitHostingScreen.kt`: the empty/list/error load model, the add form
-// with self-hosted API base-URL validation, the disconnect confirm that keeps the row when the
-// broker rejects the delete, Enter/Space on the advanced toggle and every test tag. Android's page
-// contributes the Compact branch: its own `TopAppBar` (with the "+" add action) when the hub did
-// not paint one, the add form as a `ModalBottomSheet` instead of a dialog, touch-sized connection
-// rows keyed on `LocalPointerAvailable`, and the GitLab-orange forge icon (its `ForgeIconBox` is a
-// Material icon here).
+// The add form is still kept for the page on display (#89), and its connect runs on the fleet's scope.
 package dev.supermux.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.supermux.net.ForgeCliStatus
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
-import dev.supermux.ui.adaptive.LocalPointerAvailable
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.retain.rememberRetainedOnPage
 import dev.supermux.ui.retain.rememberRetainedScope
-import dev.supermux.ui.theme.LocalSemantics
-import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Radii
-import dev.supermux.ui.theme.Size
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.theme.Stroke
-import dev.supermux.ui.widgets.AlertDialog
-import dev.supermux.ui.widgets.Dialog
-import dev.supermux.ui.widgets.SecretField
-import dev.supermux.ui.widgets.SettingsDetailMaxWidth
-import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.settings.kit.KitDot
+import dev.supermux.ui.settings.kit.KitFold
+import dev.supermux.ui.settings.kit.KitGhostButton
+import dev.supermux.ui.settings.kit.KitItem
+import dev.supermux.ui.settings.kit.KitItemList
+import dev.supermux.ui.settings.kit.KitItemStatus
+import dev.supermux.ui.settings.kit.KitMark
+import dev.supermux.ui.settings.kit.KitNote
+import dev.supermux.ui.settings.kit.KitOptions
+import dev.supermux.ui.settings.kit.KitPage
+import dev.supermux.ui.settings.kit.KitSectionHead
+import dev.supermux.ui.settings.kit.KitSheet
+import dev.supermux.ui.settings.kit.KitTextAction
+import dev.supermux.ui.settings.kit.KitTextField
+import dev.supermux.ui.settings.kit.LocalSettingsMachines
+import dev.supermux.ui.settings.kit.kitColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** GitLab's brand orange — the one place a forge is coloured by kind (Android's row did this). */
-private val GitLabOrange = Color(0xFFFC6D26)
-
 /**
- * Every broker call the Git-hosting screen makes, in one holder.
+ * Every call the GitHub & GitLab section makes, in one holder.
  *
- * Mutations are suspend→Boolean (desktop's shape): a rejected delete keeps the row and surfaces an
- * error instead of optimistically dropping it. Android's fire-and-forget `FleetStore.forgeRemove`
- * is retyped in `:shared` rather than dumbing this down.
+ * Mutations are suspend→Boolean: a refused delete keeps the row and says so instead of optimistically dropping it.
  */
 @Immutable
 class GitHostingActions(
-    /** Connections + CLI presence; `null` = transport/decode failure. */
+    /** Connections + which of gh / glab the machine has; `null` = transport/decode failure. */
     val forgesLoad: suspend () -> ForgeConnectionsResponse? = { null },
     val forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean =
         { _, _, _, _ -> false },
@@ -130,7 +75,7 @@ fun rememberGitHostingActions(app: HostStore): GitHostingActions = remember(app)
     )
 }
 
-/** [GitHostingActions] against the fleet's ACTIVE host — Android's wiring. */
+/** [GitHostingActions] against the fleet's ACTIVE host — Android's and iOS's wiring. */
 @Composable
 fun rememberGitHostingActions(fleet: FleetStore): GitHostingActions = remember(fleet) {
     GitHostingActions(
@@ -142,17 +87,10 @@ fun rememberGitHostingActions(fleet: FleetStore): GitHostingActions = remember(f
 }
 
 /**
- * Settings hub detail: connected GitHub/GitLab accounts.
- *
- * Empty state offers CLI import + manual connect; a connection list shows status badges and
- * Disconnect. "Add account" opens the add form (PAT or CLI import) — a dialog with a pointer, a
- * bottom sheet on a phone. Host-scoped: the caller re-keys on the active host.
- *
- * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
- *   itself (pass the hub's `SettingsSlotScope.onClose`).
- * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ * The GitHub & GitLab section on a page of its own — what the setup wizard's git-hosting step embeds. [onBack] and
+ * [topBarShown] are kept for its callers; the page paints no chrome of its own.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun GitHostingScreen(
     actions: GitHostingActions,
@@ -160,116 +98,93 @@ fun GitHostingScreen(
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
 ) {
-    val cs = MaterialTheme.colorScheme
+    KitPage("GitHub & GitLab", modifier) { GitHubSection(actions) }
+}
+
+/** The machine as a sentence names it mid-way: its name, or "this machine" when Settings knows none. */
+@Composable
+private fun machineInSentence(): String = LocalSettingsMachines.current?.current?.name ?: "this machine"
+
+internal fun forgeLabel(kind: String): String = if (kind == "gitlab") "GitLab" else "GitHub"
+
+/**
+ * The connected accounts as items (handle; "‹host› · HTTPS|SSH"; Connected or Reconnect; Disconnect) and "Add a GitHub
+ * or GitLab account". Loads on first composition; the caller re-keys it on the machine.
+ */
+@Composable
+fun GitHubSection(actions: GitHostingActions, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
+    val machine = machineInSentence()
 
     var connections by remember { mutableStateOf<List<ForgeConnection>>(emptyList()) }
     var cliStatus by remember { mutableStateOf<ForgeCliStatus?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var loaded by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var attempt by remember { mutableIntStateOf(0) }
+    /** What a disconnect that failed says, under the list. */
     var error by remember { mutableStateOf<String?>(null) }
-    // The add form, open or not and what is typed in it, kept for the page on display (#89): a
-    // rotation closed it with a pasted token gone. Its connect runs on the fleet's scope and lands
-    // in it (see [ForgeForm]).
+    // The add form, open or not and what is typed in it, kept for the page on display (#89): a rotation closed it
+    // with a pasted token gone. Its connect runs on the fleet's scope and lands in it (see [ForgeForm]).
     val add = rememberRetainedOnPage("git:add") { ForgeForm() }
     var disconnectTarget by remember { mutableStateOf<ForgeConnection?>(null) }
     var disconnecting by remember { mutableStateOf(false) }
 
     suspend fun reload(clearError: Boolean = true) {
-        loading = true
         val r = actions.forgesLoad()
         if (r != null) {
             connections = r.connections
             cliStatus = r.cli
+            loadFailed = false
             if (clearError) error = null
         } else {
-            error = "Couldn't load connections"
+            loadFailed = true
         }
-        loading = false
+        loaded = true
     }
 
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(attempt) { reload() }
 
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val onManual: (String?) -> Unit = { kind -> add.open(kind) }
-    val onImport: (String) -> Unit = { kind ->
-        scope.launch {
-            val ok = actions.forgeImport(kind, "https")
-            if (ok) {
-                reload()
-            } else {
-                error = "Couldn't import from ${cliName(kind)} — is it logged in?"
+    Column(modifier.fillMaxWidth().testTag("git_hosting_screen")) {
+        when {
+            loadFailed -> {
+                KitNote("Couldn't reach $machine.", Modifier.testTag("git_hosting_error"))
+                KitTextAction(
+                    "Try again",
+                    onClick = { attempt++ },
+                    modifier = Modifier.padding(top = 4.dp).testTag("git_hosting_retry"),
+                )
+            }
+            !loaded -> Unit
+            else -> {
+                error?.let { ErrorLine(it, "git_hosting_error") }
+                KitItemList(Modifier.testTag("git_hosting_list")) {
+                    connections.forEach { c ->
+                        ForgeItem(c, onReconnect = { add.open(c.kind) }, onDisconnect = { disconnectTarget = c })
+                    }
+                    val logins = loginKinds(cliStatus)
+                    KitItem(
+                        "Add a GitHub or GitLab account",
+                        modifier = Modifier.testTag("git_hosting_add_account"),
+                        subtitle = if (logins.isEmpty()) {
+                            "Paste a personal access token"
+                        } else {
+                            "Use the ${logins.joinToString(" / ") { cliName(it) }} login on $machine, or paste a token"
+                        },
+                        mark = KitMark.Add,
+                        onClick = { add.open(null) },
+                    )
+                }
             }
         }
     }
-    if (compact && !topBarShown) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text("Git hosting", color = cs.onSurface) },
-                    navigationIcon = {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("git_hosting_back"),
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    actions = {
-                        IconButton(
-                            onClick = { add.open(null) },
-                            modifier = Modifier.testTag("git_hosting_add_action"),
-                        ) {
-                            Icon(
-                                Icons.Filled.Add,
-                                contentDescription = "Add account",
-                                tint = cs.onSurface,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = cs.surfaceContainerHigh,
-                    ),
-                )
-            },
-            containerColor = cs.background,
-        ) { padding ->
-            GitHostingBody(
-                connections = connections,
-                cliStatus = cliStatus,
-                loading = loading,
-                error = error,
-                onImport = onImport,
-                onManual = onManual,
-                onRetry = { scope.launch { reload() } },
-                onDisconnect = { disconnectTarget = it },
-                modifier = modifier.padding(padding),
-            )
-        }
-    } else {
-        GitHostingBody(
-            connections = connections,
-            cliStatus = cliStatus,
-            loading = loading,
-            error = error,
-            onImport = onImport,
-            onManual = onManual,
-            onRetry = { scope.launch { reload() } },
-            onDisconnect = { disconnectTarget = it },
-            modifier = modifier,
-        )
-    }
 
     if (add.isOpen) {
-        AddForgeForm(
+        AddForgeSheet(
             form = add,
             cliStatus = cliStatus,
+            machine = machine,
             onAdd = actions.forgeAdd,
             onImport = actions.forgeImport,
-            onDismiss = { add.close() },
             onDone = {
                 add.close()
                 scope.launch { reload() }
@@ -278,16 +193,22 @@ fun GitHostingScreen(
     }
 
     disconnectTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { if (!disconnecting) disconnectTarget = null },
-            title = { Text("Disconnect @${target.account.login}?") },
-            text = {
-                Text("The account will be removed from this broker. You can reconnect at any time.")
-            },
-            confirmButton = {
-                TextButton(
+        KitSheet(
+            title = "Disconnect @${target.account.login}?",
+            onDismiss = { if (!disconnecting) disconnectTarget = null },
+            description = "supermux on $machine stops using this account. You can connect it again at any time.",
+            tag = "git_hosting_disconnect_dialog",
+            buttons = {
+                KitGhostButton(
+                    "Cancel",
+                    onClick = { disconnectTarget = null },
+                    modifier = Modifier.testTag("git_hosting_disconnect_cancel"),
+                    enabled = !disconnecting,
+                )
+                KitGhostButton(
+                    if (disconnecting) "Disconnecting…" else "Disconnect",
                     onClick = {
-                        if (disconnecting) return@TextButton
+                        if (disconnecting) return@KitGhostButton
                         disconnecting = true
                         scope.launch {
                             val ok = actions.forgeRemove(target.id)
@@ -304,415 +225,68 @@ fun GitHostingScreen(
                             }
                         }
                     },
-                    enabled = !disconnecting,
                     modifier = Modifier.testTag("git_hosting_disconnect_confirm"),
-                ) {
-                    Text("Disconnect", color = cs.error)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { disconnectTarget = null },
                     enabled = !disconnecting,
-                    modifier = Modifier.testTag("git_hosting_disconnect_cancel"),
-                ) { Text("Cancel") }
+                    destructive = true,
+                )
             },
-            modifier = Modifier.testTag("git_hosting_disconnect_dialog"),
         )
+    }
+}
+
+@Composable
+private fun ForgeItem(c: ForgeConnection, onReconnect: () -> Unit, onDisconnect: () -> Unit) {
+    val host = c.host.ifEmpty { if (c.kind == "gitlab") "gitlab.com" else "github.com" }
+    KitItem(
+        "@${c.account.login}",
+        modifier = Modifier.testTag("forge_row_${c.id}"),
+        subtitle = "$host · ${c.transport.uppercase()}",
+        mark = KitMark.Letters(if (c.kind == "gitlab") "gl" else "gh"),
+    ) {
+        if (c.status == "needs_reconnect") {
+            KitGhostButton("Reconnect", onClick = onReconnect, modifier = Modifier.testTag("forge_reconnect_${c.id}"))
+        } else {
+            KitItemStatus("Connected", dot = KitDot.Ok, modifier = Modifier.testTag("forge_ok_${c.id}"))
+        }
+        KitGhostButton("Disconnect", onClick = onDisconnect, modifier = Modifier.testTag("forge_disconnect_${c.id}"))
     }
 }
 
 /**
- * The screen's content, under whatever chrome the width class asked for.
- *
- * A `@Composable` of its own rather than a lambda-valued local: a `val body: @Composable (…) -> …`
- * is re-allocated on every recomposition of the screen, so nothing below it can ever skip.
- *
- * @param onManual open the add form; `null` means "no preset kind" (the "Add account" affordance).
+ * "Add a GitHub or GitLab account": the gh / glab login on the machine (each only where the machine has it), or a
+ * pasted token for either forge, with "Your own server" (the host, HTTPS · SSH) for both. A sheet that a tap outside
+ * does not close (a token may be half pasted), and that stays while a connect is in flight.
  */
 @Composable
-private fun GitHostingBody(
-    connections: List<ForgeConnection>,
-    cliStatus: ForgeCliStatus?,
-    loading: Boolean,
-    error: String?,
-    onImport: (String) -> Unit,
-    onManual: (String?) -> Unit,
-    onRetry: () -> Unit,
-    onDisconnect: (ForgeConnection) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(cs.background)
-            .testTag("git_hosting_screen"),
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Column(
-            Modifier
-                .widthIn(max = SettingsDetailMaxWidth)
-                .fillMaxWidth()
-                .fillMaxSize(),
-        ) {
-            when {
-                loading && connections.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            color = cs.primary,
-                            modifier = Modifier.testTag("git_hosting_loading"),
-                        )
-                    }
-                }
-                connections.isEmpty() -> ForgeEmptyState(
-                    error = error,
-                    cliStatus = cliStatus,
-                    connections = connections,
-                    onImport = onImport,
-                    onManual = { kind -> onManual(kind) },
-                    onRetry = onRetry,
-                )
-                else -> Column(Modifier.fillMaxSize()) {
-                    error?.let {
-                        Text(
-                            it,
-                            color = cs.error,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier
-                                .padding(Space.lg)
-                                .testTag("git_hosting_error"),
-                        )
-                    }
-                    LazyColumn(Modifier.weight(1f).testTag("git_hosting_list")) {
-                        items(connections, key = { it.id }) { c ->
-                            ForgeConnectionRow(
-                                c = c,
-                                onReconnect = { onManual(c.kind) },
-                                onDisconnect = { onDisconnect(c) },
-                            )
-                            HorizontalDivider(color = cs.outlineVariant)
-                        }
-                    }
-                    TextButton(
-                        onClick = { onManual(null) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(Space.sm)
-                            .testTag("git_hosting_add_account"),
-                    ) {
-                        Icon(
-                            Icons.Filled.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(Space.md + Space.xs),
-                            tint = cs.primary,
-                        )
-                        Spacer(Modifier.width(Space.xs))
-                        Text("Add account", color = cs.primary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ForgeConnectionRow(
-    c: ForgeConnection,
-    onReconnect: () -> Unit,
-    onDisconnect: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val semantics = LocalSemantics.current
-    val needsReconnect = c.status == "needs_reconnect"
-    // Touch bump on the row: ask LocalPointerAvailable, NOT LocalInputMode — a phone with a
-    // Bluetooth keyboard is still a thumb. With a pointer this is desktop's original 12dp.
-    val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Space.lg, vertical = rowPadding)
-            .testTag("forge_row_${c.id}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Space.md),
-    ) {
-        Box(
-            Modifier
-                .size(Space.xxl)
-                .clip(RoundedCornerShape(Radii.sm))
-                .background(cs.surfaceContainer)
-                .border(Stroke.hairline, cs.outline, RoundedCornerShape(Radii.sm)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Hub,
-                contentDescription = null,
-                tint = if (c.kind == "gitlab") GitLabOrange else cs.primary,
-                modifier = Modifier.size(Space.lg + Space.xs),
-            )
-        }
-        Column(Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            ) {
-                Text(
-                    "@${c.account.login}",
-                    color = cs.onSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.testTag("forge_login_${c.id}"),
-                )
-                if (needsReconnect) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(Radii.pill))
-                            .border(Stroke.hairline, semantics.warning.copy(alpha = 0.5f), RoundedCornerShape(Radii.pill))
-                            .padding(horizontal = Space.sm, vertical = Space.xs),
-                    ) {
-                        Text(
-                            "reconnect",
-                            color = semantics.warning,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                } else {
-                    Box(
-                        Modifier
-                            .size(Size.statusDot)
-                            .clip(CircleShape)
-                            .background(semantics.success)
-                            .testTag("forge_ok_${c.id}"),
-                    )
-                }
-            }
-            val host = c.host.ifEmpty { if (c.kind == "gitlab") "gitlab.com" else "github.com" }
-            val via = if (c.source == "cli") " · via CLI" else ""
-            Text(
-                "$host · ${c.transport.uppercase()}$via",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        if (needsReconnect) {
-            TextButton(onClick = onReconnect, modifier = Modifier.testTag("forge_reconnect_${c.id}")) {
-                Text("Reconnect", color = cs.primary, style = MaterialTheme.typography.labelLarge)
-            }
-        }
-        TextButton(
-            onClick = onDisconnect,
-            modifier = Modifier.testTag("forge_disconnect_${c.id}"),
-        ) {
-            Text("Disconnect", color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-        }
-    }
-}
-
-@Composable
-private fun ForgeEmptyState(
-    error: String?,
-    cliStatus: ForgeCliStatus?,
-    connections: List<ForgeConnection>,
-    onImport: (String) -> Unit,
-    onManual: (String) -> Unit,
-    onRetry: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val importable = importableKinds(cliStatus, connections)
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Space.xl)
-            .testTag("git_hosting_empty"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        error?.let {
-            Text(
-                it,
-                color = cs.error,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .padding(top = Space.lg)
-                    .testTag("git_hosting_error"),
-            )
-            TextButton(onClick = onRetry, modifier = Modifier.testTag("git_hosting_retry")) {
-                Text("Retry")
-            }
-        }
-        Spacer(Modifier.height(Space.xxl + Space.lg))
-        Box(
-            Modifier
-                .size(Space.xxl + Space.xxl - Space.xs)
-                .clip(RoundedCornerShape(Radii.lg))
-                .background(cs.surfaceContainer)
-                .border(Stroke.hairline, cs.outline, RoundedCornerShape(Radii.lg)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Filled.Hub,
-                contentDescription = null,
-                tint = cs.primary,
-                modifier = Modifier.size(Space.xl + Space.xs),
-            )
-        }
-        Spacer(Modifier.height(Space.lg))
-        Text(
-            "Connect a Git host",
-            color = cs.onSurface,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.testTag("git_hosting_empty_title"),
-        )
-        Spacer(Modifier.height(Space.sm))
-        Text(
-            "Bring your GitHub & GitLab repos into supermux — clone, create, and launch sessions without leaving the app.",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        if (importable.isNotEmpty()) {
-            Spacer(Modifier.height(Space.xl))
-            importable.forEach { kind ->
-                val login = cliLogin(cliStatus, kind)
-                Button(
-                    onClick = { onImport(kind) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = Space.xs)
-                        .testTag("git_hosting_import_$kind"),
-                    colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
-                ) {
-                    Text(
-                        "Import from ${cliName(kind)}" + (login?.let { " (@$it)" } ?: ""),
-                        color = cs.onPrimary,
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(Space.xl - Space.xs))
-        Text(
-            if (importable.isEmpty()) "Connect manually" else "or connect manually",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.testTag("git_hosting_manual_label"),
-        )
-        Spacer(Modifier.height(Space.md + Space.xs))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-            listOf("github", "gitlab").forEach { kind ->
-                Button(
-                    onClick = { onManual(kind) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("git_hosting_manual_$kind"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = cs.surfaceContainer,
-                        contentColor = cs.onSurface,
-                    ),
-                ) {
-                    Text(kind.replaceFirstChar { it.uppercase() })
-                }
-            }
-        }
-        Spacer(Modifier.height(Space.sm + Space.xs))
-        Text(
-            "Uses a personal access token or your CLI login.",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(bottom = Space.xxl + Space.lg),
-        )
-    }
-}
-
-/**
- * The "Add a Git account" form — one body, two containers.
- *
- * A pointer host gets desktop's centred [Dialog]; a phone gets Android's [ModalBottomSheet], the
- * Material-native shape for an auth form with a keyboard under it. The body (and every test tag on
- * it) is identical either way.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AddForgeForm(
+private fun AddForgeSheet(
     form: ForgeForm,
     cliStatus: ForgeCliStatus?,
+    machine: String,
     onAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
     onImport: suspend (kind: String, transport: String) -> Boolean,
-    onDismiss: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val scope = rememberCoroutineScope()
-    // Hoisted so the CONTAINER can refuse a dismiss mid-submit, exactly as desktop's dialog did.
-    // Read when the dismiss arrives, not captured at composition: the sheet may still hold a
-    // callback from before the submit started.
-    val submitting by form::submitting
+    val scope = rememberRetainedScope()
+    var kind by form::kind
+    var token by form::token
+    var hostUrl by form::hostUrl
+    var transport by form::transport
+    var error by form::error
+    val submitting = form.submitting
+
     // A connect that landed, finished by the form on screen (it may be another one than started it).
     LaunchedEffect(form, form.done) {
         if (!form.done) return@LaunchedEffect
         form.done = false
         onDone()
     }
-    if (compact) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = {
-                if (submitting) {
-                    // A sheet is NOT a dialog: Material 3 animates it to Hidden and only THEN
-                    // calls this, so merely returning here would leave it composed but invisible
-                    // while the screen still holds the form open — the "+" action would go
-                    // dead until the user left the section. Bring the sheet back up instead.
-                    scope.launch { sheetState.show() }
-                } else {
-                    onDismiss()
-                }
-            },
-            sheetState = sheetState,
-            containerColor = cs.surfaceContainerLow,
-        ) {
-            AddForgeBody(form, cliStatus, onAdd, onImport, onDismiss)
-        }
-    } else {
-        Dialog(onDismissRequest = { if (!submitting) onDismiss() }) {
-            AddForgeBody(form, cliStatus, onAdd, onImport, onDismiss)
-        }
-    }
-}
 
-@Composable
-private fun AddForgeBody(
-    form: ForgeForm,
-    cliStatus: ForgeCliStatus?,
-    onAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
-    onImport: suspend (kind: String, transport: String) -> Boolean,
-    onDismiss: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val semantics = LocalSemantics.current
-    val scope = rememberRetainedScope()
-
-    var kind by form::kind
-    var token by form::token
-    var hostUrl by form::hostUrl
-    var transport by form::transport
-    var showAdvanced by form::showAdvanced
-    var error by form::error
-    val submitting = form.submitting
-
-    val canImport = cliStatus?.let { (if (kind == "github") it.github else it.gitlab).available } == true
-    val cliLoginLabel = cliStatus?.let {
-        (if (kind == "github") it.github else it.gitlab).login
-    }?.let { " (@$it)" } ?: ""
     val hostUrlError = forgeHostUrlError(hostUrl)
     val canConnect = token.trim().isNotEmpty() && hostUrlError == null
 
     fun submitConnect() {
         val t = token.trim()
-        if (t.isEmpty() || hostUrlError != null || submitting) return
+        if (t.isEmpty() || hostUrlError != null || form.submitting) return
         form.submitting = true
         error = null
         val k = kind
@@ -721,223 +295,126 @@ private fun AddForgeBody(
         scope.launch {
             val ok = onAdd(k, t, host, tr)
             form.submitting = false
-            if (ok) form.done = true
-            else form.error = "Couldn't connect — check your token and try again."
+            if (ok) form.done = true else form.error = "Couldn't connect — check your token and try again."
         }
     }
 
-    Column(
-        Modifier
-            .widthIn(max = SettingsDetailMaxWidth)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(Radii.lg))
-            .background(cs.surfaceContainerLow)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Space.xl - Space.xs)
-            .padding(vertical = Space.xl)
-            .testTag("git_hosting_add_dialog"),
-        verticalArrangement = Arrangement.spacedBy(Space.md + Space.xs),
-    ) {
-        Text(
-            "Add a Git account",
-            color = cs.onSurface,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-        )
-
-        SingleChoiceSegmentedButtonRow(
-            Modifier.fillMaxWidth().testTag("git_hosting_kind_row"),
-        ) {
-            val kinds = listOf("github", "gitlab")
-            kinds.forEachIndexed { i, k ->
-                SegmentedButton(
-                    selected = kind == k,
-                    onClick = { kind = k },
-                    shape = SegmentedButtonDefaults.itemShape(i, kinds.size),
-                    modifier = Modifier.testTag("git_hosting_kind_$k"),
-                ) { Text(k.replaceFirstChar { it.uppercase() }) }
-            }
+    fun useLogin(k: String) {
+        if (form.submitting) return
+        form.submitting = true
+        error = null
+        val tr = transport
+        scope.launch {
+            val ok = onImport(k, tr)
+            form.submitting = false
+            if (ok) form.done = true else form.error = "Couldn't use the ${cliName(k)} login on $machine — is it signed in?"
         }
+    }
 
-        if (canImport) {
-            Button(
-                onClick = {
-                    form.submitting = true
-                    error = null
-                    val k = kind
-                    val tr = transport
-                    scope.launch {
-                        val ok = onImport(k, tr)
-                        form.submitting = false
-                        if (ok) form.done = true
-                        else {
-                            form.error = "Couldn't import from ${cliName(k)} — is it logged in?"
-                        }
-                    }
-                },
+    KitSheet(
+        title = "Add a GitHub or GitLab account",
+        // Read when the dismiss arrives, not captured at composition.
+        onDismiss = { if (!form.submitting) form.close() },
+        tag = "git_hosting_add_dialog",
+        dismissOnOutside = false,
+        buttons = {
+            KitGhostButton(
+                "Cancel",
+                onClick = { form.close() },
+                modifier = Modifier.testTag("git_hosting_add_cancel"),
                 enabled = !submitting,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("git_hosting_cli_import"),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = cs.surfaceContainer,
-                    contentColor = cs.onSurface,
-                ),
-            ) {
-                Text("Import token from ${cliName(kind)}$cliLoginLabel")
-            }
-            Text(
-                "— or paste a token —",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.fillMaxWidth(),
             )
+            KitGhostButton(
+                if (submitting) "Connecting…" else "Connect ${forgeLabel(kind)}",
+                onClick = { submitConnect() },
+                modifier = Modifier.testTag("git_hosting_connect"),
+                enabled = canConnect && !submitting,
+            )
+        },
+    ) {
+        val logins = loginKinds(cliStatus)
+        if (logins.isNotEmpty()) {
+            KitItemList(Modifier.padding(top = 12.dp)) {
+                logins.forEach { k ->
+                    KitItem(
+                        "Use the ${cliName(k)} login on $machine",
+                        modifier = Modifier.testTag("git_hosting_import_$k"),
+                        subtitle = cliLogin(cliStatus, k)?.let { "@$it, found on that machine" },
+                        onClick = { useLogin(k) },
+                    )
+                }
+            }
         }
-
-        Text(
-            "Personal access token",
-            color = cs.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
+        KitSectionHead("Paste a token")
+        KitOptions(
+            options = listOf("github", "gitlab"),
+            selected = kind,
+            onSelect = { kind = it },
+            label = ::forgeLabel,
+            modifier = Modifier.padding(top = 6.dp).testTag("git_hosting_kind_row"),
+            enabled = !submitting,
+            tag = { "git_hosting_kind_$it" },
         )
-        SecretField(
+        KitTextField(
             value = token,
             onValueChange = { token = it },
+            modifier = Modifier.padding(top = 12.dp),
+            label = "Personal access token",
             placeholder = if (kind == "github") "github_pat_…" else "glpat-…",
-            modifier = Modifier.fillMaxWidth().testTag("git_hosting_token"),
+            secret = true,
+            enabled = !submitting,
             onSubmit = { if (canConnect) submitConnect() },
+            fieldTag = "git_hosting_token",
         )
         if (error != null) {
-            Text(
-                error!!,
-                color = cs.error,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.testTag("git_hosting_add_error"),
-            )
+            ErrorLine(error!!, "git_hosting_add_error")
         } else {
-            Text(
-                "Needs scopes: ${scopesHint(kind, hostUrl)}",
-                color = cs.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
+            KitNote("Needs scopes: ${scopesHint(kind, hostUrl)}")
         }
-
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { showAdvanced = !showAdvanced }
-                .onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown &&
-                        (e.key == Key.Enter || e.key == Key.Spacebar)
-                    ) {
-                        showAdvanced = !showAdvanced
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .testTag("git_hosting_advanced_toggle"),
-            verticalAlignment = Alignment.CenterVertically,
+        // Open from the start when it holds something: an unfolded phone keeps the typing, not the fold.
+        KitFold(
+            "Your own server",
+            tag = "git_hosting_advanced_toggle",
+            initiallyOpen = hostUrl.isNotBlank() || transport != "https",
         ) {
-            Text(
-                "Self-hosted & transport",
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Icon(
-                if (showAdvanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = null,
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(Space.lg + Space.xs),
-            )
-        }
-        if (showAdvanced) {
-            OutlinedTextField(
+            KitTextField(
                 value = hostUrl,
-                onValueChange = { hostUrl = it; error = null },
-                placeholder = {
-                    Text(
-                        "API base URL — e.g. github.acme.com/api/v3",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                onValueChange = {
+                    hostUrl = it
+                    error = null
                 },
-                isError = hostUrlError != null,
-                supportingText = hostUrlError?.let { msg ->
-                    {
-                        Text(
-                            msg,
-                            color = cs.error,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.testTag("git_hosting_host_url_error"),
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().testTag("git_hosting_host_url"),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
-                colors = settingsFieldColors(),
+                modifier = Modifier.padding(top = 8.dp),
+                label = "Server",
+                placeholder = if (kind == "gitlab") "gitlab.example.com" else "github.example.com",
+                enabled = !submitting,
+                error = hostUrlError,
+                mono = true,
+                fieldTag = "git_hosting_host_url",
             )
-            SingleChoiceSegmentedButtonRow(
-                Modifier.fillMaxWidth().testTag("git_hosting_transport_row"),
-            ) {
-                val transports = listOf("https" to "HTTPS", "ssh" to "SSH")
-                transports.forEachIndexed { i, (value, label) ->
-                    SegmentedButton(
-                        selected = transport == value,
-                        onClick = { transport = value },
-                        shape = SegmentedButtonDefaults.itemShape(i, transports.size),
-                        modifier = Modifier.testTag("git_hosting_transport_$value"),
-                    ) { Text(label) }
-                }
-            }
-            if (transport == "ssh" && kind == "gitlab") {
-                Text(
-                    "SSH for GitLab is experimental.",
-                    color = semantics.warning,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
+            KitOptions(
+                options = listOf("https", "ssh"),
+                selected = transport,
+                onSelect = { transport = it },
+                label = { it.uppercase() },
+                modifier = Modifier.padding(top = 10.dp).testTag("git_hosting_transport_row"),
+                enabled = !submitting,
+                tag = { "git_hosting_transport_$it" },
+            )
+            if (transport == "ssh" && kind == "gitlab") KitNote("SSH for GitLab is experimental.")
         }
-
-        Button(
-            onClick = { submitConnect() },
-            enabled = canConnect && !submitting,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("git_hosting_connect"),
-            colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
-        ) {
-            if (submitting) {
-                CircularProgressIndicator(
-                    color = cs.onPrimary,
-                    strokeWidth = Stroke.thin,
-                    modifier = Modifier.size(Space.lg),
-                )
-            } else {
-                Text(
-                    "Connect ${kind.replaceFirstChar { it.uppercase() }}",
-                    color = cs.onPrimary,
-                )
-            }
-        }
-
-        CancelRow(onDismiss = onDismiss, enabled = !submitting)
     }
 }
 
-/** Kept out of [AddForgeBody] only so `Modifier.align` resolves against the right Column scope. */
 @Composable
-private fun ColumnScope.CancelRow(onDismiss: () -> Unit, enabled: Boolean) {
-    TextButton(
-        onClick = onDismiss,
-        enabled = enabled,
-        modifier = Modifier
-            .align(Alignment.End)
-            .testTag("git_hosting_add_cancel"),
-    ) { Text("Cancel") }
+private fun ErrorLine(text: String, tag: String) {
+    Text(text, fontSize = 12.sp, color = kitColors().danger, modifier = Modifier.padding(top = 8.dp).testTag(tag))
 }
 
 // ── Forge helpers ───────────────────────────────────────────────────────────────────────────────
+
+/** The forges whose command-line login the machine has, so the add sheet can offer "Use the gh login on …". */
+internal fun loginKinds(cli: ForgeCliStatus?): List<String> =
+    if (cli == null) emptyList() else listOf("github", "gitlab").filter { (if (it == "github") cli.github else cli.gitlab).available }
 
 internal fun importableKinds(cli: ForgeCliStatus?, connections: List<ForgeConnection>): List<String> {
     if (cli == null) return emptyList()
@@ -977,8 +454,9 @@ internal fun scopesHint(kind: String, hostUrl: String): String {
 }
 
 /**
- * Validate an optional self-hosted API base URL.
- * Blank is allowed (public github.com / gitlab.com). Non-blank must look like a host or http(s) URL.
+ * Validate an optional self-hosted server.
+ * Blank is allowed (public github.com / gitlab.com). Non-blank must look like a host or http(s) URL; supermux adds
+ * the API path itself, so the hint never asks for one (inventory bug 8).
  * Returns an error message, or null when valid.
  */
 internal fun forgeHostUrlError(raw: String): String? {
@@ -989,11 +467,10 @@ internal fun forgeHostUrlError(raw: String): String? {
     if ("://" in lower && !lower.startsWith("http://") && !lower.startsWith("https://")) {
         return "URL must start with http:// or https://"
     }
-    return if (isValidForgeHostUrl(t)) null
-    else "Enter a host like github.acme.com or https://git.example.com/api/v3"
+    return if (isValidForgeHostUrl(t)) null else "Enter a host like github.example.com"
 }
 
-/** True when [raw] is blank or a plausible host / http(s) API base URL. */
+/** True when [raw] is blank or a plausible host / http(s) URL. */
 internal fun isValidForgeHostUrl(raw: String): Boolean {
     val t = raw.trim()
     if (t.isEmpty()) return true
@@ -1018,9 +495,9 @@ internal fun isValidForgeHostUrl(raw: String): Boolean {
 }
 
 /**
- * The "Add a Git account" form, kept for the page on display (`rememberRetainedOnPage`, #89): open
- * or not, what is typed, and a connect in flight, which runs on the fleet's scope and sets [done]
- * for the form on screen. Closing it starts the next opening afresh, as closing the dialog did.
+ * The add sheet, kept for the page on display (`rememberRetainedOnPage`, #89): open or not, what is typed, and a
+ * connect in flight, which runs on the fleet's scope and sets [done] for the form on screen. Closing it starts the
+ * next opening afresh.
  */
 private class ForgeForm {
     var isOpen by mutableStateOf(false)
@@ -1028,7 +505,6 @@ private class ForgeForm {
     var token by mutableStateOf("")
     var hostUrl by mutableStateOf("")
     var transport by mutableStateOf("https")
-    var showAdvanced by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var submitting by mutableStateOf(false)
     var done by mutableStateOf(false)
@@ -1045,7 +521,6 @@ private class ForgeForm {
         token = ""
         hostUrl = ""
         transport = "https"
-        showAdvanced = false
         error = null
         submitting = false
         done = false

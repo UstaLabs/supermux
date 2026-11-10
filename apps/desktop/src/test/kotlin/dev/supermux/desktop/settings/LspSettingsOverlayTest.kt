@@ -97,7 +97,7 @@ class LspSettingsOverlayTest {
         val app = appForLspSettings()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -113,7 +113,7 @@ class LspSettingsOverlayTest {
         val app = appForLspSettings()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()
@@ -129,7 +129,7 @@ class LspSettingsOverlayTest {
         val app = appForLspSettings()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                TestAppShell(app, ui)
+                TestAppShell(app, ui, online = true)
             }
         }
         waitForIdle()

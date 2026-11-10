@@ -16,12 +16,11 @@ import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.GitHostingScreen
-import dev.supermux.ui.settings.EditorSettingsScreen
 import dev.supermux.ui.settings.SettingsPlace
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.WorktreesSettingsScreen
 import dev.supermux.ui.settings.GLOSSARY_SUB
+import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
@@ -33,6 +32,7 @@ import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
+import dev.supermux.ui.settings.rememberCodeIntelligenceActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.rememberWorktreesSettingsActions
@@ -43,8 +43,8 @@ import dev.supermux.ui.theme.AppearanceMode
  * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
  *
  * #97's switch-over, the same temporary mapping as `FleetSettingsSection`: today's screens under their new
- * section until each page is rebuilt; Accounts is a provider's sub-page and Git hosting Coding's `github` anchor
- * meanwhile.
+ * section until each page is rebuilt; Accounts is a provider's sub-page meanwhile, and Git hosting is Coding's
+ * `github` anchor.
  */
 @Composable
 fun DesktopSettingsSection(
@@ -86,33 +86,12 @@ fun DesktopSettingsSection(
                 )
             }
         }
-        // E7: the Editor page is the wrap/font steppers ABOVE the same `LspSettingsScreen` desktop used to
-        // reach bare here. The steppers write the `SettingsKeys.EDITOR_*` values `WebCodeEditor`/`DiffView`
-        // already read, so desktop's editor behaviour is unchanged.
-        SettingsSection.Coding -> if (place.anchor == "github") {
-            GitHostingScreen(
-                actions = rememberGitHostingActions(host),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        } else {
-            EditorSettingsScreen(
-                lspLoad = { host.lspLoad() },
-                lspToggle = { id, enabled -> host.lspToggle(id, enabled) },
-                lspInstall = { id -> host.lspInstall(id) },
-                lspInstallLog = host.lspInstallLog,
-                lspInstallDone = host.lspInstallDone,
-                lspAddCustom = { args ->
-                    host.lspAddCustom(
-                        args.id, args.label, args.command, args.extensions, args.args,
-                        args.languageId, args.installCmd,
-                    )
-                },
-                lspRemoveCustom = { id -> host.lspRemoveCustom(id) },
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        }
+        SettingsSection.Coding -> CodingPage(
+            forges = rememberGitHostingActions(host),
+            lsp = rememberCodeIntelligenceActions(host),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
         SettingsSection.Memory -> MemoryPage(
             actions = rememberCuratorSettingsActions(host),
             anchor = place.anchor,

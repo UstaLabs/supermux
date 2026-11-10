@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.settings.pages.CodingPage
 import dev.supermux.ui.settings.pages.GeneralPage
 import dev.supermux.ui.settings.pages.GlossaryPage
 import dev.supermux.ui.settings.pages.InterimMachinePage
@@ -37,7 +38,7 @@ import dev.supermux.ui.settings.pages.rememberVoiceSettingsActions
  * #97's switch-over: every new section shows today's screen until its page is rebuilt (Tasks 11–16 replace one line
  * each). Two old sections have no page of their own any more and are reached through their new place meanwhile:
  * Accounts is a provider's sub-page (`Providers/‹agent›`, where Usage's and the composer's "Sign in again" land)
- * and Git hosting is Coding's `github` anchor (the old slug, the menu hook).
+ * and Git hosting is Coding's `github` anchor (the old slug, the menu hook), on the Coding page itself.
  */
 @Composable
 fun FleetSettingsSection(
@@ -79,30 +80,12 @@ fun FleetSettingsSection(
                 )
             }
         }
-        SettingsSection.Coding -> if (place.anchor == "github") {
-            GitHostingScreen(
-                actions = rememberGitHostingActions(fleet),
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        } else {
-            EditorSettingsScreen(
-                lspLoad = { fleet.lspLoad() },
-                lspToggle = { id, enabled -> fleet.lspToggle(id, enabled) },
-                lspInstall = { id -> fleet.lspInstall(id) },
-                lspInstallLog = fleet.lspInstallLog,
-                lspInstallDone = fleet.lspInstallDone,
-                lspAddCustom = { args ->
-                    fleet.lspAddCustom(
-                        args.id, args.label, args.command, args.extensions, args.args,
-                        args.languageId, args.installCmd,
-                    )
-                },
-                lspRemoveCustom = { id -> fleet.lspRemoveCustom(id) },
-                onBack = scope.onClose,
-                topBarShown = scope.topBarShown,
-            )
-        }
+        SettingsSection.Coding -> CodingPage(
+            forges = rememberGitHostingActions(fleet),
+            lsp = rememberCodeIntelligenceActions(fleet),
+            anchor = place.anchor,
+            onAnchorShown = scope.onAnchorShown,
+        )
         SettingsSection.Memory -> MemoryPage(
             actions = rememberCuratorSettingsActions(fleet),
             anchor = place.anchor,
