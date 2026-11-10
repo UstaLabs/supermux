@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.webview.Activation
 import dev.supermux.webview.DarkMode
 import dev.supermux.webview.WebContent
+import dev.supermux.webview.WebProfile
 import dev.supermux.webview.WebSettings
 import dev.supermux.webview.WebSizing
 import dev.supermux.webview.WebView
@@ -81,7 +82,8 @@ hostBridge.handle('state', function () {
     )
 
     /** What a check's scene shows, and where its parts are in the window (px). */
-    private class Stage(withEmbed: Boolean = false) {
+    /** [profile]: a view that loads local content and then a page needs one pinned, or each runs in its own (Html: Ephemeral). */
+    private class Stage(withEmbed: Boolean = false, val profile: WebProfile? = null) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val runtime = WebViewRuntime(RuntimeConfig(maxLive = 2, maxIdle = 0, snapshotCacheBytes = 16L shl 20, scope = scope))
         val state = WebViewState(INPUT_PAGE)
@@ -104,7 +106,7 @@ hostBridge.handle('state', function () {
                         WebView(
                             stage.state,
                             Modifier.fillMaxSize().onGloballyPositioned { stage.page = it.boundsInWindow() },
-                            settings = WebSettings(darkMode = DarkMode.Light),
+                            settings = WebSettings(darkMode = DarkMode.Light, profile = stage.profile),
                             activation = Activation.Eager,
                         )
                         // A marked overlay over the page's top-right corner: its presses are Compose's (D1).
@@ -243,7 +245,9 @@ setTimeout(report, 50);
         Check("mac-a-cookie-set-before-the-page-reaches-its-request-and-an-httponly-one-stays-out-of-its-script") {
             val server = cookieEcho()
             try {
-                val stage = Stage()
+                // The stage starts on local content: without a pinned profile its cookies would go into Html's
+                // Ephemeral store, and the page would load in the Default one.
+                val stage = Stage(profile = WebProfile.Named("checks-cookies"))
                 withPage(stage) { _ ->
                     val url = "http://127.0.0.1:${server.address.port}/"
                     assertTrue(stage.state.navigator.setCookie(WebCookie(name = "probe", value = "1", url = url, secure = false, httpOnly = false)))

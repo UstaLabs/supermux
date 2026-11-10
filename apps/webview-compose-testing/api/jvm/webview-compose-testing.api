@@ -40,17 +40,23 @@ public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/web
 	public synthetic fun <init> (ILdev/supermux/webview/engine/EmbeddingMode;Ldev/supermux/webview/testing/FakeEngineBehavior;Ldev/supermux/webview/engine/EngineConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun Surface (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
 	public fun applyOverlays (Ldev/supermux/webview/runtime/OverlayCutouts;)V
+	public fun clearFind ()V
 	public fun configure (Ldev/supermux/webview/engine/PageSetup;)V
 	public final fun emit (Ldev/supermux/webview/engine/EngineEvent;)V
 	public fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun find (Ljava/lang/String;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getBehavior ()Ldev/supermux/webview/testing/FakeEngineBehavior;
 	public final fun getCalls ()Ljava/util/List;
 	public fun getClient ()Ldev/supermux/webview/engine/EngineClient;
 	public final fun getConfig ()Ldev/supermux/webview/engine/EngineConfig;
+	public final fun getCookies ()Ljava/util/List;
 	public final fun getCutouts ()Ldev/supermux/webview/runtime/OverlayCutouts;
 	public final fun getDocumentsStarted ()I
+	public final fun getEvaluateAnswer ()Lkotlin/jvm/functions/Function1;
 	public fun getEvents ()Lkotlinx/coroutines/flow/Flow;
+	public final fun getFindAnswer ()Lkotlin/jvm/functions/Function2;
 	public final fun getId ()I
+	public final fun getInspectorAnswer ()Ldev/supermux/webview/InspectorResult;
 	public final fun getLastSetup ()Ldev/supermux/webview/engine/PageSetup;
 	public fun getMode ()Ldev/supermux/webview/engine/EmbeddingMode;
 	public fun getNeedsCutouts ()Z
@@ -65,6 +71,7 @@ public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/web
 	public fun goForward ()V
 	public fun isUsable ()Z
 	public fun load (Ldev/supermux/webview/WebContent;)V
+	public fun openInspector ()Ldev/supermux/webview/InspectorResult;
 	public fun overlaysAtSnapshot (Ldev/supermux/webview/runtime/OverlayCutouts;)V
 	public final fun postFromPage (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Z
 	public static synthetic fun postFromPage$default (Ldev/supermux/webview/testing/FakeWebEngine;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Z
@@ -78,10 +85,15 @@ public final class dev/supermux/webview/testing/FakeWebEngine : dev/supermux/web
 	public fun saveState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setBehavior (Ldev/supermux/webview/testing/FakeEngineBehavior;)V
 	public fun setClient (Ldev/supermux/webview/engine/EngineClient;)V
+	public fun setCookie (Ldev/supermux/webview/WebCookie;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setEvaluateAnswer (Lkotlin/jvm/functions/Function1;)V
+	public final fun setFindAnswer (Lkotlin/jvm/functions/Function2;)V
+	public final fun setInspectorAnswer (Ldev/supermux/webview/InspectorResult;)V
 	public fun setOnUnusable (Lkotlin/jvm/functions/Function0;)V
 	public final fun setResetGate (Lkotlinx/coroutines/CompletableDeferred;)V
 	public final fun setSaveStateGate (Lkotlinx/coroutines/CompletableDeferred;)V
 	public fun setVisible (Z)V
+	public fun setZoom (F)Z
 	public fun snapshot (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun stop ()V
 }

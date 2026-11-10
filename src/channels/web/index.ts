@@ -297,6 +297,8 @@ export interface WebAccountsApi {
   remove(id: string, options: { deleteHome?: boolean }): Promise<void>
   /** What removing the account would do: how many chats move, and to which account (#106). */
   removalPlan(id: string): Promise<unknown>
+  /** Debug (#106): mark a login signed out, as a refused sign-in does; false when there is no such account. */
+  markExpired?(id: string): Promise<boolean>
   startLogin(body: Record<string, unknown>): unknown
   loginState(loginId: string): unknown | undefined
   submitCode(loginId: string, code: string): void
@@ -3397,6 +3399,13 @@ export class WebChannel implements Channel {
         return (await api.resumeLimitWait(id)) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
       }
       return this.json({ error: "not found" }, 404)
+    }
+
+    // ── #106 demo: mark a login signed out to try that state (paired clients only, like every /debug route) ──
+    if (path === "/debug/account-expired" && method === "POST" && this.opts.accounts?.markExpired) {
+      const body = (await req.json().catch(() => ({}))) as { account?: unknown }
+      if (typeof body.account !== "string" || !body.account) return this.json({ error: "account required" }, 400)
+      return (await this.opts.accounts.markExpired(body.account)) ? this.json({ ok: true }) : this.json({ error: "no such account" }, 404)
     }
 
     // ── accounts (one registry for every agent; secrets go in, never out) ──
