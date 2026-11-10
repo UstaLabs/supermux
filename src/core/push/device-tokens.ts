@@ -38,6 +38,14 @@ export class DevicePushTokenStore {
     return this.db.prepare(`SELECT * FROM device_push_tokens`).all() as any[]
   }
 
+  /** A renamed device keeps its push registration (#97); a stale row under the new name gives way. */
+  rename(from: string, to: string): void {
+    this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM device_push_tokens WHERE device = ?`).run(to)
+      this.db.prepare(`UPDATE device_push_tokens SET device = ? WHERE device = ?`).run(to, from)
+    })()
+  }
+
   remove(device: string): void {
     this.db.prepare(`DELETE FROM device_push_tokens WHERE device = ?`).run(device)
   }

@@ -19,6 +19,11 @@ export interface DeviceRecord {
 /** How long a pairing link pairs (#119), on the broker, whatever the app does. */
 export const PAIRING_TTL_MS = 10 * 60_000
 
+/** The longest name a rename gives a device (#97). */
+export const DEVICE_NAME_MAX = 40
+
+export type DeviceRename = { ok: true; device: DeviceRecord } | { ok: false; reason: "invalid" | "taken" | "unknown" }
+
 export type PairingClaim = { ok: true; name: string } | { ok: false; reason: "expired" | "used" | "unknown" }
 
 function sha256(s: string): string {
@@ -36,6 +41,12 @@ export class DeviceStore {
   }
 
   private revokeListeners: Array<(name: string) => void> = []
+  private renameListeners: Array<(from: string, to: string) => void> = []
+
+  /** Whatever keeps a device's name (push rows, uploads) moves with a rename (#97). */
+  addRenameListener(fn: (from: string, to: string) => void): void {
+    this.renameListeners.push(fn)
+  }
 
   addRevokeListener(fn: (name: string) => void): void {
     this.revokeListeners.push(fn)
@@ -204,6 +215,29 @@ export class DeviceStore {
     records[i]!.last_seen_at = new Date(now).toISOString()
     if (claims) delete records[i]!.pairing
     this.write(records)
+  }
+
+  /**
+   * Renames a device (#97). The name is the device's key, so the codes it made follow it and the rename
+   * listeners move what else names it. The same name again changes nothing.
+   */
+  rename(name: string, requested: string): DeviceRename {
+    const to = requested.trim()
+    if (!to || to.length > DEVICE_NAME_MAX) return { ok: false, reason: "invalid" }
+    const current = this.list().find((r) => r.name === name)
+    if (!current) return { ok: false, reason: "unknown" }
+    if (to === name) return { ok: true, device: current }
+    const records = this.read()
+    if (records.some((r) => r.name === to)) return { ok: false, reason: "taken" }
+    for (const r of records) {
+      if (r.name === name) r.name = to
+      if (r.pairing?.by === name) r.pairing.by = to
+    }
+    this.write(records)
+    for (const fn of this.renameListeners) {
+      try { fn(name, to) } catch { /* swallow */ }
+    }
+    return { ok: true, device: { ...records.find((r) => r.name === to)! } }
   }
 
   revoke(name: string): boolean {

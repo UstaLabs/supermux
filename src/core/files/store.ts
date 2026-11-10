@@ -504,6 +504,14 @@ export class FileStore {
    * `send` frames — keeps the device → file_id binding enforced at the
    * channel boundary instead of leaking sqlite into channel code.
    */
+  /** A renamed device still owns its uploads (#97), finished and in flight. */
+  renameDevice(from: string, to: string): void {
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE attachments SET device = ? WHERE device = ?").run(to, from)
+      this.db.prepare("UPDATE pending_uploads SET device = ? WHERE device = ?").run(to, from)
+    })()
+  }
+
   async resolveOwnedWebUpload(file_id: string, device: string): Promise<FileMeta | null> {
     const row = this.db.prepare(
       "SELECT file_id, kind, mime, name, path, size, origin, device FROM attachments WHERE file_id = ?",
