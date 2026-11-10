@@ -9,6 +9,7 @@
 // its own. The calls are today's [WorktreesSettingsActions], unchanged.
 package dev.supermux.ui.settings.pages
 
+import dev.supermux.fs.fileNameOf
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -201,7 +202,7 @@ object WorktreesCopy {
 
     /** The folder's own name: the last part of its path. */
     fun folder(w: WorktreeSummaryDto): String =
-        w.path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifEmpty { w.id.substringAfter('/') }
+        fileNameOf(w.path.trimEnd('/', '\\')).ifEmpty { w.id.substringAfter('/') }
 }
 
 /** Rows the page draws at first, and how many more each Show more adds. */

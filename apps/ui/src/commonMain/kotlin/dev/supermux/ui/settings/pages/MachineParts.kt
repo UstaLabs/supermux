@@ -249,7 +249,7 @@ private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 /** [url] with its origin swapped for [origin]: the pairing link on this computer's local address. */
 fun rebaseUrl(url: String, origin: String): String {
     val rest = url.substringAfter("://", url).let { r -> r.indexOf('/').let { if (it < 0) "" else r.substring(it) } }
-    return origin.trimEnd('/') + rest
+    return origin.trimEnd('/') + rest // platform-ok: url
 }
 
 /** A section with nothing to show because supermux isn't there to ask: one quiet line. */
