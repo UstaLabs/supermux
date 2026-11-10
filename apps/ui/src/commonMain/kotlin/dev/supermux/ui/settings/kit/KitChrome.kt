@@ -122,6 +122,8 @@ fun KitSheet(
     description: String? = null,
     tag: String = "settings_sheet",
     dismissOnOutside: Boolean = true,
+    /** The prototype's `.sheet.wide`: room for a list (the worktrees review, the log). */
+    wide: Boolean = false,
     buttons: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
@@ -134,7 +136,7 @@ fun KitSheet(
         Column(
             modifier
                 .padding(16.dp)
-                .widthIn(max = 380.dp)
+                .widthIn(max = if (wide) 560.dp else 380.dp)
                 .fillMaxWidth()
                 .clip(shape)
                 .background(c.chrome)

@@ -1250,6 +1250,7 @@ fun SupermuxApp(
                                         onRegisterCloseHandler = { settingsTryClose = it },
                                         machines = settingsMachines,
                                         searchShortcut = settingsSearchShortcut,
+                                        onOpenUsage = { ui.openUsage() },
                                         content = settingsSection,
                                     )
                                 }

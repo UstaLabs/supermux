@@ -29,6 +29,7 @@ import dev.supermux.ui.settings.pages.KeyboardShortcutsPage
 import dev.supermux.ui.settings.pages.MemoryPage
 import dev.supermux.ui.settings.pages.rememberCuratorSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.settings.pages.PrivacyLabsPage
 import dev.supermux.ui.settings.pages.ProviderDetailPage
 import dev.supermux.ui.settings.pages.ProvidersPage
@@ -134,7 +135,11 @@ fun FleetSettingsSection(
             else -> MachinePage(
                 system = rememberSystemSettingsActions(fleet),
                 chats = rememberMachineChats(fleet),
-                onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
+                devices = rememberDevicesSettingsActions(fleet),
+                links = rememberProxiesSettingsActions(fleet),
+                worktrees = rememberWorktreesSettingsActions(fleet),
+                usage = rememberUsageActions(fleet),
+                onOpenUsage = scope.onOpenUsage,
                 anchor = place.anchor,
                 onAnchorShown = scope.onAnchorShown,
             )

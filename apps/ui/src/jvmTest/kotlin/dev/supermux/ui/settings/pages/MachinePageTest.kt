@@ -28,7 +28,6 @@ import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingPowerUi
 import dev.supermux.ui.settings.HostingUiState
 import dev.supermux.ui.settings.KeepAwakeUi
-import dev.supermux.ui.settings.MachineSub
 import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.kit.KitMachine
 import dev.supermux.ui.settings.kit.LocalSettingsMachines
@@ -87,10 +86,9 @@ class MachinePageTest {
         hosting: ThisComputerHosting? = null,
         platform: FakePlatform = FakePlatform(),
         widthClass: WindowWidthClass = WindowWidthClass.Expanded,
-        onOpen: (String) -> Unit = {},
     ) = setPlatformContent(platform = platform, widthClass = widthClass, pointer = widthClass != WindowWidthClass.Compact) {
         Machines(machine) {
-            MachinePage(system, chats = chats, hosting = hosting, onOpen = onOpen, pollDelayMs = 10, pollAttempts = 50)
+            MachinePage(system, chats = chats, hosting = hosting, pollDelayMs = 10, pollAttempts = 50)
         }
     }
 
@@ -345,17 +343,6 @@ class MachinePageTest {
         onNodeWithTag("machine_install_git").performScrollTo().performClick()
         waitForIdle()
         assertEquals(listOf("git"), h.calls)
-    }
-
-    @Test fun the_screens_still_to_come_open_as_sub_pages() = runComposeUiTest {
-        val opened = mutableListOf<String>()
-        page(server, SystemSettingsActions(updateStatus = { status() }), onOpen = { opened += it })
-        waitForIdle()
-        listOf("devices", "links", "worktrees").forEach {
-            onNodeWithTag("machine_row_$it").performScrollTo().performClick()
-            waitForIdle()
-        }
-        assertEquals(listOf(MachineSub.DEVICES, MachineSub.LINKS, MachineSub.WORKTREES), opened)
     }
 
     @Test fun stop_copy_with_one_or_no_working_chat() {

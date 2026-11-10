@@ -42,6 +42,7 @@ import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.rememberWorktreesSettingsActions
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.usage.rememberUsageActions
 
 /**
  * Renders [place]'s desktop screen against [host]. Called from the hub's `content` slot.
@@ -146,7 +147,11 @@ fun DesktopSettingsSection(
                 } else {
                     null
                 },
-                onOpen = { scope.onOpen(SettingsPlace(SettingsSection.Machine, it)) },
+                devices = rememberDevicesSettingsActions(host),
+                links = rememberProxiesSettingsActions(host),
+                worktrees = rememberWorktreesSettingsActions(host),
+                usage = rememberUsageActions(host),
+                onOpenUsage = scope.onOpenUsage,
                 anchor = place.anchor,
                 onAnchorShown = scope.onAnchorShown,
             )

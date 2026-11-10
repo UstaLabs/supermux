@@ -139,7 +139,7 @@ class DevicesSettingsHubTest {
         harness.client.close()
     }
 
-    @Test fun the_machine_page_opens_devices_from_agents() = runComposeUiTest {
+    @Test fun the_machine_page_lists_the_devices_after_agents() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Providers) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -181,16 +181,14 @@ class DevicesSettingsHubTest {
                 false
             }
         }
-        // What a machine card does; then the machine page's Devices row.
+        // What a machine card does: the machine page lists the devices itself.
         ui.openSettings(SettingsSection.Machine)
         waitForIdle()
         onNodeWithTag("machine_page").assertIsDisplayed()
-        onNodeWithTag("machine_row_devices").performClick()
-        waitForIdle()
         assertEquals(SettingsSection.Machine, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
+                onNodeWithTag("device_row_pixel-8").assertExists()
                 true
             } catch (_: Throwable) {
                 false

@@ -1,6 +1,6 @@
-// The machine page (#97 Step 2, spec §2.4, §10.12, §13): the header (status, ONE Restart, updates) and While you're
-// away (this computer's hosting, desktop only). Devices, shared links and disk still open today's screens until the
-// next unit replaces them. The copy is the approved prototype's (`~/work/proto-97/step2/step2.js`).
+// The machine page (#97 Step 2, spec §2.4, §10.12, §13): the header (status, ONE Restart, updates), While you're
+// away (this computer's hosting, desktop only), then the machine's own parts — Devices, Shared links, Disk and Limits
+// (`MachineParts.kt`). The copy is the approved prototype's (`~/work/proto-97/step2/step2.js`).
 //
 // Restart (§13): no confirmation and no chat list — sessions survive a restart — only a status line while supermux is
 // down. This computer's own supervised supermux restarts through its supervisor ([ThisComputerHosting.restart]),
@@ -58,16 +58,15 @@ import dev.supermux.ui.settings.HostingActions
 import dev.supermux.ui.settings.HostingCopy
 import dev.supermux.ui.settings.HostingPhase
 import dev.supermux.ui.settings.HostingUiState
-import dev.supermux.ui.settings.MachineSub
+import dev.supermux.ui.settings.DevicesSettingsActions
+import dev.supermux.ui.settings.ProxiesSettingsActions
+import dev.supermux.ui.settings.WorktreesSettingsActions
 import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.isRunningState
 import dev.supermux.ui.settings.kit.KitDot
 import dev.supermux.ui.settings.kit.KitDotMark
 import dev.supermux.ui.settings.kit.KitGhostButton
 import dev.supermux.ui.settings.kit.KitGlyphs
-import dev.supermux.ui.settings.kit.KitItem
-import dev.supermux.ui.settings.kit.KitItemList
-import dev.supermux.ui.settings.kit.KitMark
 import dev.supermux.ui.settings.kit.KitNote
 import dev.supermux.ui.settings.kit.KitPage
 import dev.supermux.ui.settings.kit.KitRow
@@ -82,6 +81,7 @@ import dev.supermux.ui.settings.kit.kitAnchor
 import dev.supermux.ui.settings.kit.kitColors
 import dev.supermux.ui.settings.kit.kitMetrics
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.usage.UsageActions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -247,7 +247,10 @@ object MachineCopy {
  * @param chats its chats, for the status line and the Stop hosting sheet.
  * @param hosting this computer's hosting when the page is this computer's own, on desktop; null elsewhere, where
  *   While you're away is one line.
- * @param onOpen opens one of today's screens still on the page (devices, links, worktrees).
+ * @param devices, links, worktrees, usage that machine's paired devices, shared links, chat worktrees and limits:
+ *   today's actions holders. [usage] null leaves Limits with its head only.
+ * @param onOpenUsage "Open full usage": the Usage screen.
+ * @param pairTimings how long a pairing code lives and how often its sheet looks for the device that used it.
  */
 @Composable
 fun MachinePage(
@@ -255,11 +258,16 @@ fun MachinePage(
     modifier: Modifier = Modifier,
     chats: MachineChats = MachineChats(),
     hosting: ThisComputerHosting? = null,
-    onOpen: (sub: String) -> Unit = {},
+    devices: DevicesSettingsActions = DevicesSettingsActions(),
+    links: ProxiesSettingsActions = ProxiesSettingsActions(),
+    worktrees: WorktreesSettingsActions = WorktreesSettingsActions(),
+    usage: UsageActions? = null,
+    onOpenUsage: () -> Unit = {},
     anchor: String? = null,
     onAnchorShown: () -> Unit = {},
     pollDelayMs: Long = 1_500L,
     pollAttempts: Int = 120,
+    pairTimings: PairTimings = PairTimings(),
 ) {
     val machine = LocalSettingsMachines.current?.current
     val local = hosting != null || machine?.local == true
@@ -441,25 +449,23 @@ fun MachinePage(
             Column(Modifier.kitAnchor("host-on")) { Away(hosting, chats) }
         }
 
-        // ── Still today's screens, until the next unit (S2-3) brings them onto the page ──
-        KitSectionHead("More", Modifier)
-        KitItemList {
-            KitItem(
-                "Devices", Modifier.kitAnchor(MachineSub.DEVICES).testTag("machine_row_devices"),
-                subtitle = "Phones and computers you paired", mark = KitMark.Glyph(KitGlyphs.Devices),
-                onClick = { onOpen(MachineSub.DEVICES) },
-            )
-            KitItem(
-                "Shared links", Modifier.kitAnchor(MachineSub.LINKS).testTag("machine_row_links"),
-                subtitle = "Ports shared from chats", mark = KitMark.Glyph(KitGlyphs.Link),
-                onClick = { onOpen(MachineSub.LINKS) },
-            )
-            KitItem(
-                "Worktrees", Modifier.kitAnchor(MachineSub.WORKTREES).testTag("machine_row_worktrees"),
-                subtitle = "Disk used by chats, clean up", mark = KitMark.Glyph(KitGlyphs.Tree),
-                onClick = { onOpen(MachineSub.WORKTREES) },
-            )
+        // ── The machine's own parts: one quiet line each while supermux isn't there to ask ──
+        val quiet = when {
+            hosting != null -> when (phase) {
+                HostingPhase.Off -> MachinePartsCopy.NOT_HOSTING
+                HostingPhase.Starting -> MachinePartsCopy.STARTING
+                HostingPhase.Failed -> MachinePartsCopy.NOT_RUNNING
+                else -> null
+            }
+            !up -> MachinePartsCopy.offline(name, machine?.lastSeen.orEmpty())
+            else -> null
         }
+        // Reaching it from anywhere is off on this computer: a pairing link must use its address on this network.
+        val pairOrigin = hosting?.state?.takeIf { phase == HostingPhase.Running && !it.relay }?.localUrl?.takeIf { it.isNotBlank() }
+        DevicesSection(devices, name, quiet, pairOrigin, pairTimings)
+        LinksSection(links, name, quiet, chats.working)
+        DiskSection(worktrees, name, quiet)
+        LimitsSection(usage, quiet, onOpenUsage)
     }
 }
 

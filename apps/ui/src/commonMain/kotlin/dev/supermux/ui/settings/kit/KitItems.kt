@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,12 @@ fun KitItem(
     mark: KitMark? = null,
     onClick: (() -> Unit)? = null,
     indent: Boolean = false,
+    /** A small accent word after the title ("This device"). */
+    titleBadge: String? = null,
+    /** The subtitle with parts in their own tone ("From “chat” · Public: anyone with the link"); wins over [subtitle]. */
+    subtitleRich: AnnotatedString? = null,
+    /** The title in the dim tone and the mark faint: an item kept out of reach (a worktree with changes). */
+    muted: Boolean = false,
     below: (@Composable ColumnScope.() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
@@ -87,10 +94,35 @@ fun KitItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (mark != null) KitMarkBox(mark)
+            if (mark != null) KitMarkBox(mark, muted)
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = m.label, color = if (add) c.accent else c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (subtitle != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        title,
+                        fontSize = m.label,
+                        color = when {
+                            add -> c.accent
+                            muted -> c.dim
+                            else -> c.text
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (titleBadge != null) {
+                        Text(titleBadge, fontSize = 11.sp, color = c.accent, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                if (subtitleRich != null) {
+                    Text(
+                        subtitleRich,
+                        fontSize = m.desc,
+                        color = c.dim,
+                        maxLines = if (m.phone) 3 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 1.dp),
+                    )
+                } else if (subtitle != null) {
                     Text(
                         subtitle,
                         fontSize = m.desc,
@@ -114,7 +146,7 @@ fun KitItem(
 
 /** The mark is decoration: the title names the item, so screen readers skip the letters. */
 @Composable
-private fun KitMarkBox(mark: KitMark) {
+private fun KitMarkBox(mark: KitMark, muted: Boolean = false) {
     val c = kitColors()
     Box(
         Modifier.size(26.dp).border(1.dp, c.line, RoundedCornerShape(7.dp)).clearAndSetSemantics {},
@@ -122,7 +154,7 @@ private fun KitMarkBox(mark: KitMark) {
     ) {
         when (mark) {
             is KitMark.Letters -> Text(mark.text, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = c.dim)
-            is KitMark.Glyph -> Icon(mark.vector, contentDescription = null, tint = c.dim, modifier = Modifier.size(15.dp))
+            is KitMark.Glyph -> Icon(mark.vector, contentDescription = null, tint = if (muted) c.faint else c.dim, modifier = Modifier.size(15.dp))
             KitMark.Add -> Icon(KitGlyphs.Plus, contentDescription = null, tint = c.accent, modifier = Modifier.size(15.dp))
         }
     }

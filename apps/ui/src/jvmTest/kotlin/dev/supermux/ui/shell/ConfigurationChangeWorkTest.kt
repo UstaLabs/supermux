@@ -251,8 +251,8 @@ class ConfigurationChangeWorkTest {
 
     @Test fun a_machine_sub_page_open_on_a_phone_survives_a_recreation() = runComposeUiTest {
         // #97: Devices is a sub-page of the machine page; the hub saves the sub-page with its place.
-        val activity = phoneShell(devicesHost(), settings = true) { openSettings(SettingsSection.Machine) }
-        openFromTheIndex("machine_row_devices", "devices_settings_screen")
+        val activity = phoneShell(devicesHost(), settings = true) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        await("devices_settings_screen")
 
         activity.recreate()
 
@@ -263,8 +263,8 @@ class ConfigurationChangeWorkTest {
 
     @Test fun the_settings_page_open_on_a_phone_stays_open_through_the_compact_to_wide_swap() = runComposeUiTest {
         val ui = ShellUiState()
-        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings(SettingsSection.Machine) }
-        openFromTheIndex("machine_row_devices", "devices_settings_screen")
+        val width = flippablePhone(devicesHost(), settings = true, ui = ui) { openSettings(SettingsSection.Machine, sub = MachineSub.DEVICES) }
+        await("devices_settings_screen")
 
         unfold(width)
 

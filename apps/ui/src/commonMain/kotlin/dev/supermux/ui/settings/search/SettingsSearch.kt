@@ -146,4 +146,10 @@ val SettingsSearchIndex: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry(SettingsSection.Machine, "log", "Recent log", "log show", shownWhen = { it.caps.localBroker }),
     // Its row shows only while not hosting: the anchor is the whole section, so it lands either way.
     SettingsSearchEntry(SettingsSection.Machine, "host-on", "Host on this computer", "hosting start", shownWhen = { it.caps.localBroker }),
+    SettingsSearchEntry(SettingsSection.Machine, "devices", "Devices", "paired revoke phone computer"),
+    SettingsSearchEntry(SettingsSection.Machine, "pair", "Pair a phone or computer", "qr code add device link"),
+    SettingsSearchEntry(SettingsSection.Machine, "links", "Shared links", "proxy port public private"),
+    SettingsSearchEntry(SettingsSection.Machine, "share", "Share a port…", "expose proxy link"),
+    SettingsSearchEntry(SettingsSection.Machine, "worktrees", "Chat worktrees", "disk space delete clean folders"),
+    SettingsSearchEntry(SettingsSection.Machine, "limits", "Limits", "usage quota reset"),
 )

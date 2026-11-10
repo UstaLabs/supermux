@@ -287,6 +287,37 @@ fun KitGhostButton(
     }
 }
 
+/** The prototype's `.gb.ic`: a square ghost button holding one glyph (Open, ⋯), named by [label] for screen readers. */
+@Composable
+fun KitIconButton(
+    glyph: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val c = kitColors()
+    val m = kitMetrics()
+    val src = remember { MutableInteractionSource() }
+    val hovered by src.collectIsHoveredAsState()
+    val pressed by src.collectIsPressedAsState()
+    val focused by src.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        modifier
+            .kitTouchTarget()
+            .size(m.controlHeight)
+            .clip(shape)
+            .background(if (enabled && (hovered || pressed)) c.hover else Color.Transparent)
+            .border(1.dp, if (focused) c.accent else c.line, shape)
+            .clickable(interactionSource = src, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(glyph, contentDescription = null, tint = if (enabled) c.dim else c.faint, modifier = Modifier.size(14.dp))
+    }
+}
+
 /** A text action in the accent tone ("Try again", "Recent events"); underlined while hovered. */
 @Composable
 fun KitTextAction(
