@@ -1,4 +1,4 @@
-package dev.supermux.webview.engine.android
+package dev.supermux.webview.engine
 
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -49,5 +49,30 @@ class SideSwipeTest {
         s.down()
         // 0.4 + 0.4 + 0.4: nothing whole, then one px.
         assertTrue(listOf(s.whole(0.4f), s.whole(0.4f), s.whole(0.4f)) == listOf(0, 0, 1))
+    }
+
+    // A page 1000 wide in a view 400 wide, no insets: it scrolls from 0 to 600.
+    @Test
+    fun aPageAtItsLeftEdgeHandsOnADragToTheRight() {
+        assertTrue(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = 5f))
+        assertFalse(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = -5f))
+    }
+
+    @Test
+    fun aPageAtItsRightEdgeHandsOnADragToTheLeft() {
+        assertTrue(SideSwipe.atEdge(offsetX = 600.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = -5f))
+        assertFalse(SideSwipe.atEdge(offsetX = 600.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = 5f))
+    }
+
+    @Test
+    fun aPageMidwayKeepsTheDrag() {
+        assertFalse(SideSwipe.atEdge(offsetX = 300.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = 5f))
+        assertFalse(SideSwipe.atEdge(offsetX = 300.0, contentWidth = 1000.0, viewWidth = 400.0, fingerDx = -5f))
+    }
+
+    @Test
+    fun aPageThatCantScrollSidewaysIsAtBothEdges() {
+        assertTrue(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 400.0, viewWidth = 400.0, fingerDx = 5f))
+        assertTrue(SideSwipe.atEdge(offsetX = 0.0, contentWidth = 390.0, viewWidth = 400.0, fingerDx = -5f))
     }
 }

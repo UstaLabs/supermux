@@ -1,4 +1,4 @@
-package dev.supermux.webview.engine.android
+package dev.supermux.webview.engine
 
 import kotlin.math.abs
 
@@ -45,5 +45,18 @@ internal class SideSwipe {
         val n = fraction.toInt()
         fraction -= n
         return n
+    }
+
+    companion object {
+        /**
+         * Whether a page scrolled to [offsetX] of its [contentWidth], in a view [viewWidth] wide, is at its edge for a
+         * finger moving [fingerDx]: moving right, it would scroll the page left, past its left edge; moving left, past
+         * its right one. A page no wider than its view is at both. Within half a point counts, for rounding.
+         */
+        fun atEdge(offsetX: Double, contentWidth: Double, viewWidth: Double, fingerDx: Float): Boolean = when {
+            fingerDx > 0f -> offsetX <= 0.5
+            fingerDx < 0f -> offsetX >= contentWidth - viewWidth - 0.5
+            else -> false
+        }
     }
 }

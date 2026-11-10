@@ -1,9 +1,13 @@
 package dev.supermux.webview.engine.ios
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.UIKitInteropInteractionMode
 import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
@@ -192,6 +196,8 @@ internal class IosWebEngine private constructor(
     /** The epoch each navigation WebKit reported started in. */
     private val navigations = NavigationEpochs()
     private var lease: Job = SupervisorJob(scope.coroutineContext[Job])
+    /** A sideways drag past the page's edge goes to the views around it (the phone's tab swipe). */
+    private val sideSwipe = PageSideSwipe(webView.scrollView)
 
     private var released = false
     private var crashed = false
@@ -616,9 +622,16 @@ internal class IosWebEngine private constructor(
                 isNativeAccessibilityEnabled = true,
             )
         }
+        val dispatcher = remember { NestedScrollDispatcher() }
+        val density = LocalDensity.current.density
+        DisposableEffect(dispatcher, density) {
+            sideSwipe.dispatcher = dispatcher
+            sideSwipe.density = density
+            onDispose { if (sideSwipe.dispatcher === dispatcher) sideSwipe.dispatcher = null }
+        }
         UIKitView(
             factory = { EngineContainerView(this).also(::attach) },
-            modifier = modifier,
+            modifier = modifier.nestedScroll(NoNestedScroll, dispatcher),
             onRelease = ::detach,
             properties = properties,
         )
@@ -717,6 +730,7 @@ internal class IosWebEngine private constructor(
         answerAllByDefault()
         released = true
         client = null
+        sideSwipe.remove()
         scope.cancel()
         ticks.cancel()
         bundles.bundle = null

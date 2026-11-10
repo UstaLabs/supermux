@@ -14,6 +14,7 @@ import androidx.core.view.NestedScrollingChild3
 import androidx.core.view.NestedScrollingChildHelper
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import dev.supermux.webview.engine.SideSwipe
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
