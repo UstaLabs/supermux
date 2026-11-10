@@ -318,6 +318,8 @@ fun ViewHost(
             // means "whatever is running here", not "a stream that has gone away".
             DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), "$workspaceId:${view.id}", modifier)
         }
+        // A web page (#105): its view's state is the page, synced to every client.
+        "browser" -> dev.supermux.ui.browser.BrowserPane(view, workspaceId, actions.browser, modifier)
         else -> UnknownViewHint(view.kind, modifier)
     }
 }

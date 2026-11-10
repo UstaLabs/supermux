@@ -625,4 +625,10 @@ class ViewHostTest {
         assertEquals(listOf("src/a.ts"), tappedPathCandidates(FilePathRef("C:\\Users\\me\\proj\\src\\a.ts"), w, relativeTo = "$w\\docs"))
         assertEquals(listOf("docs/img/a.png", "img/a.png"), tappedPathCandidates(FilePathRef("img\\a.png"), w, relativeTo = "$w\\docs"))
     }
+
+    @Test fun aBrowserViewDrawsTheBrowserPaneNotTheUnknownHint() = runComposeUiTest {
+        setPlatformContent { ViewHost(view("browser", emptyMap()), "w1", "/w", ShellActions(), mutableStateMapOf()) }
+        onNodeWithTag("browser-v1").assertExists()
+        onAllNodesWithTag("view-unknown").assertCountEquals(0)
+    }
 }
