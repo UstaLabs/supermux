@@ -374,6 +374,9 @@ val icon: String? = state.navigator.favicon()                   // <link rel="ic
 
 - **`setCookie`** puts the cookie in the view's profile and returns once it's there: set it before loading the page
   that needs it. An ephemeral profile's cookies go with it. `WebCookie.toString` leaves the value out (it's a credential).
+  The profile is the content's unless the settings pin one (`Html`: Ephemeral, a page: Default), so a view that sets a
+  cookie on local content and then loads the page needs `WebSettings(profile = WebProfile.Named(…))`, or the cookie
+  stays in the other store (the macOS check found this).
 - **`favicon`** is the same on every engine: one script, read from the page.
 - **Per engine**, today:
   - macOS: find says found or not (`count` is null: WebKit's `findString` answers only that), zoom is WebKit's
