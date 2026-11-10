@@ -87,7 +87,7 @@ Runtime ([Windows](#windows)), and in a browser, this shows the demo, live once 
 - **`rememberWebViewState(content)`** keys the state by `content.key`, and never undoes what you load into it: it loads
   `content` again only when the argument itself changes. It isn't saveable on purpose: HTML bodies would overflow
   Android's saved-state bundle. Page memory brings the page back instead ([below](#snapshots-and-page-memory)).
-- **`WebView(state, modifier, settings, client, activation, sizing, placeholder)`**:
+- **`WebView(state, modifier, settings, client, activation, sizing, keepRunningWhileHidden, placeholder)`**:
   - `settings`: `WebSettings(…)` with named arguments, or `WebSettings.Default.copy(…)`: `javaScriptEnabled`,
     `inspectable`, `darkMode` (`Auto`, `Light`, `Dark`), `transparentBackground`, `userAgentSuffix`, `profile`
     (`Default`, `Named(id)` or `Ephemeral`; unset, `Html` gets `Ephemeral` and the rest `Default`),
@@ -95,6 +95,8 @@ Runtime ([Windows](#windows)), and in a browser, this shows the demo, live once 
     ([below](#the-pool-and-memory)). On Windows, `mediaPlaybackRequiresGesture = false` is the profile's autoplay
     setting for each origin the engine shows, shared by the engines of that profile on that origin ([Windows](#windows)).
   - `activation`: when the view goes live; `Activation.WhenVisible()` unless you say otherwise ([Activation](#activation)).
+  - `keepRunningWhileHidden`: `false` unless you say otherwise; `true` keeps the page running, live and unreleased,
+    while the view is composed but not shown, as a browser's tab behind another ([Activation](#activation)).
   - `client`: answers the page's requests: navigations, new windows, dialogs, file choosers, permissions and
     downloads. Every default is the safe answer ([Security defaults](#security-defaults)).
   - `placeholder`: covers the view while there's no snapshot. The default is an opaque card in the resolved theme,
@@ -110,8 +112,8 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   web (`RuntimeConfig.platformDefault()`). Over budget, a view takes the slot of a parked page first,
   the one parked longest, then evicts the lowest-priority view below its own; with nobody to evict, it keeps its cover
   and waits for capacity. Priority: the focused view (touched last, or holding the keyboard focus), then visible
-  `Eager` views, then other visible views, then hidden ones, then parked pages. Ties go to the least recently used,
-  where use means a touch or coming into view.
+  `Eager` views, then other visible views and views kept running while hidden ([below](#activation)), then hidden
+  ones, then parked pages. Ties go to the least recently used, where use means a touch or coming into view.
 - **Parked pages.** A view that leaves the composition with its page live (an item a `LazyColumn` disposes as it
   scrolls away) saves the page as before, then parks it in the pool instead of giving its engine back: unreset, hidden
   (`setVisible(false)`), with no holder. The next view of the same page, in the same profile and engine config, adopts
@@ -154,7 +156,7 @@ All web views share one `WebViewRuntime`: the engine pool, the snapshot cache, p
   its running levels, an iOS memory warning, the macOS memory-pressure source); on Android, iOS and macOS the library
   listens for these itself while any of the runtime's web views is shown, elsewhere it doesn't yet. It releases the
   spares and every parked page (each saves itself first), evicts live views down to half the budget, hidden ones first
-  and never the focused one, and the snapshot cache lets go of every decoded snapshot and half of what it stores. Until
+  (a view kept running while hidden counts with the visible ones, least recently used first) and never the focused one, and the snapshot cache lets go of every decoded snapshot and half of what it stores. Until
   `runtime.onMemoryRecovered()`, or 30 s after the latest call, the budget stays at half, no spares are kept, nothing is
   parked, and the snapshot cache keeps nothing decoded and stores within that half, even as the evicted views snapshot
   their pages on the way out. Views on screen still get their covers decoded, and hold them themselves.
@@ -178,7 +180,26 @@ Activation.OnInteraction                    // very long lists: a snapshot until
 - A view that leaves the screen but stays composed (a plain `Column`, a tab not shown) keeps its engine, whatever its
   activation, told it is hidden and ranked lowest: scrolled back, its page is as it was, with nothing reloaded. A
   visible view that needs the slot takes it at once (the hidden page saves itself first), memory pressure takes hidden
-  pages first, and a view hidden for `hiddenReleaseMillis` (10 min) gives its engine back by itself.
+  pages first, and a view hidden for `hiddenReleaseMillis` (10 min) gives its engine back by itself. A view kept
+  running while hidden is the exception (next).
+- **`WebView(keepRunningWhileHidden = true)`** is for a pane whose page must never freeze while it is out of sight
+  and composed, as a browser's tab behind another (the desktop app moves each Browser tab's view with
+  `movableContentOf` between its pane and a holder that composes it without placing it). While it is composed:
+  - it keeps its engine whatever the time: `hiddenReleaseMillis` doesn't apply;
+  - it ranks with visible views, not hidden ones: a visible view that needs a slot takes hidden views' engines, and
+    parked pages, first, and only a visible `Eager` view or the focused one outranks it. Memory pressure may still
+    take it, with the visible views, least recently used first, as may a budget that shrinks;
+  - its engine is never told it is hidden (`setVisible(false)`, [below](#for-engine-authors-the-engine-spi)): on
+    macOS and iOS that suspends the page's media, so a playing video stops. Its timers, animations and media run on,
+    throttled as the platform throttles a page whose view it doesn't show (WebKit a hidden `NSView`, as a background
+    browser tab). Elsewhere: Android skips `onPause()`; on the web the frame still hides as its surface is unplaced, but
+    a page of another site keeps its slot; on Linux and Windows the engine goes on drawing frames nobody shows;
+  - shown again with its engine still holding the painted page, it shows that page live from its first frame: no
+    snapshot is read back or drawn over it, and on macOS, at the same size, scale and window, the page shows at once,
+    with no repaint to wait for and no motion cover ([macOS](#macos)). An engine that lost the page meanwhile
+    (`PaintLost`, a crash) is covered as any view's.
+  Once it leaves the composition it is parked as any view is, and told it is hidden then. It costs what a live page
+  costs, the whole time: keep such views few, within the budget.
 - A view that leaves the composition saves its page and parks it ([parked pages](#the-pool-and-memory)). In a
   `LazyColumn` that is every item that scrolls out of the composed window: an item scrolled back is a new view, which
   shows its page's snapshot at its height at once ([page memory](#snapshots-and-page-memory)) and adopts the parked
@@ -686,8 +707,9 @@ test's) without it. In short:
   waits for the view that had it to let go of its surface before the next one composes it, for 500 ms at most.
   `applyOverlays(cutouts)` cuts overlays out of a page above the canvas; an engine that Compose draws over returns
   false from `needsCutouts`, and the runtime computes none for it. `requestFocus` is optional.
-- **Hidden pages.** `setVisible(false)` comes for a view off screen and for a parked page; engines may throttle the page
-  but must keep its document. What each one does:
+- **Hidden pages.** `setVisible(false)` comes for a view off screen and for a parked page, but never for a view kept
+  running while hidden while it is composed ([activation](#activation)): its surface's being unplaced is all the
+  engine hears of it. Engines may throttle the page but must keep its document. What each one does:
   - Android: `WebView.onPause()`, which stops the page's animations, geolocation and media and tells it it is hidden.
     Its JavaScript keeps running (`pauseTimers()` would pause every WebView in the process). A parked page's WebView is
     also out of any window; adopted, it stays invisible until it has drawn the page in its new place.
@@ -700,6 +722,8 @@ test's) without it. In short:
     `WKWebView` is out of any window, where WebKit throttles it by itself (its timers, and its animation frames, which
     stop); adopted, its first paint waits until it has drawn the page in its new place, and the view's cover hides it
     until then.
+  - macOS: the page's media is suspended, as on iOS. A view kept running while hidden isn't told: its surface's
+    unplacing hides its `NSView`, in its window, which WebKit throttles by itself, and media plays on.
   - The fake records it.
 
 ## Testing with the fake engine
@@ -1154,6 +1178,16 @@ reports `Unavailable(NotImplemented)`.
   grew by shows the page's background (the colour along its snapshot's edges) until WebKit has drawn it there, a frame
   or two later: WebKit is asked at once, and again while it keeps growing. A page that changed since its last snapshot
   jumps to its live state when the resize ends.
+- **Shown again.** A slot that stops being placed hides its view where it is, in its window. Shown again, a page that
+  was told it was hidden (a lazy list's retained item: the runtime tells it at once, and its media is suspended) is
+  drawn again first, under the cover, and takes input once it has been, as before. A page never told so (a view kept
+  running while hidden, [Activation](#activation)) shown again at the same size, at the same backing scale and in the
+  same window, shows at once, with no repaint asked and no cover: its view kept its last frame, which WebKit kept
+  drawing into as the page ran on; at another size, scale or window it is drawn again under the cover, as any resize.
+  A surface that leaves the composition and enters it again in the same apply (content moved with
+  `movableContentOf`, between a pane and a holder that keeps it unplaced) keeps its view in its window, hidden, as an
+  unplaced slot; one that doesn't come back takes it out of the window once the composition is applied. Not yet
+  checked on a Mac: the engine's tests drive the rule through its fake glue.
 - **Input.** Typing and input methods are WKWebView's own. ⌘C, ⌘X, ⌘V, ⌘A, ⌘Z and ⇧⌘Z reach the page while it has
   focus (AWT would keep them). Every other ⌘ key is the page's first, as in Chrome (#122): WebKit gets it, and a key
   script in the isolated world says after its dispatch whether the page used it (`preventDefault`); one it left unused

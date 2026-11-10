@@ -118,6 +118,10 @@ private const val AUTO_RECOVERY_WINDOW_MILLIS = 60_000L
  * needs it (an eviction), to memory pressure, or after [dev.supermux.webview.runtime.RuntimeConfig.hiddenReleaseMillis].
  * A lazy list's item that scrolled out but stays composed, unplaced, is hidden as well ([onUnplaced]).
  *
+ * A view that keeps running while hidden ([keepRunning]: a desktop app's Browser tab behind another) is never told it is
+ * hidden, keeps its engine for as long as it is composed, ranks with visible views, and shown again with its page still
+ * painted, shows it live at once: it reads no cover back ([showsLivePage]).
+ *
  * A view that leaves the composition with its page live (a lazy list's item that scrolled away) saves the page as
  * before, then parks it in the pool instead of giving its engine back ([EnginePool.park]): the next view of the same
  * page adopts it as it is, unreloaded, with its in-page state ([adoptDocument]). The pool reclaims it first when a view
@@ -183,6 +187,9 @@ internal class WebViewHost(
     // What the WebView passes, at every recomposition (update).
     private var settings: WebSettings = WebSettings.Default
     private var activation: Activation = Activation.Eager
+
+    /** `WebView(keepRunningWhileHidden)`. */
+    private var keepRunning = false
     private var uriHandler: UriHandler? = null
     private var dark = false
     private var density = 1f
@@ -375,9 +382,9 @@ internal class WebViewHost(
     private val capacityListener: () -> Unit = { signal() }
     private val stateListener: () -> Unit = { signal() }
 
-    /** Read live by the pool: focused, then visible Eager, then visible; hidden ranks lowest. */
+    /** Read live by the pool: focused, then visible Eager, then visible (or kept running while hidden); hidden ranks lowest. */
     override val priority: Int
-        get() = activationPriority(activation, visible, focused = runtime.focused === this)
+        get() = activationPriority(activation, visible, focused = runtime.focused === this, keepsRunning = keepRunning)
 
     private fun owns(): Boolean = state.owner === this
 
@@ -396,6 +403,7 @@ internal class WebViewHost(
         settings: WebSettings,
         client: WebClient,
         activation: Activation,
+        keepRunningWhileHidden: Boolean,
         uriHandler: UriHandler,
         dark: Boolean,
         density: Float,
@@ -408,13 +416,17 @@ internal class WebViewHost(
         this.density = density
         if (this.overlays !== overlays) this.overlays = overlays
         val first = !updated
-        val changed = settings != this.settings || activation != this.activation || dark != this.dark
+        val changed = settings != this.settings || activation != this.activation || dark != this.dark ||
+            keepRunningWhileHidden != keepRunning
         if (!changed && !first) return
         val before = priority
         val profileBefore = profileNow()
         this.settings = settings
         this.activation = activation
         this.dark = dark
+        // No longer kept running while hidden: the hidden time that releases the engine counts from now.
+        if (keepRunning && !keepRunningWhileHidden && !visible) hiddenSince = runtime.clock()
+        keepRunning = keepRunningWhileHidden
         if (first) {
             updated = true
             // Only into a state no other view holds: one still saving may write into it yet. [takeOver] reads it after.
@@ -629,14 +641,21 @@ internal class WebViewHost(
         if (!isVisible && painted && engine != null) seenAt = now
         visible = isVisible
         hiddenSince = if (isVisible) null else now
-        // Only views on screen hold a cover's pixels: a hidden one keeps the key, and reads the cache again when shown.
-        cover = if (isVisible) coverFor(state.snapshotKey) else null
+        // Only views on screen hold a cover's pixels: a hidden one keeps the key, and reads the cache again when shown,
+        // unless its page ran on, still painted: that page shows at once.
+        cover = if (isVisible && !showsLivePage()) coverFor(state.snapshotKey) else null
         if (engine != null) {
             if (isVisible) runtime.pool.touch(this) else runtime.pool.priorityLowered()
         }
         signal()
         return true
     }
+
+    /**
+     * Whether the view keeps running while hidden and its engine still holds the painted page: shown again, it shows that
+     * page live at once, with no cover read back. One whose engine lost its paint ([coverAgain]) is covered as any view.
+     */
+    private fun showsLivePage(): Boolean = keepRunning && painted && engine != null
 
     private fun takeFocus() {
         val previous = runtime.focused
@@ -721,6 +740,7 @@ internal class WebViewHost(
                 lastMovedAt = lastMovedAt,
                 hiddenSince = hiddenSince,
                 hiddenReleaseMillis = runtime.config.hiddenReleaseMillis,
+                keepRunningWhileHidden = keepRunning,
             ),
         )
         if (current != null) {
@@ -729,9 +749,11 @@ internal class WebViewHost(
                 letGo()
                 return now
             }
-            if (engineVisible != visible) {
-                engineVisible = visible
-                if (!safely { current.setVisible(visible) }) {
+            // A view kept running while hidden never tells its engine so: that would stop its media (macOS, iOS).
+            val shown = visible || keepRunning
+            if (engineVisible != shown) {
+                engineVisible = shown
+                if (!safely { current.setVisible(shown) }) {
                     crashNow(current)
                     return now
                 }
@@ -1777,7 +1799,7 @@ internal class WebViewHost(
     /** A decode the view waited for finished: [image] is its cover if the view, on screen, still shows that page. */
     private val coverDecoded: (SnapshotKey, ImageBitmap) -> Unit = { key, image ->
         if (awaitedCover == key) awaitedCover = null
-        if (visible && !disposed && key == state.snapshotKey && coverable(key) && cover?.key != key) {
+        if (visible && !disposed && !showsLivePage() && key == state.snapshotKey && coverable(key) && cover?.key != key) {
             cover = Cover(image, key, runtime.memoryEpoch)
         }
     }

@@ -877,12 +877,16 @@ class MacWebEngineTest {
         assertEquals(emptyList<EngineEvent>(), next)
     }
 
-    /** A slot shown again (a lazy list's retained item placed again) is drawn again, under its cover, before input. */
+    /**
+     * A slot shown again whose page was told it is hidden (a lazy list's retained item placed again: the runtime tells
+     * it at once) is drawn again, under its cover, before input.
+     */
     @Test fun aSlotShownAgainIsDrawnAgainBeforeItTakesInput() = runTest {
         val rig = Rig(this)
         rig.live()
         rig.snapshot()
         assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        rig.engine.setVisible(false)
         advanceTimeBy(1_000) // scrolled back a while later
         runCurrent()
         val repaints = rig.glue.ids("repaint").size
@@ -894,6 +898,98 @@ class MacWebEngineTest {
         rig.tick()
         rig.tick()
         assertTrue(rig.glue.lastInteractive)
+    }
+
+    /**
+     * A page that kept running while its slot was hidden (never told it is hidden: a keep-running view, a Browser tab
+     * behind another) shown again at the same size, scale and window: its view still holds its last frame, so it shows
+     * at once, with no motion cover, no repaint asked, and its input.
+     */
+    @Test fun aRunningPageShownAgainAtTheSameSizeShowsAtOnce() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        advanceTimeBy(1_500) // the cover is old: a motion that needed one would take a fresh one
+        runCurrent()
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        advanceTimeBy(5_000) // another tab in front for a while
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        val snapshots = rig.glue.ids("snapshot").size
+        rig.place()
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 0.0 640.0 480.0 at 2.0 hidden=false", rig.glue.last("place"))
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the live page, uncovered, from the frame it shows")
+        assertTrue(rig.glue.lastInteractive, "and its input")
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+        assertEquals(repaints, rig.glue.ids("repaint").size, "no repaint asked")
+        assertEquals(snapshots, rig.glue.ids("snapshot").size, "and no picture taken for a cover")
+    }
+
+    /** The same page shown again at another size reflows: covered and drawn again before input, as any resize. */
+    @Test fun aRunningPageShownAgainAtAnotherSizeIsStillCoveredAndDrawnAgain() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        assertTrue(rig.engine.surfaceUnplaced(rig.node))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        rig.place(width = 600f)
+        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "WebKit draws it at its new size first")
+        assertIs<SurfaceDraw.Cover>(rig.engine.drawFor(rig.node))
+        assertFalse(rig.glue.lastInteractive)
+        rig.repainted()
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertTrue(rig.glue.lastInteractive)
+    }
+
+    /**
+     * A surface moved in the composition (`movableContentOf`: a tab moved between its pane and a holder that keeps it
+     * composed unplaced) leaves and enters again in one apply: its view hides where it is and stays in its window, and
+     * placed again as it was, a page that ran on shows at once.
+     */
+    @Test fun aSurfaceMovedInTheCompositionKeepsItsViewInItsWindowAndShowsAtOnce() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.snapshot()
+        rig.engine.surfaceDetached(rig.node)
+        assertEquals("place 0.0 0.0 640.0 480.0 in 0.0 0.0 640.0 480.0 at 2.0 hidden=true", rig.glue.last("place"))
+        rig.engine.surfaceAttached(rig.node) // in the holder, in the same apply
+        runCurrent()
+        assertFalse(rig.glue.calls.any { it.startsWith("detach") }, "never out of its window: ${rig.glue.calls}")
+        advanceTimeBy(5_000)
+        runCurrent()
+        val repaints = rig.glue.ids("repaint").size
+        // Moved back to its pane: left and entered again, then placed where it was.
+        rig.engine.surfaceDetached(rig.node)
+        rig.engine.surfaceAttached(rig.node)
+        rig.place()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node), "the live page, uncovered")
+        assertTrue(rig.glue.lastInteractive)
+        rig.tick()
+        rig.tick()
+        assertEquals(SurfaceDraw.Hole, rig.engine.drawFor(rig.node))
+        assertEquals(repaints, rig.glue.ids("repaint").size, "no repaint asked")
+        assertFalse(rig.glue.calls.any { it.startsWith("detach") }, "${rig.glue.calls}")
+    }
+
+    /** A surface that leaves the composition for good takes the view out of its window once the composition is applied. */
+    @Test fun aSurfaceThatLeavesTakesItsViewOutOfItsWindowOnceApplied() = runTest {
+        val rig = Rig(this)
+        rig.live()
+        rig.engine.surfaceDetached(rig.node)
+        runCurrent()
+        assertEquals("detach 7", rig.glue.last("detach"))
+        rig.engine.surfaceAttached(rig.node)
+        val repaints = rig.glue.ids("repaint").size
+        rig.place()
+        assertEquals(repaints + 1, rig.glue.ids("repaint").size, "back in the window: drawn there again first")
+        assertFalse(rig.glue.lastInteractive)
     }
 
     /** The first paint waits for the slot to be still: drawn again where it is, then two ticks. */
@@ -1094,6 +1190,7 @@ class MacWebEngineTest {
         // Parked: its surface leaves, it is hidden, its subscriber goes.
         rig.engine.surfaceDetached(rig.node)
         rig.engine.setVisible(false)
+        runCurrent() // the composition applied with no surface back: out of its window
         assertEquals("detach 7", rig.glue.last("detach"))
         assertEquals("setMediaSuspended true", rig.glue.last("setMediaSuspended"))
         rig.events.clear()

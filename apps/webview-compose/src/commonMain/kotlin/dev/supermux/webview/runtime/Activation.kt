@@ -20,6 +20,11 @@ internal data class ActivationInputs(
     val hiddenSince: Long?,
     /** How long a hidden view keeps its engine when no visible view needs it ([RuntimeConfig.hiddenReleaseMillis]). */
     val hiddenReleaseMillis: Long,
+    /**
+     * The view keeps its page running while hidden (`WebView(keepRunningWhileHidden = true)`): hidden and live, it keeps
+     * its engine with no [hiddenReleaseMillis], and ranks with visible views.
+     */
+    val keepRunningWhileHidden: Boolean = false,
 )
 
 /** Whether the view wants a live engine, its pool priority, and when to decide again (null: on the next change). */
@@ -34,11 +39,15 @@ internal data class ActivationDecision(val wantLive: Boolean, val priority: Int,
  *   It ranks lowest, so the pool takes the engine for any visible view that needs one, and memory pressure takes it
  *   first. Nobody needing it, it goes after [ActivationInputs.hiddenReleaseMillis] of being hidden.
  * - Hidden, a view ranks lowest whatever its activation, even when focused.
+ * - But a view that keeps running while hidden ([ActivationInputs.keepRunningWhileHidden]) keeps its engine for as long
+ *   as it is composed, never released for being hidden, and ranks with visible views: a visible view that needs a slot
+ *   takes hidden views' engines first, and memory pressure takes it with visible views, least recently used first.
  */
 internal fun decideActivation(i: ActivationInputs): ActivationDecision {
-    val priority = activationPriority(i.activation, i.visible, i.focused)
+    val priority = activationPriority(i.activation, i.visible, i.focused, i.keepRunningWhileHidden)
     if (!i.visible) {
         if (!i.live) return ActivationDecision(false, priority, null)
+        if (i.keepRunningWhileHidden) return ActivationDecision(true, priority, null)
         val until = (i.hiddenSince ?: i.now) plusSaturated i.hiddenReleaseMillis
         return if (i.now < until) ActivationDecision(true, priority, until) else ActivationDecision(false, priority, null)
     }
@@ -55,13 +64,13 @@ internal fun decideActivation(i: ActivationInputs): ActivationDecision {
 
 /**
  * A view's pool priority (spec §4): focused, then visible Eager panes, then other visible views. Hidden, a view ranks
- * lowest whatever its activation, even when focused. [decideActivation] reports it, and a view's
- * [LeaseHolder.priority] reads it live.
+ * lowest whatever its activation, even when focused, unless it [keepsRunning] while hidden: then it ranks with other
+ * visible views. [decideActivation] reports it, and a view's [LeaseHolder.priority] reads it live.
  */
-internal fun activationPriority(activation: Activation, visible: Boolean, focused: Boolean): Int = when {
+internal fun activationPriority(activation: Activation, visible: Boolean, focused: Boolean, keepsRunning: Boolean = false): Int = when {
     focused && visible -> PRIORITY_FOCUSED
     visible && activation is Activation.Eager -> PRIORITY_VISIBLE_EAGER
-    visible -> PRIORITY_VISIBLE
+    visible || keepsRunning -> PRIORITY_VISIBLE
     else -> PRIORITY_HIDDEN
 }
 

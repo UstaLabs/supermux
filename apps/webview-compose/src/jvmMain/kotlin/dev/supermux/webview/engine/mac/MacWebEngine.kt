@@ -85,9 +85,9 @@ import kotlin.coroutines.resume
  *   relay's title and URL hints are not needed.
  * - **The surface (D1, D2, D7).** The page's view sits under the canvas, at the part of its slot that shows (I2), at
  *   the window's backing scale (I3); [MacSurfaceNode] clears a hole over it. A motion that makes the page reflow while
- *   WebKit draws it again (a new width or scale, a pane's new height, shown again, a new window) covers the slot with
- *   [motionCover], at its true size, and stops input, until the settle has the page drawn in place again: its content
- *   trails inside its view until then. A page that only moves (a list's scroll, a new clip), and an embed that only
+ *   WebKit draws it again (a new width or scale, a pane's new height, shown again after being told it was hidden, a new
+ *   window) covers the slot with [motionCover], at its true size, and stops input, until the settle has the page drawn
+ *   in place again: its content trails inside its view until then. A page that only moves (a list's scroll, a new clip), and an embed that only
  *   grows or shrinks in height (its page shows more or less of itself), stays live and takes input throughout. While
  *   it moves, its view moves in the transaction that presents Compose's frame of that layout ([MacFrameSync]), so it
  *   stays in its hole; where that can't be, skiko's frame moves the hole up to a few frames after AppKit has moved the
@@ -214,6 +214,9 @@ internal class MacWebEngine(
     private var lastPlacedAt: Long? = null
     private var placement = 0
     private var settling: Job? = null
+
+    /** The view leaving its window, once the composition that took its surface away is applied ([surfaceDetached]). */
+    private var leaving: Job? = null
 
     /** The repaint request the settle waits on ([drawInPlace]): a commit makes it moot ([onCommitted]). */
     private var settleRepaint: Long? = null
@@ -625,27 +628,52 @@ internal class MacWebEngine(
 
     override fun surfaceAttached(node: MacSurfaceNode) {
         if (released) return
+        // A surface moved in the composition: its view never left its window, and shows again where it was.
+        leaving?.cancel()
+        leaving = null
         surface = node
         wheelToPage = !node.inList
         still = false
-        needsRepaint = true
+        if (window == 0L) needsRepaint = true
         updateInput()
     }
 
+    /**
+     * The surface left the composition, or is moving in it: content moved with `movableContentOf` (a desktop app's tab
+     * moved between its pane and a holder that keeps it composed) leaves and enters again in one apply of the
+     * composition. So its view only hides where it is, in its window, as an unplaced slot's does, and leaves the window
+     * once the composition has been applied with no surface back ([leaveWindow]). A surface back by then finds it as
+     * an unplaced slot: shown again at the same size, scale and window, it shows at once ([surfacePlaced]).
+     */
     override fun surfaceDetached(node: MacSurfaceNode) {
         if (surface !== node) return
         surface = null
         settling?.cancel()
         still = false
+        lastPlacedAt = null
+        growthRepaint?.cancel()
+        val slot = bounds
+        if (placed && slot != null && window != 0L && !released) glue.place(window, slot, visible ?: slot, scale, hidden = true)
+        placed = false
+        updateInput()
+        if (window == 0L || released) {
+            leaveWindow()
+            return
+        }
+        leaving?.cancel()
+        leaving = scope.launch { if (surface == null) leaveWindow() }
+    }
+
+    /** The surface is gone for good: the view leaves its window, and the next one is placed afresh. */
+    private fun leaveWindow() {
+        leaving = null
         placed = false
         bounds = null
         visible = null
-        lastPlacedAt = null
         needsRepaint = true
         motionNeedsCover = false
         motionCover = null
         drawnHeight = 0f
-        growthRepaint?.cancel()
         if (window != 0L && !released) glue.detach(window)
         window = 0L
         updateInput()
@@ -666,12 +694,17 @@ internal class MacWebEngine(
         val old = this.bounds
         val newWidth = old == null || old.width != bounds.width || scale != this.scale
         val newHeight = old == null || old.height != bounds.height
-        val shownAgain = nowPlaced && !placed
-        // WebKit draws the page again at a new size or scale, once shown again, and in a new window.
-        val redraw = newWidth || newHeight || shownAgain || newWindow
+        // Shown again, a page told it was hidden (a lazy list's retained item: the runtime tells it at once, and suspends
+        // its media) is drawn again before it shows, under the cover. One never told so ran on while its view was hidden
+        // (a view kept running while hidden, a tab behind another): at the same size, scale and window, its view still
+        // holds its last frame, and WebKit draws on into it as the page changes, so it shows at once.
+        val redrawnWhenShown = nowPlaced && !placed && mediaSuspended
+        // WebKit draws the page again at a new size or scale, in a new window, and once shown again after being told it
+        // was hidden.
+        val redraw = newWidth || newHeight || redrawnWhenShown || newWindow
         // Its content reflows meanwhile, but for an embed's new height alone: a page as tall as its content only shows
         // more or less of itself, and nothing it shows moves (C2).
-        val reflows = redraw && (newWidth || shownAgain || newWindow || !node.inList)
+        val reflows = redraw && (newWidth || redrawnWhenShown || newWindow || !node.inList)
         this.bounds = bounds
         this.visible = visible
         this.scale = scale
