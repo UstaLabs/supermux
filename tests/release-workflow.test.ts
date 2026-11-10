@@ -121,13 +121,25 @@ test("signing runs our own client with the secrets, serialized and gated, and is
   position("secrets.SIMPLYSIGN_OTP_URI")
   position("signtool verify /pa")
   position("Open Source Developer Ahmet")
-  expect(windowsJob).toContain("group: certum-simplysign")
+  expect(windowsJob).toContain("'certum-simplysign'")
   expect(windowsJob).toContain("cancel-in-progress: false")
-  expect(windowsJob).toMatch(/environment: windows-signing/)
+  expect(windowsJob).toContain("&& 'windows-signing' || ''")
   // No third-party action or tool in the signing path.
   expect(windowsJob).not.toMatch(/uses: .*(simply|certum|ssign)/i)
   // Never in CI: every PR and push would spend signatures (5000 a month) and expose the secrets.
   expect(ci).not.toContain("SIMPLYSIGN")
+})
+
+// The signing secrets live only in the windows-signing environment, which deploys from v* tags and rc-* branches: a dry
+// run from any other branch still builds, unsigned, instead of failing at the environment check.
+test("only a v* tag or an rc-* branch signs; any other ref builds an unsigned MSI", () => {
+  const signs = "startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/heads/rc-')"
+  expect(windowsJob).toContain(signs)
+  for (const step of ["Sign the host helpers and the launcher in the app image", "Sign the .msi", "Verify the Windows signatures"]) {
+    const at = position(`- name: ${step}`)
+    const next = windowsJob.indexOf("\n      - ", at + 1)
+    expect(windowsJob.slice(at, next), step).toContain("if: env.SIGN_WINDOWS == 'true'")
+  }
 })
 
 test("Android release auto-injects monotonic versionCode and tag versionName", () => {
