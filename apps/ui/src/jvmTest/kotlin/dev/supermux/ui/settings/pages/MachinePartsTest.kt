@@ -1,6 +1,8 @@
 package dev.supermux.ui.settings.pages
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
@@ -28,6 +30,8 @@ import dev.supermux.net.UpdateStatus
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.WorktreeListDto
+import dev.supermux.net.WorktreeOrphanPageDto
+import dev.supermux.net.WorktreeOrphansDto
 import dev.supermux.net.WorktreeOwnerDto
 import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -540,6 +544,116 @@ class MachinePartsTest {
         has("machine_worktrees", "Counting…")
         waitUntil(timeoutMillis = 8_000) { loads.get() >= 2 }
         hasSoon("machine_worktrees", "in 4 folders")
+    }
+
+    // ── Folders whose repository is gone (#97 S2-4) ──
+
+    private fun goneW(id: String, live: Boolean = false) =
+        w(id, bytes = 1L shl 20, live = live).copy(error = "repo gone", hasChanges = true, unmerged = null)
+
+    @Test fun a_gone_repository_folder_is_picked_on_its_own_after_a_confirm_and_never_by_select_clean() = runComposeUiTest {
+        val gone = listOf(goneW("g0"), goneW("g1"), goneW("g2", live = true))
+        val pages = mutableListOf<Pair<Int, Int>>()
+        val batches = mutableListOf<List<String>>()
+        page(worktrees = WorktreesSettingsActions(
+            load = { WorktreeListDto("/wt", listOf(w("a"), w("dirty", changes = 2)), orphans = WorktreeOrphansDto(count = 3, bytes = 3L shl 20, sized = 3)) },
+            orphans = { offset, limit -> synchronized(pages) { pages += offset to limit }; WorktreeOrphanPageDto(gone, total = 3) },
+            delete = { ids -> batches += ids; ids.map { WorktreeDeleteResultDto(it, ok = true) } },
+        ))
+        hasSoon("machine_worktrees", "in 5 folders · 1 has no changes")
+        click("wt_review")
+        await("wt_row_g0")
+        assertEquals(listOf(0 to 200), synchronized(pages) { pages.toList() })
+        has("wt_orphans", "REPOSITORY MISSING · 3 FOLDERS")
+        has("wt_row_g0", "repository gone")
+        // A chat still on it: kept.
+        onNodeWithTag("wt_kept_g2").assertExists()
+        onNodeWithTag("wt_check_g2").assertDoesNotExist()
+        // "Select the 1 without changes" takes only the clean folder.
+        tap("wt_select_clean")
+        onNodeWithTag("wt_picked").assertTextEquals("1 picked · 1.0 GB")
+        // Picking a gone one asks first; Cancel leaves it out.
+        tap("wt_check_g0")
+        await("wt_gone_dialog")
+        has("wt_gone_dialog", "The repository is gone; this deletes the folder.")
+        tap("wt_gone_cancel")
+        await("wt_review_sheet")
+        onNodeWithTag("wt_picked").assertTextEquals("1 picked · 1.0 GB")
+        tap("wt_check_g0")
+        tap("wt_gone_confirm")
+        await("wt_review_sheet")
+        onNodeWithTag("wt_picked").assertTextEquals("2 picked · 1.0 GB")
+        // Clear drops only the clean ones; the gone one stays picked.
+        tap("wt_select_clean")
+        onNodeWithTag("wt_picked").assertTextEquals("1 picked · 1 MB")
+        tap("wt_select_clean")
+        // Unpicking needs no confirm.
+        tap("wt_check_g0")
+        onNodeWithTag("wt_gone_dialog").assertDoesNotExist()
+        onNodeWithTag("wt_picked").assertTextEquals("1 picked · 1.0 GB")
+        tap("wt_check_g0")
+        tap("wt_gone_confirm")
+        await("wt_review_sheet")
+        tap("wt_delete")
+        await("wt_delete_dialog")
+        has("wt_delete_dialog", "1 of them have no repository any more; the rest have no changes.")
+        tap("wt_delete_confirm")
+        gone("wt_review_sheet")
+        assertEquals(listOf(listOf("a", "g0")), batches)
+    }
+
+    @Test fun the_delete_ask_says_the_repository_is_gone_when_only_gone_folders_are_picked() {
+        assertEquals(
+            "Deletes the folder and its branch · 1 MB. Its repository is gone. This can’t be undone.",
+            MachinePartsCopy.deleteText(1, 1L shl 20, gone = 1),
+        )
+        assertEquals(
+            "Deletes the folders and their branches · 2 MB. Their repositories are gone. This can’t be undone.",
+            MachinePartsCopy.deleteText(2, 2L shl 20, gone = 2),
+        )
+    }
+
+    @Test fun more_gone_folders_load_a_page_at_a_time() = runComposeUiTest {
+        val pages = mutableListOf<Int>()
+        page(worktrees = WorktreesSettingsActions(
+            load = { WorktreeListDto("/wt", listOf(w("a")), orphans = WorktreeOrphansDto(count = 3)) },
+            orphans = { offset, _ ->
+                synchronized(pages) { pages += offset }
+                if (offset == 0) WorktreeOrphanPageDto(listOf(goneW("g0"), goneW("g1")), total = 3) else WorktreeOrphanPageDto(listOf(goneW("g2")), total = 3)
+            },
+        ))
+        hasSoon("machine_worktrees", " folders · ")
+        click("wt_review")
+        await("wt_row_g1")
+        onNodeWithTag("wt_orphans_more").assertTextEquals("Show more (1 left)")
+        tap("wt_orphans_more")
+        await("wt_row_g2")
+        onNodeWithTag("wt_orphans_more").assertDoesNotExist()
+        assertEquals(listOf(0, 2), synchronized(pages) { pages.toList() })
+    }
+
+    @Test fun a_live_size_does_not_move_a_row_in_review() = runComposeUiTest {
+        var sizes by androidx.compose.runtime.mutableStateOf(mapOf<String, Long>())
+        page(worktrees = WorktreesSettingsActions(
+            load = { WorktreeListDto("/wt", listOf(w("a", bytes = 3L shl 20), w("b", bytes = 2L shl 20), w("c", bytes = 1L shl 20))) },
+            sizes = { sizes },
+        ))
+        hasSoon("machine_worktrees", " folders · ")
+        click("wt_review")
+        await("wt_row_c")
+        fun top(tag: String) = onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.y
+        assertTrue(top("wt_row_a") < top("wt_row_b") && top("wt_row_b") < top("wt_row_c"))
+        sizes = mapOf("c" to (10L shl 20))
+        waitForIdle()
+        assertTrue(top("wt_row_a") < top("wt_row_b") && top("wt_row_b") < top("wt_row_c"), "a size frame must not move rows")
+        has("wt_row_c", "10 MB")
+    }
+
+    @Test fun same_named_repositories_on_windows_show_their_parent_folders() {
+        val groups = worktreeGroups(
+            listOf(w("x", repo = "repo", root = "C:\\src\\a\\repo"), w("y", repo = "repo", root = "C:\\src\\b\\repo")),
+        )
+        assertEquals(listOf("repo (C:\\src\\a)", "repo (C:\\src\\b)"), groups.map { it.first })
     }
 
     @Test fun review_groups_by_repository_root_and_tells_same_names_apart() {

@@ -174,6 +174,9 @@ object MachinePartsCopy {
     const val EVERY_FOLDER_CHANGED = "Every folder has changes."
     const val DELETE = "Delete"
     const val REPO_MISSING = "Repository missing"
+    const val REPO_GONE = "repository gone"
+    const val GONE_TEXT = "The repository is gone; this deletes the folder."
+    const val PICK_IT = "Pick it"
 
     const val LIMITS = "Limits"
     const val REFRESH = "Refresh"
@@ -246,9 +249,15 @@ object MachinePartsCopy {
     fun picked(n: Int, bytes: Long) = "$n picked · ${formatBytes(bytes)}"
     fun deleteN(n: Int) = "Delete $n"
     fun deleteTitle(n: Int) = if (n == 1) "Delete 1 worktree?" else "Delete $n worktrees?"
-    fun deleteText(n: Int, bytes: Long) =
+    /** [gone] of the [n] are folders whose repository is gone (picked one at a time); the rest have no changes. */
+    fun deleteText(n: Int, bytes: Long, gone: Int = 0) =
         "Deletes ${if (n == 1) "the folder and its branch" else "the folders and their branches"} · ${formatBytes(bytes)}. " +
-            "None of them has changes. This can’t be undone."
+            when {
+                gone == 0 -> "None of them has changes."
+                gone == n -> if (n == 1) "Its repository is gone." else "Their repositories are gone."
+                else -> "$gone of them have no repository any more; the rest have no changes."
+            } + " This can’t be undone."
+    fun moreGone(left: Int) = "Show more ($left left)"
     fun deleting(done: Int, total: Int) = "Deleting $done of $total…"
 
     /** "made today", "3 weeks old", "2 months old". */
@@ -302,6 +311,8 @@ private const val SCAN_POLL_MS = 3_000L
 private const val DELETE_CHUNK = 20
 /** Rows the review sheet draws (biggest first); "Select the N without changes" still takes every one. */
 private const val REVIEW_ROWS = 200
+/** Folders whose repository is gone, asked for a page at a time. */
+private const val ORPHAN_PAGE = 200
 
 private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
 
@@ -1049,9 +1060,17 @@ private class DiskForm {
     var rowErrors by mutableStateOf(mapOf<String, String>())
     var deleted by mutableStateOf(setOf<String>())
     var changed by mutableStateOf(0)
+    /** The folders whose repository is gone, as far as they are loaded, and how many there are. */
+    var gone by mutableStateOf<List<WorktreeSummaryDto>>(emptyList())
+    var goneTotal by mutableStateOf(0)
+    /** The gone-repository folder whose pick is being confirmed. */
+    var confirmGone by mutableStateOf<WorktreeSummaryDto?>(null)
 }
 
 private fun pickable(w: WorktreeSummaryDto) = MachinePartsCopy.keptWhy(w) == null
+
+/** A folder whose repository is gone can be picked (one at a time, after a confirm) unless a chat still uses it. */
+private fun goneIsPickable(w: WorktreeSummaryDto) = w.liveOwners.isEmpty()
 
 /** Groups by repository ROOT, labelled by name; a name shared by several roots gets its parent folder. */
 internal fun worktreeGroups(rows: List<WorktreeSummaryDto>): List<Pair<String, List<WorktreeSummaryDto>>> {
@@ -1132,6 +1151,8 @@ internal fun DiskSection(actions: WorktreesSettingsActions, machine: String, qui
                     {
                         form.selected = emptySet()
                         form.rowErrors = emptyMap()
+                        form.gone = emptyList()
+                        form.goneTotal = 0
                         form.reviewOpen = true
                     },
                     Modifier.testTag("wt_review"),
@@ -1163,9 +1184,20 @@ private fun ReviewSheet(
     val cleanIds = clean.map { it.id }.toSet()
     // Biggest first, by the sizes known when the sheet opened: a live size must not move a row under a finger.
     val shown = remember(visible) { visible.sortedByDescending(sizeOf).take(REVIEW_ROWS) }
-    val selected = form.selected.filter { it in cleanIds }.toSet()
-    val selectedRows = clean.filter { it.id in selected }
+    val removed = actions.removedIds()
+    val gone = form.gone.filter { it.id !in form.deleted && it.id !in removed }
+    val goneIds = gone.filter(::goneIsPickable).map { it.id }.toSet()
+    val selected = form.selected.filter { it in cleanIds || it in goneIds }.toSet()
+    val selectedRows = (clean + gone).filter { it.id in selected }
+    val selectedGone = selectedRows.count { it.id in goneIds }
     val selectedBytes = selectedRows.sumOf(sizeOf)
+
+    suspend fun loadGone(offset: Int) {
+        val page = actions.orphans(offset, ORPHAN_PAGE) ?: return
+        form.gone = if (offset == 0) page.worktrees else form.gone + page.worktrees
+        form.goneTotal = page.total
+    }
+    LaunchedEffect(list.orphans.count) { if (list.orphans.count > 0 && form.gone.isEmpty()) loadGone(0) }
     val progress = form.progress
     val busy = progress != null
 
@@ -1185,6 +1217,7 @@ private fun ReviewSheet(
                     }
                     val ok = res.filter { it.ok }.map { it.id }.toSet()
                     form.deleted = form.deleted + ok
+                    form.gone = form.gone.filter { it.id !in ok }
                     form.selected = form.selected - ok
                     form.rowErrors = form.rowErrors - ok + res.filter { !it.ok }.associate { r ->
                         r.id to if (r.error == "in_use") "In use by ${r.inUseBy.joinToString()}" else "Couldn’t delete it" + (r.error?.let { ": $it" } ?: "")
@@ -1204,11 +1237,33 @@ private fun ReviewSheet(
         KitSheet(
             MachinePartsCopy.deleteTitle(selectedRows.size),
             onDismiss = { form.confirming = false },
-            description = MachinePartsCopy.deleteText(selectedRows.size, selectedBytes),
+            description = MachinePartsCopy.deleteText(selectedRows.size, selectedBytes, selectedGone),
             tag = "wt_delete_dialog",
             buttons = {
                 KitGhostButton(MachinePartsCopy.CANCEL, { form.confirming = false }, Modifier.testTag("wt_delete_cancel"))
                 KitGhostButton(MachinePartsCopy.DELETE, ::delete, Modifier.testTag("wt_delete_confirm"), destructive = true)
+            },
+        )
+        return
+    }
+
+    form.confirmGone?.let { w ->
+        KitSheet(
+            worktreeTitle(w),
+            onDismiss = { form.confirmGone = null },
+            description = MachinePartsCopy.GONE_TEXT,
+            tag = "wt_gone_dialog",
+            buttons = {
+                KitGhostButton(MachinePartsCopy.CANCEL, { form.confirmGone = null }, Modifier.testTag("wt_gone_cancel"))
+                KitGhostButton(
+                    MachinePartsCopy.PICK_IT,
+                    {
+                        form.selected = form.selected + w.id
+                        form.confirmGone = null
+                    },
+                    Modifier.testTag("wt_gone_confirm"),
+                    destructive = true,
+                )
             },
         )
         return
@@ -1258,8 +1313,10 @@ private fun ReviewSheet(
         Box(Modifier.padding(top = 12.dp)) {
             when {
                 clean.isEmpty() -> KitNote(MachinePartsCopy.EVERY_FOLDER_CHANGED)
-                selected.size == clean.size -> KitTextAction(MachinePartsCopy.CLEAR, { form.selected = emptySet() }, Modifier.testTag("wt_select_clean"))
-                else -> KitTextAction(MachinePartsCopy.selectClean(clean.size), { form.selected = cleanIds }, Modifier.testTag("wt_select_clean"))
+                // Only the folders without changes: a gone repository's folder is never taken in (nor dropped) by these.
+                selected.containsAll(cleanIds) ->
+                    KitTextAction(MachinePartsCopy.CLEAR, { form.selected = form.selected - cleanIds }, Modifier.testTag("wt_select_clean"))
+                else -> KitTextAction(MachinePartsCopy.selectClean(clean.size), { form.selected = form.selected + cleanIds }, Modifier.testTag("wt_select_clean"))
             }
         }
         Column(Modifier.padding(top = 12.dp).fillMaxWidth()) {
@@ -1275,15 +1332,58 @@ private fun ReviewSheet(
                 )
                 rows.forEach { w -> WorktreeItem(w, sizeOf(w), now, w.id in selected, form.rowErrors[w.id]) { on -> form.selected = if (on) form.selected + w.id else form.selected - w.id } }
             }
+            // Folders whose repository is gone: the broker can't tell what they hold, so none is taken by "Select the
+            // N without changes"; each is picked on its own, after saying what deleting it means.
             list.orphans.takeIf { it.count > 0 }?.let { o ->
-                KitItem(
-                    MachinePartsCopy.REPO_MISSING,
-                    Modifier.testTag("wt_orphans"),
-                    subtitle = "${MachinePartsCopy.folders(o.count)} · ${formatBytes(o.bytes)}",
-                    mark = KitMark.Glyph(KitGlyphs.Lock),
-                    muted = true,
-                ) { KitItemStatus(MachinePartsCopy.KEPT) }
+                Text(
+                    "${MachinePartsCopy.REPO_MISSING} · ${MachinePartsCopy.folders(o.count)} · ${formatBytes(o.bytes)}".uppercase(),
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.63.sp,
+                    color = c.faint,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp).testTag("wt_orphans"),
+                )
+                gone.forEach { w ->
+                    GoneItem(w, sizeOf(w), now, w.id in selected, form.rowErrors[w.id]) { on ->
+                        if (on) form.confirmGone = w else form.selected = form.selected - w.id
+                    }
+                }
+                val left = form.goneTotal - form.gone.size
+                if (form.gone.isNotEmpty() && left > 0) {
+                    KitTextAction(MachinePartsCopy.moreGone(left), { calls.launch { loadGone(form.gone.size) } }, Modifier.testTag("wt_orphans_more"))
+                }
             }
+        }
+    }
+}
+
+private fun worktreeTitle(w: WorktreeSummaryDto) = w.owners.firstOrNull()?.name ?: w.branch ?: w.id.substringAfter('/')
+
+/** A folder whose repository is gone: pickable on its own (the caller confirms first) unless a chat still uses it. */
+@Composable
+private fun GoneItem(w: WorktreeSummaryDto, size: Long, now: Long, picked: Boolean, error: String?, onPick: (Boolean) -> Unit) {
+    val c = kitColors()
+    val title = worktreeTitle(w)
+    val live = w.liveOwners
+    KitItem(
+        title,
+        Modifier.testTag("wt_row_${w.id}"),
+        subtitleRich = buildAnnotatedString {
+            append("${formatBytes(size)} · ${MachinePartsCopy.age(now, w.mtime)} · ")
+            withStyle(SpanStyle(color = c.warn)) {
+                append(if (live.isNotEmpty()) "In use by ${live.joinToString { it.name }}" else MachinePartsCopy.REPO_GONE)
+            }
+        },
+        mark = KitMark.Glyph(if (live.isNotEmpty()) KitGlyphs.Lock else KitGlyphs.Tree),
+        muted = live.isNotEmpty(),
+        below = if (error == null) null else {
+            { Text(error, fontSize = 12.sp, color = c.danger, modifier = Modifier.testTag("wt_error_${w.id}")) }
+        },
+    ) {
+        if (live.isNotEmpty()) {
+            KitItemStatus(MachinePartsCopy.KEPT, modifier = Modifier.testTag("wt_kept_${w.id}"))
+        } else {
+            KitToggle(picked, onPick, "Pick $title", Modifier.testTag("wt_check_${w.id}"))
         }
     }
 }
@@ -1291,7 +1391,7 @@ private fun ReviewSheet(
 @Composable
 private fun WorktreeItem(w: WorktreeSummaryDto, size: Long, now: Long, picked: Boolean, error: String?, onPick: (Boolean) -> Unit) {
     val c = kitColors()
-    val title = w.owners.firstOrNull()?.name ?: w.branch ?: w.id.substringAfter('/')
+    val title = worktreeTitle(w)
     val why = MachinePartsCopy.keptWhy(w)
     val head = "${formatBytes(size)} · ${MachinePartsCopy.age(now, w.mtime)} · "
     KitItem(
