@@ -140,7 +140,10 @@ val macGlueAbi = Regex("#define WV_ABI_VERSION (\\d+)").find(file("native/macos/
     ?: throw GradleException("native/macos/WVGlue.h defines no WV_ABI_VERSION")
 val buildMacGlue by tasks.registering(Exec::class) {
     description = "Builds the macOS engine's Objective-C glue (native/macos/build.sh). Mac hosts only."
-    onlyIf { isMacHost }
+    // A local, not the script's own val: the predicate is serialized with the task (configuration cache, which Compose Hot
+    // Reload's recompiles use), and a lambda that reaches the build script fails there ("Could not evaluate onlyIf").
+    val onMac = isMacHost
+    onlyIf("on a Mac") { onMac }
     inputs.dir("native/macos")
     inputs.file("src/jvmMain/kotlin/dev/supermux/webview/engine/mac/MacGlue.kt")
     outputs.dir(macGlueDir)
