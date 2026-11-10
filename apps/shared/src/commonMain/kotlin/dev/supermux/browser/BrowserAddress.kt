@@ -62,9 +62,9 @@ fun parseAddress(text: String): AddressInput {
  */
 fun resolvePort(port: Int, path: String, previews: List<ProxyDto>, onHost: Boolean, byPort: String? = null): PortTarget {
     if (onHost) return PortTarget.Go("http://localhost:$port$path")
-    if (byPort != null) return PortTarget.Go(byPortUrl(byPort, port) + path.removePrefix("/"))
+    if (byPort != null) return PortTarget.Go(byPortUrl(byPort, port) + path.removePrefix("/")) // platform-ok: url (a preview URL's path)
     val preview = previews.firstOrNull { it.port == port } ?: return PortTarget.NoRoute(port)
-    return PortTarget.Go(proxyUrl(preview).trimEnd('/') + path)
+    return PortTarget.Go(proxyUrl(preview).trimEnd('/') + path) // platform-ok: url
 }
 
 /** The by-port preview [template] (`…{port}…/`) for [port]. */
@@ -73,7 +73,7 @@ fun byPortUrl(template: String, port: Int): String = template.replace("{port}", 
 fun displayAddress(url: String, previews: List<ProxyDto>, byPort: String? = null): DisplayAddress {
     byPort?.let { byPortAddress(url, it) }?.let { return it }
     for (p in previews) {
-        val base = proxyUrl(p).trimEnd('/')
+        val base = proxyUrl(p).trimEnd('/') // platform-ok: url
         if (url == base || url.startsWith("$base/")) return DisplayAddress.Preview(p.port, url.removePrefix(base).ifEmpty { "/" })
     }
     val parsed = runCatching { Url(url) }.getOrNull() ?: return DisplayAddress.Web(url, "/")
