@@ -34,8 +34,11 @@ loading. If they are ever signed, `rewritePackagedNativeDigests` must run after 
   puts the signature in, `signtool timestamp /tr http://time.certum.pl /td sha256` timestamps it. One login per run of
   the script; a refused code is never retried (repeated refusals lock the account).
 
-Secrets (GitHub Actions, never printed): `SIMPLYSIGN_EMAIL`, `SIMPLYSIGN_OTP_URI`. The job runs in the
-`windows-signing` environment (its approval gate) and the `certum-simplysign` concurrency group.
+Secrets (never printed): `SIMPLYSIGN_EMAIL`, `SIMPLYSIGN_OTP_URI`, held only as secrets of the `windows-signing`
+environment, which deploys only from tags `v*` and branches `rc-*`. The Windows job runs in that environment and the
+`certum-simplysign` concurrency group only on those refs (`SIGN_WINDOWS`): a release dry run from any other branch
+builds the same MSI **unsigned**, its signing and verify steps skipped. A `v*` tag always signs, and a failed signing
+or verify step fails the release.
 
 ## Renewal and rotation
 
