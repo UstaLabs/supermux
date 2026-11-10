@@ -58,6 +58,8 @@ fun KitItem(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    /** The subtitle in the warning tone ("Sign-in expired"). */
+    subtitleWarn: Boolean = false,
     mark: KitMark? = null,
     onClick: (() -> Unit)? = null,
     indent: Boolean = false,
@@ -90,7 +92,7 @@ fun KitItem(
                     Text(
                         subtitle,
                         fontSize = m.desc,
-                        color = c.dim,
+                        color = if (subtitleWarn) c.warn else c.dim,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 1.dp),

@@ -96,7 +96,7 @@ private sealed interface AddStep {
  * POST's answer (the broker can publish before the response lands) are held and replayed.
  */
 @Stable
-internal class AccountLoginFlow(private val agent: String, private val actions: AccountsActions) {
+internal class AccountLoginFlow(private val agent: String, private val actions: AccountsActions, private val email: String? = null) {
     var loginId by mutableStateOf<String?>(null)
         private set
     var state by mutableStateOf<AccountLoginStateDto?>(null)
@@ -126,7 +126,7 @@ internal class AccountLoginFlow(private val agent: String, private val actions: 
         loginId = null
         state = null
         early.clear()
-        when (val r = actions.startLogin(agent)) {
+        when (val r = actions.startLogin(agent, email)) {
             is AccountResult.Ok -> {
                 loginId = r.value.loginId
                 state = r.value
@@ -149,9 +149,9 @@ internal class AccountLoginFlow(private val agent: String, private val actions: 
  * code being pasted. Kept for the page on display when the sheet has a `retainKey`; closing the
  * sheet [reset]s it, so the next one starts over, as a new composition did.
  */
-private class AddAccountForm(private val agent: String, private val actions: AccountsActions) {
+private class AddAccountForm(private val agent: String, private val actions: AccountsActions, private val signInAgain: AccountDto? = null) {
     var step by mutableStateOf(firstStep())
-    var flow by mutableStateOf(AccountLoginFlow(agent, actions))
+    var flow by mutableStateOf(newFlow())
     var secret by mutableStateOf("")
     var label by mutableStateOf("")
     var saving by mutableStateOf(false)
@@ -164,7 +164,10 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
     var codeError by mutableStateOf<String?>(null)
 
     private fun firstStep(): AddStep =
-        addAccountOptions(agent).let { if (it.size == 1) AddStep.Secret(it.single()) else AddStep.Choose }
+        if (signInAgain != null) AddStep.Login
+        else addAccountOptions(agent).let { if (it.size == 1) AddStep.Secret(it.single()) else AddStep.Choose }
+
+    private fun newFlow() = AccountLoginFlow(agent, actions, signInAgain?.let { signInAgainEmail(it) })
 
     fun newSecret() {
         secret = ""
@@ -183,7 +186,7 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
 
     fun reset() {
         step = firstStep()
-        flow = AccountLoginFlow(agent, actions)
+        flow = newFlow()
         newSecret()
         clearCode()
     }
@@ -195,6 +198,9 @@ private class AddAccountForm(private val agent: String, private val actions: Acc
  *
  * [retainKey] names the sheet's state kept for the page on display (#89): its step, a sign-in in
  * flight and what is typed. Null keeps all of it in this composition.
+ *
+ * [signInAgain]: sign that login in again (#106). The sheet goes straight to the guided login, as its email
+ * where the agent's login takes one; the broker repairs that same account (same id, its chats stay on it).
  */
 @Composable
 fun AddAccountSheet(
@@ -203,15 +209,16 @@ fun AddAccountSheet(
     existing: List<AccountDto>,
     onDismiss: () -> Unit,
     retainKey: String? = null,
+    signInAgain: AccountDto? = null,
 ) {
     val options = remember(agent) { addAccountOptions(agent) }
     // With [retainKey], a rotation finds the sheet where it was: it went back to the first step in
     // the middle of a sign-in that went on on the host. The sign-in, a key being added and a cancel
     // then run on the fleet's scope, and closing the sheet starts the next one afresh.
     val form = if (retainKey != null) {
-        rememberRetainedOnPage(retainKey) { AddAccountForm(agent, actions) }
+        rememberRetainedOnPage(retainKey) { AddAccountForm(agent, actions, signInAgain) }
     } else {
-        remember(agent, actions) { AddAccountForm(agent, actions) }
+        remember(agent, actions, signInAgain?.id) { AddAccountForm(agent, actions, signInAgain) }
     }
     val scope = if (retainKey != null) rememberRetainedScope() else rememberCoroutineScope()
     var step by form::step
@@ -222,6 +229,8 @@ fun AddAccountSheet(
     }
 
     LaunchedEffect(flow) { actions.loginFrames.collect { flow.onState(it) } }
+    // Sign in again starts the login at once: there is nothing to choose.
+    LaunchedEffect(flow) { if (signInAgain != null && flow.loginId == null && !flow.starting) flow.start() }
     // The fallback poll — only while a login is live, and never backwards.
     LaunchedEffect(flow.loginId, flow.terminal) {
         val id = flow.loginId ?: return@LaunchedEffect
@@ -277,6 +286,7 @@ fun AddAccountSheet(
             )
             AddStep.Login -> LoginStep(
                 agent = agent,
+                title = signInAgain?.let { "Sign in to ${accountDisplayName(it)} again" },
                 flow = flow,
                 existing = existing,
                 form = form,
@@ -475,6 +485,7 @@ private fun ButtonRow(content: @Composable () -> Unit) {
 @Composable
 private fun LoginStep(
     agent: String,
+    title: String?,
     flow: AccountLoginFlow,
     existing: List<AccountDto>,
     form: AddAccountForm,
@@ -496,7 +507,7 @@ private fun LoginStep(
         }
     }
     Column(Modifier.fillMaxWidth().testTag("account-login-sheet"), verticalArrangement = Arrangement.spacedBy(Space.md)) {
-        SheetTitle(agent, if (agent == "codex") "Sign in with ChatGPT" else "Sign in to ${agentDisplayName(agent)}")
+        SheetTitle(agent, title ?: if (agent == "codex") "Sign in with ChatGPT" else "Sign in to ${agentDisplayName(agent)}")
         val startError = flow.startError
         when {
             startError != null -> FailedBlock(startError)

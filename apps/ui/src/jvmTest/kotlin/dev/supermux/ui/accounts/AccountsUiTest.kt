@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.AccountDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.AccountIdentityDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.net.AccountUnavailableDto
@@ -136,7 +137,7 @@ class AccountsUiTest {
             AddAccountSheet(
                 agent = "claude",
                 actions = AccountsActions(
-                    startLogin = { started += it; AccountResult.Ok(login("starting")) },
+                    startLogin = { agent, _ -> started += agent; AccountResult.Ok(login("starting")) },
                     loginFrames = frames,
                     sendLoginCode = { id, c -> codes += id to c; AccountResult.Ok(Unit) },
                     cancelLogin = { cancelled += it; AccountResult.Ok(Unit) },
@@ -185,7 +186,7 @@ class AccountsUiTest {
             AddAccountSheet(
                 agent = "claude",
                 actions = AccountsActions(
-                    startLogin = { starts++; AccountResult.Ok(login("starting")) },
+                    startLogin = { _, _ -> starts++; AccountResult.Ok(login("starting")) },
                     loginFrames = frames,
                 ),
                 existing = listOf(claudeSystem, work),
@@ -271,13 +272,41 @@ class AccountsUiTest {
         assertEquals(listOf("cursor"), signIns)
     }
 
-    @Test fun an_added_account_whose_sign_in_expired_says_how_to_sign_it_in_again() = runComposeUiTest {
+    @Test fun an_added_account_whose_sign_in_expired_signs_in_again_in_place() = runComposeUiTest {
+        val started = mutableListOf<Pair<String, String?>>()
         content {
-            AccountsSettingsScreen(AccountsActions(accounts = MutableStateFlow(listOf(cursorWork))), topBarShown = true, onSignInAgain = {})
+            AccountsSettingsScreen(
+                AccountsActions(
+                    accounts = MutableStateFlow(listOf(cursorWork)),
+                    startLogin = { agent, email -> started += agent to email; AccountResult.Ok(AccountLoginStateDto(loginId = "l1", agent = agent, phase = "starting")) },
+                ),
+                topBarShown = true, onSignInAgain = {},
+            )
         }
         waitForIdle()
-        onNodeWithText("Sign-in expired. Remove it, then add it again to sign in.").assertIsDisplayed()
-        // The system login's sign-in flow would not sign this account in.
-        onNodeWithTag("account-sign-in:cursor-work").assertDoesNotExist()
+        onNodeWithText("Sign-in expired.").assertIsDisplayed()
+        onNodeWithText("Remove it, then add it again", substring = true).assertDoesNotExist()
+        // The login repairs this account (#106): same id, its chats stay on it.
+        onNodeWithTag("account-sign-in:cursor-work").performClick()
+        waitForIdle()
+        assertEquals(listOf<Pair<String, String?>>("cursor" to null), started)
+        onNodeWithTag("account-add-sheet").assertExists()
+        onNodeWithText("Sign in to Work again").assertExists()
+    }
+
+    @Test fun removing_an_account_says_where_its_chats_go() = runComposeUiTest {
+        content {
+            AccountsSettingsScreen(
+                AccountsActions(
+                    accounts = MutableStateFlow(listOf(cursorSystem, cursorWork)),
+                    removalPlan = { AccountRemovalPlanDto(it, 3, "cursor:system", "System login") },
+                ),
+                topBarShown = true,
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("account-remove:cursor-work").performClick()
+        waitForIdle()
+        onNodeWithText("Its 3 chats move to System login.", substring = true).assertExists()
     }
 }

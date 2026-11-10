@@ -66,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.AccountDto
+import dev.supermux.net.AccountRemovalPlanDto
 import dev.supermux.net.AccountLoginStateDto
 import dev.supermux.state.AccountResult
 import dev.supermux.state.FleetStore
@@ -103,7 +104,10 @@ class AccountsActions(
     val addAccount: suspend (agent: String, method: String, secret: String, label: String?) -> AccountResult<AccountDto> =
         { _, _, _, _ -> NOT_WIRED },
     val removeAccount: suspend (id: String, deleteHome: Boolean) -> AccountResult<Unit> = { _, _ -> NOT_WIRED },
-    val startLogin: suspend (agent: String) -> AccountResult<AccountLoginStateDto> = { NOT_WIRED },
+    /** POST /accounts/login; [email] signs in as that login (Claude), which repairs that account when it exists (#106). */
+    val startLogin: suspend (agent: String, email: String?) -> AccountResult<AccountLoginStateDto> = { _, _ -> NOT_WIRED },
+    /** GET /accounts/<id>/removal: how many chats removing it moves, and where (null = unknown). */
+    val removalPlan: suspend (id: String) -> AccountRemovalPlanDto? = { null },
     /** GET /accounts/login/<id> — the fallback when a frame was missed (null = unknown). */
     val pollLogin: suspend (loginId: String) -> AccountLoginStateDto? = { null },
     /** `account_login_state` frames (every login; the sheet filters by id). */
@@ -123,7 +127,8 @@ fun rememberAccountsActions(app: HostStore): AccountsActions = remember(app) {
         setAutoSwitch = { app.setAccountsAutoSwitch(it) },
         addAccount = { agent, method, secret, label -> app.addAccount(agent, method, secret, label) },
         removeAccount = { id, deleteHome -> app.removeAccount(id, deleteHome) },
-        startLogin = { app.startAccountLogin(it) },
+        startLogin = { agent, email -> app.startAccountLogin(agent, email = email) },
+        removalPlan = { app.accountRemovalPlan(it) },
         pollLogin = { app.accountLoginState(it) },
         loginFrames = app.accountLogins,
         sendLoginCode = { id, code -> app.sendAccountLoginCode(id, code) },
@@ -144,7 +149,8 @@ fun rememberAccountsActions(fleet: FleetStore): AccountsActions = remember(fleet
             fleet.activeApp()?.addAccount(agent, method, secret, label) ?: NOT_WIRED
         },
         removeAccount = { id, deleteHome -> fleet.activeApp()?.removeAccount(id, deleteHome) ?: NOT_WIRED },
-        startLogin = { fleet.activeApp()?.startAccountLogin(it) ?: NOT_WIRED },
+        startLogin = { agent, email -> fleet.activeApp()?.startAccountLogin(agent, email = email) ?: NOT_WIRED },
+        removalPlan = { fleet.activeApp()?.accountRemovalPlan(it) },
         pollLogin = { fleet.activeApp()?.accountLoginState(it) },
         loginFrames = fleet.activeAccountLogins,
         sendLoginCode = { id, code -> fleet.activeApp()?.sendAccountLoginCode(id, code) ?: NOT_WIRED },
@@ -201,6 +207,7 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
     val adding = rememberRetainedOnPage("accounts:adding") { AccountAdding() }
     var addFor by adding::agent
     var removing by remember { mutableStateOf<AccountDto?>(null) }
+    var signingIn by remember { mutableStateOf<AccountDto?>(null) }
     var autoSwitchError by remember { mutableStateOf<String?>(null) }
     var pendingAutoSwitch by remember { mutableStateOf<Boolean?>(null) }
 
@@ -268,6 +275,7 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
                         onAdd = { addFor = agent },
                         onRemove = { removing = it },
                         onSignInAgain = onSignInAgain,
+                        onSignInAccount = { signingIn = it },
                     )
                 }
             }
@@ -283,9 +291,19 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
             retainKey = "accounts:add:$agent",
         )
     }
+    signingIn?.let { account ->
+        AddAccountSheet(
+            agent = account.agent,
+            actions = actions,
+            existing = accountsFor(accounts.orEmpty(), account.agent),
+            onDismiss = { signingIn = null },
+            signInAgain = account,
+        )
+    }
     removing?.let { account ->
         RemoveAccountDialog(
             account = account,
+            removalPlan = actions.removalPlan,
             onDismiss = { removing = null },
             onConfirm = { deleteHome -> actions.removeAccount(account.id, deleteHome) },
         )
@@ -349,6 +367,7 @@ private fun AgentAccountsGroup(
     onAdd: () -> Unit,
     onRemove: (AccountDto) -> Unit,
     onSignInAgain: ((agent: String) -> Unit)?,
+    onSignInAccount: (AccountDto) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().testTag("accounts-group:$agent"), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
@@ -378,7 +397,7 @@ private fun AgentAccountsGroup(
         AccountsCard {
             accounts.forEachIndexed { i, account ->
                 if (i > 0) HorizontalDivider(color = cs.outlineVariant.copy(alpha = 0.6f))
-                AccountRow(account, onRemove = { onRemove(account) }, onSignInAgain = onSignInAgain)
+                AccountRow(account, onRemove = { onRemove(account) }, onSignInAgain = onSignInAgain, onSignInAccount = { onSignInAccount(account) })
             }
         }
     }
@@ -392,7 +411,7 @@ private fun accountIcon(account: AccountDto): ImageVector = when (account.method
 }
 
 @Composable
-private fun AccountRow(account: AccountDto, onRemove: () -> Unit, onSignInAgain: ((agent: String) -> Unit)?) {
+private fun AccountRow(account: AccountDto, onRemove: () -> Unit, onSignInAgain: ((agent: String) -> Unit)?, onSignInAccount: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
     Row(
@@ -459,16 +478,16 @@ private fun AccountRow(account: AccountDto, onRemove: () -> Unit, onSignInAgain:
                         !expired -> "$it. Log in again, or pick it for a chat to retry."
                         // The system login signs in again through the agent's own login flow (Providers).
                         account.system -> if (onSignInAgain != null) "$it." else "$it. Sign in again under Providers."
-                        // An added login cannot be signed in again in place: a new sign-in is a new account.
-                        else -> "$it. Remove it, then add it again to sign in."
+                        // An added login signs in again in place (#106): the same account, its chats stay on it.
+                        else -> "$it."
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = sem.danger,
                     modifier = Modifier.testTag("account-unavailable-reason:${account.id}"),
                 )
-                if (expired && account.system && onSignInAgain != null) {
+                if (expired && (!account.system || onSignInAgain != null)) {
                     OutlinedButton(
-                        onClick = { onSignInAgain(account.agent) },
+                        onClick = { if (account.system) onSignInAgain?.invoke(account.agent) else onSignInAccount() },
                         modifier = Modifier.padding(top = Space.xs).testTag("account-sign-in:${account.id}"),
                     ) { Text("Sign in again", color = cs.primary) }
                 }
@@ -497,9 +516,12 @@ private fun AccountRow(account: AccountDto, onRemove: () -> Unit, onSignInAgain:
 @Composable
 private fun RemoveAccountDialog(
     account: AccountDto,
+    removalPlan: suspend (id: String) -> AccountRemovalPlanDto?,
     onDismiss: () -> Unit,
     onConfirm: suspend (deleteHome: Boolean) -> AccountResult<Unit>,
 ) {
+    var plan by remember(account.id) { mutableStateOf<AccountRemovalPlanDto?>(null) }
+    LaunchedEffect(account.id) { plan = removalPlan(account.id) }
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var deleteHome by remember { mutableStateOf(false) }
@@ -514,7 +536,7 @@ private fun RemoveAccountDialog(
             Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
                 Text(
                     "supermux forgets this ${agentDisplayName(account.agent)} account and its saved credential. " +
-                        "Chats using it need another account to continue.",
+                        (removalSentence(plan) ?: "Chats using it move to another account first."),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (subscription) {
