@@ -12,6 +12,9 @@ internal interface FrameRoutee {
 
     /** Keyboard focus may have moved: check whether it is in this engine's page now. */
     fun checkFocus()
+
+    /** The user gave the app's own window real input (a press or a key), which no frame saw. */
+    fun appInput() = Unit
 }
 
 /**
@@ -92,6 +95,7 @@ internal object WebFrameRouter {
         val now = nowMillis()
         ownInputAt = now
         if (tab) tabAt = now
+        routees.toList().forEach { it.appInput() }
     }
 
     /**

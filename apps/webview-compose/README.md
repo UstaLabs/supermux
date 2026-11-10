@@ -451,6 +451,27 @@ hostBridge.post('clicked', { at: Date.now() });
   - Names starting with `$` are the library's. `bridge.droppedMessages` counts what was dropped.
 - A page's own `call` times out after 30 s by default.
 
+### A send that must follow the user's input
+
+`bridge.handleWithUserInput(method) { params, fromUserInput -> … }` answers a page call and says whether it may count
+as the user's own act, such as a card's click-to-send. The rule is the same on every engine (an internal `InputStamp`
+per view):
+
+- The engine records the time of the last real **pointer press or key** delivered to that view. A page call counts only
+  if it arrives within **1 s** of it, and it **takes** the input: one input, one send.
+- It is decided when the call arrives, not when the handler runs. A call on load, from a timer or a promise, after a
+  script-made `click()` or `dispatchEvent`, after the window, from another card (each view has its own stamp), or a
+  second call from one input gets `fromUserInput = false`. The handler still runs, so it can answer `{ok: false, reason}`.
+  An engine that can't tell of input never allows one.
+- Where the input comes from: Linux and Windows, the press or key Compose delivers to the surface (Windows also the keys
+  the page takes); macOS, the glue's report of a press or key the page's view took; Android, `dispatchTouchEvent` and
+  `dispatchKeyEvent` of the `WebView`; iOS, the relay's `gesture` (trusted `pointerup`, `click`, `keydown`, from the
+  library's own content world); the web, the shim's trusted press or key, **and** the browser's transient activation at
+  the app's window, **and** no input in the app outside the frame since (the frame is the last thing touched).
+- Assistive activation (VoiceOver, TalkBack, Narrator) reaches the page as a click and delivers no input to the view, so
+  it is refused (spec open decision 4).
+
+
 ## Overlays and scrims
 
 With the engines as designed, Compose draws over the page on Android, iOS, macOS and the frame-mode desktops (Windows,
@@ -840,8 +861,15 @@ measured the risky parts first. The numbers are below.
   - **Mark everything you draw over a page**, buttons and labels included. Anything unmarked is under the iframe.
 - **Documents.** Every document the app starts gets a fresh iframe. So the engine adds nothing to the browser's history,
   and a page from an earlier view can't come back.
-  - `Html` content is a `srcdoc` in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
-    top-level navigation.
+  - `Html` content is a `data:` URL in `sandbox="allow-scripts"`: an origin of its own, with no storage, no popups and no
+    top-level navigation. It is not a `srcdoc`: measured in WebKit, a sandboxed srcdoc frame sends the app's
+    `SameSite=Lax` cookie and a `data:` or `blob:` one doesn't. It is not a `blob:` URL either while it fits in a
+    `data:` one (2 MiB, Chrome's URL limit): Chrome refuses an opaque document's navigation to the app's `blob:` URL,
+    so a `blob:` demo can't `location.reload()` or move to a `#fragment`. A longer page loads from a `blob:` URL all
+    the same, with those two limits, and the engine revokes it when the document is replaced or the engine is
+    released. Neither has a usable base, so the shim resolves a relative link against the content's own URL
+    (`content.origin.url`).
+
   - `Url` pages keep their own origin (`allow-scripts allow-same-origin allow-forms`). Use them only for pages you trust
     to frame, and only once the app's origin refuses to be framed (**`Url` pages and the app's origin**, below).
   - A page shows once it has drawn its content in its place, under the view's cover. A demo shows at its first
@@ -948,7 +976,7 @@ in its frame, after a redirect or a navigation of its own, is the app's, and can
   describes is Chrome's own here, and Chrome holds paint within an origin only: a demo that navigates itself to
   another origin shows a blank frame between the two documents, which the engine, hearing of the new document only at
   its load, can't cover.
-- **Demos inherit the app's Content-Security-Policy.** A `srcdoc` document takes its parent's, so a `script-src` on the
+- **Demos inherit the app's Content-Security-Policy.** A `data:` or `blob:` document (like a `srcdoc` one) takes its creator's, so a `script-src` on the
   app's page that doesn't allow inline scripts stops every demo's scripts, and the engine's shim with them.
 - **Dialogs, file choosers, permissions and downloads** are denied by the sandbox, and `WebClient` never hears of them.
 - **`userAgentSuffix` and `inspectable` do nothing.** The browser's DevTools always work.

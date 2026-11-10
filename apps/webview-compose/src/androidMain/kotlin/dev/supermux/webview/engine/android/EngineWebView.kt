@@ -3,6 +3,7 @@ package dev.supermux.webview.engine.android
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
@@ -31,7 +32,12 @@ import kotlin.math.roundToInt
  *   visual viewport by the part of the page the keyboard covers, whatever the views above it did with the insets.
  */
 @SuppressLint("ViewConstructor")
-internal class EngineWebView(context: Context, private val onFocus: (Boolean) -> Unit) : WebView(context), NestedScrollingChild3 {
+internal class EngineWebView(
+    context: Context,
+    private val onFocus: (Boolean) -> Unit,
+    /** The user pressed the view or typed a key into it: real input, from the system, which no page script can make. */
+    private val onInput: () -> Unit = {},
+) : WebView(context), NestedScrollingChild3 {
     /** Whether the engine destroyed it. Nothing touches it after that. */
     var gone: Boolean = false
 
@@ -78,6 +84,16 @@ internal class EngineWebView(context: Context, private val onFocus: (Boolean) ->
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         onFocus(focused)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (!gone && event.actionMasked == MotionEvent.ACTION_DOWN) onInput()
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (!gone && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) onInput()
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

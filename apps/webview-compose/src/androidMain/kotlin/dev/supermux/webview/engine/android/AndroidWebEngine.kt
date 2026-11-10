@@ -66,6 +66,9 @@ import androidx.webkit.WebViewFeature
 import androidx.webkit.WebViewRenderProcess
 import androidx.webkit.WebViewRenderProcessClient
 import dev.supermux.webview.ConsoleLevel
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.ConsoleMessage
 import dev.supermux.webview.DialogResult
 import dev.supermux.webview.DownloadRequest
@@ -177,7 +180,16 @@ internal class AndroidWebEngine(
     private val profileName: String?,
     /** Whether [profileName] was another engine's: its HTTP cache is cleared before anything loads. */
     reusedProfile: Boolean = false,
-) : WebEngine {
+) : WebEngine, UserInputSource {
+    /**
+     * When the user last pressed this view or typed into it (the system's own touch and key events, [EngineWebView]),
+     * for [UserInputSource]. Taps by TalkBack or Switch Access reach the page as clicks and deliver no touch here
+     * (spec open decision 4). A new document starts with none.
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     override val mode: EmbeddingMode = EmbeddingMode.NativeView
     override val needsCutouts: Boolean get() = false
     override var client: EngineClient? = null
@@ -336,7 +348,7 @@ internal class AndroidWebEngine(
     @SuppressLint("SetJavaScriptEnabled")
     private fun newWebView(): EngineWebView {
         webViewsBuilt++
-        val view = EngineWebView(context, ::onFocus)
+        val view = EngineWebView(context, ::onFocus) { inputStamp.mark(inputClock()) }
         // Before anything else touches it (WebViewCompat.setProfile).
         profileName?.let { WebViewCompat.setProfile(view, it) }
         view.settings.run {
@@ -449,6 +461,7 @@ internal class AndroidWebEngine(
         token = newToken()
         val epoch = gate.boundary(token)
         queue.advance(reset = reset)
+        inputStamp.clear()
         documentPainted = false
         lastFailure = null
         if (reset) lastReply = null

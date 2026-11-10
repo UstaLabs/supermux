@@ -134,6 +134,8 @@ public class WebBridge internal constructor(
         var scope: CoroutineScope,
         var sink: ((text: String, targetOrigin: String) -> Unit)?,
         var originAllowed: (String) -> Boolean,
+        /** Takes the user's last input at this engine's view if recent enough; see [InputStamp]. */
+        var userInput: () -> Boolean = { false },
     ) {
         var callsInFlight = 0
 
@@ -173,6 +175,9 @@ public class WebBridge internal constructor(
     private val held = ArrayDeque<Held>()
     private var heldChars = 0
     private val methods = HashMap<String, suspend (JsonElement) -> JsonElement>()
+
+    /** Methods that ask whether the call followed the user's input ([handleWithUserInput]). */
+    private val inputMethods = HashMap<String, suspend (JsonElement, Boolean) -> JsonElement>()
     private val listeners = HashMap<String, MutableList<(JsonElement) -> Unit>>()
     private val messageBudget = TokenBucket(limits.messagesPerSecond, limits.messageBurst, clock)
     private val charBudget = TokenBucket(limits.charsPerSecond, limits.charBurst, clock)
@@ -324,8 +329,27 @@ public class WebBridge internal constructor(
      * ([on]), handlers stay registered across [dev.supermux.webview.WebViewState.load].
      */
     public fun handle(method: String, handler: suspend (JsonElement) -> JsonElement): () -> Unit {
+        inputMethods.remove(method)
         methods[method] = handler
         return { if (methods[method] === handler) methods.remove(method) }
+    }
+
+    /**
+     * Answers the page's `hostBridge.call(method, …)` and says whether the call may count as the user's own act, such as
+     * a send the user clicked for: [handler]'s `fromUserInput` is true only if the user's real input (a pointer press or
+     * a key, delivered to this view by the engine itself) came within [InputStamp.DEFAULT_WINDOW_MILLIS] before the call
+     * reached the host, and that input has not served another call. It is decided when the call arrives, not when
+     * [handler] runs, and a call takes the input, so one input allows one call.
+     *
+     * Nothing the page does is input: a call on load, from a timer or a promise, or after a script-made `click()` or
+     * `dispatchEvent`, gets false, and so does one from an engine that can't tell of input. [handler] still runs, so it
+     * can refuse with a reason. A call that is dropped (another document, over a limit) takes no input.
+     * Replaces any [handle] or [handleWithUserInput] for [method], and is replaced by one.
+     */
+    public fun handleWithUserInput(method: String, handler: suspend (params: JsonElement, fromUserInput: Boolean) -> JsonElement): () -> Unit {
+        methods.remove(method)
+        inputMethods[method] = handler
+        return { if (inputMethods[method] === handler) inputMethods.remove(method) }
     }
 
     /**
@@ -339,6 +363,7 @@ public class WebBridge internal constructor(
         sink: (text: String, targetOrigin: String) -> Unit,
         originAllowed: (String) -> Boolean,
         scope: CoroutineScope,
+        userInput: () -> Boolean = { false },
     ) {
         val child = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         val parked = connection?.takeIf { it.parked }
@@ -347,9 +372,10 @@ public class WebBridge internal constructor(
             parked.scope = child
             parked.sink = sink
             parked.originAllowed = originAllowed
+            parked.userInput = userInput
         } else {
             if (connection != null) disconnect()
-            connection = Connection(child, sink, originAllowed)
+            connection = Connection(child, sink, originAllowed, userInput)
         }
         lastOrigin = null
         lastCommittedOrigin = null
@@ -635,13 +661,18 @@ public class WebBridge internal constructor(
         }
         conn.callsInFlight++
         val owner = generation
+        val inputHandler = if (call.method.startsWith("$")) null else inputMethods[call.method]
+        // Decided now, as the call arrives: the handler may run later, and the window is the page's, not the handler's.
+        val fromUserInput = inputHandler != null && conn.userInput()
         conn.scope.launch {
             val reply = try {
                 val handler = methods[call.method]
-                if (handler == null || call.method.startsWith("$")) {
+                if ((handler == null && inputHandler == null) || call.method.startsWith("$")) {
                     BridgeMessage.Reply(call.id, error = "no such method: ${call.method}")
                 } else {
-                    withTimeoutOrNull(limits.handlerTimeoutMillis) { handler(call.params) }
+                    withTimeoutOrNull(limits.handlerTimeoutMillis) {
+                        if (inputHandler != null) inputHandler(call.params, fromUserInput) else handler!!(call.params)
+                    }
                         ?.let { BridgeMessage.Reply(call.id, result = it) }
                         ?: BridgeMessage.Reply(call.id, error = "timeout")
                 }

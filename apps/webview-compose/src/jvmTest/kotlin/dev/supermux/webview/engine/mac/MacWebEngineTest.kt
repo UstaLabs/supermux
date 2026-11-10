@@ -1295,4 +1295,35 @@ class MacWebEngineTest {
         assertFalse(rig.engine.setCookie(WebCookie(name = "a", value = "b", url = "https://app.test/")))
         assertFalse(rig.glue.calls.any { it.startsWith("find") || it.startsWith("setPageZoom") || it.startsWith("setCookie") }, "${rig.glue.calls}")
     }
+
+    /** The input stamp (click-to-send): a press or a key the page's view took allows one send, and a document starts with none. */
+    @Test fun aPressTheViewTookAllowsOneSendAndOneOnly() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        assertFalse(rig.engine.consumeUserInput(), "no input yet: a send on load")
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        assertTrue(rig.engine.consumeUserInput())
+        assertFalse(rig.engine.consumeUserInput(), "one press, one send")
+    }
+
+    @Test fun aKeyThePageTookAllowsASend() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        rig.send(GlueEvent.Pointer(-1.0, -1.0))
+        assertTrue(rig.engine.consumeUserInput())
+    }
+
+    @Test fun aPressInTheDocumentBeforeIsNoInputInTheNextOne() = runTest {
+        val rig = Rig(this)
+        rig.engine.configure(setup)
+        rig.engine.load(html)
+        rig.send(GlueEvent.Committed(1, rig.page(html.origin.url), 0.5f))
+        rig.send(GlueEvent.Pointer(10.0, 10.0))
+        rig.engine.load(WebContent.Html("<p>b</p>", WebOrigin("c2")))
+        assertFalse(rig.engine.consumeUserInput())
+    }
 }

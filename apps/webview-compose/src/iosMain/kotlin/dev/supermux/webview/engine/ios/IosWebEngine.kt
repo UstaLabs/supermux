@@ -22,6 +22,9 @@ import dev.supermux.webview.WebDialog
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebOrigin
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -141,7 +144,16 @@ internal class IosWebEngine private constructor(
     private val uiDelegate: UiDelegate,
     private val scope: CoroutineScope,
     private val ticks: Ticks,
-) : WebEngine {
+) : WebEngine, UserInputSource {
+    /**
+     * When the user last tapped, clicked or typed in the page, for [UserInputSource]: the relay's `gesture`, which it
+     * sends from trusted events only, in its own content world, so no page script can make or forge it. A new document
+     * starts with none. Taps by VoiceOver or Voice Control reach the page as clicks with no touch (spec open decision 4).
+     */
+    private val inputStamp = InputStamp()
+
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock())
+
     /** A question the engine asked its client, which WebKit waits on: answered once, by the client or by default. */
     private inner class Pending(private val byDefault: () -> Unit) {
         var job: Job? = null
@@ -1100,6 +1112,7 @@ internal class IosWebEngine private constructor(
         if (!gesture) return
         gestureAt = clock()
         gestureDocument = current
+        inputStamp.mark(inputClock())
     }
 
     /**
@@ -1303,6 +1316,7 @@ internal class IosWebEngine private constructor(
     /** A new document of [content] starts: nothing an earlier one caused is delivered from now on. */
     private fun startDocument(content: WebContent): Int {
         val epoch = queue.advance()
+        inputStamp.clear()
         loadSize = webViewSize()
         this.content = content
         bundles.bundle = content as? WebContent.Bundle

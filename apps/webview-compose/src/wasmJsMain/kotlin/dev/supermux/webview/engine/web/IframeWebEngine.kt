@@ -17,6 +17,9 @@ import dev.supermux.webview.NewWindowRequest
 import dev.supermux.webview.WebContent
 import dev.supermux.webview.WebError
 import dev.supermux.webview.WebProfile
+import dev.supermux.webview.bridge.InputStamp
+import dev.supermux.webview.bridge.UserInputSource
+import dev.supermux.webview.bridge.inputClock
 import dev.supermux.webview.engine.EmbeddingMode
 import dev.supermux.webview.engine.EngineClient
 import dev.supermux.webview.engine.EngineConfig
@@ -62,6 +65,12 @@ private const val GIVE_BACK_CHECK_MILLIS = 30
 private const val GIVE_BACK_TRIES = 3
 
 /**
+ * The longest URL Chrome navigates to (`url::kMaxURLChars`, 2 MiB: one char more and the frame loads blank, measured
+ * in Chrome 156). An `Html` document whose `data:` URL is longer loads from a `blob:` URL instead.
+ */
+private const val MAX_DATA_URL_CHARS = 2 * 1024 * 1024
+
+/**
  * How long a loaded document that may run the web shim has to hand over its port before it counts as one that never
  * speaks. Its handshake comes after its iframe's `load` (the feasibility test: 0 of 30 the other way round), within
  * milliseconds.
@@ -82,7 +91,12 @@ private const val HANDSHAKE_GRACE_MILLIS = 500
  *   meanwhile. That is [EngineEvent.FirstPaint]. Something drawn: a shimmed page's first contentful paint, or its DOM and
  *   two frames, as its shim reports; or the iframe's `load`, which waits for every subresource; or [PAINT_CAP_MILLIS]
  *   since the document started, as on iOS.
- * - **Content.** `Html` is a `srcdoc` in `sandbox="allow-scripts"`: an opaque origin of its own. `Url` is `src` in
+ * - **Content.** `Html` is a `data:` URL in `sandbox="allow-scripts"`: an opaque origin of its own, and not a `srcdoc`,
+ *   which WebKit sends the app's `SameSite=Lax` cookie from. Not a `blob:` URL either while the page fits in a `data:`
+ *   one ([MAX_DATA_URL_CHARS]): Chrome refuses an opaque document's navigations to a `blob:` URL of the app's origin
+ *   ("Not allowed to load local resource"), its own included, so a demo couldn't `location.reload()` or move to a
+ *   `#fragment`. A page too long for a `data:` URL loads from a `blob:` one, where it can't do those two, and that URL is
+ *   revoked when its navigation ends: the document is replaced, or the engine released. `Url` is `src` in
  *   `sandbox="allow-scripts allow-same-origin allow-forms"`: its real origin, no popups, no top navigation, no dialogs,
  *   no downloads. Scripts off drops `allow-scripts`. What the web can't show is refused with a message page and an
  *   [EngineEvent.Error]: `Bundle` (spec §7), `Url` with headers or in an `Ephemeral` engine (the browser can do neither),
@@ -144,7 +158,7 @@ internal class IframeWebEngine(
      * frames, in the last few seconds. Tests, which can't make one, pass their own; the factory never does.
      */
     private val userActivation: () -> Boolean = ::hasTransientActivation,
-) : WebEngine, FrameRoutee, UrlSlotUser {
+) : WebEngine, FrameRoutee, UrlSlotUser, UserInputSource {
     /** One document the engine started, in its own iframe, and what that iframe went on to show. */
     private inner class Navigation(val id: Int, val content: WebContent, val setup: PageSetup, val refusal: Refusal?) {
         val iframe: HTMLElement = newElement("iframe")
@@ -197,8 +211,13 @@ internal class IframeWebEngine(
         var page: Page? = null
         var gone = false
 
+        /** The `blob:` URL the iframe loaded a long `Html` document from, revoked when the navigation ends. Null for a `data:` one. */
+        var blobUrl: String? = null
+
         fun end() {
             gone = true
+            blobUrl?.let(::revokeBlobUrl)
+            blobUrl = null
             page?.let { closePort(it.port) }
             page = null
             removeElement(iframe)
@@ -531,6 +550,7 @@ internal class IframeWebEngine(
             onScroll = { dx, dy -> scrolledInPage(navigation, page, dx, dy) },
             onFling = { vx, vy -> flungInPage(navigation, page, vx, vy) },
             onPress = { pressedInPage(navigation, page) },
+            onKey = { keyedInPage(navigation, page) },
             onFocus = { has -> pageFocus(navigation, page, has) },
             onGone = { pageGone(navigation, page) },
             onPaint = { paintedInPage(navigation, page) },
@@ -649,12 +669,39 @@ internal class IframeWebEngine(
      */
     private fun pressedInPage(navigation: Navigation, page: Page) {
         if (!fromShim(navigation, page)) return
+        inputStamp.mark(inputClock())
         pressedAt = nowMillis()
         if (pressedAt - refusedAt < LATE_PRESS_MILLIS) {
             refusedAt = Double.NEGATIVE_INFINITY
             // Still in the page if it couldn't be taken out: the press decides now.
             if (isActiveElement(navigation.iframe)) gained(navigation) else focusElement(navigation.iframe)
         }
+    }
+
+    /** A key the user typed in the page, as its shim tells: input for the stamp, and nothing else. */
+    private fun keyedInPage(navigation: Navigation, page: Page) {
+        if (!fromShim(navigation, page)) return
+        inputStamp.mark(inputClock())
+    }
+
+    // User input (UserInputSource)
+
+    /**
+     * The last real input the user gave this frame: a press or key the shim saw with `isTrusted`, which no page script can
+     * make or tell the host of (it can't send on the port). Input anywhere else in the app since forgets it ([appInput]),
+     * so the frame is the last thing the user touched.
+     */
+    private val inputStamp = InputStamp()
+
+    /**
+     * The web's rule, spec "Click-to-send": the stamp, which is recent and unspent, **and** the browser's transient
+     * activation at the app's window, which a real click in the frame gives it (activation propagates from a frame to its
+     * embedder) and a script's `click()` doesn't. Either alone is refused; the input is taken either way.
+     */
+    override fun consumeUserInput(): Boolean = inputStamp.consume(inputClock()) && userActivation()
+
+    override fun appInput() {
+        inputStamp.clear()
     }
 
     // Documents
@@ -664,6 +711,7 @@ internal class IframeWebEngine(
         // The page that had the keyboard goes with its port, before it could say so.
         setFocused(false)
         val id = queue.advance()
+        inputStamp.clear()
         endHolding()
         parked = null
         if (holdPaint && previous != null && previous.painted && !previous.gone) {
@@ -732,7 +780,17 @@ internal class IframeWebEngine(
             when (val content = navigation.content) {
                 is WebContent.Html -> {
                     attribute(iframe, "sandbox", if (setup.javaScriptEnabled) "allow-scripts" else "")
-                    setSrcdoc(iframe, documentOf(navigation, content))
+                    // A data: (or blob:) frame, not a srcdoc: WebKit sends the app's SameSite=Lax cookie from a sandboxed srcdoc
+                    // frame, and from no data: or blob: one (measured, spec Isolation 1). data: first, as Chrome refuses an
+                    // opaque document's reload and fragment navigations of a blob: URL the app made.
+                    val document = documentOf(navigation, content)
+                    val data = pageDataUrlOf(document)
+                    val url = if (parsedUrlLength(data) <= MAX_DATA_URL_CHARS) {
+                        data
+                    } else {
+                        blobUrlOf(document).also { navigation.blobUrl = it }
+                    }
+                    setSrc(iframe, url)
                 }
                 is WebContent.Url -> {
                     val scripts = if (setup.javaScriptEnabled) "allow-scripts " else ""
@@ -781,7 +839,7 @@ internal class IframeWebEngine(
         val setup = navigation.setup
         val bridged = setup.javaScriptEnabled && content.origin.origin in setup.bridgeOrigins
         if (!bridged) return content.html
-        return WebDocuments.withScript(content.html, WebShim.source(navigation.secret, pageOrigin(), trustSyntheticInput = trustSyntheticInput))
+        return WebDocuments.withScript(content.html, WebShim.source(navigation.secret, pageOrigin(), trustSyntheticInput = trustSyntheticInput, baseUrl = content.origin.url))
     }
 
     private fun styleIframe(iframe: HTMLElement, dark: Boolean) {
