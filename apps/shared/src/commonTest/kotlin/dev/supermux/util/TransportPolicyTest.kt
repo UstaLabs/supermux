@@ -41,4 +41,12 @@ class TransportPolicyTest {
         needsOptIn("ftp://example.com")
         needsOptIn("")
     }
+
+    @Test fun aBrokerOnLoopbackRunsOnThisMachine() {
+        assertTrue(TransportPolicy.isLoopback("http://127.0.0.1:9898"))
+        assertTrue(TransportPolicy.isLoopback("http://localhost:9898/"))
+        assertTrue(TransportPolicy.isLoopback("http://[::1]:9898"))
+        assertFalse(TransportPolicy.isLoopback("https://h-x.relay.supermux.dev"))
+        assertFalse(TransportPolicy.isLoopback("http://100.121.185.86:9898"))
+    }
 }

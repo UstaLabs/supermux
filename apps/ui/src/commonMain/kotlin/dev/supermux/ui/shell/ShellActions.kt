@@ -67,6 +67,8 @@ class ShellActions(
      * from [DisplayActions.displays] and hands the whole thing to `DisplayPanel`.
      */
     val display: DisplayActions = DisplayActions(),
+    /** The Browser tab's seams (#105): its view writes, the host's previews, its preview cookie. */
+    val browser: dev.supermux.ui.browser.BrowserActions = dev.supermux.ui.browser.BrowserActions(),
 
     // ── chat + session controls (the header overflow and the composer's mute row) ──────────────
     val sendMessage: (sessionId: String, text: String) -> Unit = { _, _ -> },
@@ -179,10 +181,11 @@ fun rememberShellActions(
 ): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
     val displayActions = rememberDisplayActions(app)
+    val browserActions = dev.supermux.ui.browser.rememberBrowserActions(app)
     // The router is a CALLBACK, not state: keying the bundle on it would rebuild every lambda
     // whenever the caller passed a fresh one (the F1 rule for nav callbacks).
     val routeToHost by rememberUpdatedState(appForSession)
-    return remember(app, walkthroughCap, displayActions) {
+    return remember(app, walkthroughCap, displayActions, browserActions) {
         // A session-keyed suspend call needs the SessionInfo the store's review/LSP API takes;
         // resolving it from the store's live list is what every desktop call site did inline.
         fun session(id: String): SessionInfo? = app.sessions.value.firstOrNull { it.id == id }
@@ -190,6 +193,7 @@ fun rememberShellActions(
             sessions = app.sessions,
             finishJobs = app.finishJobs,
             display = displayActions,
+            browser = browserActions,
             sendMessage = { id, text -> app.sendMessage(id, text) },
             rename = { id, name -> app.rename(id, name) },
             kill = { id -> app.kill(id) },
