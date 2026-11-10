@@ -451,6 +451,14 @@ class FleetStore(
             .flatMapLatest { app -> app?.accountsAutoSwitch ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
+    /** The ACTIVE host's auto-resume setting ([HostStore.accountsAutoResume], #92). */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeAccountsAutoResume: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app -> app?.accountsAutoResume ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
     /** `account_login_state` frames from the ACTIVE host. */
     @OptIn(ExperimentalCoroutinesApi::class)
     val activeAccountLogins: Flow<dev.supermux.net.AccountLoginStateDto> =

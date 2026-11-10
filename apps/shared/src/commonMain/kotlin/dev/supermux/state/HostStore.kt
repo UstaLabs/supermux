@@ -614,6 +614,9 @@ class HostStore(
     private val _accountsAutoSwitch = MutableStateFlow<Boolean?>(null)
     /** GET/PUT /settings/accounts `autoSwitch`, kept current by `accounts_settings`. */
     val accountsAutoSwitch: StateFlow<Boolean?> = _accountsAutoSwitch.asStateFlow()
+    private val _accountsAutoResume = MutableStateFlow<Boolean?>(null)
+    /** #92: GET/PUT /settings/accounts `autoResume`, kept current by `accounts_settings`. */
+    val accountsAutoResume: StateFlow<Boolean?> = _accountsAutoResume.asStateFlow()
 
     private val _accountLogins = MutableSharedFlow<AccountLoginStateDto>(extraBufferCapacity = 32)
     /** Every `account_login_state` frame (all logins; filter by `loginId`). */
@@ -850,7 +853,10 @@ class HostStore(
             ServerFrame.AccountsChanged -> if (accountsWanted) refreshAccounts()
             ServerFrame.AgentsChanged -> _agentsChanged.tryEmit(Unit)
             is ServerFrame.AccountLoginState -> _accountLogins.tryEmit(frame.toDto())
-            is ServerFrame.AccountsSettings -> _accountsAutoSwitch.value = frame.autoSwitch
+            is ServerFrame.AccountsSettings -> {
+                _accountsAutoSwitch.value = frame.autoSwitch
+                _accountsAutoResume.value = frame.autoResume
+            }
             is ServerFrame.HostRequirementsChanged -> _hostRequirements.value = frame.requirements
             is ServerFrame.KeepAwakeChanged -> _keepAwake.value = frame.keepAwake
             is ServerFrame.TelemetryChanged -> _telemetry.value = TelemetryState(frame.enabled, frame.source, frame.noticeShown)
@@ -2355,12 +2361,24 @@ class HostStore(
         accountCall { api.setSessionAccount(sessionId, account) }
 
     suspend fun loadAccountsAutoSwitch(): Boolean? =
-        runApi("accountsSettings") { api.accountsSettings().autoSwitch }?.also { _accountsAutoSwitch.value = it }
+        runApi("accountsSettings") { api.accountsSettings() }?.also { _accountsAutoResume.value = it.autoResume }?.autoSwitch
+            ?.also { _accountsAutoSwitch.value = it }
 
     suspend fun setAccountsAutoSwitch(enabled: Boolean): AccountResult<Boolean> =
         accountCall { api.setAccountsAutoSwitch(enabled).autoSwitch }.also {
             if (it is AccountResult.Ok) _accountsAutoSwitch.value = it.value
         }
+
+    suspend fun setAccountsAutoResume(enabled: Boolean): AccountResult<Boolean> =
+        accountCall { api.setAccountsAutoResume(enabled).autoResume }.also {
+            if (it is AccountResult.Ok) _accountsAutoResume.value = it.value
+        }
+
+    /** #92: the session no longer resumes by itself after its usage limit. */
+    suspend fun cancelLimitWait(sessionId: String): AccountResult<Unit> = accountCall { api.cancelLimitWait(sessionId) }
+
+    /** #92: resume a session waiting for its usage limit now. */
+    suspend fun resumeLimitWait(sessionId: String): AccountResult<Unit> = accountCall { api.resumeLimitWait(sessionId) }
 
     // ── Devices settings (desktop-parity Task 2) ───────────────────────────────────────────
     // Backs the Devices section of the Settings hub. Mirrors AppViewModel devices / addDevice /

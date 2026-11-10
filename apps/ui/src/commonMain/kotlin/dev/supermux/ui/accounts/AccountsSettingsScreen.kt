@@ -100,6 +100,9 @@ class AccountsActions(
     val autoSwitch: Flow<Boolean?> = flowOf(null),
     val loadAutoSwitch: suspend () -> Boolean? = { null },
     val setAutoSwitch: suspend (Boolean) -> AccountResult<Boolean> = { NOT_WIRED },
+    /** #92: wait for the first limit reset and carry on (ON unless turned off). Loaded with [loadAutoSwitch]. */
+    val autoResume: Flow<Boolean?> = flowOf(null),
+    val setAutoResume: suspend (Boolean) -> AccountResult<Boolean> = { NOT_WIRED },
     val addAccount: suspend (agent: String, method: String, secret: String, label: String?) -> AccountResult<AccountDto> =
         { _, _, _, _ -> NOT_WIRED },
     val removeAccount: suspend (id: String, deleteHome: Boolean) -> AccountResult<Unit> = { _, _ -> NOT_WIRED },
@@ -121,6 +124,8 @@ fun rememberAccountsActions(app: HostStore): AccountsActions = remember(app) {
         autoSwitch = app.accountsAutoSwitch,
         loadAutoSwitch = { app.loadAccountsAutoSwitch() },
         setAutoSwitch = { app.setAccountsAutoSwitch(it) },
+        autoResume = app.accountsAutoResume,
+        setAutoResume = { app.setAccountsAutoResume(it) },
         addAccount = { agent, method, secret, label -> app.addAccount(agent, method, secret, label) },
         removeAccount = { id, deleteHome -> app.removeAccount(id, deleteHome) },
         startLogin = { app.startAccountLogin(it) },
@@ -140,6 +145,8 @@ fun rememberAccountsActions(fleet: FleetStore): AccountsActions = remember(fleet
         autoSwitch = fleet.activeAccountsAutoSwitch,
         loadAutoSwitch = { fleet.activeApp()?.loadAccountsAutoSwitch() },
         setAutoSwitch = { fleet.activeApp()?.setAccountsAutoSwitch(it) ?: NOT_WIRED },
+        autoResume = fleet.activeAccountsAutoResume,
+        setAutoResume = { fleet.activeApp()?.setAccountsAutoResume(it) ?: NOT_WIRED },
         addAccount = { agent, method, secret, label ->
             fleet.activeApp()?.addAccount(agent, method, secret, label) ?: NOT_WIRED
         },
@@ -196,6 +203,8 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
     val scope = rememberCoroutineScope()
     val accounts by actions.accounts.collectAsState(null)
     val autoSwitch by actions.autoSwitch.collectAsState(null)
+    val autoResume by actions.autoResume.collectAsState(null)
+    var pendingAutoResume by remember { mutableStateOf<Boolean?>(null) }
     // The open add sheet, kept for the page on display (#89): a rotation closed it in the middle
     // of a sign-in that went on on the host. The sheet keeps its own state under its key.
     val adding = rememberRetainedOnPage("accounts:adding") { AccountAdding() }
@@ -258,6 +267,17 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
                             if (r is AccountResult.Failed) autoSwitchError = r.message ?: "Couldn't save the setting."
                         }
                     },
+                    // #92: right under auto-switch, same card (#97 moves both into its Providers page).
+                    resumeChecked = pendingAutoResume ?: autoResume ?: true,
+                    onResumeChange = { on ->
+                        pendingAutoResume = on
+                        autoSwitchError = null
+                        scope.launch {
+                            val r = actions.setAutoResume(on)
+                            pendingAutoResume = null
+                            if (r is AccountResult.Failed) autoSwitchError = r.message ?: "Couldn't save the setting."
+                        }
+                    },
                 )
             }
             agents.forEach { agent ->
@@ -293,40 +313,58 @@ private fun AccountsSettingsBody(actions: AccountsActions, modifier: Modifier, o
 }
 
 @Composable
-private fun AutoSwitchCard(checked: Boolean, error: String?, onChange: (Boolean) -> Unit) {
+private fun AutoSwitchCard(
+    checked: Boolean,
+    error: String?,
+    onChange: (Boolean) -> Unit,
+    resumeChecked: Boolean,
+    onResumeChange: (Boolean) -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     AccountsCard(Modifier.testTag("accounts-autoswitch-card")) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { onChange(!checked) }
-                .padding(horizontal = Space.lg, vertical = Space.md),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.md),
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column {
+            AccountsToggleRow(
+                title = "Switch accounts automatically",
+                body = "When one hits its usage limit or stops working, the chat continues on another account of the same agent.",
+                checked = checked,
+                onChange = onChange,
+                tag = "accounts-autoswitch",
+            )
+            AccountsToggleRow(
+                title = "Resume after a limit reset",
+                body = "When every login has run out, the chat waits for the first reset and then carries on.",
+                checked = resumeChecked,
+                onChange = onResumeChange,
+                tag = "accounts-autoresume",
+            )
+            if (error != null) {
                 Text(
-                    "Switch accounts automatically",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = cs.onSurface,
-                )
-                Text(
-                    "When one hits its usage limit or stops working, the chat continues on another account of the same agent.",
+                    error,
+                    color = cs.error,
                     style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.md).testTag("accounts-autoswitch-error"),
                 )
             }
-            Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.testTag("accounts-autoswitch"))
         }
-        if (error != null) {
-            Text(
-                error,
-                color = cs.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = Space.lg, end = Space.lg, bottom = Space.md).testTag("accounts-autoswitch-error"),
-            )
+    }
+}
+
+@Composable
+private fun AccountsToggleRow(title: String, body: String, checked: Boolean, onChange: (Boolean) -> Unit, tag: String) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onChange(!checked) }
+            .padding(horizontal = Space.lg, vertical = Space.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.md),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
         }
+        Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.testTag(tag))
     }
 }
 

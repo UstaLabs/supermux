@@ -3395,6 +3395,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       setSessionAccount: (sessionId, account) => setSessionAccount(sessionId, account),
       cancelLimitWait: (sessionId) => limitWaits.cancel(sessionId),
       resumeLimitWait: (sessionId) => limitWaits.resumeNow(sessionId),
+      forceLimitWait: (sessionId, minutes) => {
+        const s = registry.get(sessionId)
+        if (!s) return false
+        const account = s.account || `${s.agent}:system`
+        return !!limitWaits.wait(s.id, { account, resetsAt: new Date(Date.now() + minutes * 60_000), background: false })
+      },
       getSettings: () => ({ autoSwitch: accountsSettings().autoSwitch, autoResume: accountsSettings().autoResume }),
       setSettings: (patch) => {
         if (patch.autoSwitch !== undefined && typeof patch.autoSwitch !== "boolean") throw new AccountsApiError(400, "autoSwitch must be a boolean", "invalid_input")

@@ -59,6 +59,18 @@ data class SessionInfo(
     val account: String? = null,
     /** Display label for [account]. */
     val accountLabel: String? = null,
+    /** #92: every account of its agent is out and it waits for the first reset; null = no wait. */
+    val limitWait: LimitWaitDto? = null,
+)
+
+/** #92: when a session resumes by itself after a usage limit, and on which account. ISO times. */
+@Serializable
+data class LimitWaitDto(
+    val resumeAt: String,
+    /** Null: the reset time was not reported; the session tries again at [resumeAt]. */
+    val resetsAt: String? = null,
+    val account: String = "",
+    val accountLabel: String = "",
 )
 
 /** A finish job's outcome/state machine, broadcast on the `finish_job` WS frame and
@@ -724,7 +736,11 @@ sealed interface ServerFrame {
 
     /** The accounts settings changed (PUT /settings/accounts). */
     @Serializable @SerialName("accounts_settings")
-    data class AccountsSettings(val autoSwitch: Boolean = false) : ServerFrame
+    data class AccountsSettings(val autoSwitch: Boolean = false, val autoResume: Boolean = true) : ServerFrame
+
+    /** #92: a session's wait for a usage-limit reset was made, replaced or dropped ([wait] null). */
+    @Serializable @SerialName("limit_wait")
+    data class LimitWait(val session: String, val wait: LimitWaitDto? = null) : ServerFrame
 
     @Serializable @SerialName("agent_state")
     data class AgentState(

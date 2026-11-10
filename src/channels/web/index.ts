@@ -306,6 +306,8 @@ export interface WebAccountsApi {
   cancelLimitWait?(sessionId: string): boolean
   /** #92: resume a waiting session now; false when it had no wait. */
   resumeLimitWait?(sessionId: string): Promise<boolean>
+  /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
+  forceLimitWait?(sessionId: string, minutes: number): boolean
   getSettings(): { autoSwitch: boolean; autoResume?: boolean }
   setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
 }
@@ -3371,6 +3373,16 @@ export class WebChannel implements Channel {
       if (!body.code) return this.json({ error: "code required" }, 400)
       this.opts.sendAgentLoginCode?.(kind, body.code)
       return this.json({ ok: true })
+    }
+
+    // ── #92 demo: force a wait for a usage-limit reset on a session (paired clients only, like every /debug route) ──
+    if (path === "/debug/limit-wait" && method === "POST" && this.opts.accounts?.forceLimitWait) {
+      const body = (await req.json().catch(() => ({}))) as { session?: unknown; minutes?: unknown }
+      const minutes = Number(body.minutes)
+      if (typeof body.session !== "string" || !body.session || !Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) {
+        return this.json({ error: "session and minutes (1..1440) required" }, 400)
+      }
+      return this.opts.accounts.forceLimitWait(body.session, minutes) ? this.json({ ok: true }) : this.json({ error: "no such session" }, 404)
     }
 
     // ── a session's wait for a usage-limit reset (#92): Cancel, Resume now ──

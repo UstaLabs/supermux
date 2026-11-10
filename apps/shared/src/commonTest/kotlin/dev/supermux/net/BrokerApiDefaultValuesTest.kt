@@ -44,6 +44,31 @@ class BrokerApiDefaultValuesTest {
         assertEquals(JsonPrimitive(false), sink.single().bodyJson()["autoSwitch"])
     }
 
+    // #92: one settings PUT must never carry the other toggle, or flipping auto-switch would turn auto-resume back on.
+    @Test fun auto_switch_and_auto_resume_are_written_separately() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        val api = captured("""{"autoSwitch":true,"autoResume":false}""", sink)
+        val after = api.setAccountsAutoSwitch(true)
+        assertEquals(false, after.autoResume)
+        assertEquals(setOf("autoSwitch"), sink.last().bodyJson().keys)
+        api.setAccountsAutoResume(true)
+        assertEquals(JsonPrimitive(true), sink.last().bodyJson()["autoResume"])
+        assertEquals(setOf("autoResume"), sink.last().bodyJson().keys)
+    }
+
+    @Test fun auto_resume_is_on_when_an_older_broker_does_not_say() = runTest {
+        val api = captured("""{"autoSwitch":false}""", mutableListOf())
+        assertEquals(true, api.accountsSettings().autoResume)
+    }
+
+    @Test fun cancel_and_resume_now_hit_the_session_limit_wait_routes() = runTest {
+        val sink = mutableListOf<HttpRequestData>()
+        val api = captured("""{"ok":true}""", sink)
+        api.cancelLimitWait("s 1")
+        api.resumeLimitWait("s 1")
+        assertEquals(listOf("DELETE http://h/sessions/s%201/limit-wait", "POST http://h/sessions/s%201/limit-wait/resume"), sink.map { "${it.method.value} ${it.url}" })
+    }
+
     @Test fun curator_settings_at_their_defaults_are_all_sent() = runTest {
         val sink = mutableListOf<HttpRequestData>()
         val api = captured("""{"config":{},"nextRun":null}""", sink)
