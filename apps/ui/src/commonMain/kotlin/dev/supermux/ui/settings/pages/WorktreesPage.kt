@@ -9,7 +9,6 @@
 // its own. The calls are today's [WorktreesSettingsActions], unchanged.
 package dev.supermux.ui.settings.pages
 
-import dev.supermux.fs.fileNameOf
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -62,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.fs.fileNameOf
 import dev.supermux.fs.hostParent
 import dev.supermux.net.WorktreeListDto
 import dev.supermux.net.WorktreeSummaryDto
