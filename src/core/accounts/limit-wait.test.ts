@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { LIMIT_RESET_BACKGROUND_SUFFIX, LIMIT_RESET_CONTINUE_PROMPT, LimitWaits, RESUME_MARGIN_MS, STAGGER_MS, SPACING_MS, UNKNOWN_RESET_RETRY_MS, resumeAfterLimit, type LimitWait, type ResumeDeps } from "./limit-wait"
+import { LIMIT_RESET_BACKGROUND_SUFFIX, LIMIT_RESET_CONTINUE_PROMPT, LIMIT_RESUME_NOW_PROMPT, LimitWaits, RESUME_MARGIN_MS, STAGGER_MS, SPACING_MS, UNKNOWN_RESET_RETRY_MS, resumeAfterLimit, type LimitWait, type ResumeDeps } from "./limit-wait"
 import { parseAccountsSettings } from "./broker-accounts"
 
 const dirs: string[] = []
@@ -18,13 +18,14 @@ function harness(options: { file?: string; enabled?: boolean; now?: number } = {
   const clock = { now: options.now ?? T0 }
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   const resumed: LimitWait[] = []
+  const hows: string[] = []
   const changes: Array<[string, LimitWait | undefined]> = []
   const waits = new LimitWaits({
     file,
     now: () => clock.now,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t },
     clearTimer: (t) => { (t as { cleared: boolean }).cleared = true },
-    resume: async (wait) => { resumed.push(wait) },
+    resume: async (wait, how) => { resumed.push(wait); hows.push(how) },
     changed: (id, wait) => { changes.push([id, wait]) },
     enabled: () => options.enabled ?? true,
   })
@@ -38,7 +39,7 @@ function harness(options: { file?: string; enabled?: boolean; now?: number } = {
     }
     await new Promise((r) => setTimeout(r, 0))
   }
-  return { waits, file, clock, timers, resumed, changes, advance }
+  return { waits, file, clock, timers, resumed, hows, changes, advance }
 }
 
 test("a wait resumes at the reset + the margin + this session's stagger, and is saved", () => {
@@ -82,6 +83,7 @@ test("the timer resumes the session once and forgets the wait", async () => {
   expect(armed.ms).toBe(Date.parse(wait.resumeAt) - T0)
   await h.advance(armed.ms)
   expect(h.resumed).toEqual([wait])
+  expect(h.hows).toEqual(["due"])
   expect(h.waits.get("s1")).toBeUndefined()
   expect(h.changes.at(-1)).toEqual(["s1", undefined])
   expect(JSON.parse(readFileSync(h.file, "utf8")).waits).toEqual([])
@@ -121,6 +123,7 @@ test("resumeNow resumes at once", async () => {
   const wait = h.waits.wait("s1", { account: "work", resetsAt: new Date(T0 + 50 * MIN), background: false })!
   expect(await h.waits.resumeNow("s1")).toBe(true)
   expect(h.resumed).toEqual([wait])
+  expect(h.hows).toEqual(["now"])
   expect(h.waits.get("s1")).toBeUndefined()
   expect(await h.waits.resumeNow("s1")).toBe(false)
 })
@@ -234,4 +237,13 @@ test("the setting: auto-resume is on unless turned off; auto-switch stays off un
   expect(parseAccountsSettings(undefined)).toEqual({ autoSwitch: false, autoResume: true })
   expect(parseAccountsSettings({ autoResume: false, autoSwitch: true })).toEqual({ autoSwitch: true, autoResume: false })
   expect(parseAccountsSettings({ autoResume: "no" })).toEqual({ autoSwitch: false, autoResume: true })
+})
+
+test("resumeAfterLimit: Resume now does not claim the limit reset", async () => {
+  const { deps, log } = resumeHarness({ account: () => "work" })
+  await resumeAfterLimit(due, deps, "now")
+  expect(log).toEqual([
+    "notify s1 Resumed on WORK — resumed by hand before the reset",
+    `deliver s1 ${LIMIT_RESUME_NOW_PROMPT}`,
+  ])
 })

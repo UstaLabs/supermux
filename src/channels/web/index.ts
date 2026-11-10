@@ -297,6 +297,8 @@ export interface WebAccountsApi {
   remove(id: string, options: { deleteHome?: boolean }): Promise<void>
   /** What removing the account would do: how many chats move, and to which account (#106). */
   removalPlan(id: string): Promise<unknown>
+  /** Debug (#106): mark a login signed out, as a refused sign-in does; false when there is no such account. */
+  markExpired?(id: string): Promise<boolean>
   startLogin(body: Record<string, unknown>): unknown
   loginState(loginId: string): unknown | undefined
   submitCode(loginId: string, code: string): void
@@ -306,6 +308,8 @@ export interface WebAccountsApi {
   cancelLimitWait?(sessionId: string): boolean
   /** #92: resume a waiting session now; false when it had no wait. */
   resumeLimitWait?(sessionId: string): Promise<boolean>
+  /** #92 demo: a real wait on the session, resuming in `minutes`; false when there is no such session. */
+  forceLimitWait?(sessionId: string, minutes: number): boolean
   getSettings(): { autoSwitch: boolean; autoResume?: boolean }
   setSettings(patch: Record<string, unknown>): { autoSwitch: boolean; autoResume?: boolean }
 }
@@ -3373,6 +3377,16 @@ export class WebChannel implements Channel {
       return this.json({ ok: true })
     }
 
+    // ── #92 demo: force a wait for a usage-limit reset on a session (paired clients only, like every /debug route) ──
+    if (path === "/debug/limit-wait" && method === "POST" && this.opts.accounts?.forceLimitWait) {
+      const body = (await req.json().catch(() => ({}))) as { session?: unknown; minutes?: unknown }
+      const minutes = Number(body.minutes)
+      if (typeof body.session !== "string" || !body.session || !Number.isFinite(minutes) || minutes <= 0 || minutes > 24 * 60) {
+        return this.json({ error: "session and minutes (1..1440) required" }, 400)
+      }
+      return this.opts.accounts.forceLimitWait(body.session, minutes) ? this.json({ ok: true }) : this.json({ error: "no such session" }, 404)
+    }
+
     // ── a session's wait for a usage-limit reset (#92): Cancel, Resume now ──
     const limitWait = path.match(/^\/sessions\/([^/]+)\/limit-wait(\/resume)?$/)
     if (limitWait) {
@@ -3385,6 +3399,13 @@ export class WebChannel implements Channel {
         return (await api.resumeLimitWait(id)) ? this.json({ ok: true }) : this.json({ error: "no limit wait" }, 404)
       }
       return this.json({ error: "not found" }, 404)
+    }
+
+    // ── #106 demo: mark a login signed out to try that state (paired clients only, like every /debug route) ──
+    if (path === "/debug/account-expired" && method === "POST" && this.opts.accounts?.markExpired) {
+      const body = (await req.json().catch(() => ({}))) as { account?: unknown }
+      if (typeof body.account !== "string" || !body.account) return this.json({ error: "account required" }, 400)
+      return (await this.opts.accounts.markExpired(body.account)) ? this.json({ ok: true }) : this.json({ error: "no such account" }, 404)
     }
 
     // ── accounts (one registry for every agent; secrets go in, never out) ──
