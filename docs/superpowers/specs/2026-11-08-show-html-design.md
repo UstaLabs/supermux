@@ -62,7 +62,7 @@ The other variants:
 One check serves the tool's result (every variant), the card's stored heights and the evals.
 
 - **Where:** on the broker's host, in a Chromium-family browser it finds: Chrome, Edge, Chromium or Brave. Edge is always on Windows. If there is none, the page is shown without a check and the result says so.
-- **In what:** the way the web app will run it, the strictest of the six platforms. That is a sandboxed `blob:` frame with an opaque origin, inside a host page with the card's colour scheme. Storage (`localStorage`, cookies, IndexedDB) throws there, so a page that needs it fails the check rather than failing on the web only.
+- **In what:** the way the web app will run it, the strictest of the six platforms. That is a sandboxed `data:` frame with an opaque origin, inside a host page with the card's colour scheme. Storage (`localStorage`, cookies, IndexedDB) throws there, so a page that needs it fails the check rather than failing on the web only.
 - **How:** as T3 Code's `apps/server/src/htmlRender/headlessChrome.ts` does.
   - `--headless=new --remote-debugging-pipe`, so no port is opened.
   - A fresh profile for each check under `~/.mux/cache/html-check/`.
@@ -154,10 +154,11 @@ The frame's transient user activation (`navigator.userActivation.isActive`) must
 
 1. **Every page has its own opaque origin and is never same-origin with the app.**
    - Native: `https://c<hash>.invalid` in an ephemeral profile, which holds no supermux cookie.
-   - Web: a frame with only `sandbox="allow-scripts"`, loaded from a **`blob:` URL, not a srcdoc**.
+   - Web: a frame with only `sandbox="allow-scripts"`, loaded from a **`data:` URL, not a srcdoc** (a `blob:` URL only past Chrome's 2 MiB `data:` limit).
+     - Not `blob:` by default (step 4, 2026-11-11): Chrome refuses a sandboxed page any navigation to a `blob:` URL the app made, its own included, so `location.reload()` and `#` links did nothing ("Not allowed to load local resource"). A `data:` frame reloads and moves to fragments.
      - WebKit sends the app's `SameSite=Lax` cookie from a sandboxed srcdoc frame (measured 2026-11-08, card #104 `isolation-test/`). `blob:` and `data:` frames get it in no engine.
      - The change is in webview-compose's web engine (`IframeWebEngine.kt:85`).
-     - With it, the shim's link handling needs its own base: a `blob:` document has no useful `document.baseURI`, so `new URL(raw, baseURI)` throws on relative hrefs.
+     - With it, the shim's link handling needs its own base: a `data:` or `blob:` document has no useful `document.baseURI`, so `new URL(raw, baseURI)` throws on relative hrefs.
      - The engine also revokes each blob URL when its document goes.
 2. **The broker refuses the page.** A request that carries the cookie is refused, before routing:
    - if it has `Origin: null`;
@@ -182,7 +183,7 @@ The frame's transient user activation (`navigator.userActivation.isActive`) must
 - **Phone:**
   - The same inline card. On iOS a drag scrolls the chat and a tap reaches the page; on Android a drag that starts on the page belongs to it.
   - Full screen is a view over the chat; back returns to the same scroll.
-- **Web:** the same card in the `blob:` frame. The app's document must declare the card's colour scheme. A frame whose `color-scheme` differs from its embedder's gets an opaque canvas from the browser, which breaks the card's transparency.
+- **Web:** the same card in the `data:` frame. The app's document must declare the card's colour scheme. A frame whose `color-scheme` differs from its embedder's gets an opaque canvas from the browser, which breaks the card's transparency.
 - **Old messages:** the same card, fetched lazily. After a restart a card shows a still until it goes live.
 - **Telegram and WhatsApp** (maintenance only): the `.html` is sent as a document, captioned with its title.
 - **Per-card state:** kept while the app runs, through the library's page memory. It is not synced.
@@ -322,7 +323,7 @@ TDD, cars to Muxie, real checks on his Mac, Fold and iPhone.
 1. **The check** as a broker module: browser discovery, the pipe, the proxy, the three problems. Tests on fixed pages, one per problem, plus a clean one.
 2. **The tool:** `show_html` (or the evals' winner) in `src/shim/tools.ts`, storage, the message, `toolResult`, and the `from_card` user message.
 3. **webview-compose:**
-   - the web engine loads `Html` from `blob:`;
+   - the web engine loads `Html` from `data:` (`blob:` past 2 MiB);
    - the input stamp, consumed by one send, on every engine;
    - the click-to-send tests above.
 4. **The app:**
