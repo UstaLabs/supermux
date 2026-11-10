@@ -563,8 +563,9 @@ afterEvaluate {
         }
     }
     // #116: the MSI wraps the app image createDistributable made, which the Windows release job signs first (the host
-    // helpers and the launcher). Left to itself, jpackage builds a fresh, unsigned image for the MSI.
-    tasks.named<AbstractJPackageTask>("packageMsi") {
+    // helpers and the launcher). Left to itself, jpackage builds a fresh, unsigned image for the MSI. Looked up lazily:
+    // packageMsi only exists where Compose registers it, and a macOS host (the iOS build) configures :desktop too.
+    tasks.withType<AbstractJPackageTask>().matching { it.name == "packageMsi" }.configureEach {
         val image = tasks.named<AbstractJPackageTask>("createDistributable")
         dependsOn(image)
         appImage.set(image.flatMap { it.destinationDir.dir(it.packageName) })

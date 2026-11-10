@@ -119,7 +119,10 @@ test("the MSI wraps the signed app image: packaging does not rebuild it", () => 
   const msiLine = windowsJob.split("\n").find((l) => l.includes(":desktop:packageMsi"))!
   expect(msiLine).toContain("-x :desktop:createDistributable")
   const gradle = readFileSync(resolve(import.meta.dir, "..", "apps", "desktop", "build.gradle.kts"), "utf8")
-  expect(gradle).toMatch(/named<AbstractJPackageTask>\("packageMsi"\)[\s\S]*?appImage\.set\(/)
+  // Looked up lazily: packageMsi only exists where Compose registers it (not on a macOS host, whose iOS build
+  // configures :desktop too). An eager tasks.named("packageMsi") broke that configuration (train2, #116).
+  expect(gradle).toMatch(/matching \{ it\.name == "packageMsi" \}\.configureEach \{[\s\S]*?appImage\.set\(/)
+  expect(gradle).not.toContain('named<AbstractJPackageTask>("packageMsi")')
 })
 
 test("signing runs our own client with the secrets, serialized and gated, and is verified with signtool", () => {
